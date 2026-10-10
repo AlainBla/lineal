@@ -8,6 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// Mindest-/Höchstzahl Operationen pro Patch.
 pub const MAX_OPS: usize = 50;
+/// Maximale Textlänge in Zeichen (wie die Issue-Beschreibung), für Eingabe und Ergebnis.
+pub const MAX_TEXT_CHARS: usize = 500_000;
+/// Obergrenze in Bytes (UTF-8, höchstens 4 Bytes je Zeichen); schützt vor Allokationen.
+pub const MAX_TEXT_BYTES: usize = MAX_TEXT_CHARS * 4;
+/// Maximale Länge eines Ankers (`old_string`, `anchor`, `from`, `to`) in Bytes.
+pub const MAX_ANCHOR_BYTES: usize = 10_000;
 
 /// Eine Patch-Operation (JSON-Form wie in docs/07 §2.6, Feld `op` als Tag).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +65,29 @@ pub enum PatchOp {
 }
 
 impl PatchOp {
+    /// Anker-Strings der Operation.
+    fn anchors(&self) -> Vec<&str> {
+        match self {
+            Self::Replace { old_string, .. } => vec![old_string],
+            Self::InsertBefore { anchor, .. } | Self::InsertAfter { anchor, .. } => vec![anchor],
+            Self::ReplaceRange { from, to, .. } => vec![from, to],
+            Self::Prepend { .. } | Self::Append { .. } => vec![],
+        }
+    }
+
+    /// Einzufügende/ersetzende Texte der Operation.
+    fn texts(&self) -> Vec<&str> {
+        match self {
+            Self::Replace { new_string, .. } | Self::ReplaceRange { new_string, .. } => {
+                vec![new_string]
+            }
+            Self::InsertBefore { text, .. }
+            | Self::InsertAfter { text, .. }
+            | Self::Prepend { text }
+            | Self::Append { text } => vec![text],
+        }
+    }
+
     /// Name der Operation (`op`).
     pub fn name(&self) -> &'static str {
         match self {
@@ -85,6 +114,8 @@ pub enum PatchFailure {
     AnchorNotFound,
     /// Anker kommt mehrfach vor (auch überlappend gezählt).
     AnchorAmbiguous,
+    /// Größenlimit überschritten (Text, Anker oder Ergebnis) → `limit_exceeded`.
+    LimitExceeded,
 }
 
 /// Fehler einer Patch-Operation (`conflict`, docs/07 §2.6).
@@ -109,6 +140,9 @@ impl PatchError {
             PatchFailure::NoOps => "at least one operation is required".into(),
             PatchFailure::TooManyOps => format!("at most {MAX_OPS} operations are allowed"),
             PatchFailure::EmptyArgument => "a required string is empty".into(),
+            PatchFailure::LimitExceeded => format!(
+                "size limit exceeded (text/result max {MAX_TEXT_CHARS} characters, anchors max {MAX_ANCHOR_BYTES} bytes)"
+            ),
             PatchFailure::AnchorNotFound | PatchFailure::AnchorAmbiguous => format!(
                 "anchor must match the current content exactly once, found {} matches",
                 self.matches.unwrap_or(0)
@@ -145,25 +179,46 @@ fn norm(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
-/// Alle Trefferpositionen (Byte-Offsets), **inklusive überlappender** Treffer.
-fn positions(hay: &str, needle: &str) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(i) = hay[from..].find(needle) {
-        let at = from + i;
-        out.push(at);
-        // Weiter ab dem nächsten Zeichen (nicht Byte), damit Zeichengrenzen stimmen.
-        from = at + hay[at..].chars().next().map_or(1, char::len_utf8);
+/// Zählt alle Treffer **inklusive überlappender** in linearer Zeit (KMP, O(n + m)) und liefert
+/// die Zahl sowie die erste Position (Byte-Offset). UTF-8 ist selbstsynchronisierend, Treffer
+/// liegen daher immer auf Zeichengrenzen.
+fn count_matches(hay: &str, needle: &str) -> (usize, usize) {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    let mut fail = vec![0usize; n.len()];
+    let mut k = 0;
+    for i in 1..n.len() {
+        while k > 0 && n[i] != n[k] {
+            k = fail[k - 1];
+        }
+        if n[i] == n[k] {
+            k += 1;
+        }
+        fail[i] = k;
     }
-    out
+    let (mut count, mut first, mut k) = (0, 0, 0);
+    for (i, &c) in h.iter().enumerate() {
+        while k > 0 && c != n[k] {
+            k = fail[k - 1];
+        }
+        if c == n[k] {
+            k += 1;
+        }
+        if k == n.len() {
+            if count == 0 {
+                first = i + 1 - n.len();
+            }
+            count += 1;
+            k = fail[k - 1];
+        }
+    }
+    (count, first)
 }
 
 /// Genau ein Treffer ab Offset `from` → absolute Position, sonst Trefferzahl.
 fn find_unique(buf: &str, needle: &str, from: usize) -> Result<usize, usize> {
-    let p = positions(&buf[from..], needle);
-    match p.as_slice() {
-        [one] => Ok(from + one),
-        other => Err(other.len()),
+    match count_matches(&buf[from..], needle) {
+        (1, p) => Ok(from + p),
+        (n, _) => Err(n),
     }
 }
 
@@ -196,7 +251,29 @@ pub fn apply(text: &str, ops: &[PatchOp]) -> Result<String, PatchError> {
         });
     }
     let mut buf = norm(text);
+    if buf.len() > MAX_TEXT_BYTES || buf.chars().count() > MAX_TEXT_CHARS {
+        return Err(PatchError {
+            op_index: 0,
+            op: ops[0].name(),
+            reason: PatchFailure::LimitExceeded,
+            anchor: None,
+            matches: None,
+        });
+    }
     for (i, op) in ops.iter().enumerate() {
+        // Argumentgrößen vor jeder Normalisierung/Allokation prüfen.
+        if op.anchors().iter().any(|a| a.len() > MAX_ANCHOR_BYTES)
+            || op.texts().iter().any(|t| t.len() > MAX_TEXT_BYTES)
+        {
+            return Err(err(i, op, PatchFailure::LimitExceeded));
+        }
+        let room = |projected: usize| -> Result<(), PatchError> {
+            if projected > MAX_TEXT_BYTES {
+                Err(err(i, op, PatchFailure::LimitExceeded))
+            } else {
+                Ok(())
+            }
+        };
         let empty = |s: &str| -> Result<(), PatchError> {
             if s.is_empty() {
                 Err(err(i, op, PatchFailure::EmptyArgument))
@@ -213,12 +290,17 @@ pub fn apply(text: &str, ops: &[PatchOp]) -> Result<String, PatchError> {
                 let (old, new) = (norm(old_string), norm(new_string));
                 empty(&old)?;
                 if replace_all.unwrap_or(false) {
-                    if !buf.contains(&old) {
+                    let count = buf.matches(old.as_str()).count();
+                    if count == 0 {
                         return Err(anchor_err(i, op, &old, 0));
                     }
+                    // Wachstum vor der Allokation abschätzen (Treffer × (neu − alt)).
+                    let grow = count.saturating_mul(new.len().saturating_sub(old.len()));
+                    room(buf.len().saturating_add(grow))?;
                     buf = buf.replace(&old, &new);
                 } else {
                     let p = find_unique(&buf, &old, 0).map_err(|n| anchor_err(i, op, &old, n))?;
+                    room(buf.len().saturating_add(new.len()))?;
                     buf.replace_range(p..p + old.len(), &new);
                 }
             }
@@ -227,6 +309,7 @@ pub fn apply(text: &str, ops: &[PatchOp]) -> Result<String, PatchError> {
                 empty(&anchor)?;
                 empty(&text)?;
                 let p = find_unique(&buf, &anchor, 0).map_err(|n| anchor_err(i, op, &anchor, n))?;
+                room(buf.len().saturating_add(text.len()))?;
                 buf.insert_str(p, &text);
             }
             PatchOp::InsertAfter { anchor, text } => {
@@ -234,16 +317,19 @@ pub fn apply(text: &str, ops: &[PatchOp]) -> Result<String, PatchError> {
                 empty(&anchor)?;
                 empty(&text)?;
                 let p = find_unique(&buf, &anchor, 0).map_err(|n| anchor_err(i, op, &anchor, n))?;
+                room(buf.len().saturating_add(text.len()))?;
                 buf.insert_str(p + anchor.len(), &text);
             }
             PatchOp::Prepend { text } => {
                 let text = norm(text);
                 empty(&text)?;
+                room(buf.len().saturating_add(text.len()))?;
                 buf.insert_str(0, &text);
             }
             PatchOp::Append { text } => {
                 let text = norm(text);
                 empty(&text)?;
+                room(buf.len().saturating_add(text.len()))?;
                 buf.push_str(&text);
             }
             PatchOp::ReplaceRange {
@@ -257,8 +343,12 @@ pub fn apply(text: &str, ops: &[PatchOp]) -> Result<String, PatchError> {
                 let a = find_unique(&buf, &from, 0).map_err(|n| anchor_err(i, op, &from, n))?;
                 let b = find_unique(&buf, &to, a + from.len())
                     .map_err(|n| anchor_err(i, op, &to, n))?;
+                room(buf.len().saturating_add(new.len()))?;
                 buf.replace_range(a..b, &new);
             }
+        }
+        if buf.chars().count() > MAX_TEXT_CHARS {
+            return Err(err(i, op, PatchFailure::LimitExceeded));
         }
     }
     Ok(buf)
@@ -287,6 +377,9 @@ mod tests {
             anchor: a.into(),
             text: t.into(),
         }
+    }
+    fn append(t: &str) -> PatchOp {
+        PatchOp::Append { text: t.into() }
     }
     fn after(a: &str, t: &str) -> PatchOp {
         PatchOp::InsertAfter {
@@ -517,5 +610,82 @@ mod tests {
             serde_json::to_string(&PatchOp::Append { text: "t".into() }).unwrap(),
             r#"{"op":"append","text":"t"}"#
         );
+    }
+
+    #[test]
+    fn pathological_anchors_run_in_linear_time() {
+        // Quadratisch wäre: Anker "aaa…a" in Text "aaa…a" mit überlappenden Treffern.
+        let text = "a".repeat(400_000);
+        let anchor = "a".repeat(9_000);
+        let started = std::time::Instant::now();
+        let e = apply(&text, &[replace(&anchor, "x")]).unwrap_err();
+        assert_eq!(e.reason, PatchFailure::AnchorAmbiguous);
+        assert_eq!(e.matches, Some(400_000 - 9_000 + 1));
+        let text2 = format!("{}b", "a".repeat(400_000));
+        assert!(apply(&text2, &[after(&anchor, "x")]).is_err());
+        assert!(apply(&text, &[range(&"a".repeat(5000), &"a".repeat(5000), "")]).is_err());
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn kmp_counts_match_naive() {
+        for (h, n) in [
+            ("aaaa", "aa"),
+            ("abababa", "aba"),
+            ("äää", "ä"),
+            ("abc", "d"),
+            ("a", "abc"),
+        ] {
+            let naive = (0..h.len())
+                .filter(|i| h.is_char_boundary(*i) && h[*i..].starts_with(n))
+                .count();
+            assert_eq!(count_matches(h, n).0, naive, "{h} {n}");
+        }
+    }
+
+    #[test]
+    fn size_limits_for_input_anchors_and_result() {
+        let big = "x".repeat(MAX_TEXT_CHARS + 1);
+        assert_eq!(
+            apply(&big, &[append("y")]).unwrap_err().reason,
+            PatchFailure::LimitExceeded
+        );
+        let long_anchor = "x".repeat(MAX_ANCHOR_BYTES + 1);
+        assert_eq!(
+            apply("x", &[replace(&long_anchor, "y")])
+                .unwrap_err()
+                .reason,
+            PatchFailure::LimitExceeded
+        );
+        let max = "x".repeat(MAX_TEXT_CHARS);
+        assert_eq!(
+            apply(&max[..MAX_TEXT_CHARS - 1], &[append("y")])
+                .unwrap()
+                .len(),
+            MAX_TEXT_CHARS
+        );
+        assert_eq!(
+            apply(&max, &[append("y")]).unwrap_err().reason,
+            PatchFailure::LimitExceeded
+        );
+    }
+
+    #[test]
+    fn amplification_is_stopped_and_text_unchanged() {
+        let text = "a".repeat(100_000);
+        let e = apply(&text, &[replace_all("a", &"b".repeat(100))]).unwrap_err();
+        assert_eq!(e.reason, PatchFailure::LimitExceeded);
+        assert_eq!(e.op_index, 0);
+        let ops = vec![replace_all("a", "aa"); 30];
+        let e = apply("aaaa", &ops).unwrap_err();
+        assert_eq!(e.reason, PatchFailure::LimitExceeded);
+        assert!(e.op_index > 0 && e.op_index < 30);
+        let chunk = "z".repeat(200_000);
+        let ops: Vec<PatchOp> = (0..5).map(|_| append(&chunk)).collect();
+        assert_eq!(
+            apply("", &ops).unwrap_err().reason,
+            PatchFailure::LimitExceeded
+        );
+        assert_eq!(text.len(), 100_000);
     }
 }

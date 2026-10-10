@@ -3,7 +3,7 @@
 //!
 //! * [`sanitize`] liefert wieder Markdown: rohes HTML wird entfernt (Tags weg, Text bleibt),
 //!   Links/Bilder mit unsicherem Schema werden zu reinem Text. Alles andere bleibt Byte für Byte
-//!   erhalten (Allowlist = Markdown-Syntax plus Schemata `http`, `https`, `mailto`, `tel` und
+//!   erhalten (Allowlist = Markdown-Syntax plus Schemata `http`, `https`, `mailto` und
 //!   relative Ziele).
 //! * [`render_html`] rendert Markdown zu HTML und filtert es zusätzlich mit der
 //!   `ammonia`-Allowlist (z. B. für E-Mail-Benachrichtigungen).
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 /// Erlaubte URL-Schemata für Links und Bilder (relative Ziele sind immer erlaubt).
-const SAFE_SCHEMES: [&str; 4] = ["http", "https", "mailto", "tel"];
+const SAFE_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
 
 fn options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
@@ -124,7 +124,12 @@ pub fn render_html(md: &str) -> String {
     });
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
-    ammonia::clean(&html)
+    // Allowlist erst NACH dem Rendern auf das fertige HTML anwenden.
+    ammonia::Builder::default()
+        .url_schemes(HashSet::from(SAFE_SCHEMES))
+        .link_rel(Some("noopener noreferrer"))
+        .clean(&html)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -220,7 +225,6 @@ mod tests {
             "https://a.example",
             "HTTP://a.example",
             "mailto:a@b.example",
-            "tel:+4930123",
             "/pfad",
             "page.html",
             "#anker",
@@ -238,6 +242,7 @@ mod tests {
             "vbscript:x",
             "file:///x",
             "ftp://a",
+            "tel:+4930123",
         ] {
             assert!(!is_safe_url(bad), "{bad:?}");
         }
@@ -263,5 +268,82 @@ mod tests {
         assert!(!h.contains("data:"), "{h}");
         let h = render_html("```\n<b>x</b>\n```");
         assert!(h.contains("&lt;b&gt;x&lt;/b&gt;"), "{h}");
+    }
+
+    #[test]
+    fn render_html_bypass_attempts() {
+        let attacks = [
+            "[a](javascript:alert(1))",
+            "[a](JaVaScRiPt:alert(1))",
+            "[a](&#106;avascript:alert(1))",
+            "[a](&#x6A;avascript:alert(1))",
+            "[a](  javascript:alert(1))",
+            "[a](vbscript:msgbox(1))",
+            "[a](data:text/html;base64,PHNjcmlwdD4=)",
+            "![i](javascript:alert(1))",
+            "![i](data:image/svg+xml;base64,PHN2Zz4=)",
+            "<javascript:alert(1)>",
+            "[a][r]\n\n[r]: javascript:alert(1)",
+            "[r]\n\n[r]: data:text/html,x",
+            "<a href=\"javascript:alert(1)\">x</a>",
+            "<a href=\" javascript:alert(1)\">x</a>",
+            "<a href=\"jav&#x09;ascript:alert(1)\">x</a>",
+            "<img src=x onerror=alert(1)>",
+            "<p style=\"background:url(javascript:alert(1))\" onclick=alert(1)>x</p>",
+            "<svg><script>alert(1)</script></svg>",
+            "<svg onload=alert(1)>",
+            "<math><mi xlink:href=\"javascript:alert(1)\">x</mi></math>",
+            "<iframe src=\"https://evil.example\"></iframe>",
+            "<form action=\"javascript:alert(1)\"><button>x</button></form>",
+            "<object data=\"data:text/html,x\"></object>",
+            "<script>alert(1)</script>",
+            "<style>*{x:expression(alert(1))}</style>",
+        ];
+        for md in attacks {
+            let h = render_html(md).to_lowercase();
+            for bad in [
+                "<a href=\"javascript:",
+                "<a href=\"data:",
+                "<img src=\"data:",
+                "<img src=\"javascript:",
+                "<a href=\"vbscript:",
+                "<script",
+                "<svg",
+                "<math",
+                "<iframe",
+                "<style",
+                "<form",
+                "<object",
+            ] {
+                assert!(!h.contains(bad), "{md:?} -> {h} (contains {bad})");
+            }
+            // Keine Event-Handler/Styles in echten (unescapten) Tags.
+            for tag in h.split('<').skip(1) {
+                let tag = tag.split('>').next().unwrap_or("");
+                assert!(
+                    !tag.contains(" on") && !tag.contains("style="),
+                    "{md:?} -> {h}"
+                );
+            }
+            let clean = sanitize(md).to_lowercase();
+            assert!(
+                !clean.contains('<') || !clean.contains("javascript"),
+                "{md:?} -> {clean}"
+            );
+        }
+        // Erlaubt bleiben http, https, mailto und relative Ziele; tel nicht mehr.
+        let h =
+            render_html("[a](https://x.example) [b](mailto:a@b.example) [c](/rel) [d](tel:123)");
+        assert!(
+            h.contains("https://x.example")
+                && h.contains("mailto:a@b.example")
+                && h.contains("/rel")
+        );
+        assert!(!h.contains("tel:"), "{h}");
+        assert!(h.contains("rel=\"noopener noreferrer\""), "{h}");
+        assert!(!is_safe_url("tel:123"));
+        // URL-Encoding des Schemas ist kein Schema und bleibt unwirksam.
+        assert!(!is_safe_url("java%73cript:alert(1)"));
+        assert!(!render_html("[a](java%73cript:alert(1))").contains("javascript"));
     }
 }
