@@ -63,6 +63,8 @@ pub struct Platform {
     pub app: Arc<App>,
     pub limiter: Arc<RateLimiter>,
     pub cfg: Arc<PlatformConfig>,
+    /// Brute-Force-Zähler für fehlgeschlagene Authentifizierungen.
+    pub fails: Arc<crate::auth_failures::AuthFailures>,
 }
 
 fn cors(origins: &[String]) -> CorsLayer {
@@ -114,13 +116,16 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
         app: app.clone(),
         limiter: Arc::new(RateLimiter::default()),
         cfg: Arc::new(cfg),
+        fails: Arc::new(crate::auth_failures::AuthFailures::default()),
     };
+    let fails = platform.fails.clone();
     let security = platform.cfg.security;
     let cors_origins = platform.cfg.cors_origins.clone();
     let trusted = Arc::new(platform.cfg.trusted_proxies.clone());
     // `layer` umhüllt: zuletzt hinzugefügt = äußerste Schicht.
     let mut router = router
         .layer(Extension(app))
+        .layer(Extension(fails))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
         .layer(from_fn_with_state(platform.clone(), auth::middleware))
         // IP-Limit vor dem Token-Lookup (jeder Request kostet erst IP-Kontingent).

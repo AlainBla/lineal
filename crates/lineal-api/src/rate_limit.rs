@@ -97,7 +97,7 @@ pub struct Decision {
 }
 
 /// Harte Obergrenze der Bucket-Anzahl (Speicherschutz gegen viele erfundene Identitäten).
-pub const MAX_BUCKETS: usize = 100_000;
+pub const MAX_BUCKETS: usize = 200_000;
 
 /// Gemeinsamer Bucket je Klasse für Schlüssel, die nicht mehr in die volle Map passen.
 const OVERFLOW_PREFIX: &str = "\0overflow:";
@@ -108,6 +108,7 @@ const GC_INTERVAL_MS: i64 = 1_000;
 struct State {
     buckets: HashMap<String, Bucket>,
     last_gc_ms: i64,
+    last_overflow_warn_ms: i64,
 }
 
 /// Prozessweiter Bucket-Speicher.
@@ -188,6 +189,10 @@ impl RateLimiter {
         // Überlauf-Bucket der Klasse (Präfix vor dem ersten ':') mit einem Zehntel des Limits.
         let overflow_key;
         let (key, capacity, rate) = if map.len() >= self.max_buckets && !map.contains_key(key) {
+            if now_ms - state.last_overflow_warn_ms >= 60_000 {
+                state.last_overflow_warn_ms = now_ms;
+                tracing::warn!("rate limit table full; new keys share the overflow bucket");
+            }
             overflow_key = format!("{OVERFLOW_PREFIX}{}", key.split(':').next().unwrap_or(""));
             let capacity = (capacity / 10.0).max(1.0);
             (overflow_key.as_str(), capacity, capacity / period_secs)
@@ -285,7 +290,7 @@ fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
 
 /// Bucket-Schlüssel der Client-IP (IPv6 pro /64); `None`, wenn die Peer-Adresse unbekannt ist
 /// (kein gemeinsamer "unknown"-Bucket für alle).
-fn client_ip(req: &Request) -> Option<String> {
+pub(crate) fn client_ip(req: &Request) -> Option<String> {
     req.extensions()
         .get::<crate::client_ip::ClientIp>()
         .map(|c| c.0)

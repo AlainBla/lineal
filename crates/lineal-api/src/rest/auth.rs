@@ -4,6 +4,9 @@
 //! das Token wird nur als SHA-256-Hash gespeichert. Die Handler lesen das Token selbst (Cookie oder
 //! `Authorization`-Header); die zentrale Auth-Middleware (WP03) nutzt dieselbe Hash-Funktion.
 
+use crate::auth_failures::AuthFailures;
+use crate::client_ip::ClientIp;
+use axum::Extension;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -75,9 +78,24 @@ fn session_cookie(app: &App, token: &str, max_age_secs: i64) -> Option<HeaderVal
 /// `POST /auth/login`: `{ "email", "password", "workspace"? }`.
 pub async fn login(
     State(app): State<Arc<App>>,
+    fails: Option<Extension<Arc<AuthFailures>>>,
+    client: Option<Extension<ClientIp>>,
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
+    // Brute-Force-Schutz: je IP und je Ziel-Account, unabhängig vom normalen Request-Limit.
+    let now_ms = app.clock.now().timestamp_millis();
+    let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
+    let account = body.email.clone();
+    if let Some(Extension(f)) = &fails {
+        let wait = ip_key
+            .as_deref()
+            .and_then(|ip| f.ip_blocked(ip, now_ms))
+            .or_else(|| f.account_blocked(&account, now_ms));
+        if let Some(wait) = wait {
+            return crate::middleware::auth::blocked_response("/auth/login", wait);
+        }
+    }
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -108,7 +126,17 @@ pub async fn login(
             }
             res
         }
-        Err(e) => error_response(e),
+        Err(e) => {
+            if e.kind == lineal_app::ErrorKind::Unauthenticated
+                && let Some(Extension(f)) = &fails
+            {
+                if let Some(ip) = &ip_key {
+                    f.record_ip(ip, now_ms);
+                }
+                f.record_account(&account, now_ms);
+            }
+            error_response(e)
+        }
     }
 }
 
@@ -283,6 +311,20 @@ mod tests {
         let (status, _, body) = send(&r, me).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body["error"], "unauthenticated");
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn repeated_wrong_passwords_lock_the_account_even_for_the_right_one(pool: sqlx::PgPool) {
+        let r = setup(pool).await;
+        for i in 0..10 {
+            let (status, _, _) = send(&r, login_req(&format!("wrong-{i}"))).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "versuch {i}");
+        }
+        // Das richtige Passwort hilft jetzt nicht mehr: 429 mit Retry-After.
+        let (status, headers, body) = send(&r, login_req("lineal-dev")).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert!(headers.contains_key(header::RETRY_AFTER));
+        assert!(headers.get(header::SET_COOKIE).is_none());
     }
 
     #[sqlx::test(migrations = "../lineal-db/migrations")]

@@ -3,6 +3,7 @@
 //! alle Router zusammen (docs/11 §2: Adapter kennen einander nicht).
 #![forbid(unsafe_code)]
 
+pub mod auth_failures;
 pub mod blob;
 pub mod client_ip;
 pub mod context;

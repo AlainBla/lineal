@@ -869,3 +869,43 @@ async fn upload_checks_content_type_and_size() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json()["error"], "invalid_request");
 }
+
+// ---------------------------------------------------------------- Brute-Force
+
+#[tokio::test]
+async fn failed_token_attempts_block_the_ip_independent_of_the_request_bucket() {
+    let router = api(app_with_keys());
+    let bad = |peer: &str, n: usize| {
+        let mut req = from_peer(peer, "");
+        *req.uri_mut() = "/graphql".parse().unwrap();
+        *req.method_mut() = Method::POST;
+        req.headers_mut()
+            .insert("content-type", "application/json".parse().unwrap());
+        req.headers_mut().insert(
+            "authorization",
+            format!("lin_api_guess{n}").parse().unwrap(),
+        );
+        *req.body_mut() = Body::from(r#"{"query":"{ __typename }"}"#);
+        req
+    };
+    // 20 Fehlversuche mit jeweils anderem Token: 401, danach 429 (auch für ein gültiges Token).
+    for n in 0..20 {
+        let r = send(&router, bad("203.0.113.50", n)).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "versuch {n}");
+    }
+    let r = send(&router, bad("203.0.113.50", 99)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    let mut valid = bad("203.0.113.50", 0);
+    valid
+        .headers_mut()
+        .insert("authorization", KEY_RW.parse().unwrap());
+    assert_eq!(
+        send(&router, valid).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Eine andere IP ist nicht betroffen.
+    assert_eq!(
+        send(&router, bad("203.0.113.51", 0)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+}
