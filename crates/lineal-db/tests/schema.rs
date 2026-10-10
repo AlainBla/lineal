@@ -69,11 +69,7 @@ async fn insert_state(
     .await
 }
 
-async fn insert_user(
-    pool: &PgPool,
-    org: &str,
-    display_name: &str,
-) -> Result<String, sqlx::Error> {
+async fn insert_user(pool: &PgPool, org: &str, display_name: &str) -> Result<String, sqlx::Error> {
     scalar(
         pool,
         "insert into \"user\" (organization_id, name, display_name, email) \
@@ -396,11 +392,13 @@ async fn document_with_two_parents_is_rejected(pool: PgPool) -> Result<(), sqlx:
     assert_sqlstate(&err, PG_CHECK_VIOLATION);
 
     // Kein Parent -> ebenfalls abgelehnt.
-    let err = sqlx::query("insert into document (organization_id, title) values ($1::uuid, 'Ohne Eltern')")
-        .bind(&s.org)
-        .execute(&pool)
-        .await
-        .expect_err("kein Parent muss scheitern");
+    let err = sqlx::query(
+        "insert into document (organization_id, title) values ($1::uuid, 'Ohne Eltern')",
+    )
+    .bind(&s.org)
+    .execute(&pool)
+    .await
+    .expect_err("kein Parent muss scheitern");
     assert_sqlstate(&err, PG_CHECK_VIOLATION);
     Ok(())
 }
@@ -494,11 +492,10 @@ async fn team_key_change_updates_issue_identifiers_and_reserves_old_key(
         .bind(&s.team)
         .execute(&pool)
         .await?;
-    let identifier: String =
-        sqlx::query_scalar("select identifier from issue where id = $1::uuid")
-            .bind(&issue)
-            .fetch_one(&pool)
-            .await?;
+    let identifier: String = sqlx::query_scalar("select identifier from issue where id = $1::uuid")
+        .bind(&issue)
+        .fetch_one(&pool)
+        .await?;
     assert_eq!(identifier, "PLAT-7");
 
     // Der alte Key darf nicht an ein anderes Team vergeben werden.
@@ -558,11 +555,12 @@ async fn comment_requires_exactly_one_parent_and_history_is_append_only(
     let s = seed(&pool).await?;
     let issue = insert_issue(&pool, &s, 1, "Kommentare").await?;
 
-    let err = sqlx::query("insert into comment (organization_id, body) values ($1::uuid, 'Ohne Eltern')")
-        .bind(&s.org)
-        .execute(&pool)
-        .await
-        .expect_err("Kommentar ohne Elternobjekt muss scheitern");
+    let err =
+        sqlx::query("insert into comment (organization_id, body) values ($1::uuid, 'Ohne Eltern')")
+            .bind(&s.org)
+            .execute(&pool)
+            .await
+            .expect_err("Kommentar ohne Elternobjekt muss scheitern");
     assert_sqlstate(&err, PG_CHECK_VIOLATION);
 
     sqlx::query(

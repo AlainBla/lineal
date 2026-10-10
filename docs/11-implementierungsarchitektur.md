@@ -316,3 +316,12 @@ RUST_LOG=info,lineal=debug
 - Jede öffentliche Use-Case-Methode hat mindestens einen `#[sqlx::test]`.
 - TypeScript: `strict`, kein `any`, ESLint + Prettier.
 - Commits: Conventional Commits (`feat(issues): …`), ein Arbeitspaket = ein Branch `wp/<nr>-<name>`.
+
+## 8. Abweichungen aus dem Scaffold (S1/S2, verbindlich für alle WPs)
+
+- `Tx` hat zusätzlich `org_id()`, `last_sync_id()`, `overview()` und `imports()`; `Store::begin_system()` für Worker ohne Benutzerkontext. `OutboxRepo` hat `claim_undelivered`, `mark_delivered`, `mark_processed`; `PeriodicJob` hat `name()`.
+- `/mcp` und `/.well-known/*` liefert `lineal_mcp::router`, `/sync` liefert `lineal_sync::router`; `lineal_server::build_router` setzt sie mit dem API-Router zusammen.
+- GraphQL-Platzhalter sind sichtbare Felder `_<bereich>Ready` / `_<bereich>MutationReady`; das zuständige WP entfernt seinen Platzhalter, sobald es echte Felder hat.
+- Server-Adresse über `LINEAL_BIND` (Default `127.0.0.1:8080`), Vite-Proxy-Ziel über `LINEAL_BACKEND`.
+- `lineal-testkit` ist optionale Laufzeit-Abhängigkeit von `lineal-server` (Feature `seed`) für das Subcommand `seed`.
+- Schema-Eigenheiten: Tabelle `"user"` immer in Anführungszeichen; `issue.identifier` und `issue.state_type` pflegen Trigger; `updated_at`/`version` setzt der Core; ein Issue mit `project_id` braucht eine `project_team`-Zeile für sein Team.
