@@ -232,6 +232,10 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
+        if resolve::user::actor_user_id(ctx) == Some(target.id) {
+            return Err(AppError::forbidden("You cannot change your own role.")
+                .with_details(json!({ "reason": "self_role_change" })));
+        }
         if role == UserRole::App || target.role == UserRole::App {
             return Err(AppError::invalid_request("app users cannot change their role")
                 .with_details(json!({ "field": "role" })));
@@ -279,6 +283,9 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::SuspendUser)?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
+        if target.role == UserRole::Owner {
+            snap.require_workspace(ctx, Action::UpdateWorkspaceLimits)?; // nur Owner
+        }
         if !active {
             if resolve::user::actor_user_id(ctx) == Some(target.id) {
                 return Err(AppError::invalid_request("you cannot suspend yourself"));
@@ -315,8 +322,15 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
+        if !ctx.scopes.write {
+            return Err(AppError::forbidden("Token scope does not allow write operations."));
+        }
         if resolve::user::actor_user_id(ctx) != Some(target.id) {
             snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
+            // Admins dürfen keine Owner-Passwörter zurücksetzen (Übernahme des Workspace).
+            if target.role == UserRole::Owner {
+                snap.require_workspace(ctx, Action::UpdateWorkspaceLimits)?;
+            }
         }
         let hash = self.hasher.hash(password)?;
         tx.users().set_password_hash(target.id, &hash, self.clock.now()).await?;

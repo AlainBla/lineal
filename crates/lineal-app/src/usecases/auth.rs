@@ -175,6 +175,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::CreatePersonalApiKey)?;
+        if !ctx.scopes.write {
+            return Err(AppError::forbidden("Token scope does not allow write operations."));
+        }
         let label = input.label.trim().to_string();
         if label.is_empty() || label.chars().count() > 100 {
             return Err(AppError::invalid_request("label must be 1-100 characters")

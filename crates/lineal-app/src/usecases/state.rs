@@ -614,11 +614,31 @@ pub(crate) async fn normalize_to_parent(
         mapping.push((s.id, target.id));
     }
     // Alte Status zuerst archivieren (gibt die Namen frei), dann Kopien anlegen, dann Issues umhängen.
-    for s in &own {
+    // Der Duplicate-Status ist je Team eindeutig (auch archiviert): er wird verknüpft statt kopiert.
+    for s in own.iter().filter(|s| s.state_type != StateType::Duplicate) {
         tx.states().archive(s.id, now).await?;
     }
     let mut copy_of: Vec<(StateId, StateId)> = Vec::new(); // parent state -> copy
     for t in &targets {
+        if t.state_type == StateType::Duplicate {
+            if let Some(dup) = own.iter().find(|s| s.state_type == StateType::Duplicate) {
+                tx.states()
+                    .update(
+                        dup.id,
+                        &StatePatch {
+                            name: Some(t.name.clone()),
+                            color: Some(t.color.clone()),
+                            description: Some(t.description.clone()),
+                            position: Some(t.position),
+                            inherited_from: Some(Some(t.id)),
+                        },
+                        now,
+                    )
+                    .await?;
+                copy_of.push((t.id, dup.id));
+                continue;
+            }
+        }
         let c = insert_state(
             app,
             tx,
