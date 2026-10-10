@@ -10,17 +10,17 @@ use tower::ServiceExt;
 async fn every_documented_path_is_routed() {
     let cases = [
         (Method::POST, "/graphql", StatusCode::UNSUPPORTED_MEDIA_TYPE),
-        (Method::POST, "/mcp", StatusCode::NOT_IMPLEMENTED),
-        (Method::GET, "/mcp", StatusCode::NOT_IMPLEMENTED),
+        (Method::POST, "/mcp", StatusCode::UNAUTHORIZED),
+        (Method::GET, "/mcp", StatusCode::METHOD_NOT_ALLOWED),
         (
             Method::GET,
             "/.well-known/oauth-protected-resource",
-            StatusCode::NOT_IMPLEMENTED,
+            StatusCode::OK,
         ),
         (
             Method::GET,
             "/.well-known/oauth-authorization-server",
-            StatusCode::NOT_IMPLEMENTED,
+            StatusCode::OK,
         ),
         (Method::POST, "/oauth/register", StatusCode::NOT_IMPLEMENTED),
         (Method::GET, "/oauth/authorize", StatusCode::NOT_IMPLEMENTED),

@@ -17,9 +17,16 @@ axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 tracing.workspace = true
+uuid.workspace = true
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+jsonschema = { version = "0.30", default-features = false }
 
 [dev-dependencies]
 lineal-testkit.workspace = true
 tokio.workspace = true
+tower.workspace = true
+http-body-util.workspace = true
