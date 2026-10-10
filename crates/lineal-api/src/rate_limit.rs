@@ -89,14 +89,29 @@ pub struct Decision {
     pub retry_after_secs: u64,
 }
 
-const GC_THRESHOLD: usize = 10_000;
-
 /// Harte Obergrenze der Bucket-Anzahl (Speicherschutz gegen viele erfundene Identitäten).
 pub const MAX_BUCKETS: usize = 100_000;
 
+/// Gemeinsamer Bucket für Schlüssel, die nicht mehr in die volle Map passen.
+const OVERFLOW_KEY: &str = "\0overflow";
+/// Mindestabstand der Bereinigung voller Buckets (sonst O(n) pro Request unter Angriff).
+const GC_INTERVAL_MS: i64 = 1_000;
+
+#[derive(Default)]
+struct State {
+    buckets: HashMap<String, Bucket>,
+    last_gc_ms: i64,
+}
+
 /// Prozessweiter Bucket-Speicher.
+///
+/// Die Map ist hart begrenzt. Verdrängt wird **nie** ein Bucket mit Verbrauch (das würde dem
+/// Besitzer volle Tokens zurückgeben, und ein Angreifer könnte seinen Bucket durch viele
+/// Fake-Schlüssel "zurücksetzen"). Stattdessen werden nur Buckets entfernt, die ohnehin wieder
+/// voll wären; ist danach immer noch kein Platz, teilen sich alle neuen Schlüssel einen
+/// gemeinsamen Overflow-Bucket, bestehende Schlüssel behalten ihren Stand.
 pub struct RateLimiter {
-    buckets: Mutex<HashMap<String, Bucket>>,
+    state: Mutex<State>,
     max_buckets: usize,
 }
 
@@ -124,14 +139,29 @@ pub fn ip_bucket(ip: IpAddr) -> String {
 impl RateLimiter {
     pub fn with_max_buckets(max_buckets: usize) -> Self {
         Self {
-            buckets: Mutex::new(HashMap::new()),
+            state: Mutex::new(State::default()),
             max_buckets: max_buckets.max(10),
         }
     }
 
     /// Anzahl gehaltener Buckets (Tests, Metriken).
     pub fn len(&self) -> usize {
-        self.buckets.lock().unwrap_or_else(|p| p.into_inner()).len()
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .buckets
+            .len()
+    }
+
+    /// Ob im Bucket `key` mindestens ein Token verfügbar ist (ohne zu entnehmen).
+    pub fn has_token(&self, key: &str, capacity: f64, period_secs: f64, now_ms: i64) -> bool {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(b) = state.buckets.get(key) else {
+            return true;
+        };
+        let rate = capacity / period_secs;
+        let elapsed = (now_ms - b.updated_ms).max(0) as f64 / 1000.0;
+        (b.tokens + elapsed * rate).min(capacity) >= 1.0
     }
 
     pub fn is_empty(&self) -> bool {
@@ -148,25 +178,21 @@ impl RateLimiter {
         now_ms: i64,
     ) -> Decision {
         let rate = capacity / period_secs;
-        let mut map = self
-            .buckets
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if map.len() > GC_THRESHOLD.min(self.max_buckets / 2) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = &mut *state;
+        let map = &mut state.buckets;
+        if map.len() >= self.max_buckets && now_ms - state.last_gc_ms >= GC_INTERVAL_MS {
+            state.last_gc_ms = now_ms;
             // Volle Buckets sind von neuen nicht zu unterscheiden: verwerfen.
             map.retain(|_, b| {
                 b.tokens + (now_ms - b.updated_ms).max(0) as f64 / 1000.0 * rate < capacity
             });
         }
-        if map.len() >= self.max_buckets && !map.contains_key(key) {
-            // Immer noch voll: die am längsten unbenutzten 10 % verwerfen (LRU-Näherung).
-            let mut by_age: Vec<(i64, String)> =
-                map.iter().map(|(k, b)| (b.updated_ms, k.clone())).collect();
-            by_age.sort_unstable();
-            for (_, k) in by_age.into_iter().take(self.max_buckets / 10) {
-                map.remove(&k);
-            }
-        }
+        let key = if map.len() >= self.max_buckets && !map.contains_key(key) {
+            OVERFLOW_KEY
+        } else {
+            key
+        };
         let b = map.entry(key.to_owned()).or_insert(Bucket {
             tokens: capacity,
             updated_ms: now_ms,
@@ -246,6 +272,22 @@ pub fn denied_error(d: &Decision, what: &str) -> AppError {
 
 /// Bucket-Schlüssel der Client-IP; `None`, wenn die Peer-Adresse unbekannt ist (kein
 /// gemeinsamer "unknown"-Bucket für alle).
+pub(crate) fn client_bucket(req: &Request) -> Option<String> {
+    client_ip(req)
+}
+
+/// 429-Antwort passend zum Pfad (GraphQL-Fehlerformat bzw. REST-Fehlermodell).
+pub(crate) fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
+    let err = denied_error(d, what);
+    let mut res = if req.uri().path() == "/graphql" {
+        graphql_error_response(&err)
+    } else {
+        ApiError(err).into_response()
+    };
+    requests_headers(res.headers_mut(), d);
+    res
+}
+
 fn client_ip(req: &Request) -> Option<String> {
     req.extensions()
         .get::<crate::client_ip::ClientIp>()
@@ -360,16 +402,39 @@ mod tests {
     }
 
     #[test]
-    fn bucket_map_is_bounded_and_evicts_the_oldest() {
+    fn bucket_map_is_bounded_and_eviction_never_refills_a_drained_bucket() {
         let l = RateLimiter::with_max_buckets(100);
-        for i in 0..1_000 {
-            // Entnahme lässt die Buckets unvoll: die Bereinigung allein hilft nicht.
-            l.take(&format!("ip:{i}"), 10.0, 3600.0, 1.0, i64::from(i));
-            assert!(l.len() <= 100, "len {} bei {i}", l.len());
+        let t = 1_000;
+        // Der Angreifer verbraucht sein Kontingent (Kapazität 3 pro Stunde).
+        for _ in 0..3 {
+            assert!(l.take("ip:attacker", 3.0, 3600.0, 1.0, t).allowed);
         }
-        // Die jüngsten Identitäten sind noch da (Bucket zählt weiter), die ältesten nicht.
-        assert_eq!(l.take("ip:999", 10.0, 3600.0, 1.0, 2_000).remaining, 8);
-        assert_eq!(l.take("ip:0", 10.0, 3600.0, 1.0, 2_000).remaining, 9);
+        assert!(!l.take("ip:attacker", 3.0, 3600.0, 1.0, t).allowed);
+        // Er flutet die Map mit erfundenen Schlüsseln (z. B. gefälschte Client-IPs).
+        for i in 0..1_000 {
+            l.take(&format!("ip:fake{i}"), 3.0, 3600.0, 1.0, t + i64::from(i));
+            assert!(l.len() <= 101, "len {} bei {i}", l.len());
+        }
+        // Sein eigener Bucket wurde nicht verdrängt: weiterhin gedrosselt.
+        let d = l.take("ip:attacker", 3.0, 3600.0, 1.0, t + 2_000);
+        assert!(
+            !d.allowed,
+            "Verdrängung darf keine vollen Tokens zurückgeben"
+        );
+        assert!(!l.has_token("ip:attacker", 3.0, 3600.0, t + 2_000));
+        // Neue Schlüssel teilen sich bei voller Map den Overflow-Bucket und werden dort begrenzt.
+        let late = (0..10)
+            .filter(|i| {
+                l.take(&format!("ip:late{i}"), 3.0, 3600.0, 1.0, t + 3_000)
+                    .allowed
+            })
+            .count();
+        assert_eq!(late, 0, "Overflow-Bucket ist bereits erschöpft");
+        // Nach der natürlichen Auffüllzeit ist der Angreifer wieder frei.
+        assert!(
+            l.take("ip:attacker", 3.0, 3600.0, 1.0, t + 3_700_000)
+                .allowed
+        );
     }
 
     #[test]

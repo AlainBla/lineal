@@ -508,6 +508,42 @@ async fn ipv6_privacy_addresses_of_one_prefix_share_the_rate_limit() {
 }
 
 #[tokio::test]
+async fn invalid_tokens_count_against_the_ip_before_the_lookup() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous = ClassLimits {
+        requests: 2.0,
+        complexity: 100.0,
+    };
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let bad = |peer: &str| {
+        let mut req = from_peer(peer, "");
+        req.headers_mut()
+            .insert("authorization", "lin_api_guess".parse().unwrap());
+        req
+    };
+    // Zwei Fehlversuche kosten je einen Lookup (die Route ist öffentlich, daher 200) ...
+    for _ in 0..2 {
+        assert_eq!(
+            send(&router, bad("203.0.113.5")).await.status,
+            StatusCode::OK
+        );
+    }
+    // ... danach wird derselbe Client abgelehnt (429), ohne dass die DB gefragt wird.
+    let r = send(&router, bad("203.0.113.5")).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    // Eine andere IP ist unberührt.
+    assert_eq!(
+        send(&router, bad("203.0.113.6")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn request_rate_limit_returns_429_with_headers() {
     let router = limited_router(app_with_keys(), 3.0, 100.0);
     let ping = || from_peer("203.0.113.5", "");
