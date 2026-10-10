@@ -754,30 +754,74 @@ pub async fn validate_and_normalize(
         TemplateType::Issue => {
             let mut d: IssueData = parse(data)?;
             check_issue_data(&d, workspace, "")?;
-            if let Some(desc) = &mut d.description {
-                *desc = super::super::document::clean_markdown(desc)?;
-            }
+            sanitize_issue_data(&mut d);
             normalize_issue(tx, snap, ctx, team, &mut d, "").await?;
             to_value(&d)
         }
         TemplateType::Document => {
             let mut d: DocData = parse(data)?;
             check_doc_data(&d, "")?;
-            if let Some(c) = &mut d.content {
-                *c = super::super::document::clean_markdown(c)?;
-            }
+            sanitize_doc_data(&mut d);
             to_value(&d)
         }
         TemplateType::Project => {
             let mut d: ProjectData = parse(data)?;
             check_project_data(&d, workspace)?;
-            if let Some(c) = &mut d.description {
-                *c = super::super::document::clean_markdown(c)?;
+            clean_opt(&mut d.name);
+            clean_opt(&mut d.summary);
+            clean_opt(&mut d.description);
+            for m in d.milestones.iter_mut().flatten() {
+                clean(&mut m.name);
+                clean_opt(&mut m.description);
+            }
+            for e in d.issues.iter_mut().flatten() {
+                if let Some(i) = e.issue.as_mut() {
+                    sanitize_issue_data(i);
+                }
+            }
+            for e in d.documents.iter_mut().flatten() {
+                if let Some(doc) = e.document.as_mut() {
+                    sanitize_doc_data(doc);
+                }
             }
             normalize_project(tx, snap, ctx, team, &mut d).await?;
             to_value(&d)
         }
     }
+}
+
+fn clean(s: &mut String) {
+    *s = lineal_domain::rules::markdown::sanitize(s);
+}
+
+fn clean_opt(s: &mut Option<String>) {
+    if let Some(x) = s {
+        clean(x);
+    }
+}
+
+fn sanitize_subs(subs: &mut [SubIssueData]) {
+    for s in subs {
+        clean(&mut s.title);
+        clean_opt(&mut s.description);
+        if let Some(c) = s.sub_issues.as_mut() {
+            sanitize_subs(c);
+        }
+    }
+}
+
+/// Bereinigt alle Freitexte eines Issue-Templates (Titel, Beschreibungen, Sub-Issues).
+pub fn sanitize_issue_data(d: &mut IssueData) {
+    clean_opt(&mut d.title);
+    clean_opt(&mut d.description);
+    if let Some(s) = d.sub_issues.as_mut() {
+        sanitize_subs(s);
+    }
+}
+
+fn sanitize_doc_data(d: &mut DocData) {
+    clean_opt(&mut d.title);
+    clean_opt(&mut d.content);
 }
 
 fn to_value<T: Serialize>(d: &T) -> AppResult<Value> {
