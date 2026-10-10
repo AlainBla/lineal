@@ -93,4 +93,18 @@ describe("auth client", () => {
     });
     expect(normalizeSession({})).toBeNull();
   });
+
+  it("versteht das flache /auth/me-Format des Backends", () => {
+    expect(
+      normalizeSession({
+        id: "u1",
+        email: "bob@acme.example",
+        displayName: "bob",
+        workspace: { id: "w1", name: "Acme", urlKey: "acme" },
+      }),
+    ).toEqual({
+      user: { id: "u1", email: "bob@acme.example", name: "bob", avatarUrl: null },
+      workspace: { id: "w1", name: "Acme", urlKey: "acme" },
+    });
+  });
 });

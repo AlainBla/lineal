@@ -37,7 +37,8 @@ const rec = (v: unknown): Record<string, unknown> | null =>
 /** Wandelt die Antwort von `/auth/me` in eine `Session`; `null`, wenn Pflichtfelder fehlen. */
 export function normalizeSession(raw: unknown): Session | null {
   const root = rec(raw);
-  const u = rec(root?.user ?? root?.viewer);
+  // `/auth/me` (WP02) liefert den User auf oberster Ebene: { id, email, …, workspace }.
+  const u = rec(root?.user ?? root?.viewer) ?? (typeof root?.email === "string" ? root : null);
   const w = rec(root?.organization ?? root?.workspace);
   if (!u) return null;
   const email = str(u.email);

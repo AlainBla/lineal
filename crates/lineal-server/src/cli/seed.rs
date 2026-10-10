@@ -5,9 +5,10 @@ use anyhow::Result;
 #[cfg(feature = "seed")]
 pub async fn run() -> Result<()> {
     let (_config, _pool, app) = super::connect().await?;
+    // Die Repos arbeiten im Org-Kontext; mit begin_system() bekämen sie die nil-Org.
     let mut tx = app
         .store
-        .begin_system()
+        .begin(lineal_testkit::seed::SeedData::acme().org)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let data = lineal_testkit::seed::run(&mut *tx)

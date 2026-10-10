@@ -15,4 +15,4 @@ pub mod rest;
 pub mod router;
 pub mod security_headers;
 
-pub use router::router;
+pub use router::{router, routes};

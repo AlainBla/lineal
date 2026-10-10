@@ -49,3 +49,26 @@ async fn every_documented_path_is_routed() {
         assert_eq!(res.status(), expected, "{uri}");
     }
 }
+
+#[tokio::test]
+async fn platform_middleware_covers_mcp_and_sync() {
+    for uri in ["/mcp", "/sync"] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let res = build_router(fake_app(), false).oneshot(req).await.unwrap();
+        let h = res.headers();
+        assert!(
+            h.contains_key("content-security-policy"),
+            "{uri}: CSP fehlt"
+        );
+        assert!(h.contains_key("x-request-id"), "{uri}: Request-ID fehlt");
+        assert!(
+            h.contains_key("x-ratelimit-limit")
+                || h.keys().any(|k| k.as_str().starts_with("x-ratelimit")),
+            "{uri}: Rate-Limit-Header fehlen"
+        );
+    }
+}
