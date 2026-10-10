@@ -180,6 +180,107 @@ The input/output is a string in RFC3339 format.
 """
 scalar DateTime
 
+"""
+`Document` (Inhalt als Markdown).
+"""
+type Document {
+	id: String!
+	slugId: String!
+	title: String!
+	content: String!
+	icon: String
+	color: String
+	url: String!
+	sortOrder: Float!
+	creatorId: String
+	updatedById: String
+	projectId: String
+	issueId: String
+	initiativeId: String
+	cycleId: String
+	teamId: String
+	"""
+	Revision des Inhalts (für `expectedVersion`).
+	"""
+	contentVersion: Int!
+	trashed: Boolean!
+	createdAt: String!
+	updatedAt: String!
+	archivedAt: String
+	warnings: [String!]!
+}
+
+type DocumentConnection {
+	nodes: [Document!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+"""
+Ein Snapshot der Historie (`DocumentContentHistory`).
+"""
+type DocumentContentHistory {
+	id: String!
+	markdown: String!
+	title: String
+	actorIds: [String!]!
+	kind: String!
+	restoredFromId: String
+	contentSnapshotAt: String!
+}
+
+type DocumentContentHistoryConnection {
+	nodes: [DocumentContentHistory!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+input DocumentCreateInput {
+	title: String!
+	content: String
+	icon: String
+	color: String
+	projectId: String
+	issueId: String
+	initiativeId: String
+	cycleId: String
+	"""
+	Elternobjekt Team – oder bei `cycleId` die Auflösungshilfe für den Cycle.
+	"""
+	teamId: String
+	sortOrder: Float
+	templateId: String
+}
+
+type DocumentPayload {
+	success: Boolean!
+	document: Document
+}
+
+input DocumentUpdateInput {
+	title: String
+	content: String
+	"""
+	Teiländerungen als JSON-Liste (`op`, …), schließt `content` aus.
+	"""
+	patch: JSON
+	icon: String
+	color: String
+	"""
+	Reparent: genau ein Elternparameter.
+	"""
+	projectId: String
+	issueId: String
+	initiativeId: String
+	cycleId: String
+	teamId: String
+	sortOrder: Float
+	"""
+	Optimistische Sperre auf die Inhalts-Revision.
+	"""
+	expectedVersion: Int
+}
+
 type Initiative {
 	id: String!
 	identifier: String!
@@ -427,6 +528,11 @@ input IssueUpdateInput {
 	sortOrder: Float
 }
 
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
 input LinkInput {
 	url: String!
 	title: String!
@@ -621,14 +727,28 @@ type Mutation {
 	Eigene Einstellungen ändern (die Inbox ist nicht abschaltbar).
 	"""
 	notificationSettingsUpdate(input: NotificationSettingsInput!): NotificationSettings!
+	documentCreate(input: DocumentCreateInput!): DocumentPayload!
+	documentUpdate(id: String!, input: DocumentUpdateInput!): DocumentPayload!
 	"""
-	Platzhalter des Scaffolds.
+	Papierkorb (30 Tage wiederherstellbar).
 	"""
-	_documentMutationReady: Boolean!
+	documentDelete(id: String!): DocumentPayload!
+	documentUnarchive(id: String!): DocumentPayload!
 	"""
-	Platzhalter des Scaffolds.
+	Stellt den Inhalt eines Snapshots als neue Version wieder her.
 	"""
-	_templateMutationReady: Boolean!
+	documentContentRestore(documentId: String!, historyId: String!): DocumentPayload!
+	templateCreate(input: TemplateCreateInput!): TemplatePayload!
+	templateUpdate(id: String!, input: TemplateUpdateInput!): TemplatePayload!
+	templateDelete(id: String!): TemplatePayload!
+	"""
+	Setzt (oder löscht mit `templateId: null`) ein Default-Template des Teams.
+	"""
+	teamDefaultTemplateSet(teamId: String!, slot: TemplateDefaultSlot!, templateId: String): Boolean!
+	"""
+	Legt ein Issue (inkl. Sub-Issues) aus einem Template an – eine Transaktion.
+	"""
+	templateIssueCreate(templateId: String!, input: TemplateIssueCreateInput!): TemplateIssuePayload!
 	"""
 	Accept: Status `defaultIssueState` oder gewählt, optionaler Kommentar.
 	"""
@@ -1097,13 +1217,26 @@ type Query {
 	"""
 	notificationSubscriptions: [NotificationSubscription!]!
 	"""
-	Platzhalter des Scaffolds.
+	Ein Dokument per UUID, `slugId` oder URL.
 	"""
-	_documentReady: Boolean!
+	document(id: String!): Document!
 	"""
-	Platzhalter des Scaffolds.
+	Dokumente sichtbarer Elternobjekte (`trashed: true` = „Recently deleted“).
 	"""
-	_templateReady: Boolean!
+	documents(projectId: String, initiativeId: String, teamId: String, issueId: String, cycleId: String, creatorId: String, query: String, includeArchived: Boolean, trashed: Boolean, first: Int, after: String): DocumentConnection!
+	"""
+	Volltextsuche über Titel und Inhalt sichtbarer Dokumente.
+	"""
+	searchDocuments(term: String!, first: Int, after: String): DocumentConnection!
+	"""
+	Snapshot-Historie (neueste zuerst).
+	"""
+	documentContentHistory(documentId: String!, first: Int, after: String): DocumentContentHistoryConnection!
+	"""
+	Templates des Teams (eigene, geerbte, Workspace) bzw. alle sichtbaren.
+	"""
+	templates(teamId: String, type: TemplateKind): [Template!]!
+	template(id: String!): Template!
 	"""
 	Triage-Liste eines Teams (nicht gesnoozte, älteste zuerst).
 	"""
@@ -1247,6 +1380,100 @@ input TeamUpdateInput {
 	visibility: String
 	triageEnabled: Boolean
 	cyclesEnabled: Boolean
+}
+
+type Template {
+	id: String!
+	name: String!
+	type: String!
+	description: String
+	icon: String
+	color: String
+	"""
+	`null` = Workspace-Template.
+	"""
+	teamId: String
+	teamKey: String
+	templateData: JSON!
+	sortOrder: Float!
+	inheritedFromId: String
+	isForm: Boolean!
+	createdAt: String!
+	updatedAt: String!
+}
+
+input TemplateCreateInput {
+	type: TemplateKind!
+	name: String!
+	description: String
+	"""
+	Ohne Team: Workspace-Template.
+	"""
+	teamId: String
+	templateData: JSON!
+	icon: String
+	color: String
+	sortOrder: Float
+}
+
+"""
+Welches Default-Template eines Teams.
+"""
+enum TemplateDefaultSlot {
+	forMembers
+	forNonMembers
+	project
+}
+
+input TemplateIssueCreateInput {
+	teamId: String!
+	title: String
+	description: String
+	state: String
+	priority: Int
+	assigneeId: String
+	labelIds: [String!]
+	projectId: String
+	cycleId: String
+	parentId: String
+	"""
+	Felder, die ausdrücklich nicht gesetzt werden sollen (überschreibt das Template).
+	"""
+	clearFields: [String!]
+}
+
+type TemplateIssuePayload {
+	success: Boolean!
+	issue: Issue!
+	subIssues: [Issue!]!
+	warnings: [String!]!
+}
+
+"""
+Template-Typ.
+"""
+enum TemplateKind {
+	issue
+	project
+	document
+}
+
+type TemplatePayload {
+	success: Boolean!
+	template: Template
+}
+
+input TemplateUpdateInput {
+	name: String
+	description: String
+	templateData: JSON
+	icon: String
+	color: String
+	sortOrder: Float
+	"""
+	Sub-Team, das ein geerbtes Template anpasst (es entsteht eine Kopie mit `inheritedFrom`).
+	"""
+	asTeamId: String
 }
 
 type TimeSchedule {
