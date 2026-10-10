@@ -62,19 +62,31 @@ pub fn parse_list(entries: &[String]) -> Vec<Cidr> {
     entries.iter().filter_map(|e| Cidr::parse(e)).collect()
 }
 
-/// Client-IP aus Peer und Headern.
+/// Parst alle `X-Forwarded-For`-Header strikt zu einer Liste (Reihenfolge der Header und
+/// Einträge bleibt erhalten). Jeder Eintrag muss eine reine IP sein (nach Trimmen); Ports,
+/// Klammern, Zone-IDs, `unknown`, obfuskierte Bezeichner und leere Einträge machen die ganze
+/// Kette ungültig (`None`), damit kein vom Client gefälschter Eintrag weiter links gewählt wird.
+fn parse_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
+    let mut chain = Vec::new();
+    for value in headers.get_all("x-forwarded-for") {
+        for entry in value.to_str().ok()?.split(',') {
+            chain.push(normalize(entry.trim().parse::<IpAddr>().ok()?));
+        }
+    }
+    Some(chain)
+}
+
+/// Client-IP aus Peer und Headern. Der `Forwarded`-Header (RFC 7239) wird bewusst nicht
+/// ausgewertet, damit nicht zwei Quellen gemischt werden.
 pub fn resolve(peer: IpAddr, headers: &HeaderMap, trusted: &[Cidr]) -> IpAddr {
+    let peer = normalize(peer);
     let is_trusted = |ip: IpAddr| trusted.iter().any(|c| c.contains(ip));
     if !is_trusted(peer) {
         return peer;
     }
-    let chain: Vec<IpAddr> = headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .filter_map(|s| s.trim().parse::<IpAddr>().ok())
-        .collect();
+    let Some(chain) = parse_chain(headers) else {
+        return peer;
+    };
     chain
         .iter()
         .rev()
@@ -148,5 +160,84 @@ mod tests {
             resolve(ip("10.0.0.5"), &HeaderMap::new(), &trusted),
             ip("10.0.0.5")
         );
+    }
+
+    fn multi(values: &[&str]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for v in values {
+            h.append("x-forwarded-for", HeaderValue::from_str(v).unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn multiple_headers_form_one_ordered_list() {
+        let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
+        // Entspricht "6.6.6.6, 198.51.100.7, 10.0.0.9" in einem Header.
+        let h = multi(&["6.6.6.6", "198.51.100.7, 10.0.0.9"]);
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        // Der zweite Header (vom Proxy angehängt) zählt, nicht der erste.
+        let h = multi(&["198.51.100.7", "10.0.0.9"]);
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+    }
+
+    #[test]
+    fn anything_but_a_plain_ip_fails_closed_to_the_peer() {
+        let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
+        for bad in [
+            "6.6.6.6, 1.2.3.4:5678",
+            "6.6.6.6, [::1]:80",
+            "6.6.6.6, [::1]",
+            "6.6.6.6, unknown",
+            "6.6.6.6, _hidden",
+            "6.6.6.6, fe80::1%eth0",
+            "6.6.6.6, , 198.51.100.7",
+            "6.6.6.6,",
+        ] {
+            assert_eq!(
+                resolve(ip("10.0.0.5"), &xff(bad), &trusted),
+                ip("10.0.0.5"),
+                "{bad}"
+            );
+        }
+        // Auch ein ungültiger Eintrag in einem zweiten Header macht alles ungültig.
+        let h = multi(&["198.51.100.7", "unknown"]);
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.5"));
+        // Whitespace wird getrimmt.
+        assert_eq!(
+            resolve(
+                ip("10.0.0.5"),
+                &xff("  198.51.100.7 ,\t10.0.0.9 "),
+                &trusted
+            ),
+            ip("198.51.100.7")
+        );
+    }
+
+    #[test]
+    fn mapped_ipv6_is_normalized_for_peer_and_entries() {
+        let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
+        // Peer als mapped IPv6 gilt als 10.0.0.5 (vertrauenswürdig).
+        let h = xff("198.51.100.7");
+        assert_eq!(
+            resolve(ip("::ffff:10.0.0.5"), &h, &trusted),
+            ip("198.51.100.7")
+        );
+        // Mapped Einträge werden abgezogen und das Ergebnis ist normalisiert.
+        let h = xff("::ffff:198.51.100.7, ::ffff:10.0.0.9");
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        // Alle vertrauenswürdig: linkester Eintrag.
+        let h = xff("10.0.0.1, ::ffff:10.0.0.2");
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.1"));
+    }
+
+    #[test]
+    fn forwarded_header_is_ignored() {
+        let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
+        let mut h = HeaderMap::new();
+        h.insert("forwarded", HeaderValue::from_static("for=6.6.6.6"));
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.5"));
+        h.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.7"));
+        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
     }
 }
