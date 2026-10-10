@@ -154,6 +154,7 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                             actor: principal.actor,
                             request_id,
                             scopes: principal.scopes,
+                            team_scope: principal.team_scope,
                         },
                         class,
                     }

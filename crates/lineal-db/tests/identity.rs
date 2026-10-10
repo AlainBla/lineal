@@ -779,6 +779,7 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
         },
         request_id: "r".into(),
         scopes: Scopes::all(),
+        team_scope: None,
     };
     let org = app
         .update_workspace(

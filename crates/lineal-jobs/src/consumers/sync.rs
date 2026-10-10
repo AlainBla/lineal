@@ -329,6 +329,7 @@ async fn notification_data(
         actor: Actor::User { id: user, role },
         request_id: format!("sync_{}", ev.id),
         scopes: Scopes::read_only(),
+        team_scope: None,
     };
     match app
         .get_notification(&ctx, lineal_domain::ids::NotificationId(id))

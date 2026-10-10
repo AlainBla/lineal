@@ -169,6 +169,7 @@ mod tests {
                 id: lineal_domain::ids::UserId::new_v7(),
             },
             scopes: lineal_app::Scopes::read_only(),
+            team_scope: None,
         };
         let store = lineal_testkit::FakeStore::new().with_principal(
             crate::middleware::auth::hash_token("lin_api_test"),

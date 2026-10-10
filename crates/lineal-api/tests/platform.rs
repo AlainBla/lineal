@@ -36,6 +36,7 @@ fn principal(scopes: Scopes) -> Principal {
             id: UserId::new_v7(),
         },
         scopes,
+        team_scope: None,
     }
 }
 

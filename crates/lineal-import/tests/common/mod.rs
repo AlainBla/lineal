@@ -71,6 +71,7 @@ impl Env {
             actor: Actor::User { id: user, role },
             request_id: "req_import_test".into(),
             scopes: Scopes::all(),
+            team_scope: None,
         }
     }
 

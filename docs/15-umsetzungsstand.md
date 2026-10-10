@@ -77,7 +77,7 @@ Das Token einer WebSocket-Verbindung wird alle 60 s und nach jeder Zustellung vo
 
 ### 4.3 Zugriff auf Daten
 
-Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Policy (`visible_team_ids`, `require_*`, Scope); Namensauflösung, Fehlermeldungen und Aggregate verraten nichts über unsichtbare Objekte. Rich Text wird beim Speichern bereinigt, URLs nur über die Allowlist akzeptiert.
+Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Policy (`visible_team_ids`, `require_*`, Scope); Namensauflösung, Fehlermeldungen und Aggregate verraten nichts über unsichtbare Objekte. Rich Text wird beim Speichern bereinigt, URLs nur über die Allowlist akzeptiert. API-Keys mit `team_ids` sind auf diese Teams beschränkt (`RequestCtx.team_scope`, Schnitt in `visible_team_ids`; Teams außerhalb verhalten sich wie unsichtbare: `not_found`); eine leere Liste bedeutet „kein Team“, `NULL` keine Beschränkung. Workspace-weite Admin-Aktionen schränkt der Team-Scope nicht ein.
 
 ### 4.4 Rate-Limit und Client-IP
 

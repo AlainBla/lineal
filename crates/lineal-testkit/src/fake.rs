@@ -103,7 +103,7 @@ empty_repos!(
 #[async_trait]
 impl AuthRepo for FakeTx {
     async fn find_principal_by_token_hash(&mut self, hash: &str) -> AppResult<Option<Principal>> {
-        Ok(lock(&self.state.principals).get(hash).copied())
+        Ok(lock(&self.state.principals).get(hash).cloned())
     }
 }
 
@@ -337,8 +337,9 @@ mod tests {
                 id: UserId::new_v7(),
             },
             scopes: Scopes::read_only(),
+            team_scope: None,
         };
-        let store = FakeStore::new().with_principal("h1", principal);
+        let store = FakeStore::new().with_principal("h1", principal.clone());
         let mut tx = store.begin_system().await.unwrap();
         assert_eq!(
             tx.auth().find_principal_by_token_hash("h1").await.unwrap(),

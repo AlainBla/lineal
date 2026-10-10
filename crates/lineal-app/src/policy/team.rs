@@ -142,6 +142,8 @@ pub struct ActorView {
     pub actor: Actor,
     pub role: UserRole,
     pub memberships: HashMap<TeamId, bool>,
+    /// Team-Beschränkung eines API-Keys (`RequestCtx::team_scope`); `None` = unbeschränkt.
+    pub team_scope: Option<BTreeSet<TeamId>>,
 }
 
 impl ActorView {
@@ -155,7 +157,19 @@ impl ActorView {
             actor,
             role,
             memberships: memberships.iter().map(|m| (m.team_id, m.owner)).collect(),
+            team_scope: None,
         }
+    }
+
+    /// Beschränkt die Sicht auf die Teams eines team-beschränkten API-Keys.
+    pub fn with_team_scope(mut self, scope: Option<&[TeamId]>) -> Self {
+        self.team_scope = scope.map(|s| s.iter().copied().collect());
+        self
+    }
+
+    /// Liegt das Team im Geltungsbereich des Tokens (immer wahr ohne Team-Beschränkung)?
+    pub fn in_scope(&self, team: TeamId) -> bool {
+        self.team_scope.as_ref().is_none_or(|s| s.contains(&team))
     }
 
     pub fn is_system(&self) -> bool {
@@ -171,8 +185,17 @@ impl ActorView {
     }
 }
 
-/// `accessibleTeamIds` (docs/02 §6.5), rein berechnet.
+/// `accessibleTeamIds` (docs/02 §6.5), rein berechnet; bei einem team-beschränkten API-Key
+/// auf dessen Teams geschnitten.
 pub fn compute_visible_team_ids(actor: &ActorView, tree: &TeamTree) -> BTreeSet<TeamId> {
+    let mut ids = compute_visible_unscoped(actor, tree);
+    if let Some(scope) = &actor.team_scope {
+        ids.retain(|t| scope.contains(t));
+    }
+    ids
+}
+
+fn compute_visible_unscoped(actor: &ActorView, tree: &TeamTree) -> BTreeSet<TeamId> {
     if actor.is_system() {
         return tree.all().filter(|t| !t.trashed).map(|t| t.id).collect();
     }
@@ -279,7 +302,7 @@ pub fn compute_policy_view(
     let visible = compute_visible_team_ids(actor, tree);
     let can_access = visible.contains(&team);
     let can_see_metadata = if actor.is_system() || actor.is_admin() {
-        true
+        actor.in_scope(team)
     } else {
         can_access
     };
@@ -323,7 +346,8 @@ impl PolicySnapshot {
             Err(e) => return Err(e),
         };
         Ok(Self {
-            actor: ActorView::new(ctx.actor, &memberships),
+            actor: ActorView::new(ctx.actor, &memberships)
+                .with_team_scope(ctx.team_scope.as_deref()),
             tree: TeamTree::new(teams),
             org,
         })
@@ -522,6 +546,7 @@ pub(crate) mod fixtures {
             actor: view.actor,
             request_id: "req_test".into(),
             scopes: crate::context::Scopes::all(),
+            team_scope: None,
         }
     }
 }

@@ -309,6 +309,7 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, Str
         actor: principal.actor,
         request_id: format!("req_sync_{}", Uuid::now_v7().simple()),
         scopes: principal.scopes,
+        team_scope: principal.team_scope.clone(),
     };
     Ok((ctx, token_hash))
 }

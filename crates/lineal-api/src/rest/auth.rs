@@ -173,6 +173,7 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         actor: principal.actor,
         request_id: "req_me".into(),
         scopes: principal.scopes,
+        team_scope: principal.team_scope.clone(),
     };
     let (user, org) = match (
         app.get_user(&ctx, &user_id.to_string()).await,

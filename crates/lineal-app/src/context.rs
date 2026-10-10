@@ -1,7 +1,7 @@
 //! Wer handelt in welchem Workspace (docs/11 §3.2).
 
 use lineal_domain::enums::UserRole;
-use lineal_domain::ids::{OrgId, UserId};
+use lineal_domain::ids::{OrgId, TeamId, UserId};
 
 /// Handelnder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,9 @@ pub struct RequestCtx {
     pub actor: Actor,
     pub request_id: String,
     pub scopes: Scopes,
+    /// Team-Beschränkung eines API-Keys (`api_key.team_ids`): nur diese Teams sind sichtbar und
+    /// änderbar. `None` = keine Beschränkung (Sessions, OAuth, System).
+    pub team_scope: Option<Vec<TeamId>>,
 }
 
 impl RequestCtx {
@@ -66,6 +69,7 @@ impl RequestCtx {
             actor: Actor::System,
             request_id: request_id.into(),
             scopes: Scopes::all(),
+            team_scope: None,
         }
     }
 }
