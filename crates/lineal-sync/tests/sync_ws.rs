@@ -492,3 +492,85 @@ async fn silent_clients_are_dropped(pool: PgPool) {
     }
     assert!(saw_close, "Server hat den stummen Client nicht getrennt");
 }
+
+/// Wartet auf den Close-Frame und liefert den Code (`None` bei Timeout/ohne Close-Frame).
+async fn next_close(ws: &mut Ws, wait: Duration) -> Option<u16> {
+    let fut = async {
+        loop {
+            match ws.next().await? {
+                Ok(Message::Close(frame)) => return frame.map(|f| u16::from(f.code)),
+                Err(_) => return None,
+                Ok(_) => {}
+            }
+        }
+    };
+    tokio::time::timeout(wait, fut).await.ok().flatten()
+}
+
+fn revalidating(pool: &PgPool, every: Duration) -> SyncConfig {
+    let _ = pool;
+    SyncConfig {
+        revalidate_interval: every,
+        ..fast()
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn revoked_session_is_closed_with_4401_by_the_periodic_check(pool: PgPool) {
+    let e = env_with(pool, |p| revalidating(p, Duration::from_millis(150))).await;
+    let mut bob = e.connect("bob", None).await;
+    let mut alice = e.connect("alice", None).await;
+    assert_eq!(next_json(&mut bob, WAIT).await.unwrap()["type"], "hello");
+    assert_eq!(next_json(&mut alice, WAIT).await.unwrap()["type"], "hello");
+    sqlx::query("UPDATE user_session SET revoked_at = now() WHERE token_hash = $1")
+        .bind(lineal_app::usecases::auth::hash_token(&token("bob")))
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(next_close(&mut bob, WAIT).await, Some(4401));
+    // Alices Verbindung bleibt unberührt und liefert weiter.
+    let eng = format!("team:{}", e.d.eng.0);
+    e.append("U", "Issue", vec![eng], json!({ "tag": "still-alive" }))
+        .await;
+    assert_eq!(
+        model_ids(&next_sync(&mut alice, WAIT).await.unwrap()),
+        ["still-alive"]
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn suspended_user_is_closed_with_4401(pool: PgPool) {
+    let e = env_with(pool, |p| revalidating(p, Duration::from_millis(150))).await;
+    let mut carol = e.connect("carol", None).await;
+    assert_eq!(next_json(&mut carol, WAIT).await.unwrap()["type"], "hello");
+    sqlx::query("UPDATE \"user\" SET active = false WHERE id = $1")
+        .bind(e.d.carol.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(next_close(&mut carol, WAIT).await, Some(4401));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn membership_change_triggers_an_immediate_recheck(pool: PgPool) {
+    // Periodische Prüfung praktisch aus (1 h): nur die Zustellung einer User-Änderung prüft.
+    let e = env_with(pool, |p| revalidating(p, Duration::from_secs(3600))).await;
+    let mut bob = e.connect("bob", None).await;
+    assert_eq!(next_json(&mut bob, WAIT).await.unwrap()["type"], "hello");
+    sqlx::query("UPDATE user_session SET revoked_at = now() WHERE token_hash = $1")
+        .bind(lineal_app::usecases::auth::hash_token(&token("bob")))
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // Ohne Mitgliedschafts-Ereignis bleibt die Verbindung offen ...
+    assert!(next_close(&mut bob, QUIET).await.is_none());
+    // ... eine zugestellte User-Änderung löst die Prüfung aus.
+    e.append(
+        "U",
+        "User",
+        vec!["org".into()],
+        json!({ "tag": "member-changed" }),
+    )
+    .await;
+    assert_eq!(next_close(&mut bob, WAIT).await, Some(4401));
+}

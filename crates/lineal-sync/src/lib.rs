@@ -10,6 +10,10 @@
 //! berechnet, also verliert ein aus einem privaten Team entfernter User sofort den Strom dieses
 //! Teams). Persönliche Objekte (Notifications) tragen nur `user:<id>`.
 //!
+//! **Re-Validierung.** Das Token der Verbindung wird alle `revalidate_interval` (60 s) und nach
+//! jeder Zustellung von User-/Team-/Organisations-Änderungen neu geprüft; widerrufene oder
+//! abgelaufene Tokens und suspendierte User beenden die Verbindung mit Close-Code 4401.
+//!
 //! **Protokoll** (JSON-Textframes):
 //! - Server → Client: `{"type":"hello","lastSyncId":N,"resumed":bool}`,
 //!   `{"type":"sync","actions":[…],"lastSyncId":N}`, `{"type":"pong","lastSyncId":N}`,
@@ -55,6 +59,12 @@ pub const NOTIFY_CHANNEL: &str = "lineal_sync";
 pub const CLOSE_RESET_REQUIRED: u16 = 4001;
 /// WebSocket-Schließcode „Policy Violation“ (Auth/Sichtbarkeit nicht mehr gegeben).
 const CLOSE_POLICY: u16 = 1008;
+/// WebSocket-Schließcode, wenn das Token der Verbindung nicht mehr gilt (widerrufen, abgelaufen,
+/// User suspendiert). Der Client muss sich neu anmelden, nicht nur neu verbinden.
+pub const CLOSE_UNAUTHORIZED: u16 = 4401;
+/// Sync-Modelle, deren Änderung Mitgliedschaft/Rolle/Sichtbarkeit berühren können: nach einer
+/// Zustellung solcher Aktionen wird das Token sofort neu geprüft.
+const MEMBERSHIP_MODELS: [&str; 3] = ["User", "Team", "Organization"];
 
 /// Einstellungen des Sync-Adapters.
 #[derive(Clone)]
@@ -75,6 +85,8 @@ pub struct SyncConfig {
     pub send_timeout: Duration,
     /// Rückfall-Polling, falls `NOTIFY` nicht ankommt.
     pub poll_interval: Duration,
+    /// Abstand der periodischen Token-Prüfung laufender Verbindungen.
+    pub revalidate_interval: Duration,
     /// Pool für `LISTEN`; `None` → nur Polling.
     pub listen_pool: Option<PgPool>,
     /// Zusätzlich erlaubte `Origin`-Werte (z. B. Dev-Server); gleicher Host/`base_url` ist immer erlaubt.
@@ -92,6 +104,7 @@ impl Default for SyncConfig {
             idle_timeout: Duration::from_secs(90),
             send_timeout: Duration::from_secs(10),
             poll_interval: Duration::from_secs(2),
+            revalidate_interval: Duration::from_secs(60),
             listen_pool: None,
             extra_origins: vec![],
         }
@@ -270,7 +283,8 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, Response> {
+/// Löst die Zugangsdaten auf; liefert `RequestCtx` und den Token-Hash (für die Re-Validierung).
+async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, String), Response> {
     let unauthenticated = |msg: &str| {
         let mut res = error_response(StatusCode::UNAUTHORIZED, "unauthenticated", msg);
         res.headers_mut().insert(
@@ -285,23 +299,39 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, Resp
     if token.len() > MAX_TOKEN_LEN {
         return Err(unauthenticated("Invalid or expired token."));
     }
-    let mut tx = app
-        .store
-        .begin_system()
-        .await
-        .map_err(|e| app_error_response(&e))?;
-    let principal = tx
-        .auth()
-        .find_principal_by_token_hash(&hash_token(&token))
+    let token_hash = hash_token(&token);
+    let principal = lookup(app, &token_hash)
         .await
         .map_err(|e| app_error_response(&e))?
         .ok_or_else(|| unauthenticated("Invalid or expired token."))?;
-    Ok(RequestCtx {
+    let ctx = RequestCtx {
         org_id: principal.org_id,
         actor: principal.actor,
         request_id: format!("req_sync_{}", Uuid::now_v7().simple()),
         scopes: principal.scopes,
-    })
+    };
+    Ok((ctx, token_hash))
+}
+
+async fn lookup(
+    app: &App,
+    token_hash: &str,
+) -> Result<Option<lineal_app::ports::repos::Principal>, AppError> {
+    let mut tx = app.store.begin_system().await?;
+    tx.auth().find_principal_by_token_hash(token_hash).await
+}
+
+/// Prüft das Token einer laufenden Verbindung erneut (Widerruf, Ablauf, Suspendierung,
+/// Rollenwechsel) und übernimmt Rolle/Scopes. `Unauthorized`, wenn es nicht mehr gilt.
+async fn revalidate(shared: &Shared, token_hash: &str, ctx: &mut RequestCtx) -> Result<(), End> {
+    match lookup(&shared.app, token_hash).await? {
+        Some(p) if p.org_id == ctx.org_id && p.scopes.read => {
+            ctx.actor = p.actor;
+            ctx.scopes = p.scopes;
+            Ok(())
+        }
+        _ => Err(End::Unauthorized),
+    }
 }
 
 /// Schutz vor Cross-Site-WebSocket-Hijacking: ein gesendeter `Origin` muss zum Host, zur
@@ -351,8 +381,8 @@ async fn sync_socket(
     ws: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
 ) -> Response {
     // Reihenfolge: erst Auth (401), dann Upgrade-Fehler.
-    let ctx = match authenticate(&shared.app, &headers).await {
-        Ok(ctx) => ctx,
+    let (ctx, token_hash) = match authenticate(&shared.app, &headers).await {
+        Ok(pair) => pair,
         Err(res) => return res,
     };
     let ws = match ws {
@@ -393,7 +423,7 @@ async fn sync_socket(
     let max = shared.cfg.max_incoming_bytes;
     ws.max_message_size(max)
         .max_frame_size(max)
-        .on_upgrade(move |socket| connection(socket, shared, ctx, query.since, guard))
+        .on_upgrade(move |socket| connection(socket, shared, (ctx, token_hash), query.since, guard))
 }
 
 // --- Verbindung --------------------------------------------------------------------------
@@ -407,6 +437,8 @@ enum End {
     Slow,
     /// Keine Lebenszeichen.
     Idle,
+    /// Token widerrufen/abgelaufen oder User suspendiert (Close 4401).
+    Unauthorized,
     /// Fehler beim Zustellen.
     Error(AppError),
 }
@@ -420,12 +452,21 @@ impl From<AppError> for End {
 async fn connection(
     mut socket: WebSocket,
     shared: Arc<Shared>,
-    ctx: RequestCtx,
+    (mut ctx, token_hash): (RequestCtx, String),
     since: Option<i64>,
     _guard: ConnGuard,
 ) {
-    match drive(&mut socket, &shared, &ctx, since).await {
+    match drive(&mut socket, &shared, &mut ctx, &token_hash, since).await {
         Ok(()) | Err(End::Closed) => {}
+        Err(End::Unauthorized) => {
+            tracing::info!("sync token no longer valid, disconnecting");
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: CLOSE_UNAUTHORIZED,
+                    reason: "unauthorized".into(),
+                })))
+                .await;
+        }
         Err(End::Slow) => tracing::info!("sync client too slow, disconnecting"),
         Err(End::Idle) => {
             tracing::debug!("sync client idle, disconnecting");
@@ -467,7 +508,8 @@ async fn send(socket: &mut WebSocket, cfg: &SyncConfig, msg: Message) -> Result<
 async fn drive(
     socket: &mut WebSocket,
     shared: &Shared,
-    ctx: &RequestCtx,
+    ctx: &mut RequestCtx,
+    token_hash: &str,
     since: Option<i64>,
 ) -> Result<(), End> {
     let cfg = &shared.cfg;
@@ -497,11 +539,12 @@ async fn drive(
         &json!({ "type": "hello", "lastSyncId": head.head, "resumed": since.is_some() }),
     )
     .await?;
-    deliver(socket, shared, ctx, &mut cursor).await?;
+    deliver(socket, shared, ctx, token_hash, &mut cursor).await?;
 
     let start = Instant::now();
     let mut ping = interval_at(start + cfg.ping_interval, cfg.ping_interval);
     let mut poll = interval_at(start + cfg.poll_interval, cfg.poll_interval);
+    let mut recheck = interval_at(start + cfg.revalidate_interval, cfg.revalidate_interval);
     let mut last_seen = Instant::now();
     loop {
         tokio::select! {
@@ -523,12 +566,13 @@ async fn drive(
             r = wake.recv() => {
                 match r {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                        deliver(socket, shared, ctx, &mut cursor).await?;
+                        deliver(socket, shared, ctx, token_hash, &mut cursor).await?;
                     }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 }
             }
-            _ = poll.tick() => deliver(socket, shared, ctx, &mut cursor).await?,
+            _ = poll.tick() => deliver(socket, shared, ctx, token_hash, &mut cursor).await?,
+            _ = recheck.tick() => revalidate(shared, token_hash, ctx).await?,
             _ = ping.tick() => {
                 if last_seen.elapsed() > cfg.idle_timeout {
                     return Err(End::Idle);
@@ -599,7 +643,8 @@ fn wire(row: &SyncActionRow, allowed: &[String]) -> Value {
 async fn deliver(
     socket: &mut WebSocket,
     shared: &Shared,
-    ctx: &RequestCtx,
+    ctx: &mut RequestCtx,
+    token_hash: &str,
     cursor: &mut i64,
 ) -> Result<(), End> {
     let cfg = &shared.cfg;
@@ -607,6 +652,15 @@ async fn deliver(
         let Some(batch) = fetch(shared, ctx, *cursor).await? else {
             return Ok(());
         };
+        // Änderungen an User/Team/Organisation können Mitgliedschaft oder Rolle betreffen:
+        // Token sofort neu prüfen, bevor weitere Aktionen zugestellt werden.
+        if batch
+            .rows
+            .iter()
+            .any(|r| MEMBERSHIP_MODELS.contains(&r.model_name.as_str()))
+        {
+            revalidate(shared, token_hash, ctx).await?;
+        }
         let full = i64::try_from(batch.rows.len()).unwrap_or(i64::MAX) >= cfg.batch_actions;
         let new_cursor = if full {
             batch.rows.last().map_or(batch.head, |r| r.id)
