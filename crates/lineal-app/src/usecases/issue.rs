@@ -1496,7 +1496,19 @@ impl App {
             .get_share(issue.id, user.id)
             .await?
             .ok_or_else(|| AppError::internal("share vanished"))?;
-        let _ = created;
+        if created {
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::IssueUpdated {
+                    issue_id: issue.id,
+                    team_id: issue.team_id,
+                    changed: vec!["sharedWith".into()],
+                    mentioned_user_ids: vec![],
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(ShareResult {
             issue,
@@ -1520,7 +1532,19 @@ impl App {
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, issue_ref).await?;
         snap.require_team(ctx, Action::ShareIssue, issue.team_id)?;
         let user = resolve::user::resolve_in(&mut *tx, &snap, ctx, user_ref).await?;
-        tx.issues().delete_share(issue.id, user.id).await?;
+        if tx.issues().delete_share(issue.id, user.id).await? {
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::IssueUpdated {
+                    issue_id: issue.id,
+                    team_id: issue.team_id,
+                    changed: vec!["sharedWith".into()],
+                    mentioned_user_ids: vec![],
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(ShareResult {
             issue,

@@ -716,7 +716,8 @@ input InviteUsersGqlInput {
 }
 
 """
-`Issue`.
+`Issue`. `children`, `relations` und `history` sind eigene Felder (Detailansicht); sie laden
+beim Zugriff mit den Rechten des Aufrufers nach, in Listen also bitte nicht anfordern.
 """
 type Issue {
 	id: String!
@@ -746,6 +747,18 @@ type Issue {
 	trashed: Boolean!
 	createdAt: String!
 	updatedAt: String!
+	"""
+	Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
+	"""
+	children(first: Int): [Issue!]!
+	"""
+	Relationen dieses Issues.
+	"""
+	relations: IssueRelations!
+	"""
+	Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
+	"""
+	history: [IssueHistoryEntry!]!
 }
 
 type IssueConnection {
@@ -770,6 +783,24 @@ input IssueCreateInput {
 	cycleId: String
 	dueDate: String
 	sortOrder: Float
+}
+
+"""
+Ein Eintrag der Aktivitätshistorie.
+"""
+type IssueHistoryEntry {
+	id: String!
+	actorId: String
+	source: String!
+	"""
+	`{ "<feld>": { "from": …, "to": … } }` (camelCase-Feldnamen).
+	"""
+	changes: JSON!
+	addedLabelIds: [String!]!
+	removedLabelIds: [String!]!
+	relationChanges: JSON
+	flags: [String!]!
+	createdAt: String!
 }
 
 """
@@ -836,6 +867,17 @@ input IssueRelationCreateInput {
 	`blocks`, `related` oder `duplicate`.
 	"""
 	type: String!
+}
+
+"""
+Relationen eines Issues aus dessen Sicht (nur für den Aufrufer sichtbare Gegenstücke).
+"""
+type IssueRelations {
+	blocks: [RelatedIssue!]!
+	blockedBy: [RelatedIssue!]!
+	relatedTo: [RelatedIssue!]!
+	duplicateOf: RelatedIssue
+	duplicates: [RelatedIssue!]!
 }
 
 type IssueSearchConnection {
@@ -1782,6 +1824,15 @@ type ReactionPayload {
 	success: Boolean!
 	lastSyncId: Float!
 	reaction: Reaction
+}
+
+"""
+Verwandtes Issue (Kennung und Titel).
+"""
+type RelatedIssue {
+	id: String!
+	identifier: String!
+	title: String!
 }
 
 """

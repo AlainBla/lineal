@@ -21,8 +21,8 @@ Dieses Kapitel beschreibt, was in der Implementierung (Rust-Workspace + `web/`) 
 
 Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 
-- **Sync:** `/sync/bootstrap` fehlt (Clients laden per GraphQL); Bulk-Inbox-Aktionen, Issue-Sharing und `NotificationUpdated/Archived` erzeugen keine Sync-Aktionen; Gäste haben keine org-Gruppe (Caches für User/Labels nicht live); Tab-Leader-Wahl im Web fehlt.
-- **Issues:** `moveSubIssues`, Bulk-Move, `issueBatchUpdate`, Label-Merge/-Delete, Erwähnung `ENG-123` → `related`-Relation, Duplicate-Subscriber-Übernahme; `issue.children/relations/history` und der Abo-Zustand als GraphQL-Felder für die Detailansicht.
+- **Sync:** `/sync/bootstrap` fehlt (Clients laden per GraphQL); Bulk-Inbox-Aktionen und Issue-Sharing erzeugen jetzt Events (`NotificationUpdated`/`NotificationArchived` je Notification, `IssueUpdated` mit `changed = ["sharedWith"]`); die Zustellung geteilter Issues an den Empfänger über den Sync-Strom (Gruppe `user:<id>`) fehlt noch; Gäste haben keine org-Gruppe (Caches für User/Labels nicht live); Tab-Leader-Wahl im Web fehlt.
+- **Issues:** `moveSubIssues`, Bulk-Move, `issueBatchUpdate`, Label-Merge/-Delete, Erwähnung `ENG-123` → `related`-Relation, Duplicate-Subscriber-Übernahme; der Abo-Zustand eines Issues als GraphQL-Feld. (`Issue.children`, `relations` und `history` gibt es für die Detailansicht; sie laden beim Zugriff nach und gehören nicht in Listenabfragen.)
 - **Teams/Nesting:** Label-Merge, Cycle-Instanzen und Projektstatus-Neuauflösung beim Nesting; `update_team` stößt die Cycle-Generierung nicht sofort an (Job holt innerhalb 1 min nach).
 - **Notifications:** Kommentare an Initiativen/Dokumenten/Meilensteinen/Berichten, Dokument- und View-Abos, 1-Minuten-Bündelung, `issueUnassignedFromYou`/`issueReopened`/`issueUnblocked` (Events ohne alte Werte).
 - **Planung/Automationen:** Snooze-Wiedervorlage bei Aktivität, Auto-Archive-Benachrichtigung, Cycles/Projekte auto-archivieren, Kapazität, `cycleNumberBase`.

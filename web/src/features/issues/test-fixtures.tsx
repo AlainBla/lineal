@@ -64,6 +64,10 @@ function st(id: string, name: string, type: string, position: number): WorkflowS
 export function makeIssue(over: Partial<Issue> & Pick<Issue, "id" | "identifier">): Issue {
   const state = STATES.find((s) => s.id === (over.stateId ?? "s-todo")) ?? STATES[1]!;
   return {
+    // Nachladefelder der Detailansicht (nicht Teil der Listenabfragen).
+    children: [],
+    relations: { blocks: [], blockedBy: [], relatedTo: [], duplicateOf: null, duplicates: [] },
+    history: [],
     previousIdentifiers: [],
     title: `Issue ${over.identifier}`,
     description: null,

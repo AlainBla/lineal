@@ -544,9 +544,30 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         .execute(&e.pool)
         .await
         .unwrap();
+    let count_events = |kind: &'static str| {
+        let pool = e.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM outbox_event WHERE payload->>'type' = $1",
+            )
+            .bind(kind)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let (updated_before, archived_before) = (
+        count_events("NotificationUpdated").await,
+        count_events("NotificationArchived").await,
+    );
     assert_eq!(
         e.app.mark_all_notifications_read(&ctx, None).await.unwrap(),
         2
+    );
+    // Bulk-Aktionen erzeugen je Notification ein Event (Grundlage der Sync-Aktionen).
+    assert_eq!(
+        count_events("NotificationUpdated").await,
+        updated_before + 2
     );
     assert_eq!(
         e.app
@@ -556,11 +577,20 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         2
     );
     assert_eq!(
+        count_events("NotificationArchived").await,
+        archived_before + 2
+    );
+    assert_eq!(
         e.app
             .archive_all_notifications(&ctx, Some("all"))
             .await
             .unwrap(),
         0
+    );
+    assert_eq!(
+        count_events("NotificationArchived").await,
+        archived_before + 2,
+        "ohne Treffer keine Events"
     );
     let err = e
         .app

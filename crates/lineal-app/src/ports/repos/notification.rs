@@ -384,14 +384,15 @@ pub trait NotificationRepo: Send {
         unimplemented_repo()
     }
 
-    /// Alles Nicht-Archivierte (bzw. gefiltert) als gelesen markieren.
+    /// Alles Nicht-Archivierte (bzw. gefiltert) als gelesen markieren; liefert die betroffenen IDs
+    /// (für die Sync-Events).
     async fn mark_all_read(
         &mut self,
         _user: UserId,
         _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
-    ) -> AppResult<u64> {
+    ) -> AppResult<Vec<NotificationId>> {
         unimplemented_repo()
     }
 
@@ -417,14 +418,14 @@ pub trait NotificationRepo: Send {
         unimplemented_repo()
     }
 
-    /// Archiviert alle (gefiltert) eigenen Notifications.
+    /// Archiviert alle (gefiltert) eigenen Notifications; liefert die betroffenen IDs.
     async fn archive_all(
         &mut self,
         _user: UserId,
         _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
-    ) -> AppResult<u64> {
+    ) -> AppResult<Vec<NotificationId>> {
         unimplemented_repo()
     }
 

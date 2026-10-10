@@ -450,23 +450,23 @@ impl NotificationRepo for PgTx {
         visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
-    ) -> AppResult<u64> {
+    ) -> AppResult<Vec<NotificationId>> {
         let sql = format!(
             "UPDATE notification n SET read_at = $3, updated_at = $3, version = version + 1 \
              WHERE n.organization_id = $1 AND n.user_id = $2 AND n.read_at IS NULL \
-               AND n.archived_at IS NULL AND {} AND {}",
+               AND n.archived_at IS NULL AND {} AND {} RETURNING n.id",
             visible_sub_sql("$4"),
             bulk_sql(filter)
         );
-        let res = sqlx::query(&sql)
+        let ids: Vec<Uuid> = sqlx::query_scalar(&sql)
             .bind(self.org.0)
             .bind(user.0)
             .bind(now)
             .bind(uuids(visible_teams))
-            .execute(&mut *self.tx)
+            .fetch_all(&mut *self.tx)
             .await
             .map_err(db_err)?;
-        Ok(res.rows_affected())
+        Ok(ids.into_iter().map(NotificationId).collect())
     }
 
     async fn snooze_group(
@@ -522,22 +522,22 @@ impl NotificationRepo for PgTx {
         visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
-    ) -> AppResult<u64> {
+    ) -> AppResult<Vec<NotificationId>> {
         let sql = format!(
             "UPDATE notification n SET archived_at = $3, updated_at = $3, version = version + 1 \
-             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {}",
+             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {} RETURNING n.id",
             visible_sub_sql("$4"),
             bulk_sql(filter)
         );
-        let res = sqlx::query(&sql)
+        let ids: Vec<Uuid> = sqlx::query_scalar(&sql)
             .bind(self.org.0)
             .bind(user.0)
             .bind(now)
             .bind(uuids(visible_teams))
-            .execute(&mut *self.tx)
+            .fetch_all(&mut *self.tx)
             .await
             .map_err(db_err)?;
-        Ok(res.rows_affected())
+        Ok(ids.into_iter().map(NotificationId).collect())
     }
 
     async fn unsnooze_due(&mut self, now: DateTime<Utc>) -> AppResult<u64> {

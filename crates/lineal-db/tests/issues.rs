@@ -1778,6 +1778,16 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
         .await
         .unwrap();
     assert!(shared.shared && shared.shared_at.is_some());
+    let share_events = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM outbox_event WHERE payload->>'type' = 'IssueUpdated' \
+             AND payload->'changed' @> '[\"sharedWith\"]'::jsonb",
+        )
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(share_events().await, 1, "Teilen erzeugt ein Event");
     assert_eq!(
         fx.app
             .get_issue(&alice(), "DES-1")
@@ -1824,6 +1834,13 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
         .await
         .unwrap();
     assert!(!unshared.shared);
+    assert_eq!(share_events().await, 2, "Widerruf erzeugt ein Event");
+    // Wiederholter Widerruf ist idempotent und erzeugt kein weiteres Event.
+    fx.app
+        .unshare_issue(&bob(), "DES-1", "alice@acme.example")
+        .await
+        .unwrap();
+    assert_eq!(share_events().await, 2);
     assert_eq!(
         kind(fx.app.get_issue(&alice(), "DES-1").await),
         ErrorKind::NotFound

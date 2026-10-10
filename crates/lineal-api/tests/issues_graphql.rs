@@ -261,3 +261,89 @@ async fn label_mutations_and_visibility(pool: sqlx::PgPool) {
     .await;
     assert_eq!(code(&hidden), "not_found");
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let schema = build_schema(test_app(Arc::new(store)));
+
+    let parent = data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"mutation { issueCreate(input: {teamId: "ENG", title: "Warenkorb"}) { issue { id } } }"#,
+        )
+        .await,
+    );
+    let parent_id = parent["issueCreate"]["issue"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (team, who, title) in [
+        ("ENG", SeedUser::Alice, "Kind sichtbar"),
+        ("DES", SeedUser::Bob, "Kind im privaten Team"),
+    ] {
+        let q = format!(
+            r#"mutation {{ issueCreate(input: {{teamId: "{team}", title: "{title}", parentId: "{parent_id}"}}) {{ success }} }}"#
+        );
+        let res = run(&schema, who, &q).await;
+        assert!(res.errors.is_empty(), "{team}: {:?}", res.errors);
+    }
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &format!(
+                r#"mutation {{ issueRelationCreate(input: {{issueId: "{parent_id}", relatedIssueId: "ENG-2", type: "blocks"}}) {{ success }} }}"#
+            ),
+        )
+        .await,
+    );
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"mutation { issueUpdate(id: "ENG-1", input: {title: "Warenkorb vereinfachen"}) { success } }"#,
+        )
+        .await,
+    );
+
+    let q = r#"{ issue(id: "ENG-1") {
+        title
+        children { identifier title }
+        relations { blocks { identifier title } blockedBy { identifier } duplicateOf { identifier } }
+        history { source changes flags createdAt }
+    } }"#;
+    let alice = data(run(&schema, SeedUser::Alice, q).await);
+    let issue = &alice["issue"];
+    // Das Kind im privaten Team ist für Alice unsichtbar.
+    assert_eq!(
+        issue["children"],
+        json!([{ "identifier": "ENG-2", "title": "Kind sichtbar" }])
+    );
+    assert_eq!(
+        issue["relations"]["blocks"],
+        json!([{ "identifier": "ENG-2", "title": "Kind sichtbar" }])
+    );
+    assert_eq!(issue["relations"]["blockedBy"], json!([]));
+    assert_eq!(issue["relations"]["duplicateOf"], Value::Null);
+    let history = issue["history"].as_array().unwrap();
+    // Änderungen im selben Moment werden mit dem Anlege-Eintrag zusammengefasst.
+    assert!(!history.is_empty(), "{history:?}");
+    assert_eq!(history[0]["source"], "api");
+    assert!(
+        history[0]["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "created")
+    );
+    assert!(history[0]["createdAt"].is_string());
+
+    // Bob sieht beide Kinder.
+    let bob = data(run(&schema, SeedUser::Bob, q).await);
+    assert_eq!(bob["issue"]["children"].as_array().unwrap().len(), 2);
+}
