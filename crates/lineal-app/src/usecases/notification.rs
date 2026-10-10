@@ -703,7 +703,7 @@ impl App {
                     email_format: patch.email_format,
                     due_date_reminders: patch.due_date_reminders,
                     priority_categories: patch.priority_categories,
-                    settings: (!extra.is_empty()).then(|| Value::Object(extra)),
+                    settings: (!extra.is_empty()).then_some(Value::Object(extra)),
                 },
                 now,
             )
