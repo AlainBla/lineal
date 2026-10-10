@@ -79,10 +79,38 @@ pub(crate) async fn create_default_workflow(
 ) -> AppResult<WorkflowPointers> {
     let mut created = Vec::new();
     if triage {
-        created.push(insert_state(app, tx, team, TRIAGE_STATE.0, StateType::Triage, TRIAGE_STATE.1, None, POSITION_STEP, None, now).await?);
+        created.push(
+            insert_state(
+                app,
+                tx,
+                team,
+                TRIAGE_STATE.0,
+                StateType::Triage,
+                TRIAGE_STATE.1,
+                None,
+                POSITION_STEP,
+                None,
+                now,
+            )
+            .await?,
+        );
     }
     for (name, kind, color) in DEFAULT_WORKFLOW {
-        created.push(insert_state(app, tx, team, name, kind, color, None, POSITION_STEP, None, now).await?);
+        created.push(
+            insert_state(
+                app,
+                tx,
+                team,
+                name,
+                kind,
+                color,
+                None,
+                POSITION_STEP,
+                None,
+                now,
+            )
+            .await?,
+        );
     }
     Ok(pointers_of(&created))
 }
@@ -160,10 +188,25 @@ pub(crate) async fn ensure_triage_state(
     now: DateTime<Utc>,
 ) -> AppResult<WorkflowState> {
     let states = tx.states().list_for_team(team, false).await?;
-    if let Some(s) = states.into_iter().find(|s| s.state_type == StateType::Triage) {
+    if let Some(s) = states
+        .into_iter()
+        .find(|s| s.state_type == StateType::Triage)
+    {
         return Ok(s);
     }
-    insert_state(app, tx, team, TRIAGE_STATE.0, StateType::Triage, TRIAGE_STATE.1, None, POSITION_STEP, None, now).await
+    insert_state(
+        app,
+        tx,
+        team,
+        TRIAGE_STATE.0,
+        StateType::Triage,
+        TRIAGE_STATE.1,
+        None,
+        POSITION_STEP,
+        None,
+        now,
+    )
+    .await
 }
 
 /// Eingabe für `create_workflow_state`.
@@ -230,7 +273,9 @@ impl App {
     ) -> AppResult<Vec<StateView>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, team, resolve::team::Visibility::Content).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, team, resolve::team::Visibility::Content)
+                .await?;
         let states = tx.states().list_for_team(team.id, false).await?;
         Ok(states
             .into_iter()
@@ -278,26 +323,28 @@ impl App {
                 resolve::state::resolve(&mut *tx, team, name.unwrap_or_default()).await?
             }
             (None, None) => {
-                return Err(AppError::invalid_request("a team is required to resolve a status by name"));
+                return Err(AppError::invalid_request(
+                    "a team is required to resolve a status by name",
+                ));
             }
         };
         // Das Team des Status muss sichtbar sein (Review-Fokus 2).
         let team = match team_row {
             Some(t) => t,
-            None => {
-                snap.view(state.team_id)
-                    .and_then(|v| {
-                        if v.can_access {
-                            Ok(v.team)
-                        } else {
-                            Err(crate::policy::team_not_found())
-                        }
-                    })
-                    .map_err(|_| {
-                        AppError::not_found("Could not find status")
-                            .with_details(json!({ "reference": state.id.to_string(), "type": "WorkflowState" }))
-                    })?
-            }
+            None => snap
+                .view(state.team_id)
+                .and_then(|v| {
+                    if v.can_access {
+                        Ok(v.team)
+                    } else {
+                        Err(crate::policy::team_not_found())
+                    }
+                })
+                .map_err(|_| {
+                    AppError::not_found("Could not find status").with_details(
+                        json!({ "reference": state.id.to_string(), "type": "WorkflowState" }),
+                    )
+                })?,
         };
         Ok(StateView {
             is_default: team.default_issue_state_id == Some(state.id),
@@ -314,42 +361,88 @@ impl App {
     ) -> AppResult<StateView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, &input.team, resolve::team::Visibility::Management).await?;
+        let team = resolve::team::resolve_in(
+            &mut *tx,
+            &snap,
+            &input.team,
+            resolve::team::Visibility::Management,
+        )
+        .await?;
         snap.require_team(ctx, Action::UpdateTeamSettings, team.id)?;
         let name = validate_name(&input.name)?;
         validate_color(&input.color)?;
         if input.state_type == StateType::Duplicate {
-            return Err(reason("The duplicate status is managed by the system", "duplicate_is_system_managed"));
+            return Err(reason(
+                "The duplicate status is managed by the system",
+                "duplicate_is_system_managed",
+            ));
         }
         ensure_editable(&team, None, input.state_type)?;
         let existing = tx.states().list_for_team(team.id, false).await?;
-        if existing.iter().any(|s| s.name.to_lowercase() == name.to_lowercase()) {
-            return Err(reason("A status with this name already exists in the team", "duplicate_name"));
+        if existing
+            .iter()
+            .any(|s| s.name.to_lowercase() == name.to_lowercase())
+        {
+            return Err(reason(
+                "A status with this name already exists in the team",
+                "duplicate_name",
+            ));
         }
-        if input.state_type == StateType::Triage && existing.iter().any(|s| s.state_type == StateType::Triage) {
-            return Err(reason("The team already has a triage status", "triage_exists"));
+        if input.state_type == StateType::Triage
+            && existing.iter().any(|s| s.state_type == StateType::Triage)
+        {
+            return Err(reason(
+                "The team already has a triage status",
+                "triage_exists",
+            ));
         }
         let position = input.position.unwrap_or_else(|| {
             existing
                 .iter()
                 .filter(|s| s.state_type == input.state_type)
                 .map(|s| s.position)
-                .fold(None, |acc: Option<f64>, p| Some(acc.map_or(p, |a| a.max(p))))
+                .fold(None, |acc: Option<f64>, p| {
+                    Some(acc.map_or(p, |a| a.max(p)))
+                })
                 .map_or(POSITION_STEP, |m| m + POSITION_STEP)
         });
         let now = self.clock.now();
-        let created = insert_state(self, &mut *tx, team.id, &name, input.state_type, &input.color, input.description.clone(), position, None, now).await?;
+        let created = insert_state(
+            self,
+            &mut *tx,
+            team.id,
+            &name,
+            input.state_type,
+            &input.color,
+            input.description.clone(),
+            position,
+            None,
+            now,
+        )
+        .await?;
         // Triage-Status: Team-Zeiger setzen.
         if created.state_type == StateType::Triage {
             tx.teams()
-                .update(team.id, &TeamPatch { triage_issue_state_id: Some(Some(created.id)), triage_enabled: Some(true), ..Default::default() }, now)
+                .update(
+                    team.id,
+                    &TeamPatch {
+                        triage_issue_state_id: Some(Some(created.id)),
+                        triage_enabled: Some(true),
+                        ..Default::default()
+                    },
+                    now,
+                )
                 .await?;
         }
         propagate_create(self, &mut *tx, &created, now).await?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         let team = tx.teams().get(team.id).await?.unwrap_or(team);
         tx.commit().await?;
-        Ok(StateView { is_default: team.default_issue_state_id == Some(created.id), state: created, team })
+        Ok(StateView {
+            is_default: team.default_issue_state_id == Some(created.id),
+            state: created,
+            team,
+        })
     }
 
     /// Ändert Name, Farbe, Beschreibung oder Position (docs/03 §1.3).
@@ -372,12 +465,21 @@ impl App {
         if state.state_type == StateType::Duplicate
             && (name.is_some() || input.description.is_some() || input.position.is_some())
         {
-            return Err(reason("Only the color of the duplicate status can be changed", "duplicate_is_system_managed"));
+            return Err(reason(
+                "Only the color of the duplicate status can be changed",
+                "duplicate_is_system_managed",
+            ));
         }
         if let Some(n) = &name {
             let existing = tx.states().list_for_team(team.id, false).await?;
-            if existing.iter().any(|s| s.id != state.id && s.name.to_lowercase() == n.to_lowercase()) {
-                return Err(reason("A status with this name already exists in the team", "duplicate_name"));
+            if existing
+                .iter()
+                .any(|s| s.id != state.id && s.name.to_lowercase() == n.to_lowercase())
+            {
+                return Err(reason(
+                    "A status with this name already exists in the team",
+                    "duplicate_name",
+                ));
             }
         }
         let patch = StatePatch {
@@ -392,7 +494,11 @@ impl App {
         propagate_update(&mut *tx, state.id, &patch, now).await?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
-        Ok(StateView { is_default: team.default_issue_state_id == Some(updated.id), state: updated, team })
+        Ok(StateView {
+            is_default: team.default_issue_state_id == Some(updated.id),
+            state: updated,
+            team,
+        })
     }
 
     /// Löscht (archiviert) einen Status; hängen Issues daran, ist ein Migrationsziel nötig
@@ -451,32 +557,54 @@ async fn delete_state_inner(
     now: DateTime<Utc>,
 ) -> AppResult<()> {
     if state.state_type == StateType::Duplicate {
-        return Err(reason("The duplicate status cannot be deleted", "duplicate_is_system_managed"));
+        return Err(reason(
+            "The duplicate status cannot be deleted",
+            "duplicate_is_system_managed",
+        ));
     }
     if team.default_issue_state_id == Some(state.id) {
-        return Err(reason("The default issue status cannot be deleted; choose another default first", "default_state"));
+        return Err(reason(
+            "The default issue status cannot be deleted; choose another default first",
+            "default_state",
+        ));
     }
     if state.state_type != StateType::Triage
-        && tx.states().count_active_of_type(team.id, state.state_type).await? <= 1
+        && tx
+            .states()
+            .count_active_of_type(team.id, state.state_type)
+            .await?
+            <= 1
     {
-        return Err(reason("Every category needs at least one status", "last_state_of_type"));
+        return Err(reason(
+            "Every category needs at least one status",
+            "last_state_of_type",
+        ));
     }
     let affected = tx.states().count_issues(state.id).await?;
     if affected > 0 {
         let Some(target_id) = target else {
-            return Err(AppError::invalid_request("A migration target status is required")
-                .with_details(json!({ "reason": "migration_target_required", "issueCount": affected })));
+            return Err(
+                AppError::invalid_request("A migration target status is required").with_details(
+                    json!({ "reason": "migration_target_required", "issueCount": affected }),
+                ),
+            );
         };
         let target = tx
             .states()
             .get(target_id)
             .await?
             .ok_or_else(|| reason("Migration target not found", "invalid_migration_target"))?;
-        if target.team_id != state.team_id || target.archived_at.is_some() || target.id == state.id {
-            return Err(reason("Invalid migration target", "invalid_migration_target"));
+        if target.team_id != state.team_id || target.archived_at.is_some() || target.id == state.id
+        {
+            return Err(reason(
+                "Invalid migration target",
+                "invalid_migration_target",
+            ));
         }
         let actor = crate::resolve::user::actor_user_id(ctx);
-        tx.states().migrate_issues(state.id, target.id, actor, now).await?;
+        tx.states()
+            .migrate_issues(state.id, target.id, actor, now)
+            .await?;
     }
     let mut patch = TeamPatch::default();
     if state.state_type == StateType::Triage {
@@ -499,7 +627,9 @@ async fn delete_state_inner(
     // Erbende Kopien in Sub-Teams folgen (Ziel = Kopie des Migrationsziels im jeweiligen Team).
     let copies = tx.states().list_copies_of(state.id).await?;
     for copy in copies {
-        let Some(child_team) = tx.teams().get(copy.team_id).await? else { continue };
+        let Some(child_team) = tx.teams().get(copy.team_id).await? else {
+            continue;
+        };
         let child_target = match target {
             Some(t) => tx
                 .states()
@@ -510,7 +640,15 @@ async fn delete_state_inner(
                 .map(|c| c.id),
             None => None,
         };
-        Box::pin(delete_state_inner(tx, ctx, &child_team, &copy, child_target, now)).await?;
+        Box::pin(delete_state_inner(
+            tx,
+            ctx,
+            &child_team,
+            &copy,
+            child_target,
+            now,
+        ))
+        .await?;
     }
     Ok(())
 }
@@ -600,9 +738,9 @@ pub(crate) async fn normalize_to_parent(
             .find(|(from, _)| *from == s.id)
             .and_then(|(_, to)| targets.iter().find(|t| t.id == *to))
             .or_else(|| {
-                targets
-                    .iter()
-                    .find(|t| t.state_type == s.state_type && t.name.to_lowercase() == s.name.to_lowercase())
+                targets.iter().find(|t| {
+                    t.state_type == s.state_type && t.name.to_lowercase() == s.name.to_lowercase()
+                })
             })
             .or_else(|| {
                 targets
@@ -655,7 +793,12 @@ pub(crate) async fn normalize_to_parent(
         copy_of.push((t.id, c.id));
     }
     let actor = crate::resolve::user::actor_user_id(ctx);
-    let lookup = |parent_state: StateId| copy_of.iter().find(|(p, _)| *p == parent_state).map(|(_, c)| *c);
+    let lookup = |parent_state: StateId| {
+        copy_of
+            .iter()
+            .find(|(p, _)| *p == parent_state)
+            .map(|(_, c)| *c)
+    };
     for (from, to_parent) in &mapping {
         if let Some(to) = lookup(*to_parent) {
             tx.states().migrate_issues(*from, to, actor, now).await?;
@@ -690,7 +833,14 @@ pub(crate) async fn detach_from_parent(
             || s.state_type == StateType::Duplicate;
         if used {
             tx.states()
-                .update(s.id, &StatePatch { inherited_from: Some(None), ..Default::default() }, now)
+                .update(
+                    s.id,
+                    &StatePatch {
+                        inherited_from: Some(None),
+                        ..Default::default()
+                    },
+                    now,
+                )
                 .await?;
         } else {
             tx.states().archive(s.id, now).await?;
@@ -700,7 +850,19 @@ pub(crate) async fn detach_from_parent(
     let remaining = tx.states().list_for_team(team.id, false).await?;
     for (name, kind, color) in DEFAULT_WORKFLOW {
         if !remaining.iter().any(|s| s.state_type == kind) {
-            insert_state(app, tx, team.id, name, kind, color, None, POSITION_STEP, None, now).await?;
+            insert_state(
+                app,
+                tx,
+                team.id,
+                name,
+                kind,
+                color,
+                None,
+                POSITION_STEP,
+                None,
+                now,
+            )
+            .await?;
         }
     }
     Ok(())

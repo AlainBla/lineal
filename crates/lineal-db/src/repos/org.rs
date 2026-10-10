@@ -5,9 +5,7 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::OrgRepo;
-use lineal_app::ports::repos::org::{
-    NewOrg, NewProjectStatus, NewWorkspaceLabel, Org, OrgPatch,
-};
+use lineal_app::ports::repos::org::{NewOrg, NewProjectStatus, NewWorkspaceLabel, Org, OrgPatch};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::OrgId;
 use serde_json::Value;

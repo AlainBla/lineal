@@ -221,12 +221,7 @@ impl TeamRepo for PgTx {
         rows.into_iter().map(TeamRow::into_team).collect()
     }
 
-    async fn update(
-        &mut self,
-        id: TeamId,
-        p: &TeamPatch,
-        now: DateTime<Utc>,
-    ) -> AppResult<Team> {
+    async fn update(&mut self, id: TeamId, p: &TeamPatch, now: DateTime<Utc>) -> AppResult<Team> {
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new("UPDATE team SET version = version + 1, updated_at = ");
         qb.push_bind(now);
@@ -271,11 +266,7 @@ impl TeamRepo for PgTx {
             p.set_issue_sort_order_on_state_change.clone()
         );
         set_col!(qb, "group_issue_history", p.group_issue_history);
-        set_col!(
-            qb,
-            "inherit_workflow_statuses",
-            p.inherit_workflow_statuses
-        );
+        set_col!(qb, "inherit_workflow_statuses", p.inherit_workflow_statuses);
         set_col!(
             qb,
             "issue_estimation_type",

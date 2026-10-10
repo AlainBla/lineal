@@ -20,6 +20,12 @@ struct ApiState {
     dev: bool,
 }
 
+impl axum::extract::FromRef<ApiState> for Arc<App> {
+    fn from_ref(state: &ApiState) -> Self {
+        state.app.clone()
+    }
+}
+
 /// Baut den Router. `dev = true` schaltet GraphiQL auf `GET /graphql` frei.
 pub fn router(app: Arc<App>, dev: bool) -> Router {
     let state = ApiState {
@@ -109,9 +115,6 @@ mod tests {
     #[tokio::test]
     async fn unimplemented_paths_answer_501_with_error_model() {
         for (m, uri) in [
-            (Method::POST, "/auth/login"),
-            (Method::POST, "/auth/logout"),
-            (Method::GET, "/auth/me"),
             (Method::PUT, "/uploads/tok"),
             (Method::GET, "/files/tok"),
             (Method::POST, "/oauth/register"),

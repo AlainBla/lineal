@@ -53,7 +53,11 @@ pub async fn resolve_in(
     // 6. Literal "me"
     if reference.eq_ignore_ascii_case("me") {
         let id = actor_user_id(ctx).ok_or_else(|| not_found(reference))?;
-        return tx.users().get(id).await?.ok_or_else(|| not_found(reference));
+        return tx
+            .users()
+            .get(id)
+            .await?
+            .ok_or_else(|| not_found(reference));
     }
     let mut found: Option<User> = None;
     // 1. UUID

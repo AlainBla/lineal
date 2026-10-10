@@ -125,7 +125,12 @@ impl TeamTree {
         let Some(team) = self.get(id) else {
             return String::new();
         };
-        let mut names: Vec<&str> = self.ancestors(id).iter().rev().map(|t| t.name.as_str()).collect();
+        let mut names: Vec<&str> = self
+            .ancestors(id)
+            .iter()
+            .rev()
+            .map(|t| t.name.as_str())
+            .collect();
         names.push(team.name.as_str());
         names.join(" › ")
     }
@@ -431,7 +436,10 @@ pub(crate) mod fixtures {
     }
 
     pub fn team(id: TeamId, key: &str, parent: Option<TeamId>, visibility: TeamVisibility) -> Team {
-        let now = Utc.with_ymd_and_hms(2026, 1, 5, 9, 0, 0).single().unwrap_or_default();
+        let now = Utc
+            .with_ymd_and_hms(2026, 1, 5, 9, 0, 0)
+            .single()
+            .unwrap_or_default();
         Team::from_new(
             org(),
             &NewTeam {
@@ -463,7 +471,10 @@ pub(crate) mod fixtures {
     }
 
     fn m(team: TeamId, user: UserId, owner: bool) -> Membership {
-        let now = Utc.with_ymd_and_hms(2026, 1, 5, 9, 0, 0).single().unwrap_or_default();
+        let now = Utc
+            .with_ymd_and_hms(2026, 1, 5, 9, 0, 0)
+            .single()
+            .unwrap_or_default();
         Membership {
             id: Uuid::new_v4(),
             team_id: team,
@@ -476,19 +487,32 @@ pub(crate) mod fixtures {
 
     pub fn alice_view() -> ActorView {
         ActorView::new(
-            Actor::User { id: alice(), role: UserRole::Owner },
+            Actor::User {
+                id: alice(),
+                role: UserRole::Owner,
+            },
             &[m(eng(), alice(), true)],
         )
     }
     pub fn bob_view() -> ActorView {
         ActorView::new(
-            Actor::User { id: bob(), role: UserRole::User },
-            &[m(eng(), bob(), false), m(web(), bob(), true), m(des(), bob(), true)],
+            Actor::User {
+                id: bob(),
+                role: UserRole::User,
+            },
+            &[
+                m(eng(), bob(), false),
+                m(web(), bob(), true),
+                m(des(), bob(), true),
+            ],
         )
     }
     pub fn carol_view() -> ActorView {
         ActorView::new(
-            Actor::User { id: carol(), role: UserRole::Guest },
+            Actor::User {
+                id: carol(),
+                role: UserRole::Guest,
+            },
             &[m(web(), carol(), false)],
         )
     }
@@ -589,8 +613,20 @@ mod tests {
         let mut org = OrgPolicy::default();
         org.limits.team_owners_enabled = false;
         // Bob (user) ist nicht mehr Owner; Admin/Owner (Alice) bleibt Verwaltungs-Owner.
-        assert!(!compute_is_team_owner(&bob_view(), &tree(), &org, web(), true));
-        assert!(compute_is_team_owner(&alice_view(), &tree(), &org, eng(), true));
+        assert!(!compute_is_team_owner(
+            &bob_view(),
+            &tree(),
+            &org,
+            web(),
+            true
+        ));
+        assert!(compute_is_team_owner(
+            &alice_view(),
+            &tree(),
+            &org,
+            eng(),
+            true
+        ));
     }
 
     #[test]
@@ -610,11 +646,27 @@ mod tests {
         let t = tree();
         let org = OrgPolicy::default();
         // Alice darf WEB (public, allMembersCanJoin) beitreten, Mitglied von ENG nicht erneut.
-        assert!(compute_policy_view(&alice_view(), &t, &org, web()).unwrap().can_join);
-        assert!(!compute_policy_view(&alice_view(), &t, &org, eng()).unwrap().can_join);
+        assert!(
+            compute_policy_view(&alice_view(), &t, &org, web())
+                .unwrap()
+                .can_join
+        );
+        assert!(
+            !compute_policy_view(&alice_view(), &t, &org, eng())
+                .unwrap()
+                .can_join
+        );
         // Privates DES: Admin darf (mit Warnhinweis), Gäste nie.
-        assert!(compute_policy_view(&alice_view(), &t, &org, des()).unwrap().can_join);
-        assert!(!compute_policy_view(&carol_view(), &t, &org, eng()).unwrap().can_join);
+        assert!(
+            compute_policy_view(&alice_view(), &t, &org, des())
+                .unwrap()
+                .can_join
+        );
+        assert!(
+            !compute_policy_view(&carol_view(), &t, &org, eng())
+                .unwrap()
+                .can_join
+        );
     }
 
     #[test]

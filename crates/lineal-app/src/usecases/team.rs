@@ -4,8 +4,8 @@
 //! Stilllegen/Löschen/Wiederherstellen (`team_lifecycle`) liegt bei WP16.
 
 use super::state::{
-    WorkflowPointers, copy_states, create_default_workflow, detach_from_parent, ensure_triage_state,
-    normalize_to_parent, pointers_of,
+    WorkflowPointers, copy_states, create_default_workflow, detach_from_parent,
+    ensure_triage_state, normalize_to_parent, pointers_of,
 };
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
@@ -47,7 +47,8 @@ pub(crate) fn validate_color(color: &str) -> AppResult<()> {
     if ok {
         Ok(())
     } else {
-        Err(AppError::invalid_request("color must be #RRGGBB").with_details(json!({ "field": "color" })))
+        Err(AppError::invalid_request("color must be #RRGGBB")
+            .with_details(json!({ "field": "color" })))
     }
 }
 
@@ -97,13 +98,21 @@ pub fn team_key_base(name: &str) -> String {
         .collect();
     let words: Vec<String> = upper
         .split_whitespace()
-        .map(|w| w.chars().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect::<String>())
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                .collect::<String>()
+        })
         .filter(|w| !w.is_empty())
         .collect();
     let mut base = match words.as_slice() {
         [] => "TEAM".to_string(),
         [one] => one.chars().take(3).collect(),
-        many => many.iter().take(4).filter_map(|w| w.chars().next()).collect(),
+        many => many
+            .iter()
+            .take(4)
+            .filter_map(|w| w.chars().next())
+            .collect(),
     };
     if base.starts_with(|c: char| c.is_ascii_digit()) {
         base.insert(0, 'T');
@@ -324,7 +333,11 @@ async fn ensure_member(
 
 impl App {
     /// `list_teams`: sichtbare Teams, gefiltert und paginiert (docs/02 §3.6, §6.6).
-    pub async fn list_teams(&self, ctx: &RequestCtx, input: ListTeamsInput) -> AppResult<Page<TeamView>> {
+    pub async fn list_teams(
+        &self,
+        ctx: &RequestCtx,
+        input: ListTeamsInput,
+    ) -> AppResult<Page<TeamView>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible = snap.visible_team_ids();
@@ -335,13 +348,18 @@ impl App {
         }
         if let Some(a) = &input.ancestor_team {
             let anc = resolve::team::resolve_in(&mut *tx, &snap, a, Visibility::Content).await?;
-            let ids: BTreeSet<TeamId> = snap.tree.descendants(anc.id).iter().map(|t| t.id).collect();
+            let ids: BTreeSet<TeamId> =
+                snap.tree.descendants(anc.id).iter().map(|t| t.id).collect();
             scope = Some(match scope {
                 Some(s) => s.intersection(&ids).copied().collect(),
                 None => ids,
             });
         }
-        let q = input.query.as_deref().map(str::to_lowercase).filter(|q| !q.is_empty());
+        let q = input
+            .query
+            .as_deref()
+            .map(str::to_lowercase)
+            .filter(|q| !q.is_empty());
         let sort_key = |t: &Team| match input.page.order_by {
             OrderBy::CreatedAt => t.created_at,
             OrderBy::UpdatedAt => t.updated_at,
@@ -354,7 +372,8 @@ impl App {
             .filter(|t| scope.as_ref().is_none_or(|s| s.contains(&t.id)))
             .filter(|t| {
                 q.as_ref().is_none_or(|q| {
-                    t.name.to_lowercase().contains(q.as_str()) || t.key.to_lowercase().contains(q.as_str())
+                    t.name.to_lowercase().contains(q.as_str())
+                        || t.key.to_lowercase().contains(q.as_str())
                 })
             })
             .filter(|t| input.created_after.is_none_or(|a| t.created_at > a))
@@ -368,7 +387,10 @@ impl App {
         let has_next = teams.len() > limit;
         teams.truncate(limit);
         let next = if has_next {
-            teams.last().map(|t| PageCursor { key: sort_key(t), id: t.id.0 })
+            teams.last().map(|t| PageCursor {
+                key: sort_key(t),
+                id: t.id.0,
+            })
         } else {
             None
         };
@@ -382,21 +404,31 @@ impl App {
     pub async fn get_team(&self, ctx: &RequestCtx, reference: &str) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Content).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Content).await?;
         Ok(view_of(&snap.tree, &team))
     }
 
     /// Team für die Verwaltung (auch private Teams für Admins als Metadaten).
-    pub async fn get_team_for_management(&self, ctx: &RequestCtx, reference: &str) -> AppResult<TeamView> {
+    pub async fn get_team_for_management(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
         snap.require_team(ctx, Action::ViewTeamMetadata, team.id)?;
         Ok(view_of(&snap.tree, &team))
     }
 
     /// Legt ein Team an (docs/02 §2.3), in einer Transaktion.
-    pub async fn create_team(&self, ctx: &RequestCtx, input: CreateTeamInput) -> AppResult<TeamView> {
+    pub async fn create_team(
+        &self,
+        ctx: &RequestCtx,
+        input: CreateTeamInput,
+    ) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let id = self.create_team_in(&mut *tx, ctx, input).await?;
         let view = reload_view(&mut *tx, id).await?;
@@ -417,15 +449,26 @@ impl App {
         );
         snap.require_workspace(
             ctx,
-            if wants_private { Action::CreatePrivateTeam } else { Action::CreateTeam },
+            if wants_private {
+                Action::CreatePrivateTeam
+            } else {
+                Action::CreateTeam
+            },
         )?;
         if let Some(max) = snap.org.limits.max_teams
             && snap.tree.all().filter(|t| !t.trashed).count() as i64 >= max
         {
-            return Err(limit("maxTeams", "The workspace has reached its team limit."));
+            return Err(limit(
+                "maxTeams",
+                "The workspace has reached its team limit.",
+            ));
         }
         let name = validate_team_name(&input.name)?;
-        if snap.tree.all().any(|t| !t.trashed && t.name.to_lowercase() == name.to_lowercase()) {
+        if snap
+            .tree
+            .all()
+            .any(|t| !t.trashed && t.name.to_lowercase() == name.to_lowercase())
+        {
             return Err(AppError::conflict("A team with this name already exists")
                 .with_details(json!({ "field": "name" })));
         }
@@ -437,13 +480,17 @@ impl App {
         if let Some(c) = &input.color {
             validate_color(c)?;
         }
-        let timezone = input.timezone.clone().unwrap_or_else(|| "America/Los_Angeles".into());
+        let timezone = input
+            .timezone
+            .clone()
+            .unwrap_or_else(|| "America/Los_Angeles".into());
         validate_timezone(&timezone)?;
 
         // Parent
         let parent = match &input.parent {
             Some(p) => {
-                let parent = resolve::team::resolve_in(tx, &snap, p, Visibility::Management).await?;
+                let parent =
+                    resolve::team::resolve_in(tx, &snap, p, Visibility::Management).await?;
                 snap.require_team(ctx, Action::SetTeamParent, parent.id)?;
                 if !snap.org.limits.sub_teams_enabled {
                     return Err(limit("subTeamsEnabled", "Sub-teams are disabled."));
@@ -465,12 +512,18 @@ impl App {
             (None, _) => TeamVisibility::Public,
         };
         if visibility == TeamVisibility::Restricted && parent.is_none() {
-            return Err(invalid("visibility", "restricted is only allowed for sub-teams"));
+            return Err(invalid(
+                "visibility",
+                "restricted is only allowed for sub-teams",
+            ));
         }
         if let Some(p) = &parent
             && !visibility_allowed_under_parent(p.visibility, visibility)
         {
-            return Err(invalid("visibility", "a sub-team cannot be more open than its parent"));
+            return Err(invalid(
+                "visibility",
+                "a sub-team cannot be more open than its parent",
+            ));
         }
         // Key
         let key = match &input.key {
@@ -491,9 +544,8 @@ impl App {
 
         let now = self.clock.now();
         let id = TeamId(self.ids.new_uuid());
-        let inherit_workflow = parent.is_some()
-            && source.is_none()
-            && input.inherit_workflow_statuses.unwrap_or(true);
+        let inherit_workflow =
+            parent.is_some() && source.is_none() && input.inherit_workflow_statuses.unwrap_or(true);
         let inherit_estimation = parent.is_some() && source.is_none();
         let triage = input.triage_enabled.unwrap_or(false);
         tx.teams()
@@ -544,7 +596,8 @@ impl App {
             patch.auto_archive_period = Some(src.auto_archive_period);
             patch.auto_close_parent_issues = Some(src.auto_close_parent_issues);
             patch.auto_close_child_issues = Some(src.auto_close_child_issues);
-            patch.set_issue_sort_order_on_state_change = Some(src.set_issue_sort_order_on_state_change.clone());
+            patch.set_issue_sort_order_on_state_change =
+                Some(src.set_issue_sort_order_on_state_change.clone());
             patch.group_issue_history = Some(src.group_issue_history);
             patch.issue_estimation_type = Some(src.issue_estimation_type);
             patch.issue_estimation_extended = Some(src.issue_estimation_extended);
@@ -576,7 +629,8 @@ impl App {
 
         // Ersteller: Mitglied (und Owner) des Teams; in Vorfahren zumindest Mitglied.
         if let Some(creator) = actor_id(ctx) {
-            let may_own = matches!(ctx.actor, Actor::User { role, .. } if !matches!(role, UserRole::Guest));
+            let may_own =
+                matches!(ctx.actor, Actor::User { role, .. } if !matches!(role, UserRole::Guest));
             ensure_member(self, tx, id, creator, may_own, now).await?;
             if let Some(p) = &parent {
                 for anc in std::iter::once(p).chain(snap.tree.ancestors(p.id)) {
@@ -623,7 +677,8 @@ impl App {
     ) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
         let owner_fields = input.visibility.is_some()
             || input.all_members_can_join.is_some()
             || input.security_settings.is_some();
@@ -705,9 +760,16 @@ impl App {
                     .all(|v| matches!(v.as_str(), Some("member" | "owner")))
             });
             if !ok {
-                return Err(invalid("securitySettings", "values must be `member` or `owner`"));
+                return Err(invalid(
+                    "securitySettings",
+                    "values must be `member` or `owner`",
+                ));
             }
-            let mut merged = team.security_settings.as_object().cloned().unwrap_or_default();
+            let mut merged = team
+                .security_settings
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
             if let Some(o) = sec.as_object() {
                 merged.extend(o.clone());
             }
@@ -728,7 +790,10 @@ impl App {
         patch.auto_close_child_issues = input.auto_close_child_issues;
         if let Some(v) = &input.set_issue_sort_order_on_state_change {
             if !["top", "bottom", "none"].contains(&v.as_str()) {
-                return Err(invalid("setIssueSortOrderOnStateChange", "must be top, bottom or none"));
+                return Err(invalid(
+                    "setIssueSortOrderOnStateChange",
+                    "must be top, bottom or none",
+                ));
             }
             patch.set_issue_sort_order_on_state_change = Some(v.clone());
         }
@@ -740,7 +805,10 @@ impl App {
             || input.issue_estimation_allow_zero.is_some()
             || input.default_issue_estimate.is_some();
         if estimation_touched && team.inherit_issue_estimation {
-            return Err(invalid("issueEstimationType", "the estimation settings are inherited from the parent team"));
+            return Err(invalid(
+                "issueEstimationType",
+                "the estimation settings are inherited from the parent team",
+            ));
         }
         patch.issue_estimation_type = input.issue_estimation_type;
         patch.issue_estimation_extended = input.issue_estimation_extended;
@@ -767,11 +835,16 @@ impl App {
                 .and_then(|p| snap.tree.get(p))
                 .is_some_and(|p| p.cycles_enabled)
         {
-            return Err(invalid("cyclesEnabled", "the cycle settings are inherited from the parent team"));
+            return Err(invalid(
+                "cyclesEnabled",
+                "the cycle settings are inherited from the parent team",
+            ));
         }
         let range = |field: &str, v: Option<i32>, lo: i32, hi: i32| -> AppResult<Option<i32>> {
             match v {
-                Some(v) if v < lo || v > hi => Err(invalid(field, &format!("must be between {lo} and {hi}"))),
+                Some(v) if v < lo || v > hi => {
+                    Err(invalid(field, &format!("must be between {lo} and {hi}")))
+                }
                 other => Ok(other),
             }
         };
@@ -793,7 +866,10 @@ impl App {
         if let Some(r) = &input.default_issue_state {
             let s = resolve::state::resolve(&mut *tx, &team, r).await?;
             if !matches!(s.state_type, StateType::Backlog | StateType::Unstarted) {
-                return Err(invalid("defaultIssueState", "must be a backlog or unstarted status"));
+                return Err(invalid(
+                    "defaultIssueState",
+                    "must be a backlog or unstarted status",
+                ));
             }
             patch.default_issue_state_id = Some(Some(s.id));
         }
@@ -809,7 +885,10 @@ impl App {
         let mut cascade: Vec<TeamId> = Vec::new();
         if let Some(v) = input.visibility {
             if v == TeamVisibility::Restricted && team.parent_id.is_none() {
-                return Err(invalid("visibility", "restricted is only allowed for sub-teams"));
+                return Err(invalid(
+                    "visibility",
+                    "restricted is only allowed for sub-teams",
+                ));
             }
             if v != TeamVisibility::Public && !snap.org.limits.private_teams_enabled {
                 return Err(limit("privateTeamsEnabled", "Private teams are disabled."));
@@ -817,7 +896,10 @@ impl App {
             if let Some(p) = team.parent_id.and_then(|p| snap.tree.get(p))
                 && !visibility_allowed_under_parent(p.visibility, v)
             {
-                return Err(invalid("visibility", "a sub-team cannot be more open than its parent"));
+                return Err(invalid(
+                    "visibility",
+                    "a sub-team cannot be more open than its parent",
+                ));
             }
             patch.visibility = Some(v);
             // Kaskade auf Sub-Teams, die jetzt offener wären als erlaubt.
@@ -853,7 +935,9 @@ impl App {
                 }
                 // Eigener früherer Key wird reaktiviert; der bisherige Key wandert in die Historie.
                 tx.teams().remove_key_history(team.id, &new_key).await?;
-                tx.teams().insert_key_history(team.id, &team.key, now).await?;
+                tx.teams()
+                    .insert_key_history(team.id, &team.key, now)
+                    .await?;
                 patch.key = Some(new_key);
             }
         }
@@ -889,7 +973,9 @@ impl App {
             }
             tx.teams().update(team.id, &p, now).await?;
         }
-        if input.visibility.is_some_and(|v| v != TeamVisibility::Public)
+        if input
+            .visibility
+            .is_some_and(|v| v != TeamVisibility::Public)
             && let Some(me) = actor_id(ctx)
             && matches!(ctx.actor, Actor::User { role, .. } if role != UserRole::Guest)
             && input.visibility != Some(team.visibility)
@@ -898,12 +984,21 @@ impl App {
             if ensure_member(self, &mut *tx, team.id, me, true, now).await? {
                 // neu angelegt
             } else {
-                tx.teams().set_membership_owner(team.id, me, true, now).await?;
+                tx.teams()
+                    .set_membership_owner(team.id, me, true, now)
+                    .await?;
             }
         }
         for c in cascade {
             tx.teams()
-                .update(c, &TeamPatch { visibility: Some(TeamVisibility::Restricted), ..Default::default() }, now)
+                .update(
+                    c,
+                    &TeamPatch {
+                        visibility: Some(TeamVisibility::Restricted),
+                        ..Default::default()
+                    },
+                    now,
+                )
                 .await?;
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
@@ -913,15 +1008,23 @@ impl App {
     }
 
     /// Mitglieder eines Teams (Verwaltungssicht).
-    pub async fn list_team_members(&self, ctx: &RequestCtx, reference: &str) -> AppResult<Vec<TeamMember>> {
+    pub async fn list_team_members(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<Vec<TeamMember>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
         snap.require_team(ctx, Action::ViewTeamMetadata, team.id)?;
         let mut out = Vec::new();
         for m in tx.teams().list_memberships(team.id).await? {
             if let Some(user) = tx.users().get(m.user_id).await? {
-                out.push(TeamMember { user, membership: m });
+                out.push(TeamMember {
+                    user,
+                    membership: m,
+                });
             }
         }
         Ok(out)
@@ -944,15 +1047,30 @@ impl App {
             return Err(invalid("user", "the user is suspended"));
         }
         let guest = target.role == UserRole::Guest;
-        snap.require_team(ctx, if guest { Action::AddGuest } else { Action::AddMember }, team.id)?;
+        snap.require_team(
+            ctx,
+            if guest {
+                Action::AddGuest
+            } else {
+                Action::AddMember
+            },
+            team.id,
+        )?;
         if owner {
             snap.require_team(ctx, Action::SetTeamOwner, team.id)?;
             if matches!(target.role, UserRole::Guest | UserRole::App) {
                 return Err(invalid("owner", "guests and apps cannot be team owners"));
             }
         }
-        if tx.teams().get_membership(team.id, target.id).await?.is_some() {
-            return Err(AppError::conflict("The user is already a member of this team"));
+        if tx
+            .teams()
+            .get_membership(team.id, target.id)
+            .await?
+            .is_some()
+        {
+            return Err(AppError::conflict(
+                "The user is already a member of this team",
+            ));
         }
         if guest && !snap.org.limits.guests_enabled {
             return Err(limit("guestsEnabled", "Guests are disabled."));
@@ -961,7 +1079,12 @@ impl App {
         if !guest {
             // Vorfahren: der Aufrufer braucht dort ebenfalls memberManagement.
             for anc in snap.tree.ancestors(team.id) {
-                if tx.teams().get_membership(anc.id, target.id).await?.is_none() {
+                if tx
+                    .teams()
+                    .get_membership(anc.id, target.id)
+                    .await?
+                    .is_none()
+                {
                     snap.require_team(ctx, Action::AddMember, anc.id)?;
                     ensure_member(self, &mut *tx, anc.id, target.id, false, now).await?;
                 }
@@ -975,7 +1098,10 @@ impl App {
             .ok_or_else(|| AppError::internal("membership vanished"))?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
-        Ok(TeamMember { user: target, membership })
+        Ok(TeamMember {
+            user: target,
+            membership,
+        })
     }
 
     /// Selbst beitreten (`canJoin`, docs/02 §4.2). Admins brauchen für private Teams
@@ -992,8 +1118,10 @@ impl App {
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
         let view = snap.require_team(ctx, Action::JoinTeam, team.id)?;
         if view.team.visibility == TeamVisibility::Private && !confirm_private_join {
-            return Err(AppError::invalid_request("Joining a private team needs confirmPrivateJoin = true")
-                .with_details(json!({ "field": "confirmPrivateJoin" })));
+            return Err(AppError::invalid_request(
+                "Joining a private team needs confirmPrivateJoin = true",
+            )
+            .with_details(json!({ "field": "confirmPrivateJoin" })));
         }
         let now = self.clock.now();
         // Vorfahren, in denen der User noch nicht Mitglied ist, müssen beitretbar sein.
@@ -1011,7 +1139,11 @@ impl App {
             }
         }
         ensure_member(self, &mut *tx, team.id, me, false, now).await?;
-        let user = tx.users().get(me).await?.ok_or_else(|| AppError::not_found("Could not find user"))?;
+        let user = tx
+            .users()
+            .get(me)
+            .await?
+            .ok_or_else(|| AppError::not_found("Could not find user"))?;
         let membership = tx
             .teams()
             .get_membership(team.id, me)
@@ -1047,7 +1179,12 @@ impl App {
     }
 
     /// Entfernt ein Mitglied (Team-Owner und Admins; sich selbst darf jeder entfernen).
-    pub async fn remove_team_member(&self, ctx: &RequestCtx, team: &str, user: &str) -> AppResult<()> {
+    pub async fn remove_team_member(
+        &self,
+        ctx: &RequestCtx,
+        team: &str,
+        user: &str,
+    ) -> AppResult<()> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
@@ -1058,7 +1195,12 @@ impl App {
         } else {
             snap.require_team(ctx, Action::RemoveMember, team.id)?;
         }
-        if tx.teams().get_membership(team.id, target.id).await?.is_none() {
+        if tx
+            .teams()
+            .get_membership(team.id, target.id)
+            .await?
+            .is_none()
+        {
             return Err(AppError::not_found("The user is not a member of this team")
                 .with_details(json!({ "type": "TeamMembership" })));
         }
@@ -1087,7 +1229,12 @@ impl App {
         if owner && matches!(target.role, UserRole::Guest | UserRole::App) {
             return Err(invalid("owner", "guests and apps cannot be team owners"));
         }
-        if tx.teams().get_membership(team.id, target.id).await?.is_none() {
+        if tx
+            .teams()
+            .get_membership(team.id, target.id)
+            .await?
+            .is_none()
+        {
             return Err(invalid("user", "the user is not a member of this team"));
         }
         tx.teams()
@@ -1100,7 +1247,10 @@ impl App {
             .ok_or_else(|| AppError::internal("membership vanished"))?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
-        Ok(TeamMember { user: target, membership })
+        Ok(TeamMember {
+            user: target,
+            membership,
+        })
     }
 
     /// Vorschau für `nest_team` (docs/02 §3.3): Konflikte, ohne zu schreiben.
@@ -1117,7 +1267,8 @@ impl App {
         let Some(parent_ref) = parent else {
             return Ok(NestingPreview::default());
         };
-        let parent = resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
+        let parent =
+            resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
         nesting_checks(&snap, &team, &parent)?;
         let plan = plan_nesting(&mut *tx, &snap, &team, &parent).await?;
         Ok(plan.into_preview())
@@ -1169,12 +1320,15 @@ impl App {
             tx.commit().await?;
             return Ok(view);
         };
-        let parent = resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
+        let parent =
+            resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
         nesting_checks(&snap, &team, &parent)?;
         let plan = plan_nesting(&mut *tx, &snap, &team, &parent).await?;
         if !plan.visibility_changes.is_empty() && !options.downgrade_visibility {
-            return Err(AppError::conflict("The visibility of the team conflicts with its new parent")
-                .with_details(json!({ "kind": "visibility", "teams": plan.visibility_details() })));
+            return Err(AppError::conflict(
+                "The visibility of the team conflicts with its new parent",
+            )
+            .with_details(json!({ "kind": "visibility", "teams": plan.visibility_details() })));
         }
         if !plan.missing_members.is_empty() && !options.add_missing_members_to_parent {
             return Err(AppError::conflict("Team members are missing in the parent team")
@@ -1189,12 +1343,31 @@ impl App {
         // Sichtbarkeit herabstufen.
         for (id, _from, to) in &plan.visibility_changes {
             tx.teams()
-                .update(*id, &TeamPatch { visibility: Some(*to), ..Default::default() }, now)
+                .update(
+                    *id,
+                    &TeamPatch {
+                        visibility: Some(*to),
+                        ..Default::default()
+                    },
+                    now,
+                )
                 .await?;
         }
-        let mut patch = TeamPatch { parent_id: Some(Some(parent.id)), ..Default::default() };
+        let mut patch = TeamPatch {
+            parent_id: Some(Some(parent.id)),
+            ..Default::default()
+        };
         if options.inherit_workflow_statuses {
-            let pointers = normalize_to_parent(self, &mut *tx, ctx, &team, parent.id, &options.state_mapping, now).await?;
+            let pointers = normalize_to_parent(
+                self,
+                &mut *tx,
+                ctx,
+                &team,
+                parent.id,
+                &options.state_mapping,
+                now,
+            )
+            .await?;
             let mut p = pointers.into_patch();
             p.parent_id = patch.parent_id;
             p.inherit_workflow_statuses = Some(true);
@@ -1228,8 +1401,10 @@ fn nesting_checks(snap: &PolicySnapshot, team: &Team, parent: &Team) -> AppResul
         return Err(limit("subTeamsEnabled", "Sub-teams are disabled."));
     }
     if snap.tree.is_self_or_descendant(team.id, parent.id) {
-        return Err(AppError::invalid_request("A team cannot become its own descendant")
-            .with_details(json!({ "reason": "cycle" })));
+        return Err(
+            AppError::invalid_request("A team cannot become its own descendant")
+                .with_details(json!({ "reason": "cycle" })),
+        );
     }
     if team.retired_at.is_some() || team.trashed || parent.retired_at.is_some() || parent.trashed {
         return Err(invalid("parent", "the team and its parent must be active"));
@@ -1343,7 +1518,11 @@ async fn plan_nesting(
         .filter(|s| s.state_type != StateType::Triage && s.inherited_from_id.is_none())
         .map(|s| (s.name, s.state_type.as_str().to_string()))
         .collect();
-    Ok(NestingPlan { visibility_changes: changes, missing_members: missing, states })
+    Ok(NestingPlan {
+        visibility_changes: changes,
+        missing_members: missing,
+        states,
+    })
 }
 
 #[cfg(test)]

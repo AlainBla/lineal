@@ -221,7 +221,12 @@ pub trait TeamRepo: Send {
         unimplemented_repo()
     }
     /// Wendet den Patch an (`version + 1`, `updated_at = now`) und liefert den neuen Stand.
-    async fn update(&mut self, _id: TeamId, _patch: &TeamPatch, _now: DateTime<Utc>) -> AppResult<Team> {
+    async fn update(
+        &mut self,
+        _id: TeamId,
+        _patch: &TeamPatch,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Team> {
         unimplemented_repo()
     }
 

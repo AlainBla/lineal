@@ -5,7 +5,9 @@ use super::user::display_name_from_email;
 use crate::app::App;
 use crate::context::{Actor, RequestCtx, Scopes};
 use crate::error::{AppError, AppResult};
-use crate::policy::{Action, OrgPolicy, PolicySnapshot, default_limits_json, default_security_settings_json};
+use crate::policy::{
+    Action, OrgPolicy, PolicySnapshot, default_limits_json, default_security_settings_json,
+};
 use crate::ports::repos::org::{NewOrg, NewProjectStatus, NewWorkspaceLabel, Org, OrgPatch};
 use crate::ports::repos::user::{NewUser, User};
 use lineal_domain::enums::{ProjectStatusType, UserRole};
@@ -58,8 +60,10 @@ pub fn validate_url_key(key: &str) -> AppResult<()> {
     if ok {
         Ok(())
     } else {
-        Err(AppError::invalid_request("urlKey must match ^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
-            .with_details(json!({ "field": "urlKey" })))
+        Err(
+            AppError::invalid_request("urlKey must match ^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+                .with_details(json!({ "field": "urlKey" })),
+        )
     }
 }
 
@@ -122,7 +126,10 @@ const WORKSPACE_LABELS: [(&str, &str); 3] = [
 impl App {
     /// Legt einen Workspace samt Owner, Projektstatus, Standard-Labels und Default-Team an
     /// (docs/02 §1.1), in einer Transaktion.
-    pub async fn create_workspace(&self, input: CreateWorkspaceInput) -> AppResult<WorkspaceCreated> {
+    pub async fn create_workspace(
+        &self,
+        input: CreateWorkspaceInput,
+    ) -> AppResult<WorkspaceCreated> {
         let name = input.name.trim().to_string();
         if name.is_empty() || name.chars().count() > 80 {
             return Err(AppError::invalid_request("name must be 1-80 characters")
@@ -130,8 +137,10 @@ impl App {
         }
         let owner_name = input.owner_name.trim().to_string();
         if owner_name.is_empty() || owner_name.chars().count() > 255 {
-            return Err(AppError::invalid_request("owner name must be 1-255 characters")
-                .with_details(json!({ "field": "ownerName" })));
+            return Err(
+                AppError::invalid_request("owner name must be 1-255 characters")
+                    .with_details(json!({ "field": "ownerName" })),
+            );
         }
         let email = input.owner_email.trim().to_string();
         super::user::validate_email(&email)?;
@@ -218,16 +227,27 @@ impl App {
         }
         let ctx = RequestCtx {
             org_id,
-            actor: Actor::User { id: owner_id, role: UserRole::Owner },
+            actor: Actor::User {
+                id: owner_id,
+                role: UserRole::Owner,
+            },
             request_id: "req_create_workspace".into(),
             scopes: Scopes::all(),
         };
-        emit(&mut *tx, &ctx, DomainEvent::UserCreated { user_id: owner_id }).await?;
+        emit(
+            &mut *tx,
+            &ctx,
+            DomainEvent::UserCreated { user_id: owner_id },
+        )
+        .await?;
         let team_id = self
             .create_team_in(
                 &mut *tx,
                 &ctx,
-                CreateTeamInput { name: name.clone(), ..Default::default() },
+                CreateTeamInput {
+                    name: name.clone(),
+                    ..Default::default()
+                },
             )
             .await?;
         let tree = crate::policy::TeamTree::new(tx.teams().list_all().await?);
@@ -235,7 +255,10 @@ impl App {
             .get(team_id)
             .cloned()
             .ok_or_else(|| AppError::internal("default team vanished"))?;
-        let team = TeamView { display_name: tree.display_name(team_id), team };
+        let team = TeamView {
+            display_name: tree.display_name(team_id),
+            team,
+        };
         let org = tx
             .orgs()
             .get()
@@ -261,11 +284,19 @@ impl App {
 
     /// Absolute URL des Workspace (`<baseUrl>/<urlKey>`).
     pub fn workspace_url(&self, org: &Org) -> String {
-        format!("{}/{}", self.config.base_url.trim_end_matches('/'), org.url_key)
+        format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            org.url_key
+        )
     }
 
     /// Ändert Workspace-Settings (docs/02 §1.2): Admin/Owner; Limits und Mindestrollen nur Owner.
-    pub async fn update_workspace(&self, ctx: &RequestCtx, input: UpdateWorkspaceInput) -> AppResult<Org> {
+    pub async fn update_workspace(
+        &self,
+        ctx: &RequestCtx,
+        input: UpdateWorkspaceInput,
+    ) -> AppResult<Org> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
@@ -277,7 +308,10 @@ impl App {
             .get()
             .await?
             .ok_or_else(|| AppError::not_found("Could not find referenced Workspace."))?;
-        let mut patch = OrgPatch { now: Some(self.clock.now()), ..Default::default() };
+        let mut patch = OrgPatch {
+            now: Some(self.clock.now()),
+            ..Default::default()
+        };
         if let Some(n) = &input.name {
             let n = n.trim();
             if n.is_empty() || n.chars().count() > 80 {
@@ -299,22 +333,24 @@ impl App {
         patch.logo_url = input.logo_url.clone();
         if let Some(m) = input.fiscal_year_start_month {
             if !(0..=11).contains(&m) {
-                return Err(AppError::invalid_request("fiscalYearStartMonth must be 0-11")
-                    .with_details(json!({ "field": "fiscalYearStartMonth" })));
+                return Err(
+                    AppError::invalid_request("fiscalYearStartMonth must be 0-11")
+                        .with_details(json!({ "field": "fiscalYearStartMonth" })),
+                );
             }
             patch.fiscal_year_start_month = Some(m);
         }
         patch.initiatives_enabled = input.initiatives_enabled;
         if let Some(sec) = &input.security_settings {
             let ok = sec.as_object().is_some_and(|o| {
-                o.values().all(|v| {
-                    v.as_str()
-                        .is_some_and(|s| s.parse::<UserRole>().is_ok())
-                })
+                o.values()
+                    .all(|v| v.as_str().is_some_and(|s| s.parse::<UserRole>().is_ok()))
             });
             if !ok {
-                return Err(AppError::invalid_request("securitySettings values must be roles")
-                    .with_details(json!({ "field": "securitySettings" })));
+                return Err(
+                    AppError::invalid_request("securitySettings values must be roles")
+                        .with_details(json!({ "field": "securitySettings" })),
+                );
             }
             patch.security_settings = Some(merge_object(&current.security_settings, sec));
         }

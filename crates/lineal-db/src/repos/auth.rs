@@ -5,9 +5,7 @@ use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use lineal_app::ports::repos::auth::{
-    ApiKeyRecord, LoginCandidate, NewApiKey, NewSession,
-};
+use lineal_app::ports::repos::auth::{ApiKeyRecord, LoginCandidate, NewApiKey, NewSession};
 use lineal_app::ports::repos::{AuthRepo, Principal};
 use lineal_app::{Actor, AppResult, Scopes};
 use lineal_domain::enums::UserRole;
@@ -209,10 +207,8 @@ impl AuthRepo for PgTx {
     }
 
     async fn insert_api_key(&mut self, k: &NewApiKey) -> AppResult<()> {
-        let team_ids: Option<Vec<Uuid>> = k
-            .team_ids
-            .as_ref()
-            .map(|v| v.iter().map(|t| t.0).collect());
+        let team_ids: Option<Vec<Uuid>> =
+            k.team_ids.as_ref().map(|v| v.iter().map(|t| t.0).collect());
         sqlx::query(
             "INSERT INTO api_key (id, organization_id, user_id, label, key_prefix, key_hash, scopes, team_ids, \
              expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",

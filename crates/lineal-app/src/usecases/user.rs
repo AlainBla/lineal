@@ -21,14 +21,15 @@ pub const MIN_PASSWORD_LEN: usize = 8;
 
 pub(crate) fn validate_email(email: &str) -> AppResult<()> {
     let ok = email.len() <= 254
-        && email
-            .split_once('@')
-            .is_some_and(|(l, d)| !l.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.'))
+        && email.split_once('@').is_some_and(|(l, d)| {
+            !l.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.')
+        })
         && !email.contains(char::is_whitespace);
     if ok {
         Ok(())
     } else {
-        Err(AppError::invalid_request("email is not a valid address").with_details(json!({ "field": "email" })))
+        Err(AppError::invalid_request("email is not a valid address")
+            .with_details(json!({ "field": "email" })))
     }
 }
 
@@ -48,7 +49,13 @@ pub fn display_name_base(email: &str) -> String {
     let mut s: String = local
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .take(40)
         .collect();
     if s.is_empty() || matches!(s.as_str(), "me" | "none") {
@@ -100,6 +107,16 @@ pub struct CreateUserInput {
     pub teams: Vec<String>,
 }
 
+/// Schreibende User-Operationen gelten nie für den System-Akteur (kein implizites Admin-Recht).
+fn forbid_system(ctx: &RequestCtx) -> AppResult<()> {
+    if matches!(ctx.actor, crate::context::Actor::System) {
+        return Err(AppError::forbidden(
+            "User administration is not available to system contexts.",
+        ));
+    }
+    Ok(())
+}
+
 impl App {
     /// `get_user`: UUID, `"me"`, E-Mail oder Name.
     pub async fn get_user(&self, ctx: &RequestCtx, reference: &str) -> AppResult<UserView> {
@@ -113,17 +130,27 @@ impl App {
                 && let Some(t) = snap.tree.get(m.team_id)
                 && !t.trashed
             {
-                teams.push(TeamView { display_name: snap.tree.display_name(t.id), team: t.clone() });
+                teams.push(TeamView {
+                    display_name: snap.tree.display_name(t.id),
+                    team: t.clone(),
+                });
             }
         }
         Ok(UserView { user, teams })
     }
 
     /// `list_users`: aktive User; Gäste sehen nur User ihrer Teams.
-    pub async fn list_users(&self, ctx: &RequestCtx, input: ListUsersInput) -> AppResult<Page<User>> {
+    pub async fn list_users(
+        &self,
+        ctx: &RequestCtx,
+        input: ListUsersInput,
+    ) -> AppResult<Page<User>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let mut filter = UserFilter { query: input.query.clone(), ..Default::default() };
+        let mut filter = UserFilter {
+            query: input.query.clone(),
+            ..Default::default()
+        };
         if let Some(t) = &input.team {
             let team = resolve::team::resolve_in(&mut *tx, &snap, t, Visibility::Content).await?;
             filter.team_id = Some(team.id);
@@ -136,6 +163,7 @@ impl App {
 
     /// Legt einen User an (Recht: `invitationsRole`; Admin-Rolle zusätzlich `adminManagementRole`).
     pub async fn create_user(&self, ctx: &RequestCtx, input: CreateUserInput) -> AppResult<User> {
+        forbid_system(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::InviteUsers)?;
@@ -143,8 +171,10 @@ impl App {
             UserRole::Admin => snap.require_workspace(ctx, Action::GrantAdminRole)?,
             UserRole::User | UserRole::Guest => {}
             UserRole::Owner | UserRole::App => {
-                return Err(AppError::invalid_request("role must be admin, user or guest")
-                    .with_details(json!({ "field": "role" })));
+                return Err(
+                    AppError::invalid_request("role must be admin, user or guest")
+                        .with_details(json!({ "field": "role" })),
+                );
             }
         }
         if input.role == UserRole::Guest && !snap.org.limits.guests_enabled {
@@ -175,8 +205,13 @@ impl App {
         };
         let mut teams = Vec::new();
         for r in &input.teams {
-            let team = resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Management).await?;
-            let action = if input.role == UserRole::Guest { Action::AddGuest } else { Action::AddMember };
+            let team =
+                resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Management).await?;
+            let action = if input.role == UserRole::Guest {
+                Action::AddGuest
+            } else {
+                Action::AddMember
+            };
             snap.require_team(ctx, action, team.id)?;
             teams.push(team);
         }
@@ -228,7 +263,13 @@ impl App {
 
     /// Ändert die Rolle eines Users (docs/02 §6.4): Owner-Rolle nur durch Owner, Admin-Rolle
     /// über `adminManagementRole`, user ↔ guest durch Admins. Der letzte Owner bleibt Owner.
-    pub async fn set_user_role(&self, ctx: &RequestCtx, user: &str, role: UserRole) -> AppResult<User> {
+    pub async fn set_user_role(
+        &self,
+        ctx: &RequestCtx,
+        user: &str,
+        role: UserRole,
+    ) -> AppResult<User> {
+        forbid_system(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
@@ -237,8 +278,10 @@ impl App {
                 .with_details(json!({ "reason": "self_role_change" })));
         }
         if role == UserRole::App || target.role == UserRole::App {
-            return Err(AppError::invalid_request("app users cannot change their role")
-                .with_details(json!({ "field": "role" })));
+            return Err(
+                AppError::invalid_request("app users cannot change their role")
+                    .with_details(json!({ "field": "role" })),
+            );
         }
         if role == UserRole::Owner || target.role == UserRole::Owner {
             snap.require_workspace(ctx, Action::UpdateWorkspaceLimits)?;
@@ -250,23 +293,44 @@ impl App {
         if target.role == UserRole::Owner && role != UserRole::Owner {
             let owners = tx
                 .users()
-                .list(&UserFilter::default(), &PageRequest { limit: 250, ..Default::default() })
+                .list(
+                    &UserFilter::default(),
+                    &PageRequest {
+                        limit: 250,
+                        ..Default::default()
+                    },
+                )
                 .await?
                 .items
                 .iter()
                 .filter(|u| u.role == UserRole::Owner)
                 .count();
             if owners <= 1 {
-                return Err(AppError::invalid_request("the last owner cannot be demoted")
-                    .with_details(json!({ "reason": "last_owner" })));
+                return Err(
+                    AppError::invalid_request("the last owner cannot be demoted")
+                        .with_details(json!({ "reason": "last_owner" })),
+                );
             }
         }
-        if role == UserRole::Guest && tx.teams().list_memberships_of_user(target.id).await?.is_empty() {
+        if role == UserRole::Guest
+            && tx
+                .teams()
+                .list_memberships_of_user(target.id)
+                .await?
+                .is_empty()
+        {
             return Err(AppError::invalid_request("a guest needs at least one team")
                 .with_details(json!({ "field": "role" })));
         }
-        tx.users().set_role(target.id, role, self.clock.now()).await?;
-        emit(&mut *tx, ctx, DomainEvent::UserUpdated { user_id: target.id }).await?;
+        tx.users()
+            .set_role(target.id, role, self.clock.now())
+            .await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::UserUpdated { user_id: target.id },
+        )
+        .await?;
         let user = tx
             .users()
             .get(target.id)
@@ -278,7 +342,13 @@ impl App {
 
     /// Suspendiert oder reaktiviert einen User (Admin/Owner). Man kann sich nicht selbst und
     /// nicht den letzten Owner suspendieren.
-    pub async fn set_user_active(&self, ctx: &RequestCtx, user: &str, active: bool) -> AppResult<User> {
+    pub async fn set_user_active(
+        &self,
+        ctx: &RequestCtx,
+        user: &str,
+        active: bool,
+    ) -> AppResult<User> {
+        forbid_system(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::SuspendUser)?;
@@ -293,20 +363,35 @@ impl App {
             if target.role == UserRole::Owner {
                 let owners = tx
                     .users()
-                    .list(&UserFilter::default(), &PageRequest { limit: 250, ..Default::default() })
+                    .list(
+                        &UserFilter::default(),
+                        &PageRequest {
+                            limit: 250,
+                            ..Default::default()
+                        },
+                    )
                     .await?
                     .items
                     .iter()
                     .filter(|u| u.role == UserRole::Owner)
                     .count();
                 if owners <= 1 {
-                    return Err(AppError::invalid_request("the last owner cannot be suspended")
-                        .with_details(json!({ "reason": "last_owner" })));
+                    return Err(
+                        AppError::invalid_request("the last owner cannot be suspended")
+                            .with_details(json!({ "reason": "last_owner" })),
+                    );
                 }
             }
         }
-        tx.users().set_active(target.id, active, self.clock.now()).await?;
-        emit(&mut *tx, ctx, DomainEvent::UserUpdated { user_id: target.id }).await?;
+        tx.users()
+            .set_active(target.id, active, self.clock.now())
+            .await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::UserUpdated { user_id: target.id },
+        )
+        .await?;
         let user = tx
             .users()
             .get(target.id)
@@ -317,13 +402,21 @@ impl App {
     }
 
     /// Setzt das Passwort: jeder für sich selbst, Admins/Owner für andere.
-    pub async fn set_user_password(&self, ctx: &RequestCtx, user: &str, password: &str) -> AppResult<()> {
+    pub async fn set_user_password(
+        &self,
+        ctx: &RequestCtx,
+        user: &str,
+        password: &str,
+    ) -> AppResult<()> {
+        forbid_system(ctx)?;
         validate_password(password)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
         if !ctx.scopes.write {
-            return Err(AppError::forbidden("Token scope does not allow write operations."));
+            return Err(AppError::forbidden(
+                "Token scope does not allow write operations.",
+            ));
         }
         if resolve::user::actor_user_id(ctx) != Some(target.id) {
             snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
@@ -333,7 +426,9 @@ impl App {
             }
         }
         let hash = self.hasher.hash(password)?;
-        tx.users().set_password_hash(target.id, &hash, self.clock.now()).await?;
+        tx.users()
+            .set_password_hash(target.id, &hash, self.clock.now())
+            .await?;
         tx.commit().await?;
         Ok(())
     }

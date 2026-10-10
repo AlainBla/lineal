@@ -163,7 +163,9 @@ impl WorkflowStateRepo for PgTx {
         .await
         .map_err(db_err)?;
         if res.rows_affected() == 0 {
-            return Err(AppError::not_found("Could not find referenced WorkflowState."));
+            return Err(AppError::not_found(
+                "Could not find referenced WorkflowState.",
+            ));
         }
         Ok(())
     }
@@ -186,12 +188,14 @@ impl WorkflowStateRepo for PgTx {
     }
 
     async fn count_issues(&mut self, id: StateId) -> AppResult<i64> {
-        sqlx::query_scalar("SELECT count(*) FROM issue WHERE organization_id = $1 AND state_id = $2")
-            .bind(self.org.0)
-            .bind(id.0)
-            .fetch_one(&mut *self.tx)
-            .await
-            .map_err(db_err)
+        sqlx::query_scalar(
+            "SELECT count(*) FROM issue WHERE organization_id = $1 AND state_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
     }
 
     async fn migrate_issues(
@@ -255,11 +259,7 @@ impl WorkflowStateRepo for PgTx {
         rows.into_iter().map(StateRow::into_state).collect()
     }
 
-    async fn find_by_name(
-        &mut self,
-        team: TeamId,
-        name: &str,
-    ) -> AppResult<Option<WorkflowState>> {
+    async fn find_by_name(&mut self, team: TeamId, name: &str) -> AppResult<Option<WorkflowState>> {
         let row = sqlx::query_as::<_, StateRow>(&format!(
             "SELECT {STATE_COLS} FROM workflow_state \
              WHERE organization_id = $1 AND team_id = $2 AND lower(name) = lower($3) AND archived_at IS NULL"

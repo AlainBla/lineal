@@ -151,7 +151,11 @@ impl OrgPolicy {
             template_management_role: role_of(security, "templateManagementRole", UserRole::User),
             personal_api_keys_role: role_of(security, "personalApiKeysRole", UserRole::User),
             api_settings_role: role_of(security, "apiSettingsRole", UserRole::Admin),
-            workspace_initiatives_role: role_of(security, "workspaceInitiativesRole", UserRole::User),
+            workspace_initiatives_role: role_of(
+                security,
+                "workspaceInitiativesRole",
+                UserRole::User,
+            ),
             pinned_view_management_role: role_of(
                 security,
                 "pinnedViewManagementRole",

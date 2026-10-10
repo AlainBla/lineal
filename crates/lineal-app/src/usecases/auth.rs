@@ -146,13 +146,22 @@ impl App {
             })
             .await?;
         tx.commit().await?;
-        Ok(Login { token, csrf_token: csrf, expires_at, org_id: chosen.org_id, user_id: chosen.user_id })
+        Ok(Login {
+            token,
+            csrf_token: csrf,
+            expires_at,
+            org_id: chosen.org_id,
+            user_id: chosen.user_id,
+        })
     }
 
     /// Beendet die Session serverseitig; `true`, wenn eine aktive Session widerrufen wurde.
     pub async fn logout(&self, token: &str) -> AppResult<bool> {
         let mut tx = self.store.begin_system().await?;
-        let revoked = tx.auth().revoke_session(&hash_token(token), self.clock.now()).await?;
+        let revoked = tx
+            .auth()
+            .revoke_session(&hash_token(token), self.clock.now())
+            .await?;
         tx.commit().await?;
         Ok(revoked)
     }
@@ -168,7 +177,11 @@ impl App {
 
     /// Legt einen persönlichen API-Key an (docs/09 §2.2). Die Scopes dürfen die des
     /// aufrufenden Tokens und die Rolle des Users nicht übersteigen.
-    pub async fn create_api_key(&self, ctx: &RequestCtx, input: CreateApiKeyInput) -> AppResult<CreatedApiKey> {
+    pub async fn create_api_key(
+        &self,
+        ctx: &RequestCtx,
+        input: CreateApiKeyInput,
+    ) -> AppResult<CreatedApiKey> {
         let user_id = resolve::user::actor_user_id(ctx)
             .filter(|_| matches!(ctx.actor, crate::context::Actor::User { .. }))
             .ok_or_else(|| AppError::forbidden("Only users can create personal API keys."))?;
@@ -176,7 +189,9 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::CreatePersonalApiKey)?;
         if !ctx.scopes.write {
-            return Err(AppError::forbidden("Token scope does not allow write operations."));
+            return Err(AppError::forbidden(
+                "Token scope does not allow write operations.",
+            ));
         }
         let label = input.label.trim().to_string();
         if label.is_empty() || label.chars().count() > 100 {
@@ -190,12 +205,16 @@ impl App {
                 "write" if ctx.scopes.write => scopes.push("write".into()),
                 "admin" if ctx.scopes.admin && snap.actor.is_admin() => scopes.push("admin".into()),
                 "write" | "admin" => {
-                    return Err(AppError::forbidden("The key cannot have more scopes than your own token")
-                        .with_details(json!({ "scope": s })));
+                    return Err(AppError::forbidden(
+                        "The key cannot have more scopes than your own token",
+                    )
+                    .with_details(json!({ "scope": s })));
                 }
                 other => {
-                    return Err(AppError::invalid_request(format!("unknown scope `{other}`"))
-                        .with_details(json!({ "field": "scopes" })));
+                    return Err(
+                        AppError::invalid_request(format!("unknown scope `{other}`"))
+                            .with_details(json!({ "field": "scopes" })),
+                    );
                 }
             }
         }
@@ -204,7 +223,11 @@ impl App {
             Some(refs) => {
                 let mut ids = Vec::new();
                 for r in refs {
-                    ids.push(resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content).await?.id);
+                    ids.push(
+                        resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content)
+                            .await?
+                            .id,
+                    );
                 }
                 Some(ids)
             }
@@ -250,19 +273,21 @@ impl App {
     /// Widerruft einen Key: der Eigentümer oder ein Admin/Owner. Wirkt sofort.
     pub async fn revoke_api_key(&self, ctx: &RequestCtx, id: ApiKeyId) -> AppResult<()> {
         let mut tx = self.store.begin(ctx.org_id).await?;
-        let key = tx
-            .auth()
-            .get_api_key(id)
-            .await?
-            .ok_or_else(|| AppError::not_found("Could not find referenced ApiKey.").with_details(json!({ "type": "ApiKey" })))?;
+        let key = tx.auth().get_api_key(id).await?.ok_or_else(|| {
+            AppError::not_found("Could not find referenced ApiKey.")
+                .with_details(json!({ "type": "ApiKey" }))
+        })?;
         let own = resolve::user::actor_user_id(ctx) == Some(key.user_id);
         let admin = matches!(ctx.actor, crate::context::Actor::System)
             || matches!(ctx.actor, crate::context::Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin));
         if !own && !admin {
-            return Err(AppError::not_found("Could not find referenced ApiKey.").with_details(json!({ "type": "ApiKey" })));
+            return Err(AppError::not_found("Could not find referenced ApiKey.")
+                .with_details(json!({ "type": "ApiKey" })));
         }
         if !ctx.scopes.write {
-            return Err(AppError::forbidden("Token scope does not allow write operations."));
+            return Err(AppError::forbidden(
+                "Token scope does not allow write operations.",
+            ));
         }
         tx.auth().revoke_api_key(id, self.clock.now()).await?;
         tx.commit().await?;

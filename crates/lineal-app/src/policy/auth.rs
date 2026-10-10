@@ -219,7 +219,9 @@ fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppRe
     let guest_or_app = matches!(role, UserRole::Guest | UserRole::App);
     use Action::*;
     let allowed = match action {
-        UpdateWorkspaceSettings | SuspendUser | ManageWorkspaceProjectStatus
+        UpdateWorkspaceSettings
+        | SuspendUser
+        | ManageWorkspaceProjectStatus
         | CancelWorkspaceDeletion => is_admin(role),
         UpdateWorkspaceLimits | DeleteWorkspace => role == UserRole::Owner,
         GrantAdminRole => !guest_or_app && at_least(org.admin_management_role),
@@ -248,7 +250,11 @@ fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppRe
 }
 
 fn setting_is_member(view: &TeamPolicyView, key: &str) -> bool {
-    let default = if key == "issueSharing" { "owner" } else { "member" };
+    let default = if key == "issueSharing" {
+        "owner"
+    } else {
+        "member"
+    };
     view.team
         .security_settings
         .get(key)
@@ -377,8 +383,14 @@ mod tests {
             Some(ErrorKind::NotFound)
         );
         // Admin-Verwaltung (Metadaten) bleibt möglich.
-        assert!(s.require_team(&ctx, Action::ViewTeamMetadata, des()).is_ok());
-        assert!(s.require_team(&ctx, Action::UpdateTeamSettings, des()).is_ok());
+        assert!(
+            s.require_team(&ctx, Action::ViewTeamMetadata, des())
+                .is_ok()
+        );
+        assert!(
+            s.require_team(&ctx, Action::UpdateTeamSettings, des())
+                .is_ok()
+        );
         assert!(s.require_team(&ctx, Action::AddMember, des()).is_ok());
     }
 
@@ -396,7 +408,10 @@ mod tests {
             );
         }
         // Matrix: Gast darf Team-Einstellungen (T:teamManagement, Mitglied), aber keine Mitglieder hinzufügen.
-        assert!(s.require_team(&ctx, Action::UpdateTeamSettings, web()).is_ok());
+        assert!(
+            s.require_team(&ctx, Action::UpdateTeamSettings, web())
+                .is_ok()
+        );
         assert_eq!(
             kind(s.require_team(&ctx, Action::AddMember, web())),
             Some(ErrorKind::Forbidden)
@@ -412,7 +427,10 @@ mod tests {
         let bob = bob_view();
         let ctx = ctx_of(&bob);
         let mut s = snap(bob);
-        assert!(s.require_team(&ctx, Action::UpdateTeamSettings, eng()).is_ok());
+        assert!(
+            s.require_team(&ctx, Action::UpdateTeamSettings, eng())
+                .is_ok()
+        );
         // ENG verlangt Owner für teamManagement: Bob (nur Mitglied in ENG) darf nicht, Alice schon.
         let mut teams: Vec<_> = s.tree.all().cloned().collect();
         teams[0].security_settings = json!({ "teamManagement": "owner" });
@@ -424,7 +442,10 @@ mod tests {
         let alice_ctx = ctx_of(&alice_view());
         let mut sa = snap(alice_view());
         sa.tree = s.tree.clone();
-        assert!(sa.require_team(&alice_ctx, Action::UpdateTeamSettings, eng()).is_ok());
+        assert!(
+            sa.require_team(&alice_ctx, Action::UpdateTeamSettings, eng())
+                .is_ok()
+        );
         // Bob ist Owner von WEB: Key ändern erlaubt; in ENG nicht.
         assert!(s.require_team(&ctx, Action::ChangeTeamKey, web()).is_ok());
         assert_eq!(
@@ -432,7 +453,10 @@ mod tests {
             Some(ErrorKind::Forbidden)
         );
         // Alice (Owner von ENG) ist auch Owner des Sub-Teams WEB.
-        assert!(sa.require_team(&alice_ctx, Action::ChangeTeamKey, web()).is_ok());
+        assert!(
+            sa.require_team(&alice_ctx, Action::ChangeTeamKey, web())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -452,7 +476,11 @@ mod tests {
         );
         let alice = alice_view();
         let actx = ctx_of(&alice);
-        assert!(snap(alice).require_team(&actx, Action::SetTeamParent, web()).is_ok());
+        assert!(
+            snap(alice)
+                .require_team(&actx, Action::SetTeamParent, web())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -463,7 +491,9 @@ mod tests {
         let mut teams: Vec<_> = s.tree.all().cloned().collect();
         teams[1].retired_at = Some(Utc::now());
         s.tree = TeamTree::new(teams);
-        let err = s.require_team(&ctx, Action::CreateIssue, web()).unwrap_err();
+        let err = s
+            .require_team(&ctx, Action::CreateIssue, web())
+            .unwrap_err();
         assert_eq!(err.kind, ErrorKind::Forbidden);
         assert_eq!(err.details["reason"], "team_retired");
         assert!(s.require_team(&ctx, Action::ViewTeam, web()).is_ok());
@@ -545,14 +575,29 @@ mod tests {
             kind(check(bob_view(), Action::GrantAdminRole)),
             Some(ErrorKind::Forbidden)
         );
-        for a in [Action::CreateTeam, Action::InviteUsers, Action::ViewInitiatives, Action::ManageWorkspaceLabels] {
-            assert_eq!(kind(check(carol_view(), a)), Some(ErrorKind::Forbidden), "{a:?}");
+        for a in [
+            Action::CreateTeam,
+            Action::InviteUsers,
+            Action::ViewInitiatives,
+            Action::ManageWorkspaceLabels,
+        ] {
+            assert_eq!(
+                kind(check(carol_view(), a)),
+                Some(ErrorKind::Forbidden),
+                "{a:?}"
+            );
         }
         // Apps: Teams anlegen ja (public), privat nein, Webhooks nein.
         let app = ActorView::new(Actor::App { id: bob() }, &[]);
         assert!(check(app.clone(), Action::CreateTeam).is_ok());
-        assert_eq!(kind(check(app.clone(), Action::CreatePrivateTeam)), Some(ErrorKind::Forbidden));
-        assert_eq!(kind(check(app, Action::ManageWebhooks)), Some(ErrorKind::Forbidden));
+        assert_eq!(
+            kind(check(app.clone(), Action::CreatePrivateTeam)),
+            Some(ErrorKind::Forbidden)
+        );
+        assert_eq!(
+            kind(check(app, Action::ManageWebhooks)),
+            Some(ErrorKind::Forbidden)
+        );
     }
 
     #[test]
@@ -561,7 +606,9 @@ mod tests {
         let ctx = ctx_of(&bob);
         let mut s = snap(bob);
         s.org.limits.private_teams_enabled = false;
-        let err = s.require_workspace(&ctx, Action::CreatePrivateTeam).unwrap_err();
+        let err = s
+            .require_workspace(&ctx, Action::CreatePrivateTeam)
+            .unwrap_err();
         assert_eq!(err.kind, ErrorKind::LimitExceeded);
         assert_eq!(err.details["limit"], "privateTeamsEnabled");
     }

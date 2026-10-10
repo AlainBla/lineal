@@ -24,11 +24,12 @@ use uuid::Uuid;
 pub const SEED_PASSWORD: &str = "lineal-dev";
 
 /// Argon2id-Hash von [`SEED_PASSWORD`].
-pub const SEED_PASSWORD_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$bGluZWFsLWRldi1zZWVkLXNhbHQ$fYAmjfmRwFiLh1hBYr6L73LQaxuE6yZwll5rmfPYxa8";
+pub const SEED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$bGluZWFsLWRldi1zZWVkLXNhbHQ$fYAmjfmRwFiLh1hBYr6L73LQaxuE6yZwll5rmfPYxa8";
 
 fn t0() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 1, 5, 9, 0, 0).single().unwrap_or_default()
+    Utc.with_ymd_and_hms(2026, 1, 5, 9, 0, 0)
+        .single()
+        .unwrap_or_default()
 }
 
 const WORKFLOW: [(&str, StateType, &str); 6] = [
@@ -42,7 +43,9 @@ const WORKFLOW: [(&str, StateType, &str); 6] = [
 
 /// Feste Status-ID: `team_slot` unterscheidet die Teams, `index` den Status.
 pub fn seed_state_id(team_slot: u128, index: usize) -> StateId {
-    StateId(Uuid::from_u128(0x5747_E000_0000_7000_8000_0000_0000_0000 + (team_slot << 16) + index as u128))
+    StateId(Uuid::from_u128(
+        0x5747_E000_0000_7000_8000_0000_0000_0000 + (team_slot << 16) + index as u128,
+    ))
 }
 
 /// Die Status eines Seed-Teams (`slot` 1 = ENG, 2 = WEB, 3 = DES), in `WORKFLOW`-Reihenfolge.
@@ -50,7 +53,12 @@ pub fn seed_workflow_state_ids(slot: u128) -> [StateId; 6] {
     std::array::from_fn(|i| seed_state_id(slot, i))
 }
 
-async fn workflow(tx: &mut dyn Tx, team: TeamId, slot: u128, inherit_from: Option<u128>) -> AppResult<()> {
+async fn workflow(
+    tx: &mut dyn Tx,
+    team: TeamId,
+    slot: u128,
+    inherit_from: Option<u128>,
+) -> AppResult<()> {
     for (i, (name, kind, color)) in WORKFLOW.iter().enumerate() {
         tx.states()
             .insert(&NewState {
@@ -116,7 +124,13 @@ async fn team(
         .await
 }
 
-async fn member(tx: &mut dyn Tx, n: u128, team: TeamId, user: UserId, owner: bool) -> AppResult<()> {
+async fn member(
+    tx: &mut dyn Tx,
+    n: u128,
+    team: TeamId,
+    user: UserId,
+    owner: bool,
+) -> AppResult<()> {
     tx.teams()
         .insert_membership(&NewMembership {
             id: Uuid::from_u128(0x3E3B_0000_0000_7000_8000_0000_0000_0000 + n),
@@ -166,9 +180,27 @@ pub async fn seed(tx: &mut dyn Tx, data: &SeedData) -> AppResult<()> {
     }
 
     for (id, name, email, display, role) in [
-        (data.alice, "Alice Example", "alice@acme.example", "alice", UserRole::Owner),
-        (data.bob, "Bob Example", "bob@acme.example", "bob", UserRole::User),
-        (data.carol, "Carol Example", "carol@acme.example", "carol", UserRole::Guest),
+        (
+            data.alice,
+            "Alice Example",
+            "alice@acme.example",
+            "alice",
+            UserRole::Owner,
+        ),
+        (
+            data.bob,
+            "Bob Example",
+            "bob@acme.example",
+            "bob",
+            UserRole::User,
+        ),
+        (
+            data.carol,
+            "Carol Example",
+            "carol@acme.example",
+            "carol",
+            UserRole::Guest,
+        ),
     ] {
         tx.users()
             .insert(&NewUser {
@@ -182,9 +214,13 @@ pub async fn seed(tx: &mut dyn Tx, data: &SeedData) -> AppResult<()> {
             })
             .await?;
     }
-    for (i, (name, color)) in [("Bug", "#EB5757"), ("Feature", "#BB87FC"), ("Improvement", "#4EA7FC")]
-        .into_iter()
-        .enumerate()
+    for (i, (name, color)) in [
+        ("Bug", "#EB5757"),
+        ("Feature", "#BB87FC"),
+        ("Improvement", "#4EA7FC"),
+    ]
+    .into_iter()
+    .enumerate()
     {
         tx.orgs()
             .insert_workspace_label(&NewWorkspaceLabel {
@@ -197,11 +233,44 @@ pub async fn seed(tx: &mut dyn Tx, data: &SeedData) -> AppResult<()> {
             .await?;
     }
 
-    team(tx, data.eng, "Engineering", "ENG", None, TeamVisibility::Public, "Code", "#5E6AD2", false).await?;
+    team(
+        tx,
+        data.eng,
+        "Engineering",
+        "ENG",
+        None,
+        TeamVisibility::Public,
+        "Code",
+        "#5E6AD2",
+        false,
+    )
+    .await?;
     workflow(tx, data.eng, 1, None).await?;
-    team(tx, data.web, "Web", "WEB", Some(data.eng), TeamVisibility::Public, "Globe", "#26B5CE", true).await?;
+    team(
+        tx,
+        data.web,
+        "Web",
+        "WEB",
+        Some(data.eng),
+        TeamVisibility::Public,
+        "Globe",
+        "#26B5CE",
+        true,
+    )
+    .await?;
     workflow(tx, data.web, 2, Some(1)).await?;
-    team(tx, data.des, "Design", "DES", None, TeamVisibility::Private, "Palette", "#F2994A", false).await?;
+    team(
+        tx,
+        data.des,
+        "Design",
+        "DES",
+        None,
+        TeamVisibility::Private,
+        "Palette",
+        "#F2994A",
+        false,
+    )
+    .await?;
     workflow(tx, data.des, 3, None).await?;
 
     // Mitgliedschaften (docs/02, Beispieltabelle)
