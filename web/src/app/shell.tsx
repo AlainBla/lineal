@@ -10,6 +10,7 @@ import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
 import { IssuesHost } from "@/features/issues/host";
 import { attachShortcuts } from "@/lib/shortcuts";
+import { useSyncStream } from "@/lib/store";
 
 /** Linear-artige Shell: Sidebar, Topbar, Hauptbereich, Overlays und globale Tastaturbedienung. */
 export function Shell({ session, children }: { session: Session; children: ReactNode }) {
@@ -25,6 +26,7 @@ export function Shell({ session, children }: { session: Session; children: React
 
   useGlobalActions({ ws: session.workspace.urlKey, onLogout });
   useEffect(() => attachShortcuts(), []);
+  useSyncStream();
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">

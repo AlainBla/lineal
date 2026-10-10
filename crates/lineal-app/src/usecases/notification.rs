@@ -178,6 +178,18 @@ async fn org_base(app: &App, tx: &mut dyn Tx) -> AppResult<String> {
     })
 }
 
+/// Schreibt ein persönliches Inbox-Event (Sync an den Besitzer, WP15) in die Outbox.
+async fn push_notification_event(
+    tx: &mut dyn Tx,
+    ctx: &RequestCtx,
+    event: DomainEvent,
+) -> AppResult<()> {
+    tx.outbox()
+        .push(NewEvent::from_ctx(event, ctx))
+        .await
+        .map(|_| ())
+}
+
 fn to_item(view: NotificationView, base: &str) -> NotificationItem {
     let r = render(&view, base);
     NotificationItem {
@@ -291,6 +303,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let view = fetch_visible(&mut *tx, &snap, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
+        push_notification_event(
+            &mut *tx,
+            ctx,
+            DomainEvent::NotificationUpdated {
+                notification_id: id,
+                user_id: user,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(to_item(view, &base))
     }
@@ -312,6 +333,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let view = fetch_visible(&mut *tx, &snap, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
+        push_notification_event(
+            &mut *tx,
+            ctx,
+            DomainEvent::NotificationUpdated {
+                notification_id: id,
+                user_id: user,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(to_item(view, &base))
     }
@@ -354,6 +384,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let view = fetch_visible(&mut *tx, &snap, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
+        push_notification_event(
+            &mut *tx,
+            ctx,
+            DomainEvent::NotificationArchived {
+                notification_id: id,
+                user_id: user,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(to_item(view, &base))
     }

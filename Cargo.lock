@@ -1827,10 +1827,20 @@ dependencies = [
  "axum",
  "chrono",
  "chrono-tz",
+ "futures-util",
+ "http-body-util",
  "lineal-app",
+ "lineal-db",
  "lineal-domain",
+ "lineal-testkit",
+ "serde",
  "serde_json",
+ "sqlx",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

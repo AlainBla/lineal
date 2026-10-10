@@ -44,7 +44,8 @@ async fn every_documented_path_is_routed() {
         // Blob-Endpunkte (WP03): ungültige Signatur -> 403
         (Method::PUT, "/uploads/t", StatusCode::FORBIDDEN),
         (Method::GET, "/files/t", StatusCode::FORBIDDEN),
-        (Method::GET, "/sync", StatusCode::NOT_IMPLEMENTED),
+        // WP15: ohne Zugangsdaten antwortet /sync vor dem Upgrade mit 401
+        (Method::GET, "/sync", StatusCode::UNAUTHORIZED),
         (Method::GET, "/healthz", StatusCode::OK),
         (Method::GET, "/readyz", StatusCode::OK),
     ];
