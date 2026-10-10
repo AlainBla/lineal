@@ -51,6 +51,7 @@ async fn worker_delivers_each_event_once_per_consumer_and_runs_periodic_once(poo
         let ev = DomainEvent::IssueCreated {
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
+            mentioned_user_ids: vec![],
         };
         tx.outbox()
             .push(NewEvent::new(ev, EventOrigin::User))

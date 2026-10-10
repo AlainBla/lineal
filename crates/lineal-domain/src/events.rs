@@ -62,13 +62,18 @@ macro_rules! domain_events {
 }
 
 domain_events! {
-    IssueCreated { issue_id: IssueId, team_id: TeamId },
-    IssueUpdated { issue_id: IssueId, team_id: TeamId },
+    /// `mentioned_user_ids`: @-Erwähnungen in der Beschreibung (für Notifications, WP08).
+    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId> },
+    /// `changed`: geänderte Feldnamen (camelCase, z. B. `assigneeId`, `stateId`, `description`);
+    /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen in der Beschreibung.
+    IssueUpdated { issue_id: IssueId, team_id: TeamId, changed: Vec<String>, mentioned_user_ids: Vec<UserId> },
     IssueRemoved { issue_id: IssueId, team_id: TeamId },
     IssueRelationCreated { relation_id: IssueRelationId, issue_id: IssueId },
     IssueRelationRemoved { relation_id: IssueRelationId, issue_id: IssueId },
-    CommentCreated { comment_id: CommentId },
-    CommentUpdated { comment_id: CommentId },
+    /// `mentioned_user_ids`: @-Erwähnungen im Kommentartext (für Notifications, WP08).
+    CommentCreated { comment_id: CommentId, mentioned_user_ids: Vec<UserId> },
+    /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen.
+    CommentUpdated { comment_id: CommentId, mentioned_user_ids: Vec<UserId> },
     CommentRemoved { comment_id: CommentId },
     IssueLabelCreated { label_id: LabelId },
     IssueLabelUpdated { label_id: LabelId },
@@ -109,6 +114,25 @@ domain_events! {
     IssueSlaHighRisk { issue_id: IssueId },
     IssueSlaBreached { issue_id: IssueId },
     OAuthAuthorizationRevoked { client_id: String },
+    // --- vom Orchestrator vor Welle 2 ergänzt ---
+    WorkflowStateCreated { state_id: StateId, team_id: TeamId },
+    WorkflowStateUpdated { state_id: StateId, team_id: TeamId },
+    WorkflowStateRemoved { state_id: StateId, team_id: TeamId },
+    TeamMembershipCreated { team_id: TeamId, user_id: UserId },
+    TeamMembershipRemoved { team_id: TeamId, user_id: UserId },
+    OrganizationUpdated {},
+    ApiKeyCreated { user_id: UserId },
+    ApiKeyRevoked { user_id: UserId },
+    IssueSubscriptionCreated { issue_id: IssueId, user_id: UserId },
+    IssueSubscriptionRemoved { issue_id: IssueId, user_id: UserId },
+    TemplateCreated { template_id: TemplateId },
+    TemplateUpdated { template_id: TemplateId },
+    TemplateRemoved { template_id: TemplateId },
+    CustomViewCreated { view_id: ViewId },
+    CustomViewUpdated { view_id: ViewId },
+    CustomViewRemoved { view_id: ViewId },
+    /// Triage-Aktion (accept/decline/duplicate/snooze/move) auf einem Issue (WP12).
+    IssueTriaged { issue_id: IssueId, team_id: TeamId, action: String },
 }
 
 #[cfg(test)]
@@ -120,6 +144,7 @@ mod tests {
         let ev = DomainEvent::IssueCreated {
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
+            mentioned_user_ids: vec![],
         };
         let v = serde_json::to_value(&ev).unwrap();
         assert_eq!(v["type"], "IssueCreated");

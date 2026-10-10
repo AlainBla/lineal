@@ -38,6 +38,17 @@ pub enum Action {
     ManageWebhooks,
     CreatePersonalApiKey,
     ViewInitiatives,
+    // --- Workspace-Aktionen späterer Pakete (vom Orchestrator vorab angelegt) ---
+    /// Initiativen anlegen/bearbeiten, Projekte zuordnen, Initiative-Updates (WP07).
+    ManageInitiatives,
+    /// Workspace-weite (geteilte) Custom Views anlegen/ändern (WP11).
+    ManageWorkspaceViews,
+    /// Firmenweite Sicht: Overview, Workload, Workspace-Issues (WP11, docs/14).
+    ViewWorkspaceOverview,
+    /// Workspace-Projekt-Labels und Initiative-Labels verwalten (WP06/WP07).
+    ManageWorkspaceProjectLabels,
+    /// Import aus Linear starten/steuern (WP18, docs/13).
+    ManageImport,
     // --- Team ---
     /// Team und Inhalte sehen (Zugriff).
     ViewTeam,
@@ -70,6 +81,25 @@ pub enum Action {
     ShareIssue,
     /// Projekt anlegen/bearbeiten (für jedes beteiligte Team auszuwerten).
     ManageProject,
+    // --- Team-Aktionen späterer Pakete (vom Orchestrator vorab angelegt) ---
+    /// Kommentare/Reaktionen auf Issues; Autorenschaft prüft der Use-Case (WP09).
+    ReactIssue,
+    /// Anhänge hochladen/verlinken/löschen an Issues des Teams (WP09).
+    ManageAttachments,
+    /// Cycle-Einstellungen des Teams ändern, Cycles anlegen/umbenennen (WP07).
+    ManageCycles,
+    /// Status-Update zu einem Projekt schreiben (für die Teams des Projekts, WP07).
+    PostProjectUpdate,
+    /// Team-Projekt-Labels verwalten (WP07).
+    ManageTeamProjectLabels,
+    /// Triage-Aktionen: accept/decline/duplicate/snooze (WP12).
+    TriageIssue,
+    /// Triage-Einstellungen und -Rotation des Teams (WP12).
+    ManageTriageSettings,
+    /// Dokumente mit Team-/Projekt-/Issue-/Cycle-Parent anlegen/bearbeiten/löschen (WP10).
+    ManageDocuments,
+    /// Team-Views (geteilt im Team) anlegen/ändern (WP11).
+    ManageTeamSharedViews,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +136,11 @@ impl Action {
                 | ManageWebhooks
                 | CreatePersonalApiKey
                 | ViewInitiatives
+                | ManageInitiatives
+                | ManageWorkspaceViews
+                | ViewWorkspaceOverview
+                | ManageWorkspaceProjectLabels
+                | ManageImport
         )
     }
 
@@ -113,7 +148,10 @@ impl Action {
     pub const fn is_write(&self) -> bool {
         !matches!(
             self,
-            Action::ViewTeam | Action::ViewTeamMetadata | Action::ViewInitiatives
+            Action::ViewTeam
+                | Action::ViewTeamMetadata
+                | Action::ViewInitiatives
+                | Action::ViewWorkspaceOverview
         )
     }
 
@@ -130,6 +168,7 @@ impl Action {
                 | SuspendUser
                 | ManageWorkspaceProjectStatus
                 | ManageWebhooks
+                | ManageImport
         )
     }
 
@@ -154,6 +193,12 @@ impl Action {
                 (Rule::AnyAccess, false)
             }
             ShareIssue => (Rule::IssueSharing, false),
+            ReactIssue | ManageAttachments | PostProjectUpdate | TriageIssue | ManageDocuments => {
+                (Rule::AnyAccess, false)
+            }
+            ManageCycles | ManageTriageSettings => (Rule::MemberSetting("teamManagement"), false),
+            ManageTeamProjectLabels => (Rule::MemberSetting("labelManagement"), false),
+            ManageTeamSharedViews => (Rule::MemberSetting("pinnedViewManagement"), false),
             // Workspace-Aktionen werden nie über Team-Regeln ausgewertet.
             _ => (Rule::Admin, true),
         }
@@ -240,6 +285,11 @@ fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppRe
         ManageWebhooks => !guest_or_app && at_least(org.api_settings_role),
         CreatePersonalApiKey => !guest_or_app && at_least(org.personal_api_keys_role),
         ViewInitiatives => role != UserRole::Guest,
+        ManageInitiatives | ManageWorkspaceViews | ViewWorkspaceOverview => role != UserRole::Guest,
+        ManageWorkspaceProjectLabels => {
+            role != UserRole::Guest && at_least(org.label_management_role)
+        }
+        ManageImport => is_admin(role),
         _ => false,
     };
     if allowed {

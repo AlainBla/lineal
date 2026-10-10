@@ -4,18 +4,46 @@ use crate::error::AppResult;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_domain::events::{DomainEvent, EventOrigin};
-use lineal_domain::ids::{EventId, OrgId};
+use lineal_domain::ids::{EventId, OrgId, UserId};
 
 /// Neues Event, das in der laufenden Transaktion geschrieben wird.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewEvent {
     pub event: DomainEvent,
     pub origin: EventOrigin,
+    /// Auslösender User (für Self-Suppression bei Notifications); `None` bei System/App.
+    pub actor_id: Option<UserId>,
 }
 
 impl NewEvent {
     pub fn new(event: DomainEvent, origin: EventOrigin) -> Self {
-        Self { event, origin }
+        Self {
+            event,
+            origin,
+            actor_id: None,
+        }
+    }
+
+    /// Event eines Requests: Origin `user`, Auslöser aus `ctx.actor` (nur bei User-Akteuren).
+    pub fn from_ctx(event: DomainEvent, ctx: &crate::RequestCtx) -> Self {
+        let actor_id = match ctx.actor {
+            crate::Actor::User { id, .. } | crate::Actor::App { id } => Some(id),
+            crate::Actor::System => None,
+        };
+        let origin = match ctx.actor {
+            crate::Actor::System => EventOrigin::System,
+            _ => EventOrigin::User,
+        };
+        Self {
+            event,
+            origin,
+            actor_id,
+        }
+    }
+
+    pub fn with_actor(mut self, actor_id: Option<UserId>) -> Self {
+        self.actor_id = actor_id;
+        self
     }
 }
 
@@ -25,6 +53,7 @@ pub struct StoredEvent {
     pub id: EventId,
     pub org_id: OrgId,
     pub origin: EventOrigin,
+    pub actor_id: Option<UserId>,
     pub sync_id: i64,
     pub event: DomainEvent,
     pub created_at: DateTime<Utc>,

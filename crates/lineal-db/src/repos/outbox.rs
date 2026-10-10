@@ -7,13 +7,15 @@ use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::{NewEvent, OutboxRepo, StoredEvent};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::events::DomainEvent;
-use lineal_domain::ids::{EventId, OrgId};
+use lineal_domain::ids::{EventId, OrgId, UserId};
 use serde_json::Value;
 use uuid::Uuid;
 
-type Row = (Uuid, Uuid, String, Value, i64, DateTime<Utc>);
+type Row = (Uuid, Uuid, String, Value, i64, DateTime<Utc>, Option<Uuid>);
 
-fn to_stored((id, org, origin, payload, sync_id, created_at): Row) -> AppResult<StoredEvent> {
+fn to_stored(
+    (id, org, origin, payload, sync_id, created_at, actor): Row,
+) -> AppResult<StoredEvent> {
     let origin = origin
         .parse()
         .map_err(|_| AppError::internal("invalid outbox origin"))?;
@@ -23,6 +25,7 @@ fn to_stored((id, org, origin, payload, sync_id, created_at): Row) -> AppResult<
         id: EventId(id),
         org_id: OrgId(org),
         origin,
+        actor_id: actor.map(UserId),
         sync_id,
         event,
         created_at,
@@ -37,8 +40,8 @@ impl OutboxRepo for PgTx {
         let payload = serde_json::to_value(&event.event)
             .map_err(|e| AppError::internal(format!("cannot encode event: {e}")))?;
         sqlx::query(
-            "INSERT INTO outbox_event (event_id, organization_id, origin, type, payload, sync_id) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO outbox_event (event_id, organization_id, origin, type, payload, sync_id, actor_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(id.0)
         .bind(self.org.0)
@@ -46,6 +49,7 @@ impl OutboxRepo for PgTx {
         .bind(event.event.type_name())
         .bind(payload)
         .bind(sync_id)
+        .bind(event.actor_id.map(|a| a.0))
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -59,7 +63,7 @@ impl OutboxRepo for PgTx {
     ) -> AppResult<Vec<StoredEvent>> {
         // Bewusst mandantenübergreifend (Relay); nur über `Store::begin_system` aufzurufen.
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT e.event_id, e.organization_id, e.origin, e.payload, e.sync_id, e.created_at \
+            "SELECT e.event_id, e.organization_id, e.origin, e.payload, e.sync_id, e.created_at, e.actor_id \
              FROM outbox_event e \
              WHERE e.processed_at IS NULL \
                AND NOT EXISTS (SELECT 1 FROM outbox_delivery d \

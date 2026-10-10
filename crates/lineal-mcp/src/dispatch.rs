@@ -165,7 +165,6 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lineal_app::ErrorKind;
     use lineal_testkit::{SeedUser, ctx_for, fake_app};
     use std::collections::BTreeSet;
 
@@ -203,18 +202,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_tool_dispatches_to_a_not_implemented_handler() {
+    async fn every_tool_is_routed_to_a_handler() {
+        // Gruppenunabhängig: jedes Tool wird geroutet (Some); das Ergebnis selbst prüfen die
+        // Contract-Tests der jeweiligen Gruppe. Dadurch muss kein WP diese Datei anfassen.
         let app = fake_app();
         let ctx = ctx_for(SeedUser::Alice);
-        for (name, group) in all_tools() {
-            // WP02 hat teams_users und statuses implementiert (eigene Contract-Tests).
-            if matches!(group, Group::TeamsUsers | Group::Statuses) {
-                continue;
-            }
-            let res = dispatch(&app, &ctx, name, Value::Null).await.expect(name);
-            let err = res.expect_err(name);
-            assert_eq!(err.kind, ErrorKind::Internal, "{name}");
-            assert_eq!(err.message, "not implemented", "{name}");
+        for (name, _group) in all_tools() {
+            assert!(
+                dispatch(&app, &ctx, name, Value::Null).await.is_some(),
+                "{name} nicht geroutet"
+            );
         }
         assert!(
             dispatch(&app, &ctx, "no_such_tool", Value::Null)

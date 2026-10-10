@@ -14,6 +14,7 @@ fn created() -> NewEvent {
         DomainEvent::IssueCreated {
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
+            mentioned_user_ids: vec![],
         },
         EventOrigin::User,
     )
@@ -31,7 +32,11 @@ async fn outbox_push_claim_deliver_process(pool: PgPool) {
         sync_a,
         "same tx, same lastSyncId"
     );
-    tx.outbox().push(created()).await.unwrap();
+    let actor = lineal_domain::ids::UserId::new_v7();
+    tx.outbox()
+        .push(created().with_actor(Some(actor)))
+        .await
+        .unwrap();
     tx.outbox().push(created()).await.unwrap();
     tx.commit().await.unwrap();
 
@@ -48,6 +53,8 @@ async fn outbox_push_claim_deliver_process(pool: PgPool) {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].org_id, org);
     assert_eq!(events[0].sync_id, sync_a);
+    assert_eq!(events[0].actor_id, Some(actor), "actor_id round-trip");
+    assert_eq!(events[1].actor_id, None);
     let ids: Vec<_> = events.iter().map(|e| e.id).collect();
     tx.outbox()
         .mark_delivered("search_index", &ids)
