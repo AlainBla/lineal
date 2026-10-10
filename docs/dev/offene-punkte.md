@@ -54,3 +54,18 @@ WP07-Leftovers:
 - Doku-Konflikte: Lead-Team-Wechsel neue P-Nummer (04 A10 anpassen); list_projects initiative rekursiv vs. 07.
 - cycleNumberBase, Kapazität, cycle_remove_moves_to_backlog fehlen.
 - GraphQL-Platzhalter _xReady: Test in graphql/mod.rs generisch machen -> Orchestrator.
+WP13-Lücken (Backend-GraphQL fehlt):
+- users-Query (Assignee-Picker, Mentions) – größte UX-Lücke.
+- issue.children (teamübergreifend), issue.relations, issue.history lesen.
+- Abo-Zustand eines Issues (issueSubscription für Viewer).
+- issueBatchUpdate, Drafts, Template-Auswahl im Create-Modal (nach WP10).
+- issues-Query mit Filter-JSON (WP11) -> Client-Filter ersetzen.
+- Web: Cache-Normalisierung Key vs UUID für Sync (WP15).
+WP12-Leftovers:
+- Snooze-Wiedervorlage bei Aktivität; Auto-Archive-Notification; Cycles/Projekte auto-archivieren.
+- SLA-Regel-CRUD + team.sla_enabled/sla_work_week Setter (Team-Settings) -> WP14/WP16.
+- BlobStore::delete fehlt -> Purge löscht Blobs nicht (WP17).
+- Mentions in Triage-Kommentaren; IssueTriaged-Notification.
+WP10-Leftovers:
+- Dokument-Kaskade (trash_documents_of/restore_documents_of) in delete_issue, set_project_trashed, Team-Löschen einhängen -> Orchestrator/WP16.
+- Snapshot-Bündelung, Dokument-Mentions/Abos, documentMoved, CRDT; useDefaultTemplate API; Form-Templates; get_issue.attachments/documents einhängen.
