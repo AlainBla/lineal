@@ -120,4 +120,10 @@ describe("Issue-Routen in der Shell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/acme/my-issues/assigned"));
     expect(await screen.findByRole("navigation", { name: "My issues tabs" })).toBeInTheDocument();
   });
+
+  it("unbekannte My-Issues-Tabs leiten auf Assigned um", async () => {
+    install();
+    const router = await renderApp("/acme/my-issues/activity");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/my-issues/assigned"));
+  });
 });
