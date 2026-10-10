@@ -1,3 +1,20 @@
+type ActiveCycle {
+	teamId: String!
+	teamKey: String!
+	teamName: String!
+	cycleId: String!
+	number: Int!
+	name: String
+	startsAt: String!
+	endsAt: String!
+	remainingDays: Int!
+	progress: Float!
+	scope: Float!
+	completedScope: Float!
+	inProgressScope: Float!
+	scopeChange: Int!
+}
+
 """
 `Attachment` (Link oder hochgeladene Datei; `url` ist bei Uploads kurzlebig signiert).
 """
@@ -118,6 +135,93 @@ type CommentUser {
 	id: String!
 	name: String!
 	displayName: String!
+}
+
+"""
+`CustomView`.
+"""
+type CustomView {
+	id: String!
+	slugId: String!
+	name: String!
+	description: String
+	icon: String
+	color: String
+	modelName: String!
+	"""
+	Normalisierter Filterbaum (`filterData`/`projectFilterData`/`initiativeFilterData`).
+	"""
+	filterData: JSON!
+	ownerId: String!
+	ownerName: String
+	shared: Boolean!
+	teamId: String
+	teamKey: String
+	projectId: String
+	initiativeId: String
+	sortOrder: Float!
+	version: Int!
+	"""
+	Darf der Betrachter bearbeiten oder löschen?
+	"""
+	canEdit: Boolean!
+	createdAt: String!
+	updatedAt: String!
+	archivedAt: String
+}
+
+type CustomViewConnection {
+	nodes: [CustomView!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+input CustomViewCreateInput {
+	name: String!
+	description: String
+	icon: String
+	color: String
+	"""
+	`Issue`, `Project` oder `Initiative`.
+	"""
+	modelName: String!
+	filterData: JSON!
+	shared: Boolean
+	teamId: String
+	projectId: String
+	initiativeId: String
+	"""
+	Anzeigeoptionen zum Zeitpunkt des Anlegens.
+	"""
+	preferences: JSON
+}
+
+type CustomViewDeletePayload {
+	success: Boolean!
+	entityId: String!
+}
+
+type CustomViewPayload {
+	success: Boolean!
+	customView: CustomView
+}
+
+input CustomViewUpdateInput {
+	expectedVersion: Int
+	name: String
+	description: String
+	icon: String
+	color: String
+	filterData: JSON
+	shared: Boolean
+	"""
+	Team-Scope setzen (`null` lässt das Team unverändert; zum Entfernen `clearTeam`).
+	"""
+	teamId: String
+	clearTeam: Boolean
+	ownerId: String
+	sortOrder: Float
+	archived: Boolean
 }
 
 """
@@ -281,6 +385,63 @@ input DocumentUpdateInput {
 	expectedVersion: Int
 }
 
+type EntitySearchConnection {
+	nodes: [EntitySearchResult!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+"""
+Treffer eines Projekts, einer Initiative oder eines Dokuments.
+"""
+type EntitySearchResult {
+	id: String!
+	"""
+	`Project`, `Initiative`, `Document`.
+	"""
+	kind: String!
+	identifier: String
+	title: String!
+	teamKey: String
+	status: String
+	archived: Boolean!
+	updatedAt: String!
+	highlights: [SearchHighlight!]!
+}
+
+"""
+`Favorite`.
+"""
+type Favorite {
+	id: String!
+	type: String!
+	parentId: String
+	folderName: String
+	sortOrder: Float!
+	targetId: String
+	predefinedViewType: String
+	predefinedViewTeamId: String
+}
+
+input FavoriteCreateInput {
+	type: String!
+	targetId: String
+	folderName: String
+	parentId: String
+	predefinedViewType: String
+	predefinedViewTeamId: String
+}
+
+type FavoriteDeletePayload {
+	success: Boolean!
+	entityId: String!
+}
+
+type FavoritePayload {
+	success: Boolean!
+	favorite: Favorite
+}
+
 type Initiative {
 	id: String!
 	identifier: String!
@@ -363,6 +524,16 @@ type InitiativeProject {
 
 type InitiativeSuccessPayload {
 	success: Boolean!
+}
+
+type InitiativeSummary {
+	id: String!
+	identifier: String!
+	name: String!
+	status: String!
+	health: String
+	projectCount: Int!
+	completedProjectCount: Int!
 }
 
 type InitiativeUpdate {
@@ -490,6 +661,16 @@ type IssuePayload {
 	issue: Issue
 }
 
+type IssueRef {
+	id: String!
+	identifier: String!
+	title: String!
+	teamKey: String!
+	dueDate: String
+	slaBreachesAt: String
+	reasons: [String!]!
+}
+
 input IssueRelationCreateInput {
 	issueId: String!
 	relatedIssueId: String!
@@ -497,6 +678,17 @@ input IssueRelationCreateInput {
 	`blocks`, `related` oder `duplicate`.
 	"""
 	type: String!
+}
+
+type IssueSearchConnection {
+	nodes: [IssueSearchResult!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+type IssueSearchResult {
+	issue: Issue!
+	highlights: [SearchHighlight!]!
 }
 
 type IssueSubscriptionPayload {
@@ -687,12 +879,29 @@ type Mutation {
 	initiativeUpdateCreate(initiativeId: String!, body: String!, health: String, isDiffHidden: Boolean): InitiativeUpdatePayload!
 	initiativeUpdateEdit(id: String!, body: String, health: String): InitiativeUpdatePayload!
 	initiativeUpdateDelete(id: String!): InitiativeSuccessPayload!
+	customViewCreate(input: CustomViewCreateInput!): CustomViewPayload!
+	customViewUpdate(id: String!, input: CustomViewUpdateInput!): CustomViewPayload!
+	customViewDelete(id: String!): CustomViewDeletePayload!
 	"""
-	Platzhalter des Scaffolds.
+	Kopie für den Aufrufer (`shared = false`, Name „… (copy)“).
 	"""
-	_viewMutationReady: Boolean!
+	customViewDuplicate(id: String!): CustomViewPayload!
+	favoriteCreate(input: FavoriteCreateInput!): FavoritePayload!
+	favoriteDelete(id: String!): FavoriteDeletePayload!
 	"""
-	Platzhalter des Scaffolds.
+	Persönliche Änderung der Anzeigeoptionen (nur die genannten Schlüssel).
+	"""
+	viewPreferencesUpdate(customViewId: String, viewType: String, teamId: String, preferences: JSON!): ViewPreferencesValues!
+	"""
+	„Set default for everyone“ (Team-Owner, View-Owner bzw. Admins).
+	"""
+	viewPreferencesSetDefault(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	"""
+	„Reset“: löscht die persönlichen Overrides.
+	"""
+	viewPreferencesReset(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	"""
+	Platzhalter des Scaffolds (der Mutation-Root darf nicht leer sein).
 	"""
 	_searchMutationReady: Boolean!
 	"""
@@ -786,7 +995,7 @@ type Mutation {
 	"""
 	timeScheduleCreate(name: String!, entries: [TimeScheduleEntryGqlInput!]!): TimeSchedule!
 	"""
-	Platzhalter des Scaffolds.
+	Platzhalter des Scaffolds (der Mutation-Root darf nicht leer sein).
 	"""
 	_overviewMutationReady: Boolean!
 	"""
@@ -934,6 +1143,18 @@ type Organization {
 	updatedAt: String!
 }
 
+type OverviewCounts {
+	openIssues: Int!
+	inProgress: Int!
+	triage: Int!
+	triageOldestAt: String
+	completed: Int!
+	completedPoints: Float!
+	overdue: Int!
+	slaAtRisk: Int!
+	slaBreached: Int!
+}
+
 """
 Relay-`PageInfo` (09 §1.3).
 """
@@ -1006,6 +1227,14 @@ type Project {
 	openIssueCount: Int
 	createdAt: String!
 	updatedAt: String!
+}
+
+type ProjectHealthSummary {
+	onTrack: Int!
+	atRisk: Int!
+	offTrack: Int!
+	noUpdate: Int!
+	total: Int!
 }
 
 """
@@ -1189,13 +1418,40 @@ type Query {
 	"""
 	initiativeUpdates(initiativeId: String, includeArchived: Boolean, first: Int): [InitiativeUpdate!]!
 	"""
-	Platzhalter des Scaffolds.
+	Sichtbare Custom Views (ohne archivierte und ohne Projekt-/Initiativ-Tabs).
 	"""
-	_viewReady: Boolean!
+	customViews(modelName: String, teamId: String, shared: Boolean, query: String, first: Int, after: String): CustomViewConnection!
 	"""
-	Platzhalter des Scaffolds.
+	Eine sichtbare View (UUID, Slug, URL oder exakter Name); sonst `not_found`.
 	"""
-	_searchReady: Boolean!
+	customView(id: String!): CustomView!
+	"""
+	Favoriten des Viewers (nur sichtbare Ziele).
+	"""
+	favorites: [Favorite!]!
+	"""
+	Wirksame Anzeigeoptionen einer Custom View oder vordefinierten Ansicht.
+	"""
+	viewPreferences(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	"""
+	Issues über Custom View und/oder Filter: View UND Filter UND Suchbegriff-Regeln
+	(docs/05 §4.3); Sortierung nach `updatedAt`, nicht aus der View.
+	"""
+	viewIssues(customViewId: String, filter: JSON, query: String, teamId: String, includeSubTeams: Boolean, includeArchived: Boolean, first: Int, after: String): IssueConnection!
+	"""
+	Volltextsuche über Issues (inkl. früherer Kennungen), mit Zusatzfilter (`IssueFilter`).
+	"""
+	searchIssues(term: String!, filter: JSON, teamId: String, includeComments: Boolean, includeArchived: Boolean, first: Int, after: String, orderBy: PaginationOrderBy, relevance: Boolean): IssueSearchConnection!
+	searchProjects(term: String!, first: Int, after: String): EntitySearchConnection!
+	"""
+	Volltextsuche über Titel und Inhalt sichtbarer Dokumente.
+	"""
+	searchDocuments(term: String!, first: Int, after: String): DocumentConnection!
+	"""
+	Globale Suche („All“-Tab): Issues, Projekte, Initiativen und Dokumente gemischt nach
+	Relevanz; `types` schränkt ein (`Issue`, `Project`, `Initiative`, `Document`).
+	"""
+	search(term: String!, types: [String!], includeComments: Boolean, first: Int, after: String): EntitySearchConnection!
 	"""
 	Eigene Notifications, neueste zuerst (ausgeblendet: archivierte, gesnoozte, Objekte ohne Zugriff).
 	"""
@@ -1225,10 +1481,6 @@ type Query {
 	"""
 	documents(projectId: String, initiativeId: String, teamId: String, issueId: String, cycleId: String, creatorId: String, query: String, includeArchived: Boolean, trashed: Boolean, first: Int, after: String): DocumentConnection!
 	"""
-	Volltextsuche über Titel und Inhalt sichtbarer Dokumente.
-	"""
-	searchDocuments(term: String!, first: Int, after: String): DocumentConnection!
-	"""
 	Snapshot-Historie (neueste zuerst).
 	"""
 	documentContentHistory(documentId: String!, first: Int, after: String): DocumentContentHistoryConnection!
@@ -1246,9 +1498,19 @@ type Query {
 	"""
 	triageResponsibility(teamId: String!, userId: String, first: Int): TriageResponsibility!
 	"""
-	Platzhalter des Scaffolds.
+	Dashboard der Firma: Kennzahlen je Team (mit Rollup über Sub-Teams), Projekte nach
+	Health, Initiativen, überfällige/SLA-gefährdete Issues. Gäste: `forbidden`.
 	"""
-	_overviewReady: Boolean!
+	workspaceOverview(teamIds: [String!], includeSubTeams: Boolean, period: String): WorkspaceOverviewGql!
+	"""
+	Auslastung: Person × Team (offene Issues und Punkte) im aktuellen (`current`) oder
+	nächsten (`next`) Cycle.
+	"""
+	workload(teamIds: [String!], cycle: String): [WorkloadRowGql!]!
+	"""
+	Aktive Cycles aller (ausgewählten) sichtbaren Teams.
+	"""
+	activeCycles(teamIds: [String!]): [ActiveCycle!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -1300,6 +1562,14 @@ type ReactionPayload {
 	success: Boolean!
 	lastSyncId: Float!
 	reaction: Reaction
+}
+
+"""
+Trefferausschnitt (`<mark>` um Fundstellen, übriger Text HTML-escaped).
+"""
+type SearchHighlight {
+	field: String!
+	snippet: String!
 }
 
 type SuccessPayload {
@@ -1363,6 +1633,18 @@ input TeamCyclesInput {
 	`moveToBacklog` | `addToCycle` beim Einschalten von „Active issues“.
 	"""
 	existingActiveIssues: String
+}
+
+type TeamMetrics {
+	teamId: String!
+	key: String!
+	name: String!
+	parentId: String
+	depth: Int!
+	counts: OverviewCounts!
+	throughput: [ThroughputWeek!]!
+	cycleProgress: Float
+	projects: ProjectHealthSummary!
 }
 
 type TeamPayload {
@@ -1476,6 +1758,12 @@ input TemplateUpdateInput {
 	asTeamId: String
 }
 
+type ThroughputWeek {
+	weekOffset: Int!
+	issues: Int!
+	points: Float!
+}
+
 type TimeSchedule {
 	id: String!
 	name: String!
@@ -1575,6 +1863,15 @@ type UploadPayload {
 }
 
 """
+Wirksame Anzeigeoptionen.
+"""
+type ViewPreferencesValues {
+	values: JSON!
+	hasPersonal: Boolean!
+	hasDefault: Boolean!
+}
+
+"""
 `WorkflowState`.
 """
 type WorkflowState {
@@ -1608,6 +1905,37 @@ input WorkflowStateUpdateInput {
 	color: String
 	description: String
 	position: Float
+}
+
+type WorkloadRowGql {
+	user: WorkloadUser!
+	perTeam: [WorkloadTeamEntry!]!
+	totalOpenIssues: Int!
+	totalPoints: Float!
+}
+
+type WorkloadTeamEntry {
+	teamId: String!
+	teamKey: String!
+	teamName: String!
+	openIssues: Int!
+	points: Float!
+}
+
+type WorkloadUser {
+	id: String!
+	name: String!
+	displayName: String!
+}
+
+type WorkspaceOverviewGql {
+	period: String!
+	includeSubTeams: Boolean!
+	teams: [TeamMetrics!]!
+	totals: OverviewCounts!
+	projects: ProjectHealthSummary!
+	initiatives: [InitiativeSummary!]!
+	atRisk: [IssueRef!]!
 }
 
 type WorkspacePayload {
