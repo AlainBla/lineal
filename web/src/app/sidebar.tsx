@@ -32,6 +32,7 @@ import {
   type TeamNode,
 } from "@/app/use-sidebar-data";
 import { Button } from "@/components/ui/button";
+import { FavoritesSection } from "@/features/views/favorites-section";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -397,6 +398,8 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
               </NavLink>
             </li>
           </ul>
+
+          <FavoritesSection ws={ws} />
 
           <SectionLabel>Your teams</SectionLabel>
           <TeamsSection ws={ws} data={data} loading={isLoading} />

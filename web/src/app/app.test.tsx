@@ -137,10 +137,10 @@ describe("shell", () => {
 
   it("shows a placeholder page for routes built by later work packages", async () => {
     mockFetch(true);
-    const router = await renderApp("/acme/inbox");
-    expect(await screen.findByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+    const router = await renderApp("/acme/drafts");
+    expect(await screen.findByRole("heading", { name: "Drafts" })).toBeInTheDocument();
     expect(screen.getByText(/not built yet/i)).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/acme/inbox");
+    expect(router.state.location.pathname).toBe("/acme/drafts");
   });
 
   it("navigates with key sequences (g i, g m)", async () => {

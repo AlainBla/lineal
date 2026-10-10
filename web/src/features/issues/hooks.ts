@@ -28,7 +28,7 @@ import {
   type IssueList,
   type IssueUpdateVars,
 } from "./queries";
-import { rememberCommentAuthors } from "./users";
+import { commentAuthors, useRememberUsers } from "./users";
 
 export function useTeamIssues(teamRef: string) {
   return useQuery({
@@ -97,12 +97,13 @@ export function useIssue(ref: string) {
 }
 
 export function useComments(issueId: string | undefined) {
+  const remember = useRememberUsers();
   return useQuery({
     queryKey: keys.comments(issueId ?? ""),
     enabled: !!issueId,
     queryFn: async ({ signal }) => {
       const nodes = await fetchComments(issueId!, signal);
-      rememberCommentAuthors(nodes);
+      remember(commentAuthors(nodes));
       return nodes;
     },
   });

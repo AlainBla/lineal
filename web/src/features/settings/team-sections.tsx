@@ -1,0 +1,627 @@
+import { ArrowDown, ArrowUp, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { errorText } from "@/features/issues/error-text";
+import {
+  STATE_TYPE_LABEL,
+  STATE_TYPE_ORDER,
+  sortStates,
+  type StateType,
+} from "@/features/issues/model";
+import { ErrorState, ListSkeleton } from "@/features/issues/states";
+import { StatusIcon } from "@/features/issues/icons";
+import type { Team, WorkflowState } from "@/gql/graphql";
+
+import {
+  useLabelMutations,
+  useMembership,
+  useTeamLabels,
+  useTeamMembers,
+  useUpdateCycleSettings,
+  useUpdateTeam,
+  useWorkflowMutations,
+  useWorkflowStates,
+  useWorkspaceMembers,
+} from "./queries";
+import { Field, Section, selectClass } from "./ui";
+
+function SaveRow({ pending, error, dirty }: { pending: boolean; error: unknown; dirty: boolean }) {
+  return (
+    <div className="flex items-center gap-3">
+      <Button type="submit" size="sm" disabled={!dirty || pending}>
+        Save
+      </Button>
+      {error != null && (
+        <span role="alert" className="text-xs text-destructive">
+          {errorText(error)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function GeneralSection({ team }: { team: Team }) {
+  const update = useUpdateTeam(team.id);
+  const [name, setName] = useState(team.name);
+  const [key, setKey] = useState(team.key);
+  const [description, setDescription] = useState(team.description ?? "");
+  const [timezone, setTimezone] = useState(team.timezone);
+  const dirty =
+    name !== team.name ||
+    key !== team.key ||
+    description !== (team.description ?? "") ||
+    timezone !== team.timezone;
+  return (
+    <Section title="General" description="Name, identifier and timezone of this team.">
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          update.mutate({
+            ...(name !== team.name ? { name } : {}),
+            ...(key !== team.key ? { key } : {}),
+            ...(description !== (team.description ?? "") ? { description } : {}),
+            ...(timezone !== team.timezone ? { timezone } : {}),
+          });
+        }}
+      >
+        <Field label="Name">
+          <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Identifier">
+          <Input
+            aria-label="Identifier"
+            value={key}
+            onChange={(e) => setKey(e.target.value.toUpperCase())}
+          />
+        </Field>
+        <Field label="Description">
+          <Input
+            aria-label="Description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <Field label="Timezone">
+          <Input
+            aria-label="Timezone"
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+          />
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          Estimates: {team.issueEstimationType} · Visibility: {team.visibility}
+        </p>
+        <SaveRow pending={update.isPending} error={update.error} dirty={dirty} />
+      </form>
+    </Section>
+  );
+}
+
+export function MembersSection({ team }: { team: Team }) {
+  const members = useTeamMembers(team.key);
+  const { add, remove } = useMembership(team.id);
+  const [adding, setAdding] = useState(false);
+  const all = useWorkspaceMembers(adding);
+  const candidates = useMemo(() => {
+    const ids = new Set((members.data ?? []).map((m) => m.id));
+    return (all.data ?? []).filter((u) => !ids.has(u.id));
+  }, [all.data, members.data]);
+  const [pick, setPick] = useState("");
+  return (
+    <Section title="Members" description="People who belong to this team.">
+      {members.isLoading && <ListSkeleton rows={3} />}
+      {members.isError && <ErrorState error={members.error} title="Could not load members" />}
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {(members.data ?? []).map((m) => (
+          <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+            {m.displayName || m.name}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              aria-label={`Remove ${m.displayName || m.name}`}
+              onClick={() => remove.mutate(m.id)}
+            >
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {adding ? (
+        <div className="flex items-center gap-2">
+          <select
+            aria-label="Add member"
+            className={selectClass}
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+          >
+            <option value="">Choose a person…</option>
+            {candidates.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.displayName || u.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            disabled={!pick}
+            onClick={() =>
+              add.mutate(pick, {
+                onSuccess: () => {
+                  setPick("");
+                  setAdding(false);
+                },
+              })
+            }
+          >
+            Add
+          </Button>
+          {add.isError && (
+            <span role="alert" className="text-xs text-destructive">
+              {errorText(add.error)}
+            </span>
+          )}
+        </div>
+      ) : (
+        <Button variant="outline" size="sm" className="self-start" onClick={() => setAdding(true)}>
+          <Plus /> Add a member
+        </Button>
+      )}
+    </Section>
+  );
+}
+
+const COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+/** Workflow-Editor (docs/08 §2.11 „Issue statuses“): Gruppen je Kategorie, anlegen, umbenennen, verschieben, archivieren. */
+export function StatusesSection({ team }: { team: Team }) {
+  const q = useWorkflowStates(team.id);
+  const m = useWorkflowMutations();
+  const [type, setType] = useState<StateType>("unstarted");
+  const [name, setName] = useState("");
+  const [color, setColor] = useState("#5e6ad2");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [archiving, setArchiving] = useState<WorkflowState | null>(null);
+  const [target, setTarget] = useState("");
+  const states = useMemo(() => sortStates(q.data ?? []), [q.data]);
+
+  /** Position zwischen den Nachbarn derselben Kategorie (Float-Mittelwert, wie `sort_order::between`). */
+  const move = (s: WorkflowState, dir: -1 | 1) => {
+    const same = states.filter((x) => x.type === s.type);
+    const idx = same.findIndex((x) => x.id === s.id);
+    const other = same[idx + dir];
+    if (!other) return;
+    const beyond = same[idx + dir * 2];
+    const position = beyond ? (other.position + beyond.position) / 2 : other.position + dir;
+    m.update.mutate({ id: s.id, input: { position } });
+  };
+
+  if (q.isLoading) return <ListSkeleton rows={5} />;
+  if (q.isError) return <ErrorState error={q.error} title="Could not load statuses" />;
+  return (
+    <Section title="Issue statuses" description="The workflow of this team, grouped by category.">
+      {STATE_TYPE_ORDER.map((t) => {
+        const list = states.filter((s) => s.type === t);
+        if (list.length === 0) return null;
+        return (
+          <div
+            key={t}
+            aria-label={STATE_TYPE_LABEL[t]}
+            role="group"
+            className="flex flex-col gap-1"
+          >
+            <h3 className="text-xs font-medium text-muted-foreground">{STATE_TYPE_LABEL[t]}</h3>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {list.map((s, i) => (
+                <li key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                  <StatusIcon type={s.type} color={s.color} />
+                  {editing === s.id ? (
+                    <form
+                      className="flex flex-1 items-center gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (draft.trim())
+                          m.update.mutate({ id: s.id, input: { name: draft.trim() } });
+                        setEditing(null);
+                      }}
+                    >
+                      <Input
+                        aria-label="Status name"
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        autoFocus
+                      />
+                      <Button type="submit" size="sm">
+                        Save
+                      </Button>
+                    </form>
+                  ) : (
+                    <span className="flex-1">
+                      {s.name}
+                      {s.isDefault && (
+                        <span className="ml-2 text-xs text-muted-foreground">Default</span>
+                      )}
+                    </span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${s.name} up`}
+                    disabled={i === 0}
+                    onClick={() => move(s, -1)}
+                  >
+                    <ArrowUp />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${s.name} down`}
+                    disabled={i === list.length - 1}
+                    onClick={() => move(s, 1)}
+                  >
+                    <ArrowDown />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setEditing(s.id);
+                      setDraft(s.name);
+                    }}
+                  >
+                    Rename
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Archive ${s.name}`}
+                    onClick={() => {
+                      setArchiving(s);
+                      setTarget("");
+                    }}
+                  >
+                    Archive
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+      {archiving && (
+        <div
+          role="group"
+          aria-label="Archive status"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3 text-sm"
+        >
+          <span>Archive “{archiving.name}”. Move its issues to:</span>
+          <select
+            aria-label="Target status"
+            className={selectClass}
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            <option value="">(none)</option>
+            {states
+              .filter((s) => s.id !== archiving.id)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+          </select>
+          <Button
+            size="sm"
+            onClick={() =>
+              m.archive.mutate(
+                { id: archiving.id, targetStateId: target || undefined },
+                { onSuccess: () => setArchiving(null) },
+              )
+            }
+          >
+            Archive
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setArchiving(null)}>
+            Cancel
+          </Button>
+          {m.archive.isError && (
+            <span role="alert" className="text-xs text-destructive">
+              {errorText(m.archive.error)}
+            </span>
+          )}
+        </div>
+      )}
+      <form
+        aria-label="Create status"
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || !COLOR_RE.test(color)) return;
+          m.create.mutate(
+            { teamId: team.id, name: name.trim(), type, color },
+            { onSuccess: () => setName("") },
+          );
+        }}
+      >
+        <select
+          aria-label="Category"
+          className={selectClass}
+          value={type}
+          onChange={(e) => setType(e.target.value as StateType)}
+        >
+          {STATE_TYPE_ORDER.map((t) => (
+            <option key={t} value={t}>
+              {STATE_TYPE_LABEL[t]}
+            </option>
+          ))}
+        </select>
+        <Input
+          aria-label="New status name"
+          placeholder="New status"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="max-w-48"
+        />
+        <Input
+          aria-label="Color"
+          value={color}
+          onChange={(e) => setColor(e.target.value)}
+          className="w-24"
+        />
+        <Button type="submit" size="sm" disabled={!name.trim() || !COLOR_RE.test(color)}>
+          <Plus /> Create status
+        </Button>
+        {m.create.isError && (
+          <span role="alert" className="text-xs text-destructive">
+            {errorText(m.create.error)}
+          </span>
+        )}
+      </form>
+    </Section>
+  );
+}
+
+export function LabelsSection({ team }: { team: Team }) {
+  const q = useTeamLabels(team.id);
+  const m = useLabelMutations();
+  const [name, setName] = useState("");
+  const [group, setGroup] = useState(false);
+  const [color, setColor] = useState("#5e6ad2");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const own = (q.data ?? []).filter((l) => l.teamId === team.id && !l.retiredAt);
+  if (q.isLoading) return <ListSkeleton rows={4} />;
+  if (q.isError) return <ErrorState error={q.error} title="Could not load labels" />;
+  return (
+    <Section title="Issue labels" description="Labels and label groups of this team.">
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {own.length === 0 && (
+          <li className="px-3 py-2 text-sm text-muted-foreground">No labels yet.</li>
+        )}
+        {own.map((l) => (
+          <li key={l.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+            <span
+              aria-hidden
+              className="size-2.5 rounded-full"
+              style={{ background: COLOR_RE.test(l.color) ? l.color : undefined }}
+            />
+            {editing === l.id ? (
+              <form
+                className="flex flex-1 items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (draft.trim()) m.update.mutate({ id: l.id, input: { name: draft.trim() } });
+                  setEditing(null);
+                }}
+              >
+                <Input
+                  aria-label="Label name"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  autoFocus
+                />
+                <Button type="submit" size="sm">
+                  Save
+                </Button>
+              </form>
+            ) : (
+              <span className="flex-1">
+                {l.name}
+                {l.isGroup && <span className="ml-2 text-xs text-muted-foreground">Group</span>}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setEditing(l.id);
+                setDraft(l.name);
+              }}
+            >
+              Rename
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Retire ${l.name}`}
+              onClick={() => m.retire.mutate(l.id)}
+            >
+              Retire
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <form
+        aria-label="Create label"
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || !COLOR_RE.test(color)) return;
+          m.create.mutate(
+            { name: name.trim(), color, teamId: team.id, isGroup: group || undefined },
+            { onSuccess: () => setName("") },
+          );
+        }}
+      >
+        <Input
+          aria-label="New label name"
+          placeholder="New label"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="max-w-48"
+        />
+        <Input
+          aria-label="Label color"
+          value={color}
+          onChange={(e) => setColor(e.target.value)}
+          className="w-24"
+        />
+        <label className="flex items-center gap-1 text-sm">
+          <input type="checkbox" checked={group} onChange={(e) => setGroup(e.target.checked)} />{" "}
+          Group
+        </label>
+        <Button type="submit" size="sm" disabled={!name.trim() || !COLOR_RE.test(color)}>
+          <Plus /> Create
+        </Button>
+        {m.create.isError && (
+          <span role="alert" className="text-xs text-destructive">
+            {errorText(m.create.error)}
+          </span>
+        )}
+      </form>
+    </Section>
+  );
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+export function CyclesSection({ team }: { team: Team }) {
+  const update = useUpdateCycleSettings(team.id);
+  const [enabled, setEnabled] = useState(team.cyclesEnabled);
+  const [duration, setDuration] = useState(2);
+  const [cooldown, setCooldown] = useState(0);
+  const [startDay, setStartDay] = useState(1);
+  const [upcoming, setUpcoming] = useState(2);
+  return (
+    <Section title="Cycles" description="Time-boxed iterations for this team.">
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          update.mutate(
+            enabled
+              ? {
+                  cyclesEnabled: true,
+                  cycleDuration: duration,
+                  cycleCooldownTime: cooldown,
+                  cycleStartDay: startDay,
+                  upcomingCycleCount: upcoming,
+                }
+              : { cyclesEnabled: false },
+          );
+        }}
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            aria-label="Enable cycles"
+          />
+          Enable cycles for this team
+        </label>
+        {enabled && (
+          <>
+            <Field label="Cycle duration (weeks)">
+              <select
+                aria-label="Cycle duration"
+                className={selectClass}
+                value={duration}
+                onChange={(e) => setDuration(Number(e.target.value))}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((w) => (
+                  <option key={w} value={w}>
+                    {w} {w === 1 ? "week" : "weeks"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Cooldown (weeks)">
+              <select
+                aria-label="Cooldown"
+                className={selectClass}
+                value={cooldown}
+                onChange={(e) => setCooldown(Number(e.target.value))}
+              >
+                {[0, 1, 2, 3].map((w) => (
+                  <option key={w} value={w}>
+                    {w === 0 ? "None" : `${w} ${w === 1 ? "week" : "weeks"}`}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Cycle starts on">
+              <select
+                aria-label="Start day"
+                className={selectClass}
+                value={startDay}
+                onChange={(e) => setStartDay(Number(e.target.value))}
+              >
+                {WEEKDAYS.map((d, i) => (
+                  <option key={d} value={i}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Upcoming cycles to create">
+              <select
+                aria-label="Upcoming cycles"
+                className={selectClass}
+                value={upcoming}
+                onChange={(e) => setUpcoming(Number(e.target.value))}
+              >
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </>
+        )}
+        <SaveRow pending={update.isPending} error={update.error} dirty />
+      </form>
+    </Section>
+  );
+}
+
+export function TriageSection({ team }: { team: Team }) {
+  const update = useUpdateTeam(team.id);
+  return (
+    <Section
+      title="Triage"
+      description="Incoming issues wait in triage until someone accepts them."
+    >
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          aria-label="Enable triage"
+          checked={team.triageEnabled}
+          disabled={update.isPending}
+          onChange={(e) => update.mutate({ triageEnabled: e.target.checked })}
+        />
+        Enable triage for this team
+      </label>
+      {update.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(update.error)}
+        </p>
+      )}
+    </Section>
+  );
+}
