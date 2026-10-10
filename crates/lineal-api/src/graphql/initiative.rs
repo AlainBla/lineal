@@ -1,6 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `initiative` (WP07): Initiativen (DAG), Projektzuordnung,
 //! Initiative-Updates. Gäste erhalten `forbidden`; Initiativen mit privatem Lead-Team sind für
-//! Nicht-Mitglieder `not_found`. Das Platzhalterfeld `_initiativeReady` bleibt bestehen.
 
 use super::org::gql_err;
 use super::project::{SimpleRefGql, parse_health};
@@ -277,12 +276,6 @@ pub struct InitiativeQuery;
 
 #[Object]
 impl InitiativeQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_initiativeReady")]
-    async fn initiative_ready(&self) -> bool {
-        true
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn initiatives(
         &self,
@@ -364,12 +357,6 @@ pub struct InitiativeMutation;
 
 #[Object]
 impl InitiativeMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_initiativeMutationReady")]
-    async fn initiative_mutation_ready(&self) -> bool {
-        true
-    }
-
     async fn initiative_create(
         &self,
         ctx: &Context<'_>,

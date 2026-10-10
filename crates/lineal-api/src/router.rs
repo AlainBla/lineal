@@ -153,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphql_requires_auth_executes_and_graphiql_is_dev_only() {
-        let q = || Body::from(r#"{"query":"{ _orgReady }"}"#);
+        let q = || Body::from(r#"{"query":"{ __typename }"}"#);
         // ohne Token: 401 mit extensions.code
         let (status, body) = call(Method::POST, "/graphql", q(), false).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -182,7 +182,7 @@ mod tests {
         let res = router(app, false).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        assert!(String::from_utf8_lossy(&bytes).contains("\"_orgReady\":true"));
+        assert!(String::from_utf8_lossy(&bytes).contains("\"__typename\":\"Query\""));
 
         assert_eq!(
             call(Method::GET, "/graphql", Body::empty(), false).await.0,

@@ -1,8 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `label` (WP06): `issueLabels`, `issueLabelCreate`,
 //! `issueLabelUpdate`, `issueLabelRetire`, `issueLabelRestore`.
-//!
-//! Das Platzhalterfeld `_labelReady` bleibt bestehen (die Scaffold-Tests in `graphql/mod.rs`
-//! prüfen es).
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
@@ -110,12 +107,6 @@ pub struct LabelQuery;
 
 #[Object]
 impl LabelQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_labelReady")]
-    async fn label_ready(&self) -> bool {
-        true
-    }
-
     /// Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
     async fn issue_labels(
         &self,
@@ -150,12 +141,6 @@ pub struct LabelMutation;
 
 #[Object]
 impl LabelMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_labelMutationReady")]
-    async fn label_mutation_ready(&self) -> bool {
-        true
-    }
-
     async fn issue_label_create(
         &self,
         ctx: &Context<'_>,

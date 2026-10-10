@@ -1,8 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `issue` (WP06): `issue`, `issues`, `issueCreate`,
 //! `issueUpdate`, `issueArchive`, `issueUnarchive`, `issueDelete`, `issueRelationCreate`.
-//!
-//! Das Platzhalterfeld `_issueReady` bleibt bestehen (die Scaffold-Tests in `graphql/mod.rs`
-//! prüfen es).
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
@@ -181,12 +178,6 @@ pub struct IssueQuery;
 
 #[Object]
 impl IssueQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_issueReady")]
-    async fn issue_ready(&self) -> bool {
-        true
-    }
-
     /// Ein Issue per UUID oder Kennung (auch frühere); nicht sichtbar → `not_found`.
     async fn issue(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<IssueGql> {
         let d = app(ctx)?
@@ -268,12 +259,6 @@ pub struct IssueMutation;
 
 #[Object]
 impl IssueMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_issueMutationReady")]
-    async fn issue_mutation_ready(&self) -> bool {
-        true
-    }
-
     async fn issue_create(
         &self,
         ctx: &Context<'_>,

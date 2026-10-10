@@ -1,6 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `cycle` (WP07): Cycles lesen, Einstellungen, Verschieben.
-//!
-//! Das Platzhalterfeld `_cycleReady` bleibt bestehen (der Schema-Test in `graphql/mod.rs` prüft es).
+
 //! `progress` ist hier wie im Domänenmodell 0..1.
 
 use super::org::gql_err;
@@ -146,12 +145,6 @@ pub struct CycleQuery;
 
 #[Object]
 impl CycleQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_cycleReady")]
-    async fn cycle_ready(&self) -> bool {
-        true
-    }
-
     /// Cycles eines Teams (Key, Name oder UUID), aufsteigend nach Nummer; `type`:
     /// `current` | `previous` | `next`. Ohne aktivierte Cycles leer.
     async fn cycles(
@@ -193,12 +186,6 @@ pub struct CycleMutation;
 
 #[Object]
 impl CycleMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_cycleMutationReady")]
-    async fn cycle_mutation_ready(&self) -> bool {
-        true
-    }
-
     /// Cycle-Einstellungen eines Teams ändern (aktivieren, Zeitplan, „Active issues“, deaktivieren).
     async fn team_cycles_update(
         &self,

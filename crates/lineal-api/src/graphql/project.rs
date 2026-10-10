@@ -1,8 +1,7 @@
 //! GraphQL-Teilobjekte des Bereichs `project` (WP07): Projekte, Meilensteine, Projekt-Updates.
 //!
 //! Dieselben Use-Cases wie MCP: Rechte (alle Teams), Projekt-Hülle (private Teams nur für Mitglieder)
-//! und Bereinigung gespeicherter Inhalte gelten unverändert. Das Platzhalterfeld `_projectReady`
-//! bleibt bestehen (der Schema-Test in `graphql/mod.rs` prüft es). `progress` ist 0..1.
+//! gelten unverändert. `progress` ist 0..1.
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
@@ -417,12 +416,6 @@ pub struct ProjectQuery;
 
 #[Object]
 impl ProjectQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_projectReady")]
-    async fn project_ready(&self) -> bool {
-        true
-    }
-
     /// Sichtbare Projekte (mindestens ein zugängliches Team).
     #[allow(clippy::too_many_arguments)]
     async fn projects(
@@ -525,12 +518,6 @@ pub struct ProjectMutation;
 
 #[Object]
 impl ProjectMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_projectMutationReady")]
-    async fn project_mutation_ready(&self) -> bool {
-        true
-    }
-
     async fn project_create(
         &self,
         ctx: &Context<'_>,

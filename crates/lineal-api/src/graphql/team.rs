@@ -1,6 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `team` (WP02): Teams, Mitgliedschaften, Workflow-Status.
 //!
-//! Das Platzhalterfeld `_teamReady` bleibt bestehen (die Scaffold-Tests prüfen es).
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
@@ -175,12 +174,6 @@ pub struct TeamQuery;
 
 #[Object]
 impl TeamQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_teamReady")]
-    async fn team_ready(&self) -> bool {
-        true
-    }
-
     /// Sichtbare Teams (private Teams ohne Mitgliedschaft erscheinen nicht).
     async fn teams(
         &self,
@@ -239,12 +232,6 @@ pub struct TeamMutation;
 
 #[Object]
 impl TeamMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_teamMutationReady")]
-    async fn team_mutation_ready(&self) -> bool {
-        true
-    }
-
     async fn team_create(
         &self,
         ctx: &Context<'_>,

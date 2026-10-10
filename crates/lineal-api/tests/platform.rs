@@ -169,7 +169,7 @@ async fn unauthenticated_graphql_is_401_with_code() {
         Some(("authorization", "lin_api_unknown")),
         Some(("cookie", "lineal_session=bogus")),
     ] {
-        let r = send(&router, gql(auth, "{ _orgReady }")).await;
+        let r = send(&router, gql(auth, "{ __typename }")).await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{auth:?}");
         let v = r.json();
         assert_eq!(v["errors"][0]["extensions"]["code"], "unauthenticated");
@@ -193,9 +193,9 @@ async fn token_sources_all_authenticate() {
             "theme=dark; lineal_session=session-token".to_owned(),
         ),
     ] {
-        let r = send(&router, gql(Some((auth.0, &auth.1)), "{ _orgReady }")).await;
+        let r = send(&router, gql(Some((auth.0, &auth.1)), "{ __typename }")).await;
         assert_eq!(r.status, StatusCode::OK, "{auth:?}: {}", r.body);
-        assert_eq!(r.json()["data"]["_orgReady"], true);
+        assert_eq!(r.json()["data"]["__typename"], "Query");
         assert!(r.headers.contains_key("x-ratelimit-requests-limit"));
         assert!(r.headers.contains_key("x-complexity"));
     }
@@ -204,7 +204,7 @@ async fn token_sources_all_authenticate() {
 #[tokio::test]
 async fn read_only_scope_cannot_mutate_and_errors_follow_the_model() {
     let router = api(app_with_keys());
-    let m = "mutation { _teamMutationReady }";
+    let m = "mutation { __typename }";
     let r = send(&router, gql(Some(("authorization", KEY_RO)), m)).await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert_eq!(r.json()["errors"][0]["extensions"]["code"], "forbidden");
@@ -214,7 +214,7 @@ async fn read_only_scope_cannot_mutate_and_errors_follow_the_model() {
     // Syntaxfehler -> 400 invalid_request
     let r = send(
         &router,
-        gql(Some(("authorization", KEY_RW)), "{ _orgReady "),
+        gql(Some(("authorization", KEY_RW)), "{ __typename "),
     )
     .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
@@ -335,7 +335,7 @@ async fn complexity_budget_is_enforced_on_graphql() {
     };
     // Wie `router`, aber mit knappem Komplexitätsbudget.
     let router = apply_with(lineal_api::router::routes(app.clone(), false), app, cfg);
-    let q = "{ _orgReady }"; // Komplexität 1
+    let q = "{ __typename }"; // Komplexität 1
     for _ in 0..3 {
         let r = send(&router, gql(Some(("authorization", KEY_RW)), q)).await;
         assert_eq!(r.status, StatusCode::OK, "{}", r.body);

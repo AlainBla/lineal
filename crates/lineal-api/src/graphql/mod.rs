@@ -123,41 +123,17 @@ mod tests {
     use lineal_testkit::fake_app;
 
     #[test]
-    fn schema_builds_and_sdl_lists_every_area() {
+    fn schema_builds_with_query_and_mutation_roots() {
+        // Bereichsunabhängig, damit Arbeitspakete ihre Platzhalter entfernen können.
         let sdl = schema_sdl();
-        for field in [
-            "_orgReady",
-            "_teamReady",
-            "_issueReady",
-            "_labelReady",
-            "_commentReady",
-            "_cycleReady",
-            "_projectReady",
-            "_initiativeReady",
-            "_viewReady",
-            "_searchReady",
-            "_notificationReady",
-            "_documentReady",
-            "_templateReady",
-            "_triageReady",
-            "_overviewReady",
-            "_webhookReady",
-            "_importReady",
-        ] {
-            assert!(sdl.contains(field), "{field} missing in SDL");
-        }
         assert!(sdl.contains("type Query {"));
         assert!(sdl.contains("type Mutation {"));
     }
 
     #[tokio::test]
-    async fn placeholder_fields_resolve() {
+    async fn schema_executes_a_trivial_query() {
         let schema = build_schema(fake_app());
-        let res = schema
-            .execute("{ _orgReady _issueReady _importReady }")
-            .await;
-        assert!(res.errors.is_empty(), "{:?}", res.errors);
-        let res = schema.execute("mutation { _teamMutationReady }").await;
+        let res = schema.execute("{ __typename }").await;
         assert!(res.errors.is_empty(), "{:?}", res.errors);
     }
 }

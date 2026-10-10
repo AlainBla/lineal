@@ -1,7 +1,6 @@
 //! GraphQL-Teilobjekte des Bereichs `org` (WP02): Workspace lesen und Settings ändern.
-//!
-//! Das Platzhalterfeld `_orgReady` bleibt bestehen (die Scaffold-Tests prüfen es); `createWorkspace`
-//! braucht eine Konto-Session ohne Workspace-Kontext und folgt mit WP03/WP16.
+
+//! `createWorkspace` braucht eine Konto-Session ohne Workspace-Kontext und folgt mit WP03/WP16.
 
 use crate::context::{app, request_ctx};
 use async_graphql::{Context, ErrorExtensions, InputObject, Object, SimpleObject};
@@ -68,12 +67,6 @@ pub struct OrgQuery;
 
 #[Object]
 impl OrgQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_orgReady")]
-    async fn org_ready(&self) -> bool {
-        true
-    }
-
     /// Der Workspace des Aufrufers.
     async fn workspace(&self, ctx: &Context<'_>) -> async_graphql::Result<OrganizationGql> {
         let org = app(ctx)?
@@ -89,12 +82,6 @@ pub struct OrgMutation;
 
 #[Object]
 impl OrgMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_orgMutationReady")]
-    async fn org_mutation_ready(&self) -> bool {
-        true
-    }
-
     /// Ändert Workspace-Settings (Admin/Owner).
     async fn workspace_update(
         &self,

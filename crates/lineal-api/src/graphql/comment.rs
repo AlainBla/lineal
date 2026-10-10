@@ -1,9 +1,5 @@
 //! GraphQL-Teilobjekte des Bereichs `comment` (WP09): Kommentare, Reaktionen, Anhänge, Uploads.
 //!
-//! Die Platzhalterfelder `_commentReady`/`_commentMutationReady` bleiben bestehen: das
-//! Scaffold-Gerüst in `graphql/mod.rs` (gemeinsame Datei) prüft sie noch. Der Orchestrator
-//! entfernt sie zusammen mit dem dortigen Test.
-//!
 //! Typnamen (`Comment`, `Reaction`, `Attachment`, `UploadPayload` …) folgen docs/09; die
 //! Lösch-Payloads heißen `CommentDeletePayload`/`ReactionDeletePayload`/`AttachmentDeletePayload`,
 //! damit sie nicht mit dem `DeletePayload` anderer Bereiche kollidieren.
@@ -316,12 +312,6 @@ pub struct CommentQuery;
 
 #[Object]
 impl CommentQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_commentReady")]
-    async fn comment_ready(&self) -> bool {
-        true
-    }
-
     /// Ein Kommentar (Sichtbarkeit über das Elternobjekt).
     async fn comment(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<CommentGql> {
         let view = app(ctx)?
@@ -486,12 +476,6 @@ fn target_spec(input: &ReactionCreateInput) -> async_graphql::Result<ReactionTar
 
 #[Object]
 impl CommentMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_commentMutationReady")]
-    async fn comment_mutation_ready(&self) -> bool {
-        true
-    }
-
     /// Neuer Thread, Antwort (`parentId`) oder Inline-Kommentar (`quotedText`).
     async fn comment_create(
         &self,

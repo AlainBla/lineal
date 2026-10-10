@@ -433,17 +433,9 @@ input MilestoneInput {
 
 type Mutation {
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_orgMutationReady: Boolean!
-	"""
 	Ändert Workspace-Settings (Admin/Owner).
 	"""
 	workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_teamMutationReady: Boolean!
 	teamCreate(input: TeamCreateInput!): TeamPayload!
 	teamUpdate(id: String!, input: TeamUpdateInput!): TeamPayload!
 	"""
@@ -458,10 +450,6 @@ type Mutation {
 	Archiviert einen Status; mit Issues ist `targetStateId` Pflicht.
 	"""
 	workflowStateArchive(id: String!, targetStateId: String): SuccessPayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_issueMutationReady: Boolean!
 	issueCreate(input: IssueCreateInput!): IssuePayload!
 	issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
 	"""
@@ -471,18 +459,10 @@ type Mutation {
 	issueUnarchive(id: String!): IssuePayload!
 	issueDelete(id: String!, permanentlyDelete: Boolean): IssuePayload!
 	issueRelationCreate(input: IssueRelationCreateInput!): IssuePayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_labelMutationReady: Boolean!
 	issueLabelCreate(input: IssueLabelCreateInput!): IssueLabelPayload!
 	issueLabelUpdate(id: String!, input: IssueLabelUpdateInput!): IssueLabelPayload!
 	issueLabelRetire(id: String!): IssueLabelPayload!
 	issueLabelRestore(id: String!): IssueLabelPayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_commentMutationReady: Boolean!
 	"""
 	Neuer Thread, Antwort (`parentId`) oder Inline-Kommentar (`quotedText`).
 	"""
@@ -528,10 +508,6 @@ type Mutation {
 	"""
 	fileUpload(filename: String!, contentType: String!, size: Int!): UploadPayload!
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_cycleMutationReady: Boolean!
-	"""
 	Cycle-Einstellungen eines Teams ändern (aktivieren, Zeitplan, „Active issues“, deaktivieren).
 	"""
 	teamCyclesUpdate(teamId: String!, input: TeamCyclesInput!): CycleSuccessPayload!
@@ -551,10 +527,6 @@ type Mutation {
 	Archiviert einen abgeschlossenen oder künftigen Cycle (Issues verlieren die Zuordnung).
 	"""
 	cycleArchive(id: String!): CycleSuccessPayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_projectMutationReady: Boolean!
 	projectCreate(input: ProjectInput!): ProjectPayload!
 	projectUpdate(id: String!, input: ProjectInput!): ProjectPayload!
 	"""
@@ -580,10 +552,6 @@ type Mutation {
 	Löscht (archiviert) ein Status-Update.
 	"""
 	projectUpdateDelete(id: String!): ProjectSuccessPayload!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_initiativeMutationReady: Boolean!
 	initiativeCreate(input: InitiativeInput!): InitiativePayload!
 	initiativeUpdate(id: String!, input: InitiativeInput!): InitiativePayload!
 	"""
@@ -614,10 +582,6 @@ type Mutation {
 	Platzhalter des Scaffolds.
 	"""
 	_searchMutationReady: Boolean!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_notificationMutationReady: Boolean!
 	"""
 	Gelesen/ungelesen, Snooze/Unsnooze.
 	"""
@@ -992,17 +956,9 @@ type ProjectUpdatePayload {
 
 type Query {
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_orgReady: Boolean!
-	"""
 	Der Workspace des Aufrufers.
 	"""
 	workspace: Organization!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_teamReady: Boolean!
 	"""
 	Sichtbare Teams (private Teams ohne Mitgliedschaft erscheinen nicht).
 	"""
@@ -1016,10 +972,6 @@ type Query {
 	"""
 	workflowStates(teamId: String!): [WorkflowState!]!
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_issueReady: Boolean!
-	"""
 	Ein Issue per UUID oder Kennung (auch frühere); nicht sichtbar → `not_found`.
 	"""
 	issue(id: String!): Issue!
@@ -1028,17 +980,9 @@ type Query {
 	"""
 	issues(teamId: String, assigneeId: String, state: String, label: String, projectId: String, cycleId: String, priority: Int, includeArchived: Boolean, first: Int, after: String): IssueConnection!
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_labelReady: Boolean!
-	"""
 	Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
 	"""
 	issueLabels(teamId: String, name: String, includeGroups: Boolean, includeArchived: Boolean, first: Int): [IssueLabel!]!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_commentReady: Boolean!
 	"""
 	Ein Kommentar (Sichtbarkeit über das Elternobjekt).
 	"""
@@ -1052,10 +996,6 @@ type Query {
 	"""
 	attachment(id: String!): Attachment!
 	"""
-	Platzhalter des Scaffolds.
-	"""
-	_cycleReady: Boolean!
-	"""
 	Cycles eines Teams (Key, Name oder UUID), aufsteigend nach Nummer; `type`:
 	`current` | `previous` | `next`. Ohne aktivierte Cycles leer.
 	"""
@@ -1064,10 +1004,6 @@ type Query {
 	Ein Cycle per UUID; Cycles privater Teams sind für Nicht-Mitglieder `not_found`.
 	"""
 	cycle(id: String!): Cycle!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_projectReady: Boolean!
 	"""
 	Sichtbare Projekte (mindestens ein zugängliches Team).
 	"""
@@ -1084,10 +1020,6 @@ type Query {
 	Status-Updates eines Projekts (neueste zuerst).
 	"""
 	projectUpdates(projectId: String, includeArchived: Boolean, first: Int): [ProjectUpdate!]!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_initiativeReady: Boolean!
 	initiatives(status: String, owner: String, leadTeam: String, parentInitiative: String, label: String, query: String, includeArchived: Boolean, first: Int): [Initiative!]!
 	"""
 	Eine Initiative per UUID, Kennung (`I-4`), Slug oder Name.
@@ -1105,10 +1037,6 @@ type Query {
 	Platzhalter des Scaffolds.
 	"""
 	_searchReady: Boolean!
-	"""
-	Platzhalter des Scaffolds.
-	"""
-	_notificationReady: Boolean!
 	"""
 	Eigene Notifications, neueste zuerst (ausgeblendet: archivierte, gesnoozte, Objekte ohne Zugriff).
 	"""

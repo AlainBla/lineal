@@ -1,7 +1,4 @@
 //! GraphQL-Teilobjekte des Bereichs `notification` (WP08): Inbox, Abos, Einstellungen.
-//!
-//! Die Platzhalterfelder `_notificationReady`/`_notificationMutationReady` bleiben bestehen, weil
-//! ein Test in `graphql/mod.rs` (gemeinsame Datei) sie im SDL erwartet.
 
 use crate::context::{app, request_ctx};
 use crate::error::GqlResultExt;
@@ -242,12 +239,6 @@ pub struct NotificationQuery;
 
 #[Object]
 impl NotificationQuery {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_notificationReady")]
-    async fn notification_ready(&self) -> bool {
-        true
-    }
-
     /// Eigene Notifications, neueste zuerst (ausgeblendet: archivierte, gesnoozte, Objekte ohne Zugriff).
     async fn notifications(
         &self,
@@ -377,12 +368,6 @@ pub struct NotificationMutation;
 
 #[Object]
 impl NotificationMutation {
-    /// Platzhalter des Scaffolds.
-    #[graphql(name = "_notificationMutationReady")]
-    async fn notification_mutation_ready(&self) -> bool {
-        true
-    }
-
     /// Gelesen/ungelesen, Snooze/Unsnooze.
     async fn notification_update(
         &self,
