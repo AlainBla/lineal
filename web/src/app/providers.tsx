@@ -1,10 +1,23 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
-/** Wurzel-Provider der Anwendung (TanStack Query; WP05 ergänzt Theme u. a.). */
-export function Providers({ children }: { children: ReactNode }) {
-  const [client] = useState(
-    () => new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } }),
+import { queryClient } from "@/app/query-client";
+import { ThemeProvider } from "@/app/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+/** Wurzel-Provider der Anwendung: TanStack Query, Theme/Motion, Tooltips. */
+export function Providers({
+  children,
+  client = queryClient,
+}: {
+  children: ReactNode;
+  client?: QueryClient;
+}) {
+  return (
+    <QueryClientProvider client={client}>
+      <ThemeProvider>
+        <TooltipProvider>{children}</TooltipProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
