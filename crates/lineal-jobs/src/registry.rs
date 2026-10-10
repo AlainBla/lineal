@@ -21,6 +21,7 @@ pub fn periodic_jobs() -> Vec<Arc<dyn PeriodicJob>> {
         Arc::new(cycles::CyclesJob),
         Arc::new(update_reminders::UpdateRemindersJob),
         Arc::new(snooze::SnoozeJob),
+        Arc::new(sync_purge::SyncPurgeJob),
         Arc::new(notification_cap::NotificationCapJob),
         Arc::new(due_reminders::DueRemindersJob),
         Arc::new(auto_close::AutoCloseJob),
