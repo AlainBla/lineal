@@ -21,6 +21,7 @@ seed = ["dep:lineal-testkit"]
 
 [dependencies]
 lineal-domain.workspace = true
+lineal-import.workspace = true
 lineal-app.workspace = true
 lineal-db.workspace = true
 lineal-api.workspace = true
@@ -37,6 +38,7 @@ chrono-tz.workspace = true
 clap.workspace = true
 dotenvy.workspace = true
 sqlx.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

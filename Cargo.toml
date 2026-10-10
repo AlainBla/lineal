@@ -10,6 +10,7 @@ members = [
     "crates/lineal-jobs",
     "crates/lineal-server",
     "crates/lineal-testkit",
+    "crates/lineal-import",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ lineal-mcp = { path = "crates/lineal-mcp" }
 lineal-sync = { path = "crates/lineal-sync" }
 lineal-jobs = { path = "crates/lineal-jobs" }
 lineal-testkit = { path = "crates/lineal-testkit" }
+lineal-import = { path = "crates/lineal-import" }
 
 # extern
 anyhow = "1"
