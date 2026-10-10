@@ -32,3 +32,4 @@ tower.workspace = true
 http-body-util.workspace = true
 lineal-db.workspace = true
 sqlx.workspace = true
+async-trait.workspace = true

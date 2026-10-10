@@ -1,6 +1,6 @@
 //! Technische Dienste hinter Ports (Zeit, IDs, Blobs, Suche, Passwörter, Mail).
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_domain::ids::OrgId;
@@ -17,9 +17,23 @@ pub trait IdGen: Send + Sync {
     fn new_uuid(&self) -> Uuid;
 }
 
+/// Metadaten eines gespeicherten Objekts (`BlobStore::head`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobInfo {
+    pub size: u64,
+    pub content_type: String,
+}
+
 /// Objektspeicher mit signierten URLs.
 #[async_trait]
 pub trait BlobStore: Send + Sync {
+    /// Existenz und Größe eines Objekts (für `create_attachment_from_upload`).
+    /// `None`, wenn es nicht (vollständig) hochgeladen wurde. Zusatz aus WP09.
+    async fn head(&self, key: &str) -> AppResult<Option<BlobInfo>> {
+        let _ = key;
+        Err(AppError::internal("blob head not supported by this store"))
+    }
+
     /// Signierte Upload-URL (PUT).
     async fn signed_put_url(
         &self,

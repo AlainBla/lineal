@@ -21,6 +21,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
+use lineal_app::ports::services::BlobInfo;
 use lineal_app::ports::{BlobStore, Clock};
 use lineal_app::{App, AppError, AppResult};
 use serde::{Deserialize, Serialize};
@@ -170,6 +171,27 @@ fn check_key(key: &str) -> AppResult<()> {
 
 #[async_trait]
 impl BlobStore for LocalBlobStore {
+    async fn head(&self, key: &str) -> AppResult<Option<BlobInfo>> {
+        check_key(key)?;
+        let (data_path, meta_path) = self.paths(key);
+        let meta: Meta = match tokio::fs::read(&meta_path).await {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|_| AppError::internal("blob storage: corrupt metadata"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io_err(e)),
+        };
+        // Metadaten werden nach den Daten geschrieben; maßgeblich ist die tatsächliche Dateigröße.
+        match tokio::fs::metadata(&data_path).await {
+            Ok(m) if meta.key == key => Ok(Some(BlobInfo {
+                size: m.len(),
+                content_type: meta.content_type,
+            })),
+            Ok(_) => Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io_err(e)),
+        }
+    }
+
     async fn signed_put_url(
         &self,
         key: &str,
