@@ -14,7 +14,14 @@ async fn run(
     who: SeedUser,
     query: &str,
 ) -> async_graphql::Response {
-    schema.execute(Request::new(query).data(ctx_for(who))).await
+    // Wie die Router-Pipeline: frisches Request-Budget für die Nachladefelder.
+    schema
+        .execute(
+            Request::new(query)
+                .data(ctx_for(who))
+                .data(lineal_api::context::DetailBudget::default()),
+        )
+        .await
 }
 
 fn code(res: &async_graphql::Response) -> String {
@@ -346,4 +353,59 @@ async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
     // Bob sieht beide Kinder.
     let bob = data(run(&schema, SeedUser::Bob, q).await);
     assert_eq!(bob["issue"]["children"].as_array().unwrap().len(), 2);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn detail_fields_are_budgeted_per_request(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let schema = build_schema(test_app(Arc::new(store)));
+    for i in 0..12 {
+        data(
+            run(
+                &schema,
+                SeedUser::Alice,
+                &format!(
+                    r#"mutation {{ issueCreate(input: {{teamId: "ENG", title: "Nr {i}"}}) {{ success }} }}"#
+                ),
+            )
+            .await,
+        );
+    }
+
+    // Detailansicht: drei Felder an einem Issue sind in Ordnung.
+    let detail = run(
+        &schema,
+        SeedUser::Alice,
+        r#"{ issue(id: "ENG-1") { history { source } relations { blocks { id } } children { id } } }"#,
+    )
+    .await;
+    assert!(detail.errors.is_empty(), "{:?}", detail.errors);
+
+    // Liste mit `history` über 12 Issues: nach 10 Aufrufen ist Schluss (invalid_request).
+    let list = run(
+        &schema,
+        SeedUser::Alice,
+        "{ issues(first: 12) { nodes { identifier history { source } } } }",
+    )
+    .await;
+    assert_eq!(code(&list), "invalid_request");
+    assert!(
+        list.errors[0]
+            .message
+            .contains("only available in the detail view"),
+        "{:?}",
+        list.errors
+    );
+
+    // Ohne Budget in den Context-Daten (am Router vorbei) wird abgelehnt statt unbegrenzt erlaubt.
+    let bare = schema
+        .execute(
+            Request::new(r#"{ issue(id: "ENG-1") { history { source } } }"#)
+                .data(ctx_for(SeedUser::Alice)),
+        )
+        .await;
+    assert_eq!(code(&bare), "invalid_request");
 }

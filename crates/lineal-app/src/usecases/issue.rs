@@ -1129,7 +1129,8 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        tx.issues().list_history(issue.id, 1000).await
+        let entries = tx.issues().list_history(issue.id, 1000).await?;
+        redact_history(&mut *tx, &snap, ctx, entries).await
     }
 
     /// Issues filtern (docs/07 §3.2 `list_issues`).
@@ -1555,6 +1556,119 @@ impl App {
             message: None,
         })
     }
+}
+
+/// Felder eines History-Eintrags, deren Werte auf andere Objekte zeigen.
+const HISTORY_REF_FIELDS: [&str; 5] = [
+    "teamId",
+    "parentId",
+    "projectId",
+    "cycleId",
+    "projectMilestoneId",
+];
+
+/// Ist das Objekt, auf das `value` im Feld `field` zeigt, für den Aufrufer sichtbar?
+/// Nicht auflösbare Werte gelten als unsichtbar.
+async fn history_ref_visible(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    field: &str,
+    value: &str,
+) -> AppResult<bool> {
+    let Ok(uuid) = uuid::Uuid::parse_str(value) else {
+        return Ok(false);
+    };
+    let any_visible = |teams: &[TeamId]| teams.iter().any(|t| visible.contains(t));
+    Ok(match field {
+        "teamId" => visible.contains(&TeamId(uuid)),
+        "parentId" => tx
+            .issues()
+            .get(IssueId(uuid), false)
+            .await?
+            .is_some_and(|i| visible.contains(&i.team_id)),
+        "cycleId" => tx
+            .issues()
+            .get_cycle(lineal_domain::ids::CycleId(uuid))
+            .await?
+            .is_some_and(|c| visible.contains(&c.team_id)),
+        "projectId" => tx
+            .issues()
+            .get_project(lineal_domain::ids::ProjectId(uuid))
+            .await?
+            .is_some_and(|p| any_visible(&p.team_ids)),
+        "projectMilestoneId" => {
+            match tx
+                .projects()
+                .get_milestone(lineal_domain::ids::MilestoneId(uuid))
+                .await?
+            {
+                Some(m) => tx
+                    .issues()
+                    .get_project(m.project_id)
+                    .await?
+                    .is_some_and(|p| any_visible(&p.team_ids)),
+                None => false,
+            }
+        }
+        _ => true,
+    })
+}
+
+/// Entfernt aus der Historie alles, was auf unsichtbare Objekte zeigt: Relationsänderungen
+/// zu Issues, die der Aufrufer nicht sehen darf, entfallen; Verweise (`teamId`, `parentId`,
+/// `projectId`, `cycleId`, `projectMilestoneId`) auf unsichtbare Ziele werden `null`.
+async fn redact_history(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    entries: Vec<HistoryEntry>,
+) -> AppResult<Vec<HistoryEntry>> {
+    let visible = snap.visible_team_ids();
+    let mut cache: HashMap<(&'static str, String), bool> = HashMap::new();
+    let mut out = Vec::with_capacity(entries.len());
+    for mut e in entries {
+        if let Some(Value::Array(items)) = e.relation_changes.take() {
+            let mut kept = Vec::new();
+            for item in items {
+                let identifier = item.get("identifier").and_then(Value::as_str).unwrap_or("");
+                match resolve::issue::resolve_in(tx, snap, ctx, identifier).await {
+                    Ok(_) => kept.push(item),
+                    Err(err) if err.kind == crate::error::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            e.relation_changes = (!kept.is_empty()).then_some(Value::Array(kept));
+        }
+        if let Value::Object(changes) = &mut e.changes {
+            for field in HISTORY_REF_FIELDS {
+                let Some(Value::Object(sides)) = changes.get_mut(field) else {
+                    continue;
+                };
+                for side in ["from", "to"] {
+                    let Some(v) = sides.get_mut(side) else {
+                        continue;
+                    };
+                    let Some(text) = v.as_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    let key = (field, text);
+                    let ok = match cache.get(&key) {
+                        Some(ok) => *ok,
+                        None => {
+                            let ok = history_ref_visible(tx, &visible, field, &key.1).await?;
+                            cache.insert(key, ok);
+                            ok
+                        }
+                    };
+                    if !ok {
+                        *v = Value::Null;
+                    }
+                }
+            }
+        }
+        out.push(e);
+    }
+    Ok(out)
 }
 
 fn resolve_not_found(kind: &str, reference: &str) -> AppError {

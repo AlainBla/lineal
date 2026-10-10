@@ -2,7 +2,7 @@
 //! `issueUpdate`, `issueArchive`, `issueUnarchive`, `issueDelete`, `issueRelationCreate`.
 
 use super::org::gql_err;
-use crate::context::{app, request_ctx};
+use crate::context::{app, charge_detail_field, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::issue::HistorySource;
@@ -135,6 +135,7 @@ impl IssueGql {
         ctx: &Context<'_>,
         first: Option<i32>,
     ) -> async_graphql::Result<Vec<IssueGql>> {
+        charge_detail_field(ctx)?;
         let page = app(ctx)?
             .list_issues(
                 request_ctx(ctx)?,
@@ -153,6 +154,7 @@ impl IssueGql {
 
     /// Relationen dieses Issues.
     async fn relations(&self, ctx: &Context<'_>) -> async_graphql::Result<IssueRelations> {
+        charge_detail_field(ctx)?;
         let r = app(ctx)?
             .issue_relations(request_ctx(ctx)?, &self.id)
             .await
@@ -171,6 +173,7 @@ impl IssueGql {
 
     /// Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
     async fn history(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<IssueHistoryEntry>> {
+        charge_detail_field(ctx)?;
         let entries = app(ctx)?
             .issue_history(request_ctx(ctx)?, &self.id)
             .await

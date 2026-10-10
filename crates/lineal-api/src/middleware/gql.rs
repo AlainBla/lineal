@@ -55,10 +55,12 @@ fn int_arg(
 
 /// Connection: Argument `first`/`last` oder direktes Kind `nodes`/`edges` (ohne Schema-Typen).
 fn is_connection(field: &async_graphql::parser::types::Field) -> bool {
-    field
-        .arguments
-        .iter()
-        .any(|(n, _)| n.node == "first" || n.node == "last")
+    // `Issue.children` ist eine Liste mit Default-Größe 50.
+    field.name.node == "children"
+        || field
+            .arguments
+            .iter()
+            .any(|(n, _)| n.node == "first" || n.node == "last")
         || field.selection_set.node.items.iter().any(|s| {
             matches!(&s.node, Selection::Field(f)
                 if matches!(f.node.name.node.as_str(), "nodes" | "edges"))
@@ -88,6 +90,10 @@ fn selection_cost(
                         .unwrap_or(DEFAULT_CONNECTION_SIZE);
                     let inner = selection_cost(doc, children, request, walk);
                     total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
+                } else if name == "history" {
+                    // Aktivitätsverlauf: bis zu 1000 Zeilen je Issue, pauschal mit Faktor 100.
+                    let inner = selection_cost(doc, children, request, walk);
+                    total = total.saturating_add(10u64.saturating_add(inner.saturating_mul(100)));
                 } else {
                     total = total.saturating_add(10 + selection_cost(doc, children, request, walk));
                 }
@@ -225,7 +231,10 @@ async fn run(
     request_id: &str,
     decision: Option<(crate::rate_limit::Decision, u64)>,
 ) -> Response {
-    let mut response = schema.execute(request).await;
+    // Frisches Request-Budget für `Issue.children/relations/history` (nie wiederverwendet).
+    let mut response = schema
+        .execute(request.data(crate::context::DetailBudget::default()))
+        .await;
     let bad_request = finish_errors(&mut response, request_id);
     let status = if bad_request {
         StatusCode::BAD_REQUEST
@@ -249,6 +258,28 @@ mod tests {
         let doc = parse_query(query).unwrap();
         let op = operation(&doc, None).unwrap();
         complexity(&doc, &op.selection_set.node, &request)
+    }
+
+    #[test]
+    fn history_and_children_are_expensive_fields() {
+        let plain = cost_of("{ issues(first: 100) { nodes { identifier } } }", json!({}));
+        // `history` zählt mit Faktor 100 je Issue, `children` ohne `first` wie eine Connection (50).
+        let history = cost_of(
+            "{ issues(first: 100) { nodes { identifier history { source } } } }",
+            json!({}),
+        );
+        assert!(history >= plain + 1_000, "{history} vs {plain}");
+        let children = cost_of(
+            "{ issues(first: 100) { nodes { children { identifier } } } }",
+            json!({}),
+        );
+        assert!(children >= 500, "{children}");
+        // Verschachtelung multipliziert: Listen mit Kindern mit Kindern sprengen jedes Limit.
+        let nested = cost_of(
+            "{ issues(first: 100) { nodes { children { children { history { source } } } } } }",
+            json!({}),
+        );
+        assert!(nested > 10_000, "{nested}");
     }
 
     #[test]
