@@ -930,3 +930,85 @@ async fn webhook_target_is_revalidated_at_delivery_and_creator_visibility_is_enf
     plan_all(&fx).await;
     assert_eq!(deliveries(&fx, des.id).await.len(), before);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn delivery_context_is_reevaluated_for_every_event(pool: PgPool) {
+    use lineal_app::usecases::team_lifecycle::{OpenIssuesOnRetirement, SubTeamHandling};
+    let fx = setup(pool).await;
+    // Update kann weder Ziel noch Scope ändern: Rechte und Ziel bleiben die der Anlage.
+    let w = fx.app.create_webhook(&bob(), team_hook("DES", &["Issue"])).await.unwrap().webhook;
+    let upd = fx
+        .app
+        .update_webhook(
+            &bob(),
+            w.id,
+            UpdateWebhookInput { resource_types: Some(vec!["Issue".into(), "Comment".into()]), ..Default::default() },
+        )
+        .await
+        .unwrap();
+    assert_eq!((upd.team_id, upd.all_public_teams), (w.team_id, false));
+    // Ein Team-Owner kann den Webhook nicht zum Workspace-Webhook machen, und fremde Webhooks nicht ändern.
+    assert_eq!(
+        kind(fx.app.create_webhook(&bob(), ws_hook(&["Issue"])).await),
+        ErrorKind::Forbidden
+    );
+
+    // WEB-Webhook (Bob ist Team-Owner): Zustellung nur solange Team aktiv und Ersteller aktiv/Mitglied.
+    let web = fx.app.create_webhook(&bob(), team_hook("WEB", &["Issue"])).await.unwrap().webhook;
+    fx.app.create_issue(&bob(), issue("WEB", "eins")).await.unwrap();
+    plan_all(&fx).await;
+    assert_eq!(deliveries(&fx, web.id).await.len(), 1);
+
+    // Stillgelegtes Team: keine Zustellung (Alice legt WEB still, Bob kann nicht mehr schreiben).
+    fx.app
+        .retire_team(&alice(), "WEB", Some(SubTeamHandling::Cascade), OpenIssuesOnRetirement::Keep)
+        .await
+        .unwrap();
+    let ev = lineal_domain::events::DomainEvent::IssueUpdated {
+        issue_id: sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM issue WHERE team_id = $1 LIMIT 1")
+            .bind(fx.data.web.0)
+            .fetch_one(&fx.pool)
+            .await
+            .map(lineal_domain::ids::IssueId)
+            .unwrap(),
+        team_id: fx.data.web,
+        changed: vec!["title".into()],
+        mentioned_user_ids: vec![],
+    };
+    let stored = |e: lineal_domain::events::DomainEvent| StoredEvent {
+        id: lineal_domain::ids::EventId::new_v7(),
+        org_id: fx.data.org,
+        origin: EventOrigin::User,
+        actor_id: None,
+        sync_id: 1,
+        event: e,
+        created_at: Utc::now(),
+    };
+    assert_eq!(fx.app.plan_webhook_deliveries(&stored(ev.clone())).await.unwrap(), 0, "retired");
+    fx.app.restore_team(&alice(), "ENG").await.ok();
+    fx.app.restore_team(&alice(), "WEB").await.ok();
+    fx.app.restore_team(&alice(), "ENG").await.ok();
+    assert_eq!(fx.app.plan_webhook_deliveries(&stored(ev.clone())).await.unwrap(), 1, "active again");
+
+    // Ersteller suspendiert -> keine Zustellung.
+    sqlx::query("UPDATE \"user\" SET active = false WHERE id = $1")
+        .bind(fx.data.bob.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(fx.app.plan_webhook_deliveries(&stored(ev.clone())).await.unwrap(), 0, "suspended creator");
+    sqlx::query("UPDATE \"user\" SET active = true WHERE id = $1")
+        .bind(fx.data.bob.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(fx.app.plan_webhook_deliveries(&stored(ev.clone())).await.unwrap(), 1);
+
+    // Gelöschtes Team und privates Team ohne Mitgliedschaft des Erstellers.
+    sqlx::query("UPDATE team SET trashed = true, trashed_at = now() WHERE id = $1")
+        .bind(fx.data.web.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(fx.app.plan_webhook_deliveries(&stored(ev)).await.unwrap(), 0, "trashed");
+}

@@ -865,7 +865,7 @@ impl App {
         let visibility = |t: TeamId| {
             all_teams
                 .iter()
-                .find(|x| x.id == t && !x.trashed)
+                .find(|x| x.id == t && !x.trashed && x.retired_at.is_none())
                 .map(|x| x.visibility)
         };
         let org = tx
@@ -897,7 +897,8 @@ impl App {
             if let Some(t) = hook.team_id {
                 let creator = tx.users().get(hook.creator_id).await?;
                 let ok = match creator {
-                    Some(u) if u.active && u.status == "active" => {
+                    // Stillgelegte/gelöschte Teams liefern nichts (visibility = None).
+                    Some(u) if u.active && u.status == "active" && visibility(t).is_some() => {
                         visibility(t) == Some(TeamVisibility::Public)
                             || tx.teams().get_membership(t, u.id).await?.is_some()
                     }
