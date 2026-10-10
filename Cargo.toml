@@ -32,7 +32,7 @@ lineal-testkit = { path = "crates/lineal-testkit" }
 
 # extern
 anyhow = "1"
-async-graphql = { version = "7.2", default-features = false, features = ["chrono", "uuid"] }
+async-graphql = { version = "7.2", default-features = false, features = ["chrono", "uuid", "graphiql"] }
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "ws"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }

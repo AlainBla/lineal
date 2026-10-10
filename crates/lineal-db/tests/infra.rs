@@ -1,8 +1,8 @@
 //! Beispiel für `#[sqlx::test]`: Outbox und Jobs gegen eine frische Datenbank.
 
 use chrono::Utc;
-use lineal_app::ports::repos::{NewEvent, NewJob};
 use lineal_app::ports::Store;
+use lineal_app::ports::repos::{NewEvent, NewJob};
 use lineal_db::PgStore;
 use lineal_domain::events::{DomainEvent, EventOrigin};
 use lineal_domain::ids::{IssueId, OrgId, TeamId};
@@ -11,7 +11,10 @@ use sqlx::PgPool;
 
 fn created() -> NewEvent {
     NewEvent::new(
-        DomainEvent::IssueCreated { issue_id: IssueId::new_v7(), team_id: TeamId::new_v7() },
+        DomainEvent::IssueCreated {
+            issue_id: IssueId::new_v7(),
+            team_id: TeamId::new_v7(),
+        },
         EventOrigin::User,
     )
 }
@@ -23,7 +26,11 @@ async fn outbox_push_claim_deliver_process(pool: PgPool) {
 
     let mut tx = store.begin(org).await.unwrap();
     let sync_a = tx.last_sync_id().await.unwrap();
-    assert_eq!(tx.last_sync_id().await.unwrap(), sync_a, "same tx, same lastSyncId");
+    assert_eq!(
+        tx.last_sync_id().await.unwrap(),
+        sync_a,
+        "same tx, same lastSyncId"
+    );
     tx.outbox().push(created()).await.unwrap();
     tx.outbox().push(created()).await.unwrap();
     tx.commit().await.unwrap();
@@ -33,20 +40,50 @@ async fn outbox_push_claim_deliver_process(pool: PgPool) {
     drop(tx); // Rollback
 
     let mut tx = store.begin_system().await.unwrap();
-    let events = tx.outbox().claim_undelivered("search_index", 100).await.unwrap();
+    let events = tx
+        .outbox()
+        .claim_undelivered("search_index", 100)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].org_id, org);
     assert_eq!(events[0].sync_id, sync_a);
     let ids: Vec<_> = events.iter().map(|e| e.id).collect();
-    tx.outbox().mark_delivered("search_index", &ids).await.unwrap();
+    tx.outbox()
+        .mark_delivered("search_index", &ids)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let mut tx = store.begin_system().await.unwrap();
-    assert!(tx.outbox().claim_undelivered("search_index", 100).await.unwrap().is_empty());
-    assert_eq!(tx.outbox().claim_undelivered("sync", 100).await.unwrap().len(), 2);
+    assert!(
+        tx.outbox()
+            .claim_undelivered("search_index", 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        tx.outbox()
+            .claim_undelivered("sync", 100)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     let both = ["search_index".to_string(), "sync".to_string()];
-    assert_eq!(tx.outbox().mark_processed(&both).await.unwrap(), 0, "sync not delivered yet");
-    assert_eq!(tx.outbox().mark_processed(&["search_index".to_string()]).await.unwrap(), 2);
+    assert_eq!(
+        tx.outbox().mark_processed(&both).await.unwrap(),
+        0,
+        "sync not delivered yet"
+    );
+    assert_eq!(
+        tx.outbox()
+            .mark_processed(&["search_index".to_string()])
+            .await
+            .unwrap(),
+        2
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -56,7 +93,13 @@ async fn rolled_back_tx_leaves_no_event(pool: PgPool) {
     tx.outbox().push(created()).await.unwrap();
     drop(tx);
     let mut tx = store.begin_system().await.unwrap();
-    assert!(tx.outbox().claim_undelivered("x", 10).await.unwrap().is_empty());
+    assert!(
+        tx.outbox()
+            .claim_undelivered("x", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -68,8 +111,14 @@ async fn jobs_enqueue_claim_complete_retry(pool: PgPool) {
     let mut keyed = NewJob::now("demo", json!({"n": 1}), now);
     keyed.unique_key = Some("demo:1".into());
     assert!(tx.jobs().enqueue(keyed.clone()).await.unwrap().is_some());
-    assert!(tx.jobs().enqueue(keyed).await.unwrap().is_none(), "unique_key dedups");
-    let later = NewJob { run_at: now + chrono::Duration::hours(1), ..NewJob::now("later", json!({}), now) };
+    assert!(
+        tx.jobs().enqueue(keyed).await.unwrap().is_none(),
+        "unique_key dedups"
+    );
+    let later = NewJob {
+        run_at: now + chrono::Duration::hours(1),
+        ..NewJob::now("later", json!({}), now)
+    };
     tx.jobs().enqueue(later).await.unwrap();
     tx.commit().await.unwrap();
 

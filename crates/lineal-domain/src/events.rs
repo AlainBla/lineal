@@ -33,7 +33,10 @@ impl std::str::FromStr for EventOrigin {
             "user" => Ok(Self::User),
             "system" => Ok(Self::System),
             "import" => Ok(Self::Import),
-            other => Err(crate::DomainError::validation("origin", format!("unknown value `{other}`"))),
+            other => Err(crate::DomainError::validation(
+                "origin",
+                format!("unknown value `{other}`"),
+            )),
         }
     }
 }
@@ -126,14 +129,22 @@ mod tests {
 
     #[test]
     fn covers_sla_and_oauth_events() {
-        for n in ["IssueSlaSet", "IssueSlaHighRisk", "IssueSlaBreached", "OAuthAuthorizationRevoked"] {
+        for n in [
+            "IssueSlaSet",
+            "IssueSlaHighRisk",
+            "IssueSlaBreached",
+            "OAuthAuthorizationRevoked",
+        ] {
             assert!(DomainEvent::TYPE_NAMES.contains(&n));
         }
     }
 
     #[test]
     fn origin_parses() {
-        assert_eq!("import".parse::<EventOrigin>().unwrap(), EventOrigin::Import);
+        assert_eq!(
+            "import".parse::<EventOrigin>().unwrap(),
+            EventOrigin::Import
+        );
         assert!("x".parse::<EventOrigin>().is_err());
     }
 }

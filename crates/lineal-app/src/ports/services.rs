@@ -21,7 +21,12 @@ pub trait IdGen: Send + Sync {
 #[async_trait]
 pub trait BlobStore: Send + Sync {
     /// Signierte Upload-URL (PUT).
-    async fn signed_put_url(&self, key: &str, content_type: &str, ttl: Duration) -> AppResult<String>;
+    async fn signed_put_url(
+        &self,
+        key: &str,
+        content_type: &str,
+        ttl: Duration,
+    ) -> AppResult<String>;
     /// Signierte Download-URL (GET).
     async fn signed_get_url(&self, key: &str, ttl: Duration) -> AppResult<String>;
 }

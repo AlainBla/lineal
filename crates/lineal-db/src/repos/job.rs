@@ -77,7 +77,12 @@ impl JobRepo for PgTx {
         Ok(())
     }
 
-    async fn fail(&mut self, id: JobId, error: &str, retry_at: Option<DateTime<Utc>>) -> AppResult<()> {
+    async fn fail(
+        &mut self,
+        id: JobId,
+        error: &str,
+        retry_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
         sqlx::query(
             "UPDATE job SET last_error = $2, locked_by = NULL, locked_at = NULL, \
                  status = CASE WHEN $3::timestamptz IS NOT NULL AND attempts < max_attempts \

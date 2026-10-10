@@ -1,0 +1,3 @@
+[env]
+# Default für #[sqlx::test] und lokale Läufe (überschreibbar per Umgebungsvariable).
+DATABASE_URL = { value = "postgres://lineal:lineal@localhost:5440/lineal", force = false }

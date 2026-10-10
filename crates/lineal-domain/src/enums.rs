@@ -57,7 +57,10 @@ string_enum! {
 impl StateType {
     /// „Offen“ = triage | backlog | unstarted | started.
     pub const fn is_open(&self) -> bool {
-        matches!(self, Self::Triage | Self::Backlog | Self::Unstarted | Self::Started)
+        matches!(
+            self,
+            Self::Triage | Self::Backlog | Self::Unstarted | Self::Started
+        )
     }
     /// „Geschlossen“ = completed | canceled | duplicate.
     pub const fn is_closed(&self) -> bool {
@@ -210,7 +213,12 @@ impl TryFrom<u8> for Priority {
             2 => Self::High,
             3 => Self::Medium,
             4 => Self::Low,
-            _ => return Err(DomainError::validation("priority", "must be between 0 and 4")),
+            _ => {
+                return Err(DomainError::validation(
+                    "priority",
+                    "must be between 0 and 4",
+                ));
+            }
         })
     }
 }
@@ -234,7 +242,15 @@ mod tests {
         let names: Vec<_> = StateType::ALL.iter().map(StateType::as_str).collect();
         assert_eq!(
             names,
-            ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]
+            [
+                "triage",
+                "backlog",
+                "unstarted",
+                "started",
+                "completed",
+                "canceled",
+                "duplicate"
+            ]
         );
         assert!(StateType::Started.is_open() && StateType::Duplicate.is_closed());
         assert_eq!("started".parse::<StateType>().unwrap(), StateType::Started);
@@ -272,7 +288,10 @@ mod tests {
     #[test]
     fn priority_is_int() {
         assert_eq!(wire(&Priority::High), "2");
-        assert_eq!(serde_json::from_str::<Priority>("4").unwrap(), Priority::Low);
+        assert_eq!(
+            serde_json::from_str::<Priority>("4").unwrap(),
+            Priority::Low
+        );
         assert!(serde_json::from_str::<Priority>("5").is_err());
         assert_eq!(Priority::High.name(), "High");
         assert!(Priority::Urgent.sort_key() < Priority::NoPriority.sort_key());

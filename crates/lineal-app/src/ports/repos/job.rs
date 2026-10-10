@@ -21,7 +21,14 @@ pub struct NewJob {
 impl NewJob {
     /// Sofort fälliger Job ohne Schlüssel.
     pub fn now(kind: impl Into<String>, payload: Value, now: DateTime<Utc>) -> Self {
-        Self { kind: kind.into(), payload, org_id: None, run_at: now, max_attempts: 5, unique_key: None }
+        Self {
+            kind: kind.into(),
+            payload,
+            org_id: None,
+            run_at: now,
+            max_attempts: 5,
+            unique_key: None,
+        }
     }
 }
 
@@ -47,5 +54,10 @@ pub trait JobRepo: Send {
     async fn complete(&mut self, id: JobId, now: DateTime<Utc>) -> AppResult<()>;
     /// Meldet einen Fehler. Mit `retry_at` (und `attempts < max_attempts`) wird der Job neu
     /// eingeplant, sonst endgültig `failed`.
-    async fn fail(&mut self, id: JobId, error: &str, retry_at: Option<DateTime<Utc>>) -> AppResult<()>;
+    async fn fail(
+        &mut self,
+        id: JobId,
+        error: &str,
+        retry_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()>;
 }

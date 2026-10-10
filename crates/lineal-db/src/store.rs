@@ -27,7 +27,11 @@ impl PgStore {
 
     async fn begin_tx(&self, org: OrgId) -> AppResult<Box<dyn Tx>> {
         let tx = self.pool.begin().await.map_err(db_err)?;
-        Ok(Box::new(PgTx { tx, org, sync_id: None }))
+        Ok(Box::new(PgTx {
+            tx,
+            org,
+            sync_id: None,
+        }))
     }
 }
 

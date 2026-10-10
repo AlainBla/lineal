@@ -6,18 +6,27 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::{NewEvent, OutboxRepo, StoredEvent};
 use lineal_app::{AppError, AppResult};
-use lineal_domain::ids::{EventId, OrgId};
 use lineal_domain::events::DomainEvent;
+use lineal_domain::ids::{EventId, OrgId};
 use serde_json::Value;
 use uuid::Uuid;
 
 type Row = (Uuid, Uuid, String, Value, i64, DateTime<Utc>);
 
 fn to_stored((id, org, origin, payload, sync_id, created_at): Row) -> AppResult<StoredEvent> {
-    let origin = origin.parse().map_err(|_| AppError::internal("invalid outbox origin"))?;
+    let origin = origin
+        .parse()
+        .map_err(|_| AppError::internal("invalid outbox origin"))?;
     let event: DomainEvent = serde_json::from_value(payload)
         .map_err(|e| AppError::internal(format!("undecodable outbox payload: {e}")))?;
-    Ok(StoredEvent { id: EventId(id), org_id: OrgId(org), origin, sync_id, event, created_at })
+    Ok(StoredEvent {
+        id: EventId(id),
+        org_id: OrgId(org),
+        origin,
+        sync_id,
+        event,
+        created_at,
+    })
 }
 
 #[async_trait]
@@ -43,7 +52,11 @@ impl OutboxRepo for PgTx {
         Ok(id)
     }
 
-    async fn claim_undelivered(&mut self, consumer: &str, limit: i64) -> AppResult<Vec<StoredEvent>> {
+    async fn claim_undelivered(
+        &mut self,
+        consumer: &str,
+        limit: i64,
+    ) -> AppResult<Vec<StoredEvent>> {
         // Bewusst mandantenübergreifend (Relay); nur über `Store::begin_system` aufzurufen.
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT e.event_id, e.organization_id, e.origin, e.payload, e.sync_id, e.created_at \

@@ -58,7 +58,10 @@ impl FakeStore {
 #[async_trait]
 impl Store for FakeStore {
     async fn begin(&self, org: OrgId) -> AppResult<Box<dyn Tx>> {
-        Ok(Box::new(FakeTx { state: self.state.clone(), org }))
+        Ok(Box::new(FakeTx {
+            state: self.state.clone(),
+            org,
+        }))
     }
     async fn begin_system(&self) -> AppResult<Box<dyn Tx>> {
         self.begin(OrgId::nil()).await
@@ -76,9 +79,25 @@ macro_rules! empty_repos {
 }
 
 empty_repos!(
-    OrgRepo, UserRepo, TeamRepo, WorkflowStateRepo, LabelRepo, IssueRepo, CommentRepo,
-    AttachmentRepo, CycleRepo, ProjectRepo, InitiativeRepo, ViewRepo, NotificationRepo,
-    DocumentRepo, TemplateRepo, TriageRepo, WebhookRepo, OverviewRepo, ImportRepo,
+    OrgRepo,
+    UserRepo,
+    TeamRepo,
+    WorkflowStateRepo,
+    LabelRepo,
+    IssueRepo,
+    CommentRepo,
+    AttachmentRepo,
+    CycleRepo,
+    ProjectRepo,
+    InitiativeRepo,
+    ViewRepo,
+    NotificationRepo,
+    DocumentRepo,
+    TemplateRepo,
+    TriageRepo,
+    WebhookRepo,
+    OverviewRepo,
+    ImportRepo,
 );
 
 #[async_trait]
@@ -94,7 +113,11 @@ impl OutboxRepo for FakeTx {
         lock(&self.state.events).push(event);
         Ok(EventId::new_v7())
     }
-    async fn claim_undelivered(&mut self, _consumer: &str, _limit: i64) -> AppResult<Vec<StoredEvent>> {
+    async fn claim_undelivered(
+        &mut self,
+        _consumer: &str,
+        _limit: i64,
+    ) -> AppResult<Vec<StoredEvent>> {
         Ok(vec![])
     }
     async fn mark_delivered(&mut self, _consumer: &str, _ids: &[EventId]) -> AppResult<()> {
@@ -111,13 +134,23 @@ impl JobRepo for FakeTx {
         lock(&self.state.jobs).push(job);
         Ok(Some(JobId::new_v7()))
     }
-    async fn claim(&mut self, _worker: &str, _limit: i64, _now: DateTime<Utc>) -> AppResult<Vec<Job>> {
+    async fn claim(
+        &mut self,
+        _worker: &str,
+        _limit: i64,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<Job>> {
         Ok(vec![])
     }
     async fn complete(&mut self, _id: JobId, _now: DateTime<Utc>) -> AppResult<()> {
         Ok(())
     }
-    async fn fail(&mut self, _id: JobId, _error: &str, _retry_at: Option<DateTime<Utc>>) -> AppResult<()> {
+    async fn fail(
+        &mut self,
+        _id: JobId,
+        _error: &str,
+        _retry_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
         Ok(())
     }
 }
@@ -130,28 +163,72 @@ impl Tx for FakeTx {
     async fn last_sync_id(&mut self) -> AppResult<i64> {
         Ok(self.state.sync_seq.fetch_add(1, Ordering::SeqCst) + 1)
     }
-    fn orgs(&mut self) -> &mut dyn OrgRepo { self }
-    fn users(&mut self) -> &mut dyn UserRepo { self }
-    fn auth(&mut self) -> &mut dyn AuthRepo { self }
-    fn teams(&mut self) -> &mut dyn TeamRepo { self }
-    fn states(&mut self) -> &mut dyn WorkflowStateRepo { self }
-    fn labels(&mut self) -> &mut dyn LabelRepo { self }
-    fn issues(&mut self) -> &mut dyn IssueRepo { self }
-    fn comments(&mut self) -> &mut dyn CommentRepo { self }
-    fn attachments(&mut self) -> &mut dyn AttachmentRepo { self }
-    fn cycles(&mut self) -> &mut dyn CycleRepo { self }
-    fn projects(&mut self) -> &mut dyn ProjectRepo { self }
-    fn initiatives(&mut self) -> &mut dyn InitiativeRepo { self }
-    fn views(&mut self) -> &mut dyn ViewRepo { self }
-    fn notifications(&mut self) -> &mut dyn NotificationRepo { self }
-    fn documents(&mut self) -> &mut dyn DocumentRepo { self }
-    fn templates(&mut self) -> &mut dyn TemplateRepo { self }
-    fn triage(&mut self) -> &mut dyn TriageRepo { self }
-    fn webhooks(&mut self) -> &mut dyn WebhookRepo { self }
-    fn outbox(&mut self) -> &mut dyn OutboxRepo { self }
-    fn jobs(&mut self) -> &mut dyn JobRepo { self }
-    fn overview(&mut self) -> &mut dyn OverviewRepo { self }
-    fn imports(&mut self) -> &mut dyn ImportRepo { self }
+    fn orgs(&mut self) -> &mut dyn OrgRepo {
+        self
+    }
+    fn users(&mut self) -> &mut dyn UserRepo {
+        self
+    }
+    fn auth(&mut self) -> &mut dyn AuthRepo {
+        self
+    }
+    fn teams(&mut self) -> &mut dyn TeamRepo {
+        self
+    }
+    fn states(&mut self) -> &mut dyn WorkflowStateRepo {
+        self
+    }
+    fn labels(&mut self) -> &mut dyn LabelRepo {
+        self
+    }
+    fn issues(&mut self) -> &mut dyn IssueRepo {
+        self
+    }
+    fn comments(&mut self) -> &mut dyn CommentRepo {
+        self
+    }
+    fn attachments(&mut self) -> &mut dyn AttachmentRepo {
+        self
+    }
+    fn cycles(&mut self) -> &mut dyn CycleRepo {
+        self
+    }
+    fn projects(&mut self) -> &mut dyn ProjectRepo {
+        self
+    }
+    fn initiatives(&mut self) -> &mut dyn InitiativeRepo {
+        self
+    }
+    fn views(&mut self) -> &mut dyn ViewRepo {
+        self
+    }
+    fn notifications(&mut self) -> &mut dyn NotificationRepo {
+        self
+    }
+    fn documents(&mut self) -> &mut dyn DocumentRepo {
+        self
+    }
+    fn templates(&mut self) -> &mut dyn TemplateRepo {
+        self
+    }
+    fn triage(&mut self) -> &mut dyn TriageRepo {
+        self
+    }
+    fn webhooks(&mut self) -> &mut dyn WebhookRepo {
+        self
+    }
+    fn outbox(&mut self) -> &mut dyn OutboxRepo {
+        self
+    }
+    fn jobs(&mut self) -> &mut dyn JobRepo {
+        self
+    }
+    fn overview(&mut self) -> &mut dyn OverviewRepo {
+        self
+    }
+    fn imports(&mut self) -> &mut dyn ImportRepo {
+        self
+    }
     async fn commit(self: Box<Self>) -> AppResult<()> {
         Ok(())
     }
@@ -162,7 +239,11 @@ pub struct FixedClock(pub DateTime<Utc>);
 
 impl Default for FixedClock {
     fn default() -> Self {
-        Self(Utc.with_ymd_and_hms(2026, 10, 10, 7, 15, 0).single().unwrap_or_default())
+        Self(
+            Utc.with_ymd_and_hms(2026, 10, 10, 7, 15, 0)
+                .single()
+                .unwrap_or_default(),
+        )
     }
 }
 
@@ -252,12 +333,23 @@ mod tests {
     async fn configurable_principal_lookup() {
         let principal = Principal {
             org_id: OrgId::new_v7(),
-            actor: Actor::App { id: UserId::new_v7() },
+            actor: Actor::App {
+                id: UserId::new_v7(),
+            },
             scopes: Scopes::read_only(),
         };
         let store = FakeStore::new().with_principal("h1", principal);
         let mut tx = store.begin_system().await.unwrap();
-        assert_eq!(tx.auth().find_principal_by_token_hash("h1").await.unwrap(), Some(principal));
-        assert_eq!(tx.auth().find_principal_by_token_hash("nope").await.unwrap(), None);
+        assert_eq!(
+            tx.auth().find_principal_by_token_hash("h1").await.unwrap(),
+            Some(principal)
+        );
+        assert_eq!(
+            tx.auth()
+                .find_principal_by_token_hash("nope")
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

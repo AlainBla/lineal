@@ -70,14 +70,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_keys() {
-        for k in ["", "eng", "1AB", "ABCDEFGH", "EN G", "EN-G", "ÄB", "Eng", "_AB"] {
+        for k in [
+            "", "eng", "1AB", "ABCDEFGH", "EN G", "EN-G", "ÄB", "Eng", "_AB",
+        ] {
             assert!(TeamKey::parse(k).is_err(), "{k}");
         }
     }
 
     #[test]
     fn serde_validates() {
-        assert_eq!(serde_json::to_string(&TeamKey::parse("ENG").unwrap()).unwrap(), "\"ENG\"");
+        assert_eq!(
+            serde_json::to_string(&TeamKey::parse("ENG").unwrap()).unwrap(),
+            "\"ENG\""
+        );
         assert!(serde_json::from_str::<TeamKey>("\"eng\"").is_err());
     }
 }

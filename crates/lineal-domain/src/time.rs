@@ -22,7 +22,10 @@ mod tests {
 
     #[test]
     fn parses_known_and_rejects_unknown() {
-        assert_eq!(parse_timezone("Europe/Berlin").unwrap(), chrono_tz::Europe::Berlin);
+        assert_eq!(
+            parse_timezone("Europe/Berlin").unwrap(),
+            chrono_tz::Europe::Berlin
+        );
         assert!(parse_timezone("Mars/Base").is_err());
         assert_eq!(DEFAULT_TEAM_TIMEZONE.name(), "America/Los_Angeles");
     }

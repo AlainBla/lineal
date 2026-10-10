@@ -37,7 +37,11 @@ pub trait OutboxRepo: Send {
 
     /// Holt bis zu `limit` Events, die `consumer` noch nicht verarbeitet hat
     /// (`ORDER BY sync_id … FOR UPDATE SKIP LOCKED`, mandantenübergreifend; nur mit `begin_system`).
-    async fn claim_undelivered(&mut self, consumer: &str, limit: i64) -> AppResult<Vec<StoredEvent>>;
+    async fn claim_undelivered(
+        &mut self,
+        consumer: &str,
+        limit: i64,
+    ) -> AppResult<Vec<StoredEvent>>;
 
     /// Vermerkt die Zustellung an `consumer` (`outbox_delivery`), idempotent.
     async fn mark_delivered(&mut self, consumer: &str, ids: &[EventId]) -> AppResult<()>;

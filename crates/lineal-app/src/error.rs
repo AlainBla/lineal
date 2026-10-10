@@ -83,7 +83,11 @@ macro_rules! ctor {
 impl AppError {
     /// Erzeugt einen Fehler ohne Details.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), details: json!({}) }
+        Self {
+            kind,
+            message: message.into(),
+            details: json!({}),
+        }
     }
 
     ctor! {
@@ -116,9 +120,8 @@ impl std::error::Error for AppError {}
 impl From<DomainError> for AppError {
     fn from(e: DomainError) -> Self {
         match &e {
-            DomainError::Validation { field, reason } => {
-                Self::invalid_request(e.to_string()).with_details(json!({ "field": field, "reason": reason }))
-            }
+            DomainError::Validation { field, reason } => Self::invalid_request(e.to_string())
+                .with_details(json!({ "field": field, "reason": reason })),
         }
     }
 }
@@ -129,7 +132,10 @@ mod tests {
 
     #[test]
     fn codes_and_statuses_follow_00_section_7() {
-        let table: Vec<_> = ErrorKind::ALL.iter().map(|k| (k.code(), k.http_status())).collect();
+        let table: Vec<_> = ErrorKind::ALL
+            .iter()
+            .map(|k| (k.code(), k.http_status()))
+            .collect();
         assert_eq!(
             table,
             [
