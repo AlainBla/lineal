@@ -8,6 +8,7 @@ import { useGlobalActions } from "@/app/global-actions";
 import { ShortcutHelp } from "@/app/shortcut-help";
 import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
+import { IssuesHost } from "@/features/issues/host";
 import { attachShortcuts } from "@/lib/shortcuts";
 
 /** Linear-artige Shell: Sidebar, Topbar, Hauptbereich, Overlays und globale Tastaturbedienung. */
@@ -42,6 +43,7 @@ export function Shell({ session, children }: { session: Session; children: React
       </div>
       <ConnectedCommandMenu />
       <ShortcutHelp />
+      <IssuesHost />
     </div>
   );
 }

@@ -1,0 +1,278 @@
+/**
+ * GraphQL-Operationen und Query-Keys der Issue-Screens. Gegen `web/schema.graphql` programmiert:
+ * Listen sind einfache Arrays bzw. `{ nodes, hasNextPage, endCursor }` (keine Relay-Connections).
+ */
+import type {
+  Comment,
+  Cycle,
+  Issue,
+  IssueConnection,
+  IssueLabel,
+  Project,
+  Team,
+  WorkflowState,
+} from "@/gql/graphql";
+import { gqlRequest } from "@/lib/graphql";
+
+export const ISSUE_FIELDS = `
+  id identifier previousIdentifiers title description priority estimate teamId
+  stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
+  labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed createdAt updatedAt
+`;
+
+const COMMENT_FIELDS = `
+  id body userId user { id name displayName } issueId parentId quotedText editedAt resolvedAt
+  reactionData { emoji count userIds } createdAt updatedAt
+`;
+
+export const keys = {
+  issues: ["issues"] as const,
+  teamIssues: (team: string) => ["issues", "team", team] as const,
+  myIssues: (tab: string, userId: string | undefined) => ["issues", "my", tab, userId] as const,
+  issue: (ref: string) => ["issue", ref] as const,
+  teamMeta: (team: string) => ["team-meta", team] as const,
+  comments: (issueId: string) => ["comments", issueId] as const,
+  teams: ["issue-teams"] as const,
+};
+
+/** Obergrenze geladener Issues je Liste (Seiten à 250); darüber weist die Ansicht darauf hin. */
+export const PAGE_SIZE = 250;
+export const MAX_PAGES = 8;
+
+export interface IssueList {
+  issues: Issue[];
+  /** Es gibt mehr Issues als geladen (Obergrenze erreicht). */
+  truncated: boolean;
+}
+
+interface IssuesVars extends Record<string, unknown> {
+  teamId?: string;
+  assigneeId?: string;
+  first: number;
+  after?: string;
+}
+
+const ISSUES_QUERY = `query TeamIssues($teamId: String, $assigneeId: String, $first: Int, $after: String) {
+  issues(teamId: $teamId, assigneeId: $assigneeId, first: $first, after: $after) {
+    nodes { ${ISSUE_FIELDS} } hasNextPage endCursor
+  }
+}`;
+
+/** Lädt Issues seitenweise bis zur Obergrenze; Triage und Papierkorb werden ausgeblendet. */
+export async function fetchIssues(
+  filter: { teamId?: string; assigneeId?: string },
+  signal?: AbortSignal,
+): Promise<IssueList> {
+  const all: Issue[] = [];
+  let after: string | undefined;
+  let truncated = false;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const vars: IssuesVars = { ...filter, first: PAGE_SIZE, after };
+    const res = await gqlRequest<{ issues: IssueConnection }, IssuesVars>(ISSUES_QUERY, vars, {
+      signal,
+    });
+    all.push(...res.issues.nodes);
+    if (!res.issues.hasNextPage || !res.issues.endCursor) break;
+    after = res.issues.endCursor;
+    if (page === MAX_PAGES - 1) truncated = true;
+  }
+  return { issues: all.filter((i) => !i.trashed && i.stateType !== "triage"), truncated };
+}
+
+export interface TeamMeta {
+  team: Team;
+  states: WorkflowState[];
+  labels: IssueLabel[];
+  cycles: Cycle[];
+  projects: Array<Pick<Project, "id" | "identifier" | "name" | "color">>;
+}
+
+const TEAM_META_QUERY = `query TeamMeta($team: String!) {
+  team(id: $team) { id key name displayName parentId icon color issueEstimationType cyclesEnabled triageEnabled }
+  workflowStates(teamId: $team) { id teamId name type color position isDefault }
+  issueLabels(teamId: $team, includeGroups: true) { id name color teamId parentId isGroup groupType }
+  cycles(teamId: $team) { id teamId number name startsAt endsAt isActive isNext isPast }
+  projects(team: $team) { id identifier name color }
+}`;
+
+export async function fetchTeamMeta(team: string, signal?: AbortSignal): Promise<TeamMeta> {
+  const res = await gqlRequest<
+    {
+      team: Team;
+      workflowStates: WorkflowState[];
+      issueLabels: IssueLabel[];
+      cycles: Cycle[];
+      projects: TeamMeta["projects"];
+    },
+    { team: string }
+  >(TEAM_META_QUERY, { team }, { signal });
+  return {
+    team: res.team,
+    states: res.workflowStates,
+    labels: res.issueLabels,
+    cycles: res.cycles,
+    projects: res.projects,
+  };
+}
+
+export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Issue> {
+  const res = await gqlRequest<{ issue: Issue }, { id: string }>(
+    `query IssueDetail($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
+    { id: ref },
+    { signal },
+  );
+  return res.issue;
+}
+
+export async function fetchComments(issueId: string, signal?: AbortSignal): Promise<Comment[]> {
+  const res = await gqlRequest<{ comments: { nodes: Comment[] } }, { issueId: string }>(
+    `query IssueComments($issueId: String) {
+      comments(issueId: $issueId, first: 100, orderBy: createdAt) { nodes { ${COMMENT_FIELDS} } }
+    }`,
+    { issueId },
+    { signal },
+  );
+  return res.comments.nodes;
+}
+
+/** Eingabe von `issueUpdate`; `null` leert ein Feld (Tri-State), ein fehlender Schlüssel lässt es unverändert. */
+export interface IssueUpdateVars {
+  [key: string]: unknown;
+  title?: string;
+  description?: string | null;
+  stateId?: string;
+  assigneeId?: string | null;
+  priority?: number;
+  estimate?: number | null;
+  teamId?: string;
+  parentId?: string | null;
+  labelIds?: string[];
+  projectId?: string | null;
+  cycleId?: string | null;
+  dueDate?: string | null;
+  sortOrder?: number;
+}
+
+export async function updateIssue(id: string, input: IssueUpdateVars): Promise<Issue> {
+  const res = await gqlRequest<
+    { issueUpdate: { success: boolean; issue: Issue | null } },
+    { id: string; input: IssueUpdateVars }
+  >(
+    `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) { success issue { ${ISSUE_FIELDS} } }
+    }`,
+    { id, input },
+  );
+  if (!res.issueUpdate.success || !res.issueUpdate.issue) throw new Error("Update failed");
+  return res.issueUpdate.issue;
+}
+
+export interface IssueCreateVars {
+  [key: string]: unknown;
+  teamId: string;
+  title: string;
+  description?: string;
+  stateId?: string;
+  assigneeId?: string;
+  priority?: number;
+  estimate?: number;
+  labelIds?: string[];
+  parentId?: string;
+  projectId?: string;
+  cycleId?: string;
+  dueDate?: string;
+}
+
+export async function createIssue(input: IssueCreateVars): Promise<Issue> {
+  const res = await gqlRequest<
+    { issueCreate: { success: boolean; issue: Issue | null } },
+    { input: IssueCreateVars }
+  >(
+    `mutation IssueCreate($input: IssueCreateInput!) {
+      issueCreate(input: $input) { success issue { ${ISSUE_FIELDS} } }
+    }`,
+    { input },
+  );
+  if (!res.issueCreate.success || !res.issueCreate.issue) throw new Error("Create failed");
+  return res.issueCreate.issue;
+}
+
+export async function createComment(input: {
+  issueId: string;
+  body: string;
+  parentId?: string;
+}): Promise<Comment> {
+  const res = await gqlRequest<
+    { commentCreate: { success: boolean; comment: Comment | null } },
+    { input: typeof input }
+  >(
+    `mutation CommentCreate($input: CommentCreateInput!) {
+      commentCreate(input: $input) { success comment { ${COMMENT_FIELDS} } }
+    }`,
+    { input },
+  );
+  if (!res.commentCreate.success || !res.commentCreate.comment) throw new Error("Comment failed");
+  return res.commentCreate.comment;
+}
+
+export async function createReaction(
+  commentId: string,
+  emoji: string,
+): Promise<{ id: string; emoji: string }> {
+  const res = await gqlRequest<
+    { reactionCreate: { success: boolean; reaction: { id: string; emoji: string } | null } },
+    { input: { commentId: string; emoji: string } }
+  >(
+    `mutation ReactionCreate($input: ReactionCreateInput!) {
+      reactionCreate(input: $input) { success reaction { id emoji } }
+    }`,
+    { input: { commentId, emoji } },
+  );
+  if (!res.reactionCreate.reaction) throw new Error("Reaction failed");
+  return res.reactionCreate.reaction;
+}
+
+export async function deleteReaction(id: string): Promise<void> {
+  await gqlRequest<{ reactionDelete: { success: boolean } }, { id: string }>(
+    `mutation ReactionDelete($id: String!) { reactionDelete(id: $id) { success } }`,
+    { id },
+  );
+}
+
+export type RelationKind = "blocks" | "related" | "duplicate";
+
+export async function createRelation(input: {
+  issueId: string;
+  relatedIssueId: string;
+  type: RelationKind;
+}): Promise<void> {
+  await gqlRequest<
+    { issueRelationCreate: { success: boolean } },
+    { input: { issueId: string; relatedIssueId: string; type: RelationKind } }
+  >(
+    `mutation IssueRelationCreate($input: IssueRelationCreateInput!) {
+      issueRelationCreate(input: $input) { success }
+    }`,
+    { input },
+  );
+}
+
+export async function setSubscription(issueId: string, subscribe: boolean): Promise<void> {
+  const op = subscribe ? "issueSubscribe" : "issueUnsubscribe";
+  await gqlRequest<Record<string, { success: boolean }>, { id: string }>(
+    `mutation IssueSubscription($id: String!) { ${op}(id: $id) { success changed } }`,
+    { id: issueId },
+  );
+}
+
+export type TeamRef = Pick<Team, "id" | "key" | "name" | "parentId" | "issueEstimationType">;
+
+/** Alle für den User sichtbaren, nicht archivierten Teams (Team-Picker, Create-Modal). */
+export async function fetchTeams(signal?: AbortSignal): Promise<TeamRef[]> {
+  const res = await gqlRequest<{ teams: TeamRef[] }>(
+    `query IssueTeams { teams { id key name parentId issueEstimationType } }`,
+    undefined,
+    { signal },
+  );
+  return res.teams;
+}
