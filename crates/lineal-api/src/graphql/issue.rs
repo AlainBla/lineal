@@ -1,10 +1,180 @@
-//! GraphQL-Teilobjekte des Bereichs `issue` (WP06).
+//! GraphQL-Teilobjekte des Bereichs `issue` (WP06): `issue`, `issues`, `issueCreate`,
+//! `issueUpdate`, `issueArchive`, `issueUnarchive`, `issueDelete`, `issueRelationCreate`.
 //!
-//! Das Platzhalterfeld `_issueReady` ist sichtbar (nicht versteckt), damit der Root-Typ im
-//! exportierten SDL nie leer ist. Das zuständige Arbeitspaket löscht es, sobald der Bereich
-//! echte Felder hat.
+//! Das Platzhalterfeld `_issueReady` bleibt bestehen (die Scaffold-Tests in `graphql/mod.rs`
+//! prüfen es).
 
-use async_graphql::Object;
+use super::org::gql_err;
+use crate::context::{app, request_ctx};
+use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
+use chrono::{DateTime, NaiveDate, Utc};
+use lineal_app::ports::repos::issue::HistorySource;
+use lineal_app::ports::repos::user::{OrderBy, PageCursor};
+use lineal_app::usecases::issue::{
+    CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput, RelationChanges,
+    UpdateIssueInput,
+};
+use lineal_app::{AppError, AppResult};
+use lineal_domain::enums::RelationType;
+
+/// `Issue`.
+#[derive(SimpleObject)]
+#[graphql(name = "Issue")]
+pub struct IssueGql {
+    pub id: String,
+    pub identifier: String,
+    pub previous_identifiers: Vec<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: i32,
+    pub estimate: Option<i32>,
+    pub team_id: String,
+    pub state_id: String,
+    pub state_name: String,
+    pub state_type: String,
+    pub assignee_id: Option<String>,
+    pub creator_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub project_id: Option<String>,
+    pub project_milestone_id: Option<String>,
+    pub cycle_id: Option<String>,
+    pub label_ids: Vec<String>,
+    pub due_date: Option<String>,
+    pub sort_order: f64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub canceled_at: Option<String>,
+    pub archived_at: Option<String>,
+    pub trashed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<IssueView> for IssueGql {
+    fn from(v: IssueView) -> Self {
+        let i = v.issue;
+        let ts = |t: Option<DateTime<Utc>>| t.map(|t| t.to_rfc3339());
+        Self {
+            id: i.id.to_string(),
+            identifier: i.identifier,
+            previous_identifiers: v.previous_identifiers,
+            title: i.title,
+            description: i.description,
+            priority: i32::from(i.priority.value()),
+            estimate: i.estimate,
+            team_id: i.team_id.to_string(),
+            state_id: i.state_id.to_string(),
+            state_name: v.extras.state_name,
+            state_type: i.state_type.as_str().into(),
+            assignee_id: i.assignee_id.map(|u| u.to_string()),
+            creator_id: i.creator_id.map(|u| u.to_string()),
+            parent_id: i.parent_id.map(|u| u.to_string()),
+            project_id: i.project_id.map(|u| u.to_string()),
+            project_milestone_id: i.project_milestone_id.map(|u| u.to_string()),
+            cycle_id: i.cycle_id.map(|u| u.to_string()),
+            label_ids: v.extras.label_ids.iter().map(ToString::to_string).collect(),
+            due_date: i.due_date.map(|d| d.to_string()),
+            sort_order: i.sort_order,
+            started_at: ts(i.started_at),
+            completed_at: ts(i.completed_at),
+            canceled_at: ts(i.canceled_at),
+            archived_at: ts(i.archived_at),
+            trashed: i.trashed,
+            created_at: i.created_at.to_rfc3339(),
+            updated_at: i.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+pub struct IssuePayload {
+    pub success: bool,
+    pub issue: Option<IssueGql>,
+}
+
+#[derive(SimpleObject)]
+pub struct IssueConnection {
+    pub nodes: Vec<IssueGql>,
+    pub has_next_page: bool,
+    pub end_cursor: Option<String>,
+}
+
+#[derive(InputObject)]
+pub struct IssueCreateInput {
+    pub id: Option<String>,
+    pub team_id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub state_id: Option<String>,
+    pub assignee_id: Option<String>,
+    pub priority: Option<i32>,
+    pub estimate: Option<f64>,
+    pub label_ids: Option<Vec<String>>,
+    pub parent_id: Option<String>,
+    pub project_id: Option<String>,
+    pub project_milestone_id: Option<String>,
+    pub cycle_id: Option<String>,
+    pub due_date: Option<String>,
+    pub sort_order: Option<f64>,
+}
+
+/// Tri-State: ein weggelassenes Feld bleibt unverändert, ein explizites `null` leert es.
+#[derive(InputObject)]
+pub struct IssueUpdateInput {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub state_id: Option<String>,
+    pub assignee_id: MaybeUndefined<String>,
+    pub priority: Option<i32>,
+    pub estimate: MaybeUndefined<f64>,
+    pub team_id: Option<String>,
+    pub parent_id: MaybeUndefined<String>,
+    pub label_ids: Option<Vec<String>>,
+    pub added_label_ids: Option<Vec<String>>,
+    pub removed_label_ids: Option<Vec<String>>,
+    pub project_id: MaybeUndefined<String>,
+    pub project_milestone_id: MaybeUndefined<String>,
+    pub cycle_id: MaybeUndefined<String>,
+    pub due_date: MaybeUndefined<String>,
+    pub sort_order: Option<f64>,
+}
+
+#[derive(InputObject)]
+pub struct IssueRelationCreateInput {
+    pub issue_id: String,
+    pub related_issue_id: String,
+    /// `blocks`, `related` oder `duplicate`.
+    #[graphql(name = "type")]
+    pub relation_type: String,
+}
+
+fn date(s: &str) -> AppResult<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD"))
+}
+
+fn tri<T>(m: MaybeUndefined<T>) -> Option<Option<T>> {
+    match m {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(v) => Some(Some(v)),
+    }
+}
+
+fn tri_date(v: Option<Option<String>>) -> AppResult<Option<Option<NaiveDate>>> {
+    match v {
+        None => Ok(None),
+        Some(None) => Ok(Some(None)),
+        Some(Some(s)) => Ok(Some(Some(date(&s)?))),
+    }
+}
+
+fn payload(v: IssueView) -> IssuePayload {
+    IssuePayload {
+        success: true,
+        issue: Some(v.into()),
+    }
+}
 
 #[derive(Default)]
 pub struct IssueQuery;
@@ -15,6 +185,81 @@ impl IssueQuery {
     #[graphql(name = "_issueReady")]
     async fn issue_ready(&self) -> bool {
         true
+    }
+
+    /// Ein Issue per UUID oder Kennung (auch frühere); nicht sichtbar → `not_found`.
+    async fn issue(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<IssueGql> {
+        let d = app(ctx)?
+            .get_issue(request_ctx(ctx)?, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(d.view.into())
+    }
+
+    /// Issues der sichtbaren Teams.
+    #[allow(clippy::too_many_arguments)]
+    async fn issues(
+        &self,
+        ctx: &Context<'_>,
+        team_id: Option<String>,
+        assignee_id: Option<String>,
+        state: Option<String>,
+        label: Option<String>,
+        project_id: Option<String>,
+        cycle_id: Option<String>,
+        priority: Option<i32>,
+        include_archived: Option<bool>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> async_graphql::Result<IssueConnection> {
+        let cursor = after
+            .as_deref()
+            .map(|c| -> AppResult<PageCursor> {
+                let (k, i) = c
+                    .split_once('|')
+                    .ok_or_else(|| AppError::invalid_request("invalid cursor"))?;
+                Ok(PageCursor {
+                    key: DateTime::parse_from_rfc3339(k)
+                        .map_err(|_| AppError::invalid_request("invalid cursor"))?
+                        .with_timezone(&Utc),
+                    id: i
+                        .parse()
+                        .map_err(|_| AppError::invalid_request("invalid cursor"))?,
+                })
+            })
+            .transpose()
+            .map_err(gql_err)?;
+        let page = app(ctx)?
+            .list_issues(
+                request_ctx(ctx)?,
+                ListIssuesInput {
+                    team: team_id,
+                    assignee: assignee_id.map(Some),
+                    state,
+                    label,
+                    project: project_id,
+                    cycle: cycle_id,
+                    priority: priority.map(i64::from),
+                    include_archived: include_archived.unwrap_or(false),
+                    order_by: OrderBy::UpdatedAt,
+                    limit: i64::from(first.unwrap_or(50)),
+                    cursor,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(IssueConnection {
+            has_next_page: page.next.is_some(),
+            end_cursor: page.next.map(|c| {
+                format!(
+                    "{}|{}",
+                    c.key.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                    c.id
+                )
+            }),
+            nodes: page.items.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -27,5 +272,189 @@ impl IssueMutation {
     #[graphql(name = "_issueMutationReady")]
     async fn issue_mutation_ready(&self) -> bool {
         true
+    }
+
+    async fn issue_create(
+        &self,
+        ctx: &Context<'_>,
+        input: IssueCreateInput,
+    ) -> async_graphql::Result<IssuePayload> {
+        let id = input
+            .id
+            .as_deref()
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|_| gql_err(AppError::invalid_request("id must be a UUID")))?;
+        let v = app(ctx)?
+            .create_issue(
+                request_ctx(ctx)?,
+                CreateIssueInput {
+                    id,
+                    team: input.team_id,
+                    title: input.title,
+                    description: input.description,
+                    state: input.state_id,
+                    priority: input.priority.map(i64::from),
+                    assignee: input.assignee_id,
+                    estimate: input.estimate,
+                    labels: input.label_ids,
+                    due_date: input
+                        .due_date
+                        .as_deref()
+                        .map(date)
+                        .transpose()
+                        .map_err(gql_err)?,
+                    cycle: input.cycle_id,
+                    project: input.project_id,
+                    milestone: input.project_milestone_id,
+                    parent: input.parent_id,
+                    sort_order: input.sort_order,
+                    source: HistorySource::Api,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(payload(v))
+    }
+
+    async fn issue_update(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        input: IssueUpdateInput,
+    ) -> async_graphql::Result<IssuePayload> {
+        let v = app(ctx)?
+            .update_issue(
+                request_ctx(ctx)?,
+                UpdateIssueInput {
+                    id,
+                    team: input.team_id,
+                    title: input.title,
+                    description: input.description.map(DescriptionEdit::Set),
+                    state: input.state_id,
+                    priority: input.priority.map(i64::from),
+                    assignee: tri(input.assignee_id),
+                    estimate: tri(input.estimate),
+                    labels: input.label_ids,
+                    add_labels: input.added_label_ids.unwrap_or_default(),
+                    remove_labels: input.removed_label_ids.unwrap_or_default(),
+                    due_date: tri_date(tri(input.due_date)).map_err(gql_err)?,
+                    cycle: tri(input.cycle_id),
+                    project: tri(input.project_id),
+                    milestone: tri(input.project_milestone_id),
+                    parent: tri(input.parent_id),
+                    sort_order: input.sort_order,
+                    source: HistorySource::Api,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(payload(v))
+    }
+
+    /// Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
+    async fn issue_archive(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        trash: Option<bool>,
+    ) -> async_graphql::Result<IssuePayload> {
+        let _ = trash;
+        let issue = app(ctx)?
+            .delete_issue(request_ctx(ctx)?, &id, false)
+            .await
+            .map_err(gql_err)?;
+        Ok(IssuePayload {
+            success: true,
+            issue: Some(
+                IssueView {
+                    extras: Default::default(),
+                    previous_identifiers: vec![],
+                    issue,
+                }
+                .into(),
+            ),
+        })
+    }
+
+    async fn issue_unarchive(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<IssuePayload> {
+        let v = app(ctx)?
+            .restore_issue(request_ctx(ctx)?, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(payload(v))
+    }
+
+    async fn issue_delete(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        permanently_delete: Option<bool>,
+    ) -> async_graphql::Result<IssuePayload> {
+        let issue = app(ctx)?
+            .delete_issue(request_ctx(ctx)?, &id, permanently_delete.unwrap_or(false))
+            .await
+            .map_err(gql_err)?;
+        Ok(IssuePayload {
+            success: true,
+            issue: Some(
+                IssueView {
+                    extras: Default::default(),
+                    previous_identifiers: vec![],
+                    issue,
+                }
+                .into(),
+            ),
+        })
+    }
+
+    async fn issue_relation_create(
+        &self,
+        ctx: &Context<'_>,
+        input: IssueRelationCreateInput,
+    ) -> async_graphql::Result<IssuePayload> {
+        let kind: RelationType = input
+            .relation_type
+            .parse()
+            .map_err(|_| gql_err(AppError::invalid_request("unknown relation type")))?;
+        let r = input.related_issue_id;
+        let relations = match kind {
+            RelationType::Blocks => RelationChanges {
+                blocks: vec![r],
+                ..Default::default()
+            },
+            RelationType::Related => RelationChanges {
+                related_to: vec![r],
+                ..Default::default()
+            },
+            RelationType::Duplicate => RelationChanges {
+                duplicate_of: Some(Some(r)),
+                ..Default::default()
+            },
+            RelationType::Similar => {
+                return Err(gql_err(AppError::invalid_request(
+                    "similar relations cannot be created manually",
+                )));
+            }
+        };
+        let v = app(ctx)?
+            .update_issue(
+                request_ctx(ctx)?,
+                UpdateIssueInput {
+                    id: input.issue_id,
+                    relations,
+                    source: HistorySource::Api,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(payload(v))
     }
 }
