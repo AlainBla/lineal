@@ -1,10 +1,12 @@
 //! Repository-Port `OutboxRepo` (Transactional Outbox, docs/09 §6 und docs/11 §3.6).
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_domain::events::{DomainEvent, EventOrigin};
 use lineal_domain::ids::{EventId, OrgId, UserId};
+use serde_json::Value;
+use uuid::Uuid;
 
 /// Neues Event, das in der laufenden Transaktion geschrieben wird.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,4 +79,106 @@ pub trait OutboxRepo: Send {
 
     /// Setzt `processed_at` bei allen Events, die an alle `consumers` zugestellt wurden.
     async fn mark_processed(&mut self, consumers: &[String]) -> AppResult<u64>;
+
+    // --- Sync-Log (WP15, docs/09 §5). Alle Methoden sind auf `Tx::org_id()` begrenzt. ---
+
+    /// Schreibt Aktionen ins `sync_log` (idempotent über `(event_id, n)`), vergibt die
+    /// Stream-IDs in Commit-Reihenfolge und weckt per `NOTIFY` die Verbindungen. Liefert die
+    /// höchste vergebene ID (`None`, wenn alles schon vorhanden war).
+    async fn sync_append(&mut self, _actions: &[NewSyncAction]) -> AppResult<Option<i64>> {
+        sync_unimplemented()
+    }
+
+    /// Aktueller Stand des Logs dieses Workspace.
+    async fn sync_head(&mut self) -> AppResult<SyncHead> {
+        sync_unimplemented()
+    }
+
+    /// Aktionen mit `after < id <= upto`, deren Gruppen sich mit `groups` überschneiden, aufsteigend.
+    async fn sync_read(
+        &mut self,
+        _after: i64,
+        _upto: i64,
+        _groups: &[String],
+        _limit: i64,
+    ) -> AppResult<Vec<SyncActionRow>> {
+        sync_unimplemented()
+    }
+
+    /// Gruppen der letzten (nicht gelöschten) Aktion zu diesem Objekt.
+    async fn sync_last_groups(
+        &mut self,
+        _model_name: &str,
+        _model_id: Uuid,
+    ) -> AppResult<Option<Vec<String>>> {
+        sync_unimplemented()
+    }
+
+    /// Löscht Einträge, die vor `before` geschrieben wurden, und setzt das Wasserzeichen.
+    async fn sync_purge(&mut self, _before: DateTime<Utc>) -> AppResult<u64> {
+        sync_unimplemented()
+    }
+
+    /// Aktueller Zustand eines Objekts als Sync-`data` plus seine Sync-Gruppen (zum Zeitpunkt des
+    /// Aufrufs). `None`, wenn es nicht (mehr) existiert oder `model_name` unbekannt ist.
+    async fn sync_model(
+        &mut self,
+        _model_name: &str,
+        _model_id: Uuid,
+    ) -> AppResult<Option<SyncModelState>> {
+        sync_unimplemented()
+    }
+}
+
+fn sync_unimplemented<T>() -> AppResult<T> {
+    Err(AppError::internal("not implemented"))
+}
+
+/// Neue Aktion für das Sync-Log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewSyncAction {
+    pub event_id: EventId,
+    /// Laufende Nummer innerhalb des Events (mehrere Aktionen je Event möglich).
+    pub n: i16,
+    /// `lastSyncId` der auslösenden Transaktion.
+    pub sync_id: i64,
+    /// `I`, `U`, `A`, `V`, `D`, `C` oder `G`.
+    pub action: String,
+    pub model_name: String,
+    pub model_id: Uuid,
+    pub data: Value,
+    /// `team:<uuid>`, `org`, `user:<uuid>`.
+    pub groups: Vec<String>,
+    pub origin: EventOrigin,
+    pub actor_id: Option<UserId>,
+}
+
+/// Zeile des Sync-Logs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncActionRow {
+    /// Stream-ID (`lastSyncId` des Clients).
+    pub id: i64,
+    pub sync_id: i64,
+    pub action: String,
+    pub model_name: String,
+    pub model_id: Uuid,
+    pub data: Value,
+    pub groups: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Stand des Sync-Logs eines Workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncHead {
+    /// Höchste vergebene ID (0, wenn leer).
+    pub head: i64,
+    /// Alles bis einschließlich dieser ID wurde durch die Aufbewahrung gelöscht (0 = nichts).
+    pub purged_up_to: i64,
+}
+
+/// Sync-Zustand eines Objekts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncModelState {
+    pub data: Value,
+    pub groups: Vec<String>,
 }
