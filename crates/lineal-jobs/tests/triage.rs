@@ -1668,3 +1668,51 @@ async fn sla_rules_set_and_remove_slas_by_priority(pool: PgPool) {
         .issue;
     assert!(u.sla_breaches_at.is_none(), "Entfernen-Regel greift");
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn unsnooze_and_delete_responsibility(pool: PgPool) {
+    let fx = setup(pool).await;
+    enable_triage(&fx, &alice(), "ENG").await;
+    let id = triage_issue(&fx, "Kurz weg").await;
+    fx.app
+        .triage_snooze(
+            &bob(),
+            TriageSnoozeInput {
+                issue: id.clone(),
+                until: t0() + Duration::days(2),
+                source: HistorySource::User,
+            },
+        )
+        .await
+        .unwrap();
+    let v = fx
+        .app
+        .triage_unsnooze(&bob(), &id, HistorySource::User)
+        .await
+        .unwrap();
+    assert!(v.issue.snoozed_until_at.is_none());
+    fx.app
+        .set_triage_responsibility(
+            &alice(),
+            SetTriageResponsibilityInput {
+                team: "ENG".into(),
+                action: None,
+                users: vec!["Bob Example".into()],
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        fx.app
+            .delete_triage_responsibility(&alice(), "ENG")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !fx.app
+            .delete_triage_responsibility(&alice(), "ENG")
+            .await
+            .unwrap()
+    );
+}

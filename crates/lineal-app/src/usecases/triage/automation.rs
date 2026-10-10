@@ -74,7 +74,7 @@ async fn cascade(
         old,
     }]);
     while let Some(ev) = queue.pop_front() {
-        if !(is_closed(ev.issue.state_type) && !is_closed(ev.old)) {
+        if !is_closed(ev.issue.state_type) || is_closed(ev.old) {
             continue;
         }
         // 1. Letztes offenes Child geschlossen -> Parent abschließen.

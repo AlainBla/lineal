@@ -311,9 +311,7 @@ async fn persist(
     )
     .await?;
     if old.state_id != saved.state_id {
-        for f in ["triagedAt"] {
-            changed.push(f.into());
-        }
+        changed.push("triagedAt".into());
     }
     emit(
         tx,
