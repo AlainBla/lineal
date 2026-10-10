@@ -1,7 +1,9 @@
 //! PostgreSQL-Implementierung der Ports aus `lineal-app`.
 #![forbid(unsafe_code)]
 
+pub mod filter_sql;
 pub mod repos;
+pub mod search;
 pub mod store;
 
 pub use store::{PgStore, PgTx};

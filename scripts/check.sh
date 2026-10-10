@@ -8,6 +8,11 @@ export DATABASE_URL="${DATABASE_URL:-postgres://lineal:lineal@localhost:5440/lin
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
+if ! command -v cargo-fmt >/dev/null || ! command -v cargo-clippy >/dev/null; then
+  echo "rustfmt/clippy fehlen: 'sudo apt install rustfmt rust-clippy' oder 'rustup component add rustfmt clippy'" >&2
+  exit 1
+fi
+
 step "PostgreSQL starten (docker compose, Port 5440)"
 docker compose up -d --wait
 
