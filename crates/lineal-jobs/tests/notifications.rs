@@ -1997,3 +1997,28 @@ async fn removal_from_private_team_hides_notifications_everywhere_and_stops_emai
         mails[0].body
     );
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn read_only_token_cannot_change_inbox_or_subscriptions(pool: PgPool) {
+    let e = env(pool).await;
+    let mut ctx = ctx_for(SeedUser::Bob);
+    ctx.scopes.write = false;
+    let err = e
+        .app
+        .update_notification_settings(
+            &ctx,
+            NotificationSettingsPatch {
+                due_date_reminders: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::Forbidden);
+    let err = e
+        .app
+        .mark_all_notifications_read(&ctx, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::Forbidden);
+}

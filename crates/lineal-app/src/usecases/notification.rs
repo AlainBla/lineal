@@ -114,6 +114,19 @@ const CONTEXTS: [&str; 5] = [
 const CHANNELS: [&str; 3] = ["email", "desktop", "mobile"];
 
 /// Der handelnde User (Notifications gehören immer einem User; System/Apps ohne User nicht).
+/// Schreibende Inbox-/Abo-Aktionen brauchen Scope `write` (auch für eigene Daten).
+fn require_write(ctx: &RequestCtx) -> AppResult<()> {
+    if ctx.scopes.write {
+        Ok(())
+    } else {
+        Err(
+            AppError::forbidden("Token scope does not allow write operations.").with_details(
+                serde_json::json!({ "reason": "insufficient_scope", "scope": "write" }),
+            ),
+        )
+    }
+}
+
 fn me(ctx: &RequestCtx) -> AppResult<UserId> {
     match ctx.actor {
         Actor::User { id, .. } | Actor::App { id } => Ok(id),
@@ -248,6 +261,7 @@ impl App {
         id: NotificationId,
         input: MarkNotificationInput,
     ) -> AppResult<NotificationItem> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         if input.read.is_none() && input.snoozed_until_at.is_none() {
             return Err(AppError::invalid_request(
@@ -287,6 +301,7 @@ impl App {
         ctx: &RequestCtx,
         id: NotificationId,
     ) -> AppResult<NotificationItem> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -307,6 +322,7 @@ impl App {
         ctx: &RequestCtx,
         filter: Option<&str>,
     ) -> AppResult<u64> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         let filter = parse_bulk(filter)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
@@ -327,6 +343,7 @@ impl App {
         id: NotificationId,
         archive: bool,
     ) -> AppResult<NotificationItem> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -347,6 +364,7 @@ impl App {
         ctx: &RequestCtx,
         filter: Option<&str>,
     ) -> AppResult<u64> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         let filter = parse_bulk(filter)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
@@ -406,6 +424,7 @@ impl App {
         issue: &str,
         user: Option<&str>,
     ) -> AppResult<IssueSubscriptionResult> {
+        require_write(ctx)?;
         let caller = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -463,6 +482,7 @@ impl App {
         issue: &str,
         user: Option<&str>,
     ) -> AppResult<IssueSubscriptionResult> {
+        require_write(ctx)?;
         let caller = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -521,6 +541,7 @@ impl App {
         ctx: &RequestCtx,
         input: SetObjectSubscriptionInput,
     ) -> AppResult<ObjectSubscription> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         if let Some(c) = &input.context_view_type {
             if input.kind != ObjectKind::Team || !CONTEXTS.contains(&c.as_str()) {
@@ -633,6 +654,7 @@ impl App {
         ctx: &RequestCtx,
         patch: NotificationSettingsPatch,
     ) -> AppResult<NotificationSettings> {
+        require_write(ctx)?;
         let user = me(ctx)?;
         if let Some(f) = &patch.email_format
             && !matches!(f.as_str(), "digest" | "immediate")
