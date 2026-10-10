@@ -24,8 +24,16 @@ async fn every_documented_path_is_routed() {
         ),
         (Method::POST, "/oauth/register", StatusCode::BAD_REQUEST),
         (Method::GET, "/oauth/authorize", StatusCode::BAD_REQUEST),
-        (Method::POST, "/oauth/token", StatusCode::UNSUPPORTED_MEDIA_TYPE),
-        (Method::POST, "/oauth/revoke", StatusCode::UNSUPPORTED_MEDIA_TYPE),
+        (
+            Method::POST,
+            "/oauth/token",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            Method::POST,
+            "/oauth/revoke",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
         (
             Method::POST,
             "/auth/login",
