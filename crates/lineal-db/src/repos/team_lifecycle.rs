@@ -95,7 +95,10 @@ impl PgTx {
         .map_err(db_err)
     }
 
-    pub(crate) async fn shared_team_projects_impl(&mut self, team: TeamId) -> AppResult<Vec<(Uuid, TeamId)>> {
+    pub(crate) async fn shared_team_projects_impl(
+        &mut self,
+        team: TeamId,
+    ) -> AppResult<Vec<(Uuid, TeamId)>> {
         let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
             "SELECT p.id, p.lead_team_id FROM project p WHERE p.organization_id = $1 AND NOT p.trashed \
                AND EXISTS (SELECT 1 FROM project_team pt WHERE pt.organization_id = p.organization_id \
@@ -112,7 +115,10 @@ impl PgTx {
         Ok(rows.into_iter().map(|(p, l)| (p, TeamId(l))).collect())
     }
 
-    pub(crate) async fn project_issue_counts_impl(&mut self, project: Uuid) -> AppResult<Vec<(TeamId, i64)>> {
+    pub(crate) async fn project_issue_counts_impl(
+        &mut self,
+        project: Uuid,
+    ) -> AppResult<Vec<(TeamId, i64)>> {
         let rows: Vec<(Uuid, i64)> = sqlx::query_as(
             "SELECT team_id, count(*) FROM issue WHERE organization_id = $1 AND project_id = $2 AND NOT trashed \
              GROUP BY team_id",
@@ -137,7 +143,10 @@ impl PgTx {
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(rows.into_iter().map(|(o, t)| (OrgId(o), TeamId(t))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(o, t)| (OrgId(o), TeamId(t)))
+            .collect())
     }
 
     /// Löscht das Team samt Inhalt. Reihenfolge nach den Fremdschlüsseln: Verweise lösen, Dokumente,

@@ -17,7 +17,12 @@ fn unusable_secret_hash() -> String {
     // SHA-256 über zwei Zufalls-UUIDs; nur als Platzhalter für die NOT-NULL-Spalte.
     use std::fmt::Write;
     let mut s = String::new();
-    let _ = write!(s, "unused:{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let _ = write!(
+        s,
+        "unused:{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
     s
 }
 
@@ -52,11 +57,13 @@ impl PgTx {
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(row.map(|(client_id, client_name, redirect_uris)| ClientRegistration {
-            client_id,
-            client_name,
-            redirect_uris,
-        }))
+        Ok(row.map(
+            |(client_id, client_name, redirect_uris)| ClientRegistration {
+                client_id,
+                client_name,
+                redirect_uris,
+            },
+        ))
     }
 
     pub(crate) async fn oauth_ensure_application_impl(
@@ -147,7 +154,19 @@ impl PgTx {
         .await
         .map_err(db_err)?;
         Ok(row.map(
-            |(org, app, client, user, redirect_uri, scopes, challenge, actor, family, expires_at, used_at)| {
+            |(
+                org,
+                app,
+                client,
+                user,
+                redirect_uri,
+                scopes,
+                challenge,
+                actor,
+                family,
+                expires_at,
+                used_at,
+            )| {
                 AuthCodeRecord {
                     org_id: OrgId(org),
                     application_id: app,
@@ -253,7 +272,20 @@ impl PgTx {
         .await
         .map_err(db_err)?;
         Ok(row.map(
-            |(id, org, app, client, user, actor, scopes, refresh, prev, rotated_at, family, revoked_at)| {
+            |(
+                id,
+                org,
+                app,
+                client,
+                user,
+                actor,
+                scopes,
+                refresh,
+                prev,
+                rotated_at,
+                family,
+                revoked_at,
+            )| {
                 OauthTokenRecord {
                     id,
                     org_id: OrgId(org),

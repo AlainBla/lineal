@@ -22,9 +22,10 @@ async fn every_documented_path_is_routed() {
             "/.well-known/oauth-authorization-server",
             StatusCode::OK,
         ),
-        (Method::POST, "/oauth/register", StatusCode::NOT_IMPLEMENTED),
-        (Method::GET, "/oauth/authorize", StatusCode::NOT_IMPLEMENTED),
-        (Method::POST, "/oauth/token", StatusCode::NOT_IMPLEMENTED),
+        (Method::POST, "/oauth/register", StatusCode::BAD_REQUEST),
+        (Method::GET, "/oauth/authorize", StatusCode::BAD_REQUEST),
+        (Method::POST, "/oauth/token", StatusCode::UNSUPPORTED_MEDIA_TYPE),
+        (Method::POST, "/oauth/revoke", StatusCode::UNSUPPORTED_MEDIA_TYPE),
         (
             Method::POST,
             "/auth/login",

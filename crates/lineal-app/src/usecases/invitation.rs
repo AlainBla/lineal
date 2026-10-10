@@ -75,7 +75,6 @@ fn invitation_not_found() -> AppError {
         .with_details(json!({ "type": "Invitation" }))
 }
 
-
 fn require_creator_or_admin(ctx: &RequestCtx, inv: &InvitationRecord) -> AppResult<()> {
     let admin = matches!(
         ctx.actor,
@@ -108,7 +107,10 @@ fn forbid_system(ctx: &RequestCtx) -> AppResult<()> {
 
 impl App {
     fn invitation_mail(&self, to: &str, org_name: &str, token: &str) -> Mail {
-        let link = format!("{}/invite/{token}", self.config.base_url.trim_end_matches('/'));
+        let link = format!(
+            "{}/invite/{token}",
+            self.config.base_url.trim_end_matches('/')
+        );
         Mail {
             to: to.to_string(),
             subject: format!("You have been invited to {org_name} on Lineal"),
@@ -165,7 +167,8 @@ impl App {
         }
         let mut team_ids: Vec<TeamId> = Vec::new();
         for r in &input.teams {
-            let team = resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Management).await?;
+            let team =
+                resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Management).await?;
             let action = if role == UserRole::Guest {
                 Action::AddGuest
             } else {
@@ -303,7 +306,11 @@ impl App {
     }
 
     /// Widerruft eine offene Einladung; der Link wird ungültig.
-    pub async fn revoke_invitation(&self, ctx: &RequestCtx, id: Uuid) -> AppResult<InvitationRecord> {
+    pub async fn revoke_invitation(
+        &self,
+        ctx: &RequestCtx,
+        id: Uuid,
+    ) -> AppResult<InvitationRecord> {
         forbid_system(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -315,8 +322,10 @@ impl App {
             .ok_or_else(invitation_not_found)?;
         require_creator_or_admin(ctx, &inv)?;
         if inv.status != "pending" {
-            return Err(AppError::conflict("Only pending invitations can be revoked")
-                .with_details(json!({ "status": inv.status })));
+            return Err(
+                AppError::conflict("Only pending invitations can be revoked")
+                    .with_details(json!({ "status": inv.status })),
+            );
         }
         tx.webhooks()
             .set_invitation_status(id, "revoked", None, self.clock.now())
@@ -445,11 +454,7 @@ impl App {
             .await?
             .filter(|i| i.status == "pending" && i.expires_at > now)
             .ok_or_else(invitation_not_found)?;
-        let org = tx
-            .orgs()
-            .get()
-            .await?
-            .ok_or_else(invitation_not_found)?;
+        let org = tx.orgs().get().await?.ok_or_else(invitation_not_found)?;
         let teams = tx.teams().list_all().await?;
         let tree = crate::policy::TeamTree::new(teams);
         let existing = tx.users().find_by_email(&inv.email).await?;
@@ -458,7 +463,9 @@ impl App {
                 tx.webhooks()
                     .activate_imported_user(
                         u.id,
-                        name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&u.name),
+                        name.map(str::trim)
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or(&u.name),
                         password_hash.as_deref(),
                         inv.role,
                         now,
@@ -501,7 +508,10 @@ impl App {
         };
         emit(&mut *tx, &ev_ctx, DomainEvent::UserCreated { user_id }).await?;
         for t in &inv.team_ids {
-            let Some(team) = tree.get(*t).filter(|x| !x.trashed && x.retired_at.is_none()) else {
+            let Some(team) = tree
+                .get(*t)
+                .filter(|x| !x.trashed && x.retired_at.is_none())
+            else {
                 continue;
             };
             let chain: Vec<TeamId> = if inv.role == UserRole::Guest {

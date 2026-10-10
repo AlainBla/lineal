@@ -14,10 +14,10 @@ use crate::app::App;
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot, TeamTree, team_not_found};
+use crate::ports::Tx;
 use crate::ports::repos::document::DocParent;
 use crate::ports::repos::project::ProjectPatch;
 use crate::ports::repos::team::Team;
-use crate::ports::Tx;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use chrono::{DateTime, Duration, Utc};
@@ -41,10 +41,10 @@ impl SubTeamHandling {
         match s {
             "retire" | "delete" => Ok(Self::Cascade),
             "unnest" => Ok(Self::Unnest),
-            other => Err(AppError::invalid_request(format!(
-                "unknown sub-team handling `{other}`"
-            ))
-            .with_details(json!({ "field": "handleSubTeams" }))),
+            other => Err(
+                AppError::invalid_request(format!("unknown sub-team handling `{other}`"))
+                    .with_details(json!({ "field": "handleSubTeams" })),
+            ),
         }
     }
 }
@@ -80,8 +80,9 @@ fn active_children(tree: &TeamTree, id: TeamId) -> Vec<Team> {
 }
 
 fn needs_handling() -> AppError {
-    AppError::invalid_request("The team has active sub-teams; say how to handle them")
-        .with_details(json!({ "field": "handleSubTeams", "values": ["retire", "delete", "unnest"] }))
+    AppError::invalid_request("The team has active sub-teams; say how to handle them").with_details(
+        json!({ "field": "handleSubTeams", "values": ["retire", "delete", "unnest"] }),
+    )
 }
 
 impl App {
@@ -139,7 +140,11 @@ impl App {
         snap.require_team(ctx, Action::RetireTeam, team_id)?;
         let now = self.clock.now();
         let mut targets = vec![team_id];
-        targets.extend(Self::active_descendants(&snap.tree, team_id).iter().map(|t| t.id));
+        targets.extend(
+            Self::active_descendants(&snap.tree, team_id)
+                .iter()
+                .map(|t| t.id),
+        );
         for t in targets {
             snap.require_team(ctx, Action::RetireTeam, t)?;
             tx.webhooks().set_team_retired(t, Some(now), now).await?;
@@ -226,7 +231,8 @@ impl App {
         targets.extend(rest.iter().rev().map(|t| t.id));
         targets.reverse();
         for t in targets {
-            self.trash_team_in(&mut *tx, ctx, &snap.tree, t, now).await?;
+            self.trash_team_in(&mut *tx, ctx, &snap.tree, t, now)
+                .await?;
         }
         let tree = TeamTree::new(tx.teams().list_all().await?);
         let v = view(&tree, team_id)?;
@@ -243,11 +249,15 @@ impl App {
         now: DateTime<Utc>,
     ) -> AppResult<()> {
         tx.webhooks().set_team_trashed(team, true, now).await?;
-        tx.documents().cascade_trash(DocParent::Team(team), now).await?;
+        tx.documents()
+            .cascade_trash(DocParent::Team(team), now)
+            .await?;
         // Projekte nur dieses Teams wandern in den Papierkorb.
         for pid in tx.webhooks().trash_sole_projects(team, now).await? {
             let id = ProjectId(pid);
-            tx.documents().cascade_trash(DocParent::Project(id), now).await?;
+            tx.documents()
+                .cascade_trash(DocParent::Project(id), now)
+                .await?;
             emit(tx, ctx, DomainEvent::ProjectUpdated { project_id: id }).await?;
         }
         // Multi-Team-Projekte: Team entfernen, bei Bedarf neues Lead-Team.
@@ -264,12 +274,7 @@ impl App {
                     .collect();
                 // Meiste Issues, bei Gleichstand das älteste Team (Reihenfolge der Anlage).
                 let order = |t: &TeamId| tree.all().position(|x| x.id == *t).unwrap_or(usize::MAX);
-                let count = |t: &TeamId| {
-                    counts
-                        .iter()
-                        .find(|(c, _)| c == t)
-                        .map_or(0, |(_, n)| *n)
-                };
+                let count = |t: &TeamId| counts.iter().find(|(c, _)| c == t).map_or(0, |(_, n)| *n);
                 if let Some(new_lead) = others
                     .iter()
                     .copied()
@@ -282,11 +287,7 @@ impl App {
                             .unwrap_or_default();
                         let number = tx.teams().next_project_number(new_lead).await?;
                         tx.projects()
-                            .add_alias(
-                                id,
-                                &format!("P-{}-{}", old_key, project.number),
-                                &old_key,
-                            )
+                            .add_alias(id, &format!("P-{}-{}", old_key, project.number), &old_key)
                             .await?;
                         tx.projects()
                             .update(
@@ -303,7 +304,9 @@ impl App {
                 }
             }
             let actor = crate::resolve::user::actor_user_id(ctx);
-            tx.projects().detach_team_issues(id, team, actor, now).await?;
+            tx.projects()
+                .detach_team_issues(id, team, actor, now)
+                .await?;
             tx.projects().remove_team(id, team).await?;
             emit(tx, ctx, DomainEvent::ProjectUpdated { project_id: id }).await?;
         }
@@ -348,8 +351,10 @@ impl App {
         if let Some(max) = snap.org.limits.max_teams {
             let active = snap.tree.all().filter(|t| !t.trashed).count() as i64;
             if active >= max {
-                return Err(AppError::limit_exceeded("The maximum number of teams is reached.")
-                    .with_details(json!({ "limit": "maxTeams" })));
+                return Err(
+                    AppError::limit_exceeded("The maximum number of teams is reached.")
+                        .with_details(json!({ "limit": "maxTeams" })),
+                );
             }
         }
         // Das Team und die zugleich gelöschten Nachfahren (Eltern vor Kindern).
@@ -365,12 +370,21 @@ impl App {
         }
         for t in targets {
             tx.webhooks().set_team_trashed(t.id, false, now).await?;
-            tx.documents().cascade_restore(DocParent::Team(t.id)).await?;
+            tx.documents()
+                .cascade_restore(DocParent::Team(t.id))
+                .await?;
             if let Some(at) = t.trashed_at {
                 for pid in tx.webhooks().restore_sole_projects(t.id, at, now).await? {
                     let id = ProjectId(pid);
-                    tx.documents().cascade_restore(DocParent::Project(id)).await?;
-                    emit(&mut *tx, ctx, DomainEvent::ProjectUpdated { project_id: id }).await?;
+                    tx.documents()
+                        .cascade_restore(DocParent::Project(id))
+                        .await?;
+                    emit(
+                        &mut *tx,
+                        ctx,
+                        DomainEvent::ProjectUpdated { project_id: id },
+                    )
+                    .await?;
                 }
             }
             emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: t.id }).await?;
@@ -412,15 +426,11 @@ impl App {
         let Some(t) = tx.teams().get(team).await? else {
             return Ok(false);
         };
-        let retention = tx
-            .orgs()
-            .get()
-            .await?
-            .map_or(30, |o| {
-                crate::policy::OrgPolicy::from_json(&o.security_settings, &o.limits)
-                    .limits
-                    .trash_retention_days
-            });
+        let retention = tx.orgs().get().await?.map_or(30, |o| {
+            crate::policy::OrgPolicy::from_json(&o.security_settings, &o.limits)
+                .limits
+                .trash_retention_days
+        });
         let Some(trashed_at) = t.trashed_at.filter(|_| t.trashed) else {
             return Ok(false);
         };

@@ -1424,8 +1424,12 @@ async fn sync_team_cycles(
         return Ok(());
     };
     let tree = TeamTree::new(tx.teams().list_all().await?);
-    let non_inheriting: std::collections::HashSet<TeamId> =
-        tx.cycles().teams_not_inheriting().await?.into_iter().collect();
+    let non_inheriting: std::collections::HashSet<TeamId> = tx
+        .cycles()
+        .teams_not_inheriting()
+        .await?
+        .into_iter()
+        .collect();
     let env = Env {
         tree: &tree,
         non_inheriting: &non_inheriting,

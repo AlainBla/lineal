@@ -95,9 +95,12 @@ async fn delivery_is_signed_over_the_raw_body(pool: PgPool) {
         deliver_due(&app, &rec, app.clock.now(), 10).await.unwrap(),
         1
     );
-    let reqs = rec.0.lock().unwrap();
+    let reqs = rec.0.lock().unwrap().clone();
     let r = &reqs[0];
-    assert_eq!(header(r, "Lineal-Signature"), Some(sign(&secret, &r.body).as_str()));
+    assert_eq!(
+        header(r, "Lineal-Signature"),
+        Some(sign(&secret, &r.body).as_str())
+    );
     assert_eq!(header(r, "Lineal-Event"), Some("Issue"));
     assert!(header(r, "Lineal-Delivery").is_some());
     let v: Value = serde_json::from_slice(&r.body).unwrap();
@@ -149,9 +152,14 @@ async fn rebinding_to_a_private_target_is_rejected_at_delivery(pool: PgPool) {
             .await
             .unwrap();
         let rec = Recorder::default();
-        let n = deliver_due(&app, &rec, chrono::Utc::now(), 10).await.unwrap();
+        let n = deliver_due(&app, &rec, chrono::Utc::now(), 10)
+            .await
+            .unwrap();
         assert_eq!(n, 1);
-        assert!(rec.0.lock().unwrap().is_empty(), "{target}: kein Request darf rausgehen");
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "{target}: kein Request darf rausgehen"
+        );
     }
     let err: String = sqlx::query_scalar("SELECT error FROM webhook_delivery")
         .fetch_one(&pool)
@@ -161,14 +169,19 @@ async fn rebinding_to_a_private_target_is_rejected_at_delivery(pool: PgPool) {
 }
 
 /// Minimaler HTTP-Empfänger: antwortet mit `status` (+ optional Location) und merkt sich Header/Body.
-async fn receiver(status: u16, location: Option<&'static str>) -> (u16, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
+async fn receiver(
+    status: u16,
+    location: Option<&'static str>,
+) -> (u16, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let seen2 = seen.clone();
     tokio::spawn(async move {
         loop {
-            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
             let seen = seen2.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::new();
@@ -183,16 +196,26 @@ async fn receiver(status: u16, location: Option<&'static str>) -> (u16, Arc<Mute
                         let head = String::from_utf8_lossy(&buf[..pos]).to_string();
                         let len = head
                             .lines()
-                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
                             .unwrap_or(0);
                         if buf.len() >= pos + 4 + len {
-                            seen.lock().unwrap().push((head, buf[pos + 4..pos + 4 + len].to_vec()));
+                            seen.lock()
+                                .unwrap()
+                                .push((head, buf[pos + 4..pos + 4 + len].to_vec()));
                             break;
                         }
                     }
                 }
-                let loc = location.map(|l| format!("Location: {l}\r\n")).unwrap_or_default();
-                let resp = format!("HTTP/1.1 {status} X\r\n{loc}Content-Length: 2\r\nConnection: close\r\n\r\nok");
+                let loc = location
+                    .map(|l| format!("Location: {l}\r\n"))
+                    .unwrap_or_default();
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\n{loc}Content-Length: 2\r\nConnection: close\r\n\r\nok"
+                );
                 let _ = sock.write_all(resp.as_bytes()).await;
             });
         }
@@ -212,21 +235,31 @@ async fn consumer_delivers_over_http_and_does_not_follow_redirects(pool: PgPool)
         ..Default::default()
     };
     let a = app.create_webhook(&alice(), hook(ok_port)).await.unwrap();
-    let b = app.create_webhook(&alice(), hook(redir_port)).await.unwrap();
+    let b = app
+        .create_webhook(&alice(), hook(redir_port))
+        .await
+        .unwrap();
     app.create_issue(&alice(), issue()).await.unwrap();
     // Über den echten Konsumenten (Plan + Versand).
     let mut tx = app.store.begin_system().await.unwrap();
-    let evs = tx.outbox().claim_undelivered("webhooks", 100).await.unwrap();
+    let evs = tx
+        .outbox()
+        .claim_undelivered("webhooks", 100)
+        .await
+        .unwrap();
     drop(tx);
     for ev in &evs {
         WebhooksConsumer.handle(&app, ev).await.unwrap();
     }
-    let seen = ok_seen.lock().unwrap();
+    let seen = ok_seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     let (head, body) = &seen[0];
     let sig = head
         .lines()
-        .find_map(|l| l.strip_prefix("lineal-signature: ").or_else(|| l.strip_prefix("Lineal-Signature: ")))
+        .find_map(|l| {
+            l.strip_prefix("lineal-signature: ")
+                .or_else(|| l.strip_prefix("Lineal-Signature: "))
+        })
         .expect("signature header");
     assert_eq!(sig.trim(), sign(&a.secret.unwrap(), body));
     let _ = b;
@@ -236,6 +269,12 @@ async fn consumer_delivers_over_http_and_does_not_follow_redirects(pool: PgPool)
             .await
             .unwrap();
     // 200 -> succeeded; 302 zählt als Fehlschlag (Redirect nicht gefolgt) und wird neu eingeplant.
-    assert!(rows.contains(&("succeeded".to_string(), Some(200))), "{rows:?}");
-    assert!(rows.contains(&("pending".to_string(), Some(302))), "{rows:?}");
+    assert!(
+        rows.contains(&("succeeded".to_string(), Some(200))),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&("pending".to_string(), Some(302))),
+        "{rows:?}"
+    );
 }

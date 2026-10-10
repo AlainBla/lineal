@@ -29,7 +29,20 @@ const COLS: &str = "id, organization_id, email, role, team_ids, inviter_id, stat
     accepted_at, accepted_user_id, created_at";
 
 fn record(r: Row) -> AppResult<InvitationRecord> {
-    let (id, org, email, role, teams, inviter, status, expires_at, last_sent_at, accepted_at, accepted_user, created_at) = r;
+    let (
+        id,
+        org,
+        email,
+        role,
+        teams,
+        inviter,
+        status,
+        expires_at,
+        last_sent_at,
+        accepted_at,
+        accepted_user,
+        created_at,
+    ) = r;
     Ok(InvitationRecord {
         id,
         org_id: OrgId(org),
@@ -80,7 +93,10 @@ impl PgTx {
         Ok(())
     }
 
-    pub(crate) async fn get_invitation_impl(&mut self, id: Uuid) -> AppResult<Option<InvitationRecord>> {
+    pub(crate) async fn get_invitation_impl(
+        &mut self,
+        id: Uuid,
+    ) -> AppResult<Option<InvitationRecord>> {
         let row: Option<Row> = sqlx::query_as(&format!(
             "SELECT {COLS} FROM invitation WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL"
         ))
@@ -92,7 +108,10 @@ impl PgTx {
         row.map(record).transpose()
     }
 
-    pub(crate) async fn list_invitations_impl(&mut self, pending_only: bool) -> AppResult<Vec<InvitationRecord>> {
+    pub(crate) async fn list_invitations_impl(
+        &mut self,
+        pending_only: bool,
+    ) -> AppResult<Vec<InvitationRecord>> {
         let rows: Vec<Row> = sqlx::query_as(&format!(
             "SELECT {COLS} FROM invitation WHERE organization_id = $1 AND archived_at IS NULL \
              AND (NOT $2 OR status = 'pending') ORDER BY created_at DESC, id DESC LIMIT 500"
@@ -207,7 +226,10 @@ impl PgTx {
         Ok(())
     }
 
-    pub(crate) async fn password_hash_of_account_impl(&mut self, user: UserId) -> AppResult<Option<String>> {
+    pub(crate) async fn password_hash_of_account_impl(
+        &mut self,
+        user: UserId,
+    ) -> AppResult<Option<String>> {
         let h: Option<Option<String>> = sqlx::query_scalar(
             "SELECT password_hash FROM \"user\" WHERE id = $1 AND status = 'active' AND active",
         )

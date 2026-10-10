@@ -140,12 +140,20 @@ async fn row_json(c: Pool<'_>, table: &str, org: Uuid, id: Uuid) -> AppResult<Op
     .map_err(db_err)
 }
 
-async fn issue_entity(c: Pool<'_>, org: Uuid, id: Uuid) -> AppResult<Option<(Vec<Uuid>, Value, String)>> {
+async fn issue_entity(
+    c: Pool<'_>,
+    org: Uuid,
+    id: Uuid,
+) -> AppResult<Option<(Vec<Uuid>, Value, String)>> {
     let Some(base) = row_json(&mut *c, "issue", org, id).await? else {
         return Ok(None);
     };
-    let team = base["team_id"].as_str().and_then(|s| Uuid::parse_str(s).ok());
-    let state = base["state_id"].as_str().and_then(|s| Uuid::parse_str(s).ok());
+    let team = base["team_id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let state = base["state_id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
     let team_obj: Option<Value> = match team {
         Some(t) => sqlx::query_as::<_, (Uuid, String, String)>(
             "SELECT id, key, name FROM team WHERE organization_id = $1 AND id = $2",
@@ -212,22 +220,22 @@ async fn issue_entity(c: Pool<'_>, org: Uuid, id: Uuid) -> AppResult<Option<(Vec
 
 async fn comment_scope(c: Pool<'_>, org: Uuid, row: &Value) -> AppResult<(Vec<Uuid>, String)> {
     let str_id = |v: &Value, k: &str| v[k].as_str().and_then(|s| Uuid::parse_str(s).ok());
-            let mut path = String::new();
-            let teams = if let Some(i) = str_id(row, "issue_id") {
-                if let Some(ident) = sqlx::query_scalar::<_, String>(
-                    "SELECT identifier FROM issue WHERE organization_id = $1 AND id = $2",
-                )
-                .bind(org)
-                .bind(i)
-                .fetch_optional(&mut *c)
-                .await
-                .map_err(db_err)?
-                {
-                    path = format!("issue/{ident}");
-                }
-                issue_teams(&mut *c, org, i).await?
-            } else {
-                let project = match str_id(row, "project_id") {
+    let mut path = String::new();
+    let teams = if let Some(i) = str_id(row, "issue_id") {
+        if let Some(ident) = sqlx::query_scalar::<_, String>(
+            "SELECT identifier FROM issue WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(org)
+        .bind(i)
+        .fetch_optional(&mut *c)
+        .await
+        .map_err(db_err)?
+        {
+            path = format!("issue/{ident}");
+        }
+        issue_teams(&mut *c, org, i).await?
+    } else {
+        let project = match str_id(row, "project_id") {
                     Some(p) => Some(p),
                     None => match str_id(row, "project_update_id") {
                         Some(u) => sqlx::query_scalar(
@@ -251,14 +259,14 @@ async fn comment_scope(c: Pool<'_>, org: Uuid, row: &Value) -> AppResult<(Vec<Uu
                         },
                     },
                 };
-                match project {
-                    Some(p) => project_teams(&mut *c, org, p).await?,
-                    None => match str_id(row, "document_id") {
-                        Some(d) => document_teams(&mut *c, org, d).await?,
-                        None => Vec::new(),
-                    },
-                }
-            };
+        match project {
+            Some(p) => project_teams(&mut *c, org, p).await?,
+            None => match str_id(row, "document_id") {
+                Some(d) => document_teams(&mut *c, org, d).await?,
+                None => Vec::new(),
+            },
+        }
+    };
     Ok((teams, path))
 }
 
@@ -340,7 +348,11 @@ async fn load_entity(
                 Some(i) => issue_teams(&mut *c, org, i).await?,
                 None => Vec::new(),
             };
-            Some((teams, camelize(row, &["storage_key", "metadata"]), String::new()))
+            Some((
+                teams,
+                camelize(row, &["storage_key", "metadata"]),
+                String::new(),
+            ))
         }
         "Project" => {
             let Some(row) = row_json(&mut *c, "project", org, id).await? else {
@@ -449,7 +461,11 @@ async fn load_entity(
             let Some(row) = row_json(&mut *c, "initiative_update", org, id).await? else {
                 return Ok(None);
             };
-            Some((Vec::new(), camelize(row, &["progress_snapshot"]), String::new()))
+            Some((
+                Vec::new(),
+                camelize(row, &["progress_snapshot"]),
+                String::new(),
+            ))
         }
         // Whitelist: nie E-Mail, Passwort-Hash oder persönliche Einstellungen.
         "User" => {
@@ -470,6 +486,7 @@ async fn load_entity(
     })
 }
 
+#[allow(clippy::type_complexity)]
 async fn document_teams(c: Pool<'_>, org: Uuid, doc: Uuid) -> AppResult<Vec<Uuid>> {
     let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
         "SELECT team_id, issue_id, project_id, cycle_id FROM document WHERE organization_id = $1 AND id = $2",
@@ -492,12 +509,14 @@ async fn document_teams(c: Pool<'_>, org: Uuid, doc: Uuid) -> AppResult<Vec<Uuid
         return project_teams(&mut *c, org, p).await;
     }
     if let Some(cy) = cycle {
-        return sqlx::query_scalar("SELECT team_id FROM cycle WHERE organization_id = $1 AND id = $2")
-            .bind(org)
-            .bind(cy)
-            .fetch_all(&mut *c)
-            .await
-            .map_err(db_err);
+        return sqlx::query_scalar(
+            "SELECT team_id FROM cycle WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(org)
+        .bind(cy)
+        .fetch_all(&mut *c)
+        .await
+        .map_err(db_err);
     }
     Ok(Vec::new())
 }
@@ -616,7 +635,10 @@ impl WebhookRepo for PgTx {
     }
 
     // --- Zustellung -------------------------------------------------------
-    async fn list_dispatch_webhooks(&mut self, resource_type: &str) -> AppResult<Vec<WebhookRecord>> {
+    async fn list_dispatch_webhooks(
+        &mut self,
+        resource_type: &str,
+    ) -> AppResult<Vec<WebhookRecord>> {
         let rows = sqlx::query_as::<_, WebhookRow>(&format!(
             "SELECT {WEBHOOK_COLS} FROM webhook WHERE organization_id = $1 AND enabled AND archived_at IS NULL \
              AND $2 = ANY (resource_types) ORDER BY created_at, id"
@@ -810,7 +832,11 @@ impl WebhookRepo for PgTx {
         Ok(disabled.unwrap_or(false))
     }
 
-    async fn list_deliveries(&mut self, webhook: WebhookId, limit: i64) -> AppResult<Vec<DeliveryRecord>> {
+    async fn list_deliveries(
+        &mut self,
+        webhook: WebhookId,
+        limit: i64,
+    ) -> AppResult<Vec<DeliveryRecord>> {
         let rows: Vec<(Uuid, Uuid, Uuid, String, String, i32, String, Option<i32>, Option<i32>, Option<DateTime<Utc>>, DateTime<Utc>)> =
             sqlx::query_as(
                 "SELECT id, webhook_id, event_id, resource_type, action, attempt, status, response_code, duration_ms, \
@@ -825,19 +851,21 @@ impl WebhookRepo for PgTx {
             .map_err(db_err)?;
         Ok(rows
             .into_iter()
-            .map(|(id, w, e, rt, a, attempt, status, code, dur, next, created)| DeliveryRecord {
-                id,
-                webhook_id: WebhookId(w),
-                event_id: e,
-                resource_type: rt,
-                action: a,
-                attempt,
-                status,
-                response_code: code,
-                duration_ms: dur,
-                next_attempt_at: next,
-                created_at: created,
-            })
+            .map(
+                |(id, w, e, rt, a, attempt, status, code, dur, next, created)| DeliveryRecord {
+                    id,
+                    webhook_id: WebhookId(w),
+                    event_id: e,
+                    resource_type: rt,
+                    action: a,
+                    attempt,
+                    status,
+                    response_code: code,
+                    duration_ms: dur,
+                    next_attempt_at: next,
+                    created_at: created,
+                },
+            )
             .collect())
     }
 
@@ -856,15 +884,21 @@ impl WebhookRepo for PgTx {
     }
 
     async fn purge_deliveries(&mut self, before: DateTime<Utc>) -> AppResult<u64> {
-        let res = sqlx::query("DELETE FROM webhook_delivery WHERE created_at < $1 AND status <> 'pending'")
-            .bind(before)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        let res = sqlx::query(
+            "DELETE FROM webhook_delivery WHERE created_at < $1 AND status <> 'pending'",
+        )
+        .bind(before)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(res.rows_affected())
     }
 
-    async fn disable_webhooks_of_application(&mut self, application: Uuid, now: DateTime<Utc>) -> AppResult<u64> {
+    async fn disable_webhooks_of_application(
+        &mut self,
+        application: Uuid,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
         let res = sqlx::query(
             "UPDATE webhook SET enabled = false, disabled_reason = 'oauth_revoked', updated_at = $3 \
              WHERE organization_id = $1 AND oauth_application_id = $2 AND enabled",
@@ -879,10 +913,17 @@ impl WebhookRepo for PgTx {
     }
 
     // --- OAuth ------------------------------------------------------------
-    async fn oauth_register_client(&mut self, c: &ClientRegistration, now: DateTime<Utc>) -> AppResult<()> {
+    async fn oauth_register_client(
+        &mut self,
+        c: &ClientRegistration,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
         self.oauth_register_client_impl(c, now).await
     }
-    async fn oauth_find_client(&mut self, client_id: &str) -> AppResult<Option<ClientRegistration>> {
+    async fn oauth_find_client(
+        &mut self,
+        client_id: &str,
+    ) -> AppResult<Option<ClientRegistration>> {
         self.oauth_find_client_impl(client_id).await
     }
     async fn oauth_ensure_application(
@@ -891,7 +932,8 @@ impl WebhookRepo for PgTx {
         creator: UserId,
         now: DateTime<Utc>,
     ) -> AppResult<Uuid> {
-        self.oauth_ensure_application_impl(client, creator, now).await
+        self.oauth_ensure_application_impl(client, creator, now)
+            .await
     }
     async fn oauth_insert_code(&mut self, code: &NewAuthCode) -> AppResult<()> {
         self.oauth_insert_code_impl(code).await
@@ -908,10 +950,18 @@ impl WebhookRepo for PgTx {
     async fn oauth_revoke_family(&mut self, family: Uuid, now: DateTime<Utc>) -> AppResult<u64> {
         self.oauth_revoke_family_impl(family, now).await
     }
-    async fn oauth_find_by_refresh_hash(&mut self, hash: &str) -> AppResult<Option<OauthTokenRecord>> {
+    async fn oauth_find_by_refresh_hash(
+        &mut self,
+        hash: &str,
+    ) -> AppResult<Option<OauthTokenRecord>> {
         self.oauth_find_by_refresh_hash_impl(hash).await
     }
-    async fn oauth_rotate_token(&mut self, id: Uuid, expected_current: &str, r: &TokenRotation) -> AppResult<bool> {
+    async fn oauth_rotate_token(
+        &mut self,
+        id: Uuid,
+        expected_current: &str,
+        r: &TokenRotation,
+    ) -> AppResult<bool> {
         self.oauth_rotate_token_impl(id, expected_current, r).await
     }
     async fn oauth_revoke_by_token_hash(
@@ -932,10 +982,17 @@ impl WebhookRepo for PgTx {
     async fn list_invitations(&mut self, pending_only: bool) -> AppResult<Vec<InvitationRecord>> {
         self.list_invitations_impl(pending_only).await
     }
-    async fn find_pending_invitation(&mut self, email: &str, now: DateTime<Utc>) -> AppResult<Option<InvitationRecord>> {
+    async fn find_pending_invitation(
+        &mut self,
+        email: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<InvitationRecord>> {
         self.find_pending_invitation_impl(email, now).await
     }
-    async fn find_invitation_by_token_hash(&mut self, hash: &str) -> AppResult<Option<InvitationRecord>> {
+    async fn find_invitation_by_token_hash(
+        &mut self,
+        hash: &str,
+    ) -> AppResult<Option<InvitationRecord>> {
         self.find_invitation_by_token_hash_impl(hash).await
     }
     async fn renew_invitation(
@@ -945,7 +1002,8 @@ impl WebhookRepo for PgTx {
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> AppResult<()> {
-        self.renew_invitation_impl(id, token_hash, expires_at, now).await
+        self.renew_invitation_impl(id, token_hash, expires_at, now)
+            .await
     }
     async fn set_invitation_status(
         &mut self,
@@ -954,7 +1012,8 @@ impl WebhookRepo for PgTx {
         accepted_user: Option<UserId>,
         now: DateTime<Utc>,
     ) -> AppResult<()> {
-        self.set_invitation_status_impl(id, status, accepted_user, now).await
+        self.set_invitation_status_impl(id, status, accepted_user, now)
+            .await
     }
     async fn activate_imported_user(
         &mut self,
@@ -964,7 +1023,8 @@ impl WebhookRepo for PgTx {
         role: UserRole,
         now: DateTime<Utc>,
     ) -> AppResult<()> {
-        self.activate_imported_user_impl(user, name, password_hash, role, now).await
+        self.activate_imported_user_impl(user, name, password_hash, role, now)
+            .await
     }
     async fn password_hash_of_account(&mut self, user: UserId) -> AppResult<Option<String>> {
         self.password_hash_of_account_impl(user).await
@@ -979,10 +1039,19 @@ impl WebhookRepo for PgTx {
     ) -> AppResult<()> {
         self.set_team_retired_impl(team, retired_at, now).await
     }
-    async fn set_team_trashed(&mut self, team: TeamId, trashed: bool, now: DateTime<Utc>) -> AppResult<()> {
+    async fn set_team_trashed(
+        &mut self,
+        team: TeamId,
+        trashed: bool,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
         self.set_team_trashed_impl(team, trashed, now).await
     }
-    async fn trash_sole_projects(&mut self, team: TeamId, now: DateTime<Utc>) -> AppResult<Vec<Uuid>> {
+    async fn trash_sole_projects(
+        &mut self,
+        team: TeamId,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<Uuid>> {
         self.trash_sole_projects_impl(team, now).await
     }
     async fn restore_sole_projects(
@@ -999,7 +1068,10 @@ impl WebhookRepo for PgTx {
     async fn project_issue_counts(&mut self, project: Uuid) -> AppResult<Vec<(TeamId, i64)>> {
         self.project_issue_counts_impl(project).await
     }
-    async fn list_teams_due_for_purge(&mut self, before: DateTime<Utc>) -> AppResult<Vec<(OrgId, TeamId)>> {
+    async fn list_teams_due_for_purge(
+        &mut self,
+        before: DateTime<Utc>,
+    ) -> AppResult<Vec<(OrgId, TeamId)>> {
         self.list_teams_due_for_purge_impl(before).await
     }
     async fn purge_team(&mut self, team: TeamId) -> AppResult<()> {

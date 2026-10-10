@@ -144,6 +144,7 @@ pub struct WebhookSecretPayload {
 }
 
 #[derive(SimpleObject)]
+#[graphql(name = "WebhookSuccessPayload")]
 pub struct SuccessPayload {
     pub success: bool,
 }

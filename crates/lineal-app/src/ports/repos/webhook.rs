@@ -367,7 +367,10 @@ pub trait WebhookRepo: Send {
         unimplemented_repo()
     }
     /// Registrierter Client (global, ohne Workspace-Bezug).
-    async fn oauth_find_client(&mut self, _client_id: &str) -> AppResult<Option<ClientRegistration>> {
+    async fn oauth_find_client(
+        &mut self,
+        _client_id: &str,
+    ) -> AppResult<Option<ClientRegistration>> {
         unimplemented_repo()
     }
     /// Liefert die Workspace-Anwendung zu einem DCR-Client; legt sie beim ersten Consent an.
@@ -387,7 +390,11 @@ pub trait WebhookRepo: Send {
         unimplemented_repo()
     }
     /// Markiert den Code atomar als verwendet; `false`, wenn er schon verwendet war.
-    async fn oauth_consume_code(&mut self, _code_hash: &str, _now: DateTime<Utc>) -> AppResult<bool> {
+    async fn oauth_consume_code(
+        &mut self,
+        _code_hash: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
         unimplemented_repo()
     }
     async fn oauth_insert_token(&mut self, _t: &NewOauthToken) -> AppResult<()> {
@@ -507,7 +514,11 @@ pub trait WebhookRepo: Send {
     }
     /// Legt alle nicht gelöschten Projekte, an denen nur dieses Team beteiligt ist, in den
     /// Papierkorb (`trashedAt = now`); liefert ihre IDs.
-    async fn trash_sole_projects(&mut self, _team: TeamId, _now: DateTime<Utc>) -> AppResult<Vec<Uuid>> {
+    async fn trash_sole_projects(
+        &mut self,
+        _team: TeamId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<Uuid>> {
         unimplemented_repo()
     }
     /// Stellt die Projekte wieder her, die mit dem Team (`trashedAt == trashed_at`) gelöscht wurden.

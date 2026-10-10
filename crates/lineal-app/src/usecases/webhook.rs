@@ -9,11 +9,11 @@ use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
+use crate::ports::repos::StoredEvent;
 use crate::ports::repos::webhook::{
     DeliveryOutcome, DeliveryRecord, DueDelivery, NewDelivery, NewWebhook, WebhookPatch,
     WebhookRecord,
 };
-use crate::ports::repos::StoredEvent;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use base64::Engine;
@@ -136,7 +136,13 @@ impl UrlPolicy {
 
     /// Dev-Modus, wenn die Basis-URL des Servers `http://` ist.
     pub fn for_app(app: &App) -> Self {
-        if app.config.base_url.trim().to_ascii_lowercase().starts_with("http://") {
+        if app
+            .config
+            .base_url
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("http://")
+        {
             Self::DEV
         } else {
             Self::STRICT
@@ -244,7 +250,8 @@ pub fn parse_target_url(raw: &str, policy: UrlPolicy) -> AppResult<Url> {
                 || d.ends_with(".internal")
                 || d.ends_with(".localdomain")
                 || !d.contains('.') && !policy.allow_loopback;
-            if internal && !(policy.allow_loopback && (d == "localhost" || d.ends_with(".localhost")))
+            if internal
+                && !(policy.allow_loopback && (d == "localhost" || d.ends_with(".localhost")))
             {
                 return Err(invalid_url("the target host is not allowed"));
             }
@@ -341,7 +348,9 @@ pub fn map_event(ev: &DomainEvent) -> Option<MappedEvent> {
         team_hint: None,
     };
     Some(match ev {
-        E::IssueCreated { issue_id, team_id, .. } => MappedEvent {
+        E::IssueCreated {
+            issue_id, team_id, ..
+        } => MappedEvent {
             team_hint: Some(*team_id),
             ..m("Issue", "create", issue_id.0)
         },
@@ -428,9 +437,7 @@ pub fn visible_teams_for_hook(
     visibility_of: &dyn Fn(TeamId) -> Option<TeamVisibility>,
 ) -> Option<BTreeSet<TeamId>> {
     if let Some(t) = hook.team_id {
-        return entity_teams
-            .contains(&t)
-            .then(|| BTreeSet::from([t]));
+        return entity_teams.contains(&t).then(|| BTreeSet::from([t]));
     }
     if !hook.all_public_teams {
         return None;
@@ -498,7 +505,11 @@ pub fn build_payload(
 }
 
 /// Vollständiger Body eines Versuchs: Payload plus aktueller `webhookTimestamp` (ms) und `webhookId`.
-pub fn build_body(payload: &Value, webhook_id: WebhookId, now: DateTime<Utc>) -> AppResult<Vec<u8>> {
+pub fn build_body(
+    payload: &Value,
+    webhook_id: WebhookId,
+    now: DateTime<Utc>,
+) -> AppResult<Vec<u8>> {
     let mut v = payload.clone();
     let Some(o) = v.as_object_mut() else {
         return Err(AppError::internal("webhook payload is not an object"));
@@ -563,8 +574,10 @@ fn validate_resource_types(types: &[String]) -> AppResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for t in types {
         if !RESOURCE_TYPES.contains(&t.as_str()) {
-            return Err(AppError::invalid_request(format!("unknown resource type `{t}`"))
-                .with_details(json!({ "field": "resourceTypes", "value": t })));
+            return Err(
+                AppError::invalid_request(format!("unknown resource type `{t}`"))
+                    .with_details(json!({ "field": "resourceTypes", "value": t })),
+            );
         }
         if !out.contains(t) {
             out.push(t.clone());
@@ -596,7 +609,9 @@ impl App {
         match w.team_id {
             // Webhooks nicht sichtbarer Teams (privat, Nicht-Mitglied) sind auch für Admins unsichtbar.
             Some(t) if !snap.visible_team_ids().contains(&t) => Err(webhook_not_found()),
-            Some(t) => snap.require_team(ctx, Action::CreateTeamWebhook, t).map(|_| ()),
+            Some(t) => snap
+                .require_team(ctx, Action::CreateTeamWebhook, t)
+                .map(|_| ()),
             None => snap.require_workspace(ctx, Action::ManageWebhooks),
         }
     }
@@ -626,7 +641,8 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team_id = match &input.team {
             Some(r) => {
-                let team = resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content).await?;
+                let team =
+                    resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content).await?;
                 snap.require_team(ctx, Action::CreateTeamWebhook, team.id)?;
                 Some(team.id)
             }
@@ -814,9 +830,16 @@ impl App {
             .await?
             .iter()
             .any(|d| d.id == delivery);
-        if !known || !tx.webhooks().requeue_delivery(delivery, self.clock.now()).await? {
-            return Err(AppError::not_found("Could not find referenced WebhookDelivery.")
-                .with_details(json!({ "type": "WebhookDelivery" })));
+        if !known
+            || !tx
+                .webhooks()
+                .requeue_delivery(delivery, self.clock.now())
+                .await?
+        {
+            return Err(
+                AppError::not_found("Could not find referenced WebhookDelivery.")
+                    .with_details(json!({ "type": "WebhookDelivery" })),
+            );
         }
         tx.commit().await?;
         Ok(())
@@ -1206,7 +1229,10 @@ mod tests {
             Some(BTreeSet::from([eng]))
         );
         // Workspace-weite Entität (Initiative, User) geht an Workspace-Webhooks.
-        assert_eq!(visible_teams_for_hook(&ws, &[], &vis), Some(BTreeSet::new()));
+        assert_eq!(
+            visible_teams_for_hook(&ws, &[], &vis),
+            Some(BTreeSet::new())
+        );
         // Team-Webhook: nur Daten seines Teams, nie workspace-weite Entitäten.
         let th = hook(Some(eng), false);
         assert_eq!(
@@ -1222,7 +1248,10 @@ mod tests {
             Some(BTreeSet::from([des]))
         );
         // Gelöschtes/unbekanntes Team gilt als nicht öffentlich.
-        assert_eq!(visible_teams_for_hook(&ws, &[TeamId::new_v7()], &|_| None), None);
+        assert_eq!(
+            visible_teams_for_hook(&ws, &[TeamId::new_v7()], &|_| None),
+            None
+        );
     }
 
     #[test]
