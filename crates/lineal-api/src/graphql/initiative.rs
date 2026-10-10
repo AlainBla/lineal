@@ -1,5 +1,6 @@
 //! GraphQL-Teilobjekte des Bereichs `initiative` (WP07): Initiativen (DAG), Projektzuordnung,
 //! Initiative-Updates. Gäste erhalten `forbidden`; Initiativen mit privatem Lead-Team sind für
+//! Nicht-Mitglieder `not_found`.
 
 use super::org::gql_err;
 use super::project::{SimpleRefGql, parse_health};
