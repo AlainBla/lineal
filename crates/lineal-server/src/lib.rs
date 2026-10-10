@@ -16,5 +16,7 @@ pub fn build_router(app: Arc<App>, dev: bool) -> Router {
     let routes = lineal_api::routes(app.clone(), dev)
         .merge(lineal_mcp::router(app.clone()))
         .merge(lineal_sync::router(app.clone()));
-    lineal_api::middleware::apply(routes, app, dev)
+    let mut cfg = lineal_api::middleware::PlatformConfig::new(&app, dev);
+    cfg.require_peer = true; // `serve` liefert ConnectInfo; ohne Peer keine Rate-Limit-Identität
+    lineal_api::middleware::apply_with(routes, app, cfg)
 }

@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use lineal_app::AppError;
 use serde_json::json;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 /// Limits einer Identitätsklasse pro Periode.
@@ -91,13 +91,53 @@ pub struct Decision {
 
 const GC_THRESHOLD: usize = 10_000;
 
+/// Harte Obergrenze der Bucket-Anzahl (Speicherschutz gegen viele erfundene Identitäten).
+pub const MAX_BUCKETS: usize = 100_000;
+
 /// Prozessweiter Bucket-Speicher.
-#[derive(Default)]
 pub struct RateLimiter {
     buckets: Mutex<HashMap<String, Bucket>>,
+    max_buckets: usize,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::with_max_buckets(MAX_BUCKETS)
+    }
+}
+
+/// Bucket-Schlüssel einer Client-IP: IPv4 pro Adresse (/32), IPv6 pro /64 (sonst umgeht ein
+/// Client das Limit durch Adresswechsel innerhalb seines Präfixes); IPv4-mapped IPv6 wie IPv4.
+pub fn ip_bucket(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => format!("v4:{v4}"),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => format!("v4:{v4}"),
+            None => {
+                let s = v6.segments();
+                format!("v6:{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+    }
 }
 
 impl RateLimiter {
+    pub fn with_max_buckets(max_buckets: usize) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            max_buckets: max_buckets.max(10),
+        }
+    }
+
+    /// Anzahl gehaltener Buckets (Tests, Metriken).
+    pub fn len(&self) -> usize {
+        self.buckets.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Entnimmt `cost` Tokens aus dem Bucket `key` (atomar unter dem Mutex).
     pub fn take(
         &self,
@@ -112,11 +152,20 @@ impl RateLimiter {
             .buckets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if map.len() > GC_THRESHOLD {
+        if map.len() > GC_THRESHOLD.min(self.max_buckets / 2) {
             // Volle Buckets sind von neuen nicht zu unterscheiden: verwerfen.
             map.retain(|_, b| {
                 b.tokens + (now_ms - b.updated_ms).max(0) as f64 / 1000.0 * rate < capacity
             });
+        }
+        if map.len() >= self.max_buckets && !map.contains_key(key) {
+            // Immer noch voll: die am längsten unbenutzten 10 % verwerfen (LRU-Näherung).
+            let mut by_age: Vec<(i64, String)> =
+                map.iter().map(|(k, b)| (b.updated_ms, k.clone())).collect();
+            by_age.sort_unstable();
+            for (_, k) in by_age.into_iter().take(self.max_buckets / 10) {
+                map.remove(&k);
+            }
         }
         let b = map.entry(key.to_owned()).or_insert(Bucket {
             tokens: capacity,
@@ -195,7 +244,9 @@ pub fn denied_error(d: &Decision, what: &str) -> AppError {
         .with_details(json!({ "retryAfter": d.retry_after_secs, "limit": d.limit }))
 }
 
-fn client_ip(req: &Request) -> String {
+/// Bucket-Schlüssel der Client-IP; `None`, wenn die Peer-Adresse unbekannt ist (kein
+/// gemeinsamer "unknown"-Bucket für alle).
+fn client_ip(req: &Request) -> Option<String> {
     req.extensions()
         .get::<crate::client_ip::ClientIp>()
         .map(|c| c.0)
@@ -204,7 +255,7 @@ fn client_ip(req: &Request) -> String {
                 .get::<ConnectInfo<SocketAddr>>()
                 .map(|c| c.0.ip())
         })
-        .map_or_else(|| "unknown".to_owned(), |ip| ip.to_string())
+        .map(ip_bucket)
 }
 
 fn exempt(path: &str) -> bool {
@@ -220,6 +271,7 @@ pub async fn middleware(
     if exempt(req.uri().path()) {
         return next.run(req).await;
     }
+    let anonymous_ip = client_ip(&req);
     let (class, key) = match req.extensions().get::<AuthState>() {
         Some(AuthState::Authenticated { ctx, class }) => {
             let id = match ctx.actor {
@@ -230,10 +282,16 @@ pub async fn middleware(
             };
             (*class, format!("user:{id}"))
         }
-        _ => (
-            CredentialClass::Anonymous,
-            format!("ip:{}", client_ip(&req)),
-        ),
+        _ => match anonymous_ip {
+            Some(ip) => (CredentialClass::Anonymous, format!("ip:{ip}")),
+            None if p.cfg.require_peer => {
+                // Produktiv liefert `serve` immer die Peer-Adresse; fehlt sie, ist die
+                // Verdrahtung kaputt. Ablehnen statt alle in einen Bucket zu werfen.
+                return ApiError(AppError::internal("Peer address unavailable.")).into_response();
+            }
+            // Ohne Peer-Adresse (nur Router-Tests) wird nicht anonym begrenzt.
+            None => return next.run(req).await,
+        },
     };
     let limits = p.cfg.rate.for_class(class);
     let now_ms = p.app.clock.now().timestamp_millis();
@@ -287,6 +345,31 @@ mod tests {
         assert!(l.take("k", 2.0, 10.0, 1.0, 5_000).allowed);
         // andere Schlüssel sind unabhängig
         assert!(l.take("other", 2.0, 10.0, 1.0, 0).allowed);
+    }
+
+    #[test]
+    fn ipv6_clients_share_a_bucket_per_64_prefix() {
+        let ip = |s: &str| ip_bucket(s.parse().unwrap());
+        assert_eq!(
+            ip("2001:db8:1:2::1"),
+            ip("2001:db8:1:2:ffff:ffff:ffff:ffff")
+        );
+        assert_ne!(ip("2001:db8:1:2::1"), ip("2001:db8:1:3::1"));
+        assert_ne!(ip("192.0.2.1"), ip("192.0.2.2"));
+        assert_eq!(ip("::ffff:192.0.2.1"), ip("192.0.2.1"));
+    }
+
+    #[test]
+    fn bucket_map_is_bounded_and_evicts_the_oldest() {
+        let l = RateLimiter::with_max_buckets(100);
+        for i in 0..1_000 {
+            // Entnahme lässt die Buckets unvoll: die Bereinigung allein hilft nicht.
+            l.take(&format!("ip:{i}"), 10.0, 3600.0, 1.0, i64::from(i));
+            assert!(l.len() <= 100, "len {} bei {i}", l.len());
+        }
+        // Die jüngsten Identitäten sind noch da (Bucket zählt weiter), die ältesten nicht.
+        assert_eq!(l.take("ip:999", 10.0, 3600.0, 1.0, 2_000).remaining, 8);
+        assert_eq!(l.take("ip:0", 10.0, 3600.0, 1.0, 2_000).remaining, 9);
     }
 
     #[test]

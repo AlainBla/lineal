@@ -427,9 +427,90 @@ async fn forwarded_for_is_honoured_only_behind_a_trusted_proxy() {
 }
 
 #[tokio::test]
+async fn invalid_forwarded_for_behind_a_trusted_proxy_is_rejected_not_pooled() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.trusted_proxies = lineal_api::client_ip::parse_list(&["10.0.0.0/8".to_owned()]);
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    // Der kaputte Header kostet nur diesen Request (400); er belastet keinen Bucket anderer.
+    for _ in 0..3 {
+        let r = send(&router, from_peer("10.0.0.5", "6.6.6.6, unknown")).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    }
+    let ok = send(&router, from_peer("10.0.0.5", "198.51.100.1")).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    assert_eq!(ok.headers["x-ratelimit-requests-remaining"], "599");
+}
+
+#[tokio::test]
+async fn requests_without_peer_address_never_share_a_global_bucket() {
+    let ping = || Request::get("/ping").body(Body::empty()).unwrap();
+    let make = |require_peer: bool| {
+        let app = app_with_keys();
+        let mut cfg = PlatformConfig::new(&app, false);
+        cfg.require_peer = require_peer;
+        cfg.rate.anonymous = ClassLimits {
+            requests: 1.0,
+            complexity: 100.0,
+        };
+        apply_with(
+            Router::new().route("/ping", get(|| async { "pong" })),
+            app,
+            cfg,
+        )
+    };
+    // Produktiv (require_peer): ohne Peer abgelehnt statt in einem "unknown"-Bucket gedrosselt.
+    let strict = make(true);
+    for _ in 0..2 {
+        assert_eq!(
+            send(&strict, ping()).await.status,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+    // Tests: ohne Peer wird nicht anonym begrenzt (kein gemeinsamer Bucket).
+    let lax = make(false);
+    for _ in 0..3 {
+        assert_eq!(send(&lax, ping()).await.status, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn ipv6_privacy_addresses_of_one_prefix_share_the_rate_limit() {
+    let router = limited_router(app_with_keys(), 2.0, 100.0);
+    let from6 = |ip: &str| {
+        let mut req = Request::get("/ping").body(Body::empty()).unwrap();
+        let addr: std::net::SocketAddr = format!("[{ip}]:4000").parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+        req
+    };
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2::1")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2::2")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2:aaaa::3")).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Anderes /64: eigener Bucket.
+    assert_eq!(
+        send(&router, from6("2001:db8:1:9::1")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn request_rate_limit_returns_429_with_headers() {
     let router = limited_router(app_with_keys(), 3.0, 100.0);
-    let ping = || Request::get("/ping").body(Body::empty()).unwrap();
+    let ping = || from_peer("203.0.113.5", "");
     for remaining in [2, 1, 0] {
         let r = send(&router, ping()).await;
         assert_eq!(r.status, StatusCode::OK);

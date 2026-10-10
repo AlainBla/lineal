@@ -9,7 +9,7 @@
 use axum::extract::{ConnectInfo, Request};
 use axum::http::HeaderMap;
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -76,24 +76,35 @@ fn parse_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     Some(chain)
 }
 
+/// `X-Forwarded-For` eines vertrauenswürdigen Proxys ist nicht lesbar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidForwardedFor;
+
 /// Client-IP aus Peer und Headern. Der `Forwarded`-Header (RFC 7239) wird bewusst nicht
 /// ausgewertet, damit nicht zwei Quellen gemischt werden.
-pub fn resolve(peer: IpAddr, headers: &HeaderMap, trusted: &[Cidr]) -> IpAddr {
+///
+/// Ein ungültiger `X-Forwarded-For` hinter einem vertrauenswürdigen Proxy ergibt `Err`; die
+/// Middleware lehnt den Request mit 400 ab. Alternativen wären die Proxy-IP (ein gemeinsamer
+/// Bucket für alle Nutzer hinter dem Proxy: ein kaputter Header sperrt alle aus) oder eine
+/// weiter links stehende, vom Client gefälschte IP; beides wird vermieden.
+pub fn resolve(
+    peer: IpAddr,
+    headers: &HeaderMap,
+    trusted: &[Cidr],
+) -> Result<IpAddr, InvalidForwardedFor> {
     let peer = normalize(peer);
     let is_trusted = |ip: IpAddr| trusted.iter().any(|c| c.contains(ip));
     if !is_trusted(peer) {
-        return peer;
+        return Ok(peer);
     }
-    let Some(chain) = parse_chain(headers) else {
-        return peer;
-    };
-    chain
+    let chain = parse_chain(headers).ok_or(InvalidForwardedFor)?;
+    Ok(chain
         .iter()
         .rev()
         .find(|ip| !is_trusted(**ip))
         .or(chain.first())
         .copied()
-        .unwrap_or(peer)
+        .unwrap_or(peer))
 }
 
 /// Äußerste Middleware: setzt [`ClientIp`] (ohne `ConnectInfo`, z. B. in Router-Tests, nichts).
@@ -103,8 +114,17 @@ pub async fn middleware(
     next: Next,
 ) -> Response {
     if let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() {
-        let ip = resolve(peer.ip(), req.headers(), &trusted);
-        req.extensions_mut().insert(ClientIp(ip));
+        match resolve(peer.ip(), req.headers(), &trusted) {
+            Ok(ip) => {
+                req.extensions_mut().insert(ClientIp(ip));
+            }
+            Err(InvalidForwardedFor) => {
+                return crate::error::ApiError(lineal_app::AppError::invalid_request(
+                    "Invalid X-Forwarded-For header.",
+                ))
+                .into_response();
+            }
+        }
     }
     next.run(req).await
 }
@@ -116,6 +136,10 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    fn res(peer: IpAddr, headers: &HeaderMap, trusted: &[Cidr]) -> IpAddr {
+        resolve(peer, headers, trusted).unwrap()
     }
 
     fn xff(value: &str) -> HeaderMap {
@@ -145,8 +169,8 @@ mod tests {
     fn forged_header_from_untrusted_peer_is_ignored() {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         let h = xff("1.2.3.4");
-        assert_eq!(resolve(ip("203.0.113.9"), &h, &trusted), ip("203.0.113.9"));
-        assert_eq!(resolve(ip("203.0.113.9"), &h, &[]), ip("203.0.113.9"));
+        assert_eq!(res(ip("203.0.113.9"), &h, &trusted), ip("203.0.113.9"));
+        assert_eq!(res(ip("203.0.113.9"), &h, &[]), ip("203.0.113.9"));
     }
 
     #[test]
@@ -154,10 +178,10 @@ mod tests {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         // Client fälscht "6.6.6.6"; der Proxy 10.0.0.5 hängt die echte Adresse an.
         let h = xff("6.6.6.6, 198.51.100.7, 10.0.0.9");
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
         // Ohne Header: Peer.
         assert_eq!(
-            resolve(ip("10.0.0.5"), &HeaderMap::new(), &trusted),
+            res(ip("10.0.0.5"), &HeaderMap::new(), &trusted),
             ip("10.0.0.5")
         );
     }
@@ -175,14 +199,14 @@ mod tests {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         // Entspricht "6.6.6.6, 198.51.100.7, 10.0.0.9" in einem Header.
         let h = multi(&["6.6.6.6", "198.51.100.7, 10.0.0.9"]);
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
         // Der zweite Header (vom Proxy angehängt) zählt, nicht der erste.
         let h = multi(&["198.51.100.7", "10.0.0.9"]);
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
     }
 
     #[test]
-    fn anything_but_a_plain_ip_fails_closed_to_the_peer() {
+    fn anything_but_a_plain_ip_is_rejected_behind_a_trusted_proxy() {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         for bad in [
             "6.6.6.6, 1.2.3.4:5678",
@@ -196,16 +220,21 @@ mod tests {
         ] {
             assert_eq!(
                 resolve(ip("10.0.0.5"), &xff(bad), &trusted),
-                ip("10.0.0.5"),
+                Err(InvalidForwardedFor),
                 "{bad}"
+            );
+            // Von einem nicht vertrauenswürdigen Peer wird der Header gar nicht gelesen.
+            assert_eq!(
+                res(ip("203.0.113.9"), &xff(bad), &trusted),
+                ip("203.0.113.9")
             );
         }
         // Auch ein ungültiger Eintrag in einem zweiten Header macht alles ungültig.
         let h = multi(&["198.51.100.7", "unknown"]);
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.5"));
+        assert!(resolve(ip("10.0.0.5"), &h, &trusted).is_err());
         // Whitespace wird getrimmt.
         assert_eq!(
-            resolve(
+            res(
                 ip("10.0.0.5"),
                 &xff("  198.51.100.7 ,\t10.0.0.9 "),
                 &trusted
@@ -219,16 +248,13 @@ mod tests {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         // Peer als mapped IPv6 gilt als 10.0.0.5 (vertrauenswürdig).
         let h = xff("198.51.100.7");
-        assert_eq!(
-            resolve(ip("::ffff:10.0.0.5"), &h, &trusted),
-            ip("198.51.100.7")
-        );
+        assert_eq!(res(ip("::ffff:10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
         // Mapped Einträge werden abgezogen und das Ergebnis ist normalisiert.
         let h = xff("::ffff:198.51.100.7, ::ffff:10.0.0.9");
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
         // Alle vertrauenswürdig: linkester Eintrag.
         let h = xff("10.0.0.1, ::ffff:10.0.0.2");
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.1"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.1"));
     }
 
     #[test]
@@ -236,8 +262,8 @@ mod tests {
         let trusted = parse_list(&["10.0.0.0/8".to_owned()]);
         let mut h = HeaderMap::new();
         h.insert("forwarded", HeaderValue::from_static("for=6.6.6.6"));
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.5"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("10.0.0.5"));
         h.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.7"));
-        assert_eq!(resolve(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
+        assert_eq!(res(ip("10.0.0.5"), &h, &trusted), ip("198.51.100.7"));
     }
 }

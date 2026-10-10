@@ -25,6 +25,9 @@ pub struct PlatformConfig {
     pub allowed_origins: Vec<String>,
     /// Vertrauenswürdige Proxys für `X-Forwarded-For` ([`crate::client_ip`]).
     pub trusted_proxies: Vec<crate::client_ip::Cidr>,
+    /// Anonyme Requests ohne Peer-Adresse (`ConnectInfo`) ablehnen statt sie unbegrenzt
+    /// durchzulassen. Der Server schaltet das ein; Router-Tests (`oneshot`) haben keinen Peer.
+    pub require_peer: bool,
 }
 
 impl PlatformConfig {
@@ -40,6 +43,7 @@ impl PlatformConfig {
                 &app.config.allowed_origins,
                 &app.config.base_url,
             ),
+            require_peer: false,
             trusted_proxies: crate::client_ip::parse_list(&app.config.trusted_proxies),
             cors_origins: if dev {
                 vec![
