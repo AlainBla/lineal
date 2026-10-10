@@ -69,14 +69,15 @@ pub fn hash_token(token: &str) -> String {
 pub fn extract_token(headers: &HeaderMap) -> Option<(String, CredentialClass)> {
     if let Some(value) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         let value = value.trim();
-        let (raw, bearer) = match value.split_once(' ') {
-            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("bearer") => (rest.trim(), true),
-            _ => (value, false),
+        let raw = match value.split_once(' ') {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("bearer") => rest.trim(),
+            _ => value,
         };
         if !raw.is_empty() {
-            let class = if raw.starts_with("lin_api_") {
-                CredentialClass::ApiKey
-            } else if raw.starts_with("lin_oauth_") || bearer {
+            // Die Klasse (und damit das Rate-Limit) folgt ausschließlich dem Token-Präfix.
+            // Das Präfix ist Teil des gehashten Tokens und damit nicht fälschbar; das Schema
+            // (`Bearer`) bestimmt der Client und darf kein höheres Limit freischalten.
+            let class = if raw.starts_with("lin_oauth_") {
                 CredentialClass::OAuth
             } else {
                 CredentialClass::ApiKey
@@ -244,7 +245,12 @@ mod tests {
                 ("cookie", "lineal_session=tok"),
                 ("authorization", "Bearer k")
             ])),
-            Some(("k".into(), CredentialClass::OAuth))
+            Some(("k".into(), CredentialClass::ApiKey))
+        );
+        // `Bearer` allein schaltet kein höheres (OAuth-)Limit frei.
+        assert_eq!(
+            t(headers(&[("authorization", "Bearer random-token")])),
+            Some(("random-token".into(), CredentialClass::ApiKey))
         );
         assert_eq!(t(headers(&[])), None);
         assert_eq!(t(headers(&[("cookie", "lineal_session=")])), None);

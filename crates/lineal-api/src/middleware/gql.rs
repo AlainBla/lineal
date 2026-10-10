@@ -23,8 +23,17 @@ const MAX_FRAGMENT_DEPTH: usize = 64;
 /// Statische Komplexität nach 09 §3.2 (aufgerundet). Intern in Zehntelpunkten gerechnet,
 /// damit Gleitkomma-Rauschen das Aufrunden nicht verfälscht.
 pub fn complexity(doc: &ExecutableDocument, operation: &SelectionSet, request: &Request) -> u64 {
-    let mut stack = Vec::new();
-    selection_cost(doc, operation, request, &mut stack).div_ceil(10)
+    let mut walk = Walk::default();
+    selection_cost(doc, operation, request, &mut walk).div_ceil(10)
+}
+
+/// Zustand der Kostenberechnung. Fragmentkosten sind kontextfrei (Multiplikatoren wendet der
+/// Aufrufer an) und werden memoisiert: Ohne Cache wäre die Berechnung bei verschachtelten,
+/// mehrfach referenzierten Fragmenten exponentiell (CPU-DoS vor jeder Begrenzung).
+#[derive(Default)]
+struct Walk {
+    stack: Vec<Name>,
+    memo: std::collections::HashMap<Name, u64>,
 }
 
 fn int_arg(
@@ -60,7 +69,7 @@ fn selection_cost(
     doc: &ExecutableDocument,
     set: &SelectionSet,
     request: &Request,
-    stack: &mut Vec<Name>,
+    walk: &mut Walk,
 ) -> u64 {
     let mut total: u64 = 0;
     for sel in &set.items {
@@ -72,16 +81,15 @@ fn selection_cost(
                 if children.items.is_empty() {
                     total += 1;
                 } else if matches!(name, "nodes" | "edges" | "node") {
-                    total = total.saturating_add(selection_cost(doc, children, request, stack));
+                    total = total.saturating_add(selection_cost(doc, children, request, walk));
                 } else if is_connection(field) {
                     let n = int_arg(field, "first", request)
                         .or_else(|| int_arg(field, "last", request))
                         .unwrap_or(DEFAULT_CONNECTION_SIZE);
-                    let inner = selection_cost(doc, children, request, stack);
+                    let inner = selection_cost(doc, children, request, walk);
                     total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
                 } else {
-                    total =
-                        total.saturating_add(10 + selection_cost(doc, children, request, stack));
+                    total = total.saturating_add(10 + selection_cost(doc, children, request, walk));
                 }
             }
             Selection::InlineFragment(f) => {
@@ -89,24 +97,25 @@ fn selection_cost(
                     doc,
                     &f.node.selection_set.node,
                     request,
-                    stack,
+                    walk,
                 ));
             }
             Selection::FragmentSpread(s) => {
                 let name = &s.node.fragment_name.node;
+                if let Some(cost) = walk.memo.get(name) {
+                    total = total.saturating_add(*cost);
+                    continue;
+                }
                 // Zyklen sind ungültig (die Validierung meldet sie); hier nur nicht rekursieren.
-                if stack.contains(name) || stack.len() > MAX_FRAGMENT_DEPTH {
+                if walk.stack.contains(name) || walk.stack.len() > MAX_FRAGMENT_DEPTH {
                     continue;
                 }
                 if let Some(frag) = doc.fragments.get(name) {
-                    stack.push(name.clone());
-                    total = total.saturating_add(selection_cost(
-                        doc,
-                        &frag.node.selection_set.node,
-                        request,
-                        stack,
-                    ));
-                    stack.pop();
+                    walk.stack.push(name.clone());
+                    let cost = selection_cost(doc, &frag.node.selection_set.node, request, walk);
+                    walk.stack.pop();
+                    walk.memo.insert(name.clone(), cost);
+                    total = total.saturating_add(cost);
                 }
             }
         }
@@ -240,6 +249,23 @@ mod tests {
         let doc = parse_query(query).unwrap();
         let op = operation(&doc, None).unwrap();
         complexity(&doc, &op.selection_set.node, &request)
+    }
+
+    #[test]
+    fn nested_fragment_fanout_is_linear_not_exponential() {
+        // 40 Ebenen, jede referenziert die nächste zweimal: ohne Memo 2^40 Schritte.
+        let mut q = String::from("query { ...F0 }\n");
+        for i in 0..40 {
+            q.push_str(&format!(
+                "fragment F{i} on Query {{ ...F{n} ...F{n} }}\n",
+                n = i + 1
+            ));
+        }
+        q.push_str("fragment F40 on Query { a }\n");
+        let start = std::time::Instant::now();
+        let cost = cost_of(&q, serde_json::json!({}));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert!(cost > 0);
     }
 
     #[test]

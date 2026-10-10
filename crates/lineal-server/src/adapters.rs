@@ -135,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_app_wires_a_working_blob_store() {
-        let cfg = Config::from_lookup(|_| None).unwrap();
+        let cfg = Config::from_lookup(|k| (k == "LINEAL_DEV").then(|| "1".into())).unwrap();
         let app = build_app(Arc::new(lineal_testkit::FakeStore::new()), &cfg);
         let url = app
             .blobs

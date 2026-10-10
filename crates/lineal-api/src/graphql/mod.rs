@@ -97,8 +97,14 @@ pub fn build_schema(app: Arc<App>) -> LinealSchema {
         EmptySubscription,
     )
     .data(app)
+    // Zweite Verteidigungslinie neben der eigenen Komplexitätsprüfung (middleware::gql).
+    .limit_depth(MAX_QUERY_DEPTH)
+    .limit_recursive_depth(MAX_QUERY_DEPTH * 2)
     .finish()
 }
+
+/// Maximale Verschachtelungstiefe einer Abfrage.
+pub const MAX_QUERY_DEPTH: usize = 16;
 
 /// SDL ohne laufende App (für `lineal schema-export`).
 pub fn schema_sdl() -> String {
