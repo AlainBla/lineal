@@ -1251,7 +1251,7 @@ async fn project_update_reaches_project_subscribers(pool: PgPool) {
         .unwrap();
     sqlx::query(
         "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id, creator_id) \
-         VALUES ($1,$2,'Checkout v2',$3,1,$4,$5)",
+         VALUES ($1,$2,'Notification Test Project',$3,101,$4,$5)",
     )
     .bind(project)
     .bind(e.d.org.0)
@@ -1311,7 +1311,7 @@ async fn project_update_reaches_project_subscribers(pool: PgPool) {
         .await
         .unwrap()
         .items[0];
-    assert_eq!(item.title, "Checkout v2");
+    assert_eq!(item.title, "Notification Test Project");
     assert_eq!(item.view.n.category, "postsAndUpdates");
     assert!(item.url.contains("/acme/project/"));
 }

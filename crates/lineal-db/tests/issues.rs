@@ -831,9 +831,16 @@ async fn exec(fx: &Fx, sql: &str, binds: &[Uuid]) {
 async fn planning(fx: &Fx, team: Uuid, project_teams: &[Uuid]) -> (Uuid, Uuid, Uuid) {
     let (cycle, project, milestone) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let org = fx.data.org.0;
+    // Der Seed (WP07) legt Cycles für ENG an; für diesen Test einen eigenen, garantiert
+    // aktiven Cycle ohne Überlappung verwenden.
+    sqlx::query("DELETE FROM cycle WHERE team_id = $1")
+        .bind(team)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO cycle (id, organization_id, team_id, number, name, starts_at, ends_at) \
-         VALUES ($1, $2, $3, 1, 'Sprint 1', $4, $5)",
+         VALUES ($1, $2, $3, 101, 'Sprint 101', $4, $5)",
     )
     .bind(cycle)
     .bind(org)
@@ -849,7 +856,7 @@ async fn planning(fx: &Fx, team: Uuid, project_teams: &[Uuid]) -> (Uuid, Uuid, U
         .unwrap();
     sqlx::query(
         "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id) \
-         VALUES ($1, $2, 'Checkout v2', $3, 1, $4)",
+         VALUES ($1, $2, 'Issue Test Project', $3, 101, $4)",
     )
     .bind(project)
     .bind(org)
@@ -927,8 +934,8 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         .update_issue(
             &alice(),
             UpdateIssueInput {
-                cycle: Some(Some("Sprint 1".into())),
-                project: Some(Some("P-ENG-1".into())),
+                cycle: Some(Some("Sprint 101".into())),
+                project: Some(Some("P-ENG-101".into())),
                 milestone: Some(Some(milestone.to_string())),
                 ..update("ENG-1")
             },
@@ -940,7 +947,7 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
     assert_eq!(ok.issue.project_milestone_id.map(|m| m.0), Some(milestone));
     assert_eq!(ok.issue.state_type, StateType::Unstarted);
     assert!(ok.issue.added_to_cycle_at.is_some() && ok.issue.added_to_project_at.is_some());
-    assert_eq!(ok.extras.project_identifier.as_deref(), Some("P-ENG-1"));
+    assert_eq!(ok.extras.project_identifier.as_deref(), Some("P-ENG-101"));
     // Projektwechsel leert den Meilenstein; Projekt entfernen ebenso
     let cleared = fx
         .app
@@ -966,7 +973,7 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
                 .update_issue(
                     &bob(),
                     UpdateIssueInput {
-                        project: Some(Some("Checkout v2".into())),
+                        project: Some(Some("Issue Test Project".into())),
                         ..update("WEB-1")
                     }
                 )
@@ -979,7 +986,7 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         .update_issue(
             &alice(),
             UpdateIssueInput {
-                project: Some(Some("Checkout v2".into())),
+                project: Some(Some("Issue Test Project".into())),
                 ..update("ENG-1")
             },
         )
@@ -990,7 +997,7 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         .list_issues(
             &alice(),
             ListIssuesInput {
-                project: Some("P-ENG-1".into()),
+                project: Some("P-ENG-101".into()),
                 limit: 50,
                 ..Default::default()
             },
@@ -1003,7 +1010,7 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         .list_issues(
             &alice(),
             ListIssuesInput {
-                cycle: Some("Sprint 1".into()),
+                cycle: Some("Sprint 101".into()),
                 team: Some("ENG".into()),
                 limit: 50,
                 ..Default::default()
