@@ -114,27 +114,23 @@ pub(crate) fn require_manage(
     action: Action,
     project_teams: &[TeamId],
 ) -> AppResult<()> {
-    let visible = snap.visible_team_ids();
-    let accessible: Vec<TeamId> = project_teams
-        .iter()
-        .copied()
-        .filter(|t| visible.contains(t))
-        .collect();
-    if accessible.is_empty() {
+    if project_teams.is_empty() {
         return Err(crate::policy::team_not_found());
     }
-    let active: Vec<TeamId> = accessible
+    // Jede Änderung braucht das Recht für ALLE Teams des Projekts (`not_found` vor `forbidden`).
+    // Stillgelegte Teams blockieren nur, wenn alle Teams stillgelegt sind (Projekt read-only).
+    let active: Vec<TeamId> = project_teams
         .iter()
         .copied()
         .filter(|t| snap.tree.get(*t).is_some_and(|t| t.retired_at.is_none()))
         .collect();
-    if active.is_empty() {
-        // Alle zugänglichen Teams sind stillgelegt: `team_retired` kommt aus der Policy.
-        snap.require_team(ctx, action, accessible[0])?;
-        return Err(AppError::forbidden("The project is read-only.")
-            .with_details(json!({ "reason": "team_retired" })));
+    let to_check: &[TeamId] = if active.is_empty() { project_teams } else { &active };
+    // Unzugängliche Teams (auch stillgelegte) liefern zuerst `not_found`.
+    let visible = snap.visible_team_ids();
+    if project_teams.iter().any(|t| !visible.contains(t)) {
+        return Err(crate::policy::team_not_found());
     }
-    snap.require_teams(ctx, action, &active)?;
+    snap.require_teams(ctx, action, to_check)?;
     Ok(())
 }
 
@@ -146,8 +142,43 @@ fn writable(p: &Project) -> AppResult<()> {
     Ok(())
 }
 
+/// Entfernt aktive Inhalte aus einfachem Text (Name, Kurzbeschreibung, Titel).
+pub(crate) fn clean_text(s: &str) -> String {
+    lineal_domain::rules::markdown::sanitize(s.trim()).trim().to_owned()
+}
+
+/// Icon: Name oder Emoji-Code (`Rocket`, `:eagle:`) nach Allowlist.
+pub(crate) fn validate_icon(i: &str) -> AppResult<Option<String>> {
+    if i.is_empty() {
+        return Ok(None);
+    }
+    let ok = i.len() <= 64
+        && i.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-'));
+    if ok {
+        Ok(Some(i.to_owned()))
+    } else {
+        Err(AppError::invalid_request("icon must be an icon name or emoji code")
+            .with_details(json!({ "field": "icon" })))
+    }
+}
+
+/// Externer Link: nur http/https und sicheres Schema.
+pub(crate) fn validate_link(url: &str, title: &str) -> AppResult<(String, String)> {
+    let lower = url.trim().to_lowercase();
+    let ok = (lower.starts_with("http://") || lower.starts_with("https://"))
+        && lineal_domain::rules::markdown::is_safe_url(url.trim());
+    if !ok {
+        return Err(AppError::invalid_request("links must use http or https")
+            .with_details(json!({ "field": "links", "url": url })));
+    }
+    let t = clean_text(title);
+    Ok((url.trim().to_owned(), if t.is_empty() { url.trim().to_owned() } else { t }))
+}
+
 fn validate_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
+    let n = clean_text(name);
+    let n = n.as_str();
     if n.is_empty() || n.chars().count() > 255 {
         return Err(AppError::invalid_request("name must be 1-255 characters")
             .with_details(json!({ "field": "name" })));
@@ -156,11 +187,12 @@ fn validate_name(name: &str) -> AppResult<String> {
 }
 
 fn validate_summary(s: &str) -> AppResult<Option<String>> {
+    let s = clean_text(s);
     if s.chars().count() > 255 {
         return Err(AppError::invalid_request("summary must be at most 255 characters")
             .with_details(json!({ "field": "summary" })));
     }
-    Ok((!s.is_empty()).then(|| s.to_owned()))
+    Ok((!s.is_empty()).then_some(s))
 }
 
 fn validate_color(c: &str) -> AppResult<()> {
@@ -262,17 +294,27 @@ pub(crate) async fn resolve_labels(
     Ok(out)
 }
 
-/// Ob ein Gast als Lead/Mitglied zulässig ist (Zugriff auf mindestens ein Projekt-Team).
-async fn check_member_allowed(tx: &mut dyn Tx, user: &User, teams: &[TeamId]) -> AppResult<()> {
-    if user.role != UserRole::Guest {
-        return Ok(());
-    }
-    let mine = tx.teams().list_memberships_of_user(user.id).await?;
-    if mine.iter().any(|m| teams.contains(&m.team_id)) {
+/// Lead/Mitglieder brauchen Zugriff auf mindestens ein Projekt-Team (docs/04 §2.2).
+async fn check_member_allowed(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    user: &User,
+    teams: &[TeamId],
+) -> AppResult<()> {
+    let memberships = tx.teams().list_memberships_of_user(user.id).await?;
+    let view = crate::policy::ActorView::new(
+        crate::context::Actor::User {
+            id: user.id,
+            role: user.role,
+        },
+        &memberships,
+    );
+    let visible = crate::policy::compute_visible_team_ids(&view, &snap.tree);
+    if teams.iter().any(|t| visible.contains(t)) {
         Ok(())
     } else {
         Err(AppError::invalid_request(
-            "A guest needs access to at least one team of the project.",
+            "The user needs access to at least one team of the project.",
         )
         .with_details(json!({ "field": "lead", "user": user.id.to_string() })))
     }
@@ -561,7 +603,7 @@ impl App {
         let lead = match &input.lead {
             Some(Some(r)) => {
                 let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
-                check_member_allowed(tx, &u, &ids).await?;
+                check_member_allowed(tx, snap, &u, &ids).await?;
                 Some(u)
             }
             _ => None,
@@ -610,7 +652,7 @@ impl App {
                 description: summary.flatten(),
                 content,
                 color: input.color.clone(),
-                icon: input.icon.clone().filter(|i| !i.is_empty()),
+                icon: input.icon.as_deref().map(validate_icon).transpose()?.flatten(),
                 status_id: status.id,
                 priority: input.priority.unwrap_or(0),
                 sort_order: now.timestamp_millis() as f64,
@@ -641,7 +683,8 @@ impl App {
             emit(tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i.id }).await?;
         }
         for (url, title) in &input.links {
-            tx.projects().add_link(id, url, title, creator, now).await?;
+            let (url, title) = validate_link(url, title)?;
+            tx.projects().add_link(id, &url, &title, creator, now).await?;
         }
         emit(tx, ctx, DomainEvent::ProjectCreated { project_id: id }).await?;
         Ok(id)
@@ -780,7 +823,7 @@ impl App {
             changed = true;
         }
         if let Some(i) = &input.icon {
-            patch.icon = Some((!i.is_empty()).then(|| i.clone()));
+            patch.icon = Some(validate_icon(i)?);
             changed = true;
         }
         if let Some(p) = input.priority {
@@ -882,7 +925,7 @@ impl App {
                 None => patch.lead_id = Some(None),
                 Some(r) => {
                     let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
-                    check_member_allowed(tx, &u, &final_teams).await?;
+                    check_member_allowed(tx, snap, &u, &final_teams).await?;
                     patch.lead_id = Some(Some(u.id));
                     new_lead_user = Some(u.id);
                 }
@@ -945,8 +988,9 @@ impl App {
             changed = true;
         }
         for (url, title) in &input.links {
+            let (url, title) = validate_link(url, title)?;
             tx.projects()
-                .add_link(project.id, url, title, resolve::user::actor_user_id(ctx), now)
+                .add_link(project.id, &url, &title, resolve::user::actor_user_id(ctx), now)
                 .await?;
             changed = true;
         }

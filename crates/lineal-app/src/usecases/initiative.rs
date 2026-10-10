@@ -170,7 +170,8 @@ fn graph_error(
 }
 
 fn validate_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
+    let n = super::project::clean_text(name);
+    let n = n.as_str();
     if n.is_empty() || n.chars().count() > 255 {
         return Err(AppError::invalid_request("name must be 1-255 characters")
             .with_details(json!({ "field": "name" })));
@@ -459,6 +460,14 @@ impl App {
         snap.require_workspace(ctx, Action::ManageInitiatives)?;
         let limits = require_enabled(&mut *tx).await?;
         let now = self.clock.now();
+        let input = &SaveInitiativeInput {
+            summary: input.summary.as_deref().map(super::project::clean_text),
+            icon: match input.icon.as_deref() {
+                Some(i) => Some(super::project::validate_icon(i)?.unwrap_or_default()),
+                None => None,
+            },
+            ..input.clone()
+        };
         if let Some(s) = &input.summary
             && s.chars().count() > 255
         {
