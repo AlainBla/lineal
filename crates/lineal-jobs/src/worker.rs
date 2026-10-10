@@ -5,10 +5,8 @@ use chrono::Duration as ChronoDuration;
 use lineal_app::App;
 use lineal_app::AppResult;
 use lineal_app::ports::repos::NewJob;
-use lineal_domain::ids::EventId;
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 const PERIODIC_PREFIX: &str = "periodic:";
@@ -57,8 +55,6 @@ pub struct Worker {
     consumers: Vec<Arc<dyn EventConsumer>>,
     periodic: Vec<Arc<dyn PeriodicJob>>,
     cfg: WorkerConfig,
-    /// Fehlversuche je (Konsument, Event); nur im Speicher (nach einem Neustart zählt es neu).
-    failures: Mutex<HashMap<(&'static str, EventId), u32>>,
 }
 
 impl Worker {
@@ -79,31 +75,7 @@ impl Worker {
             consumers,
             periodic,
             cfg,
-            failures: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Zählt einen Fehlversuch; `true`, wenn das Limit erreicht ist und das Event aufgegeben wird.
-    fn record_failure(&self, consumer: &'static str, event: EventId) -> bool {
-        let mut map = self
-            .failures
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let attempts = map.entry((consumer, event)).or_insert(0);
-        *attempts += 1;
-        if *attempts >= self.cfg.max_event_attempts {
-            map.remove(&(consumer, event));
-            true
-        } else {
-            false
-        }
-    }
-
-    fn clear_failures(&self, consumer: &'static str, event: EventId) {
-        self.failures
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&(consumer, event));
     }
 
     /// Ein Durchlauf: Outbox verteilen, periodische Jobs einplanen, fällige Jobs ausführen.
@@ -158,22 +130,29 @@ impl Worker {
             let mut ok_ids = Vec::with_capacity(events.len());
             for ev in &events {
                 match consumer.handle(&self.app, ev).await {
-                    Ok(()) => {
-                        self.clear_failures(consumer.name(), ev.id);
-                        ok_ids.push(ev.id);
+                    Ok(()) => ok_ids.push(ev.id),
+                    Err(e) => {
+                        // Fehlversuche stehen in `outbox_delivery` und überleben einen Neustart.
+                        let attempts = tx
+                            .outbox()
+                            .record_failure(consumer.name(), ev.id, &e.to_string())
+                            .await?;
+                        let limit = i32::try_from(self.cfg.max_event_attempts).unwrap_or(i32::MAX);
+                        if attempts >= limit {
+                            tracing::error!(
+                                consumer = consumer.name(), event = %ev.id, error = %e,
+                                attempts,
+                                "consumer gave up on event (dead letter), marked as delivered"
+                            );
+                            tx.outbox().mark_dead_letter(consumer.name(), ev.id).await?;
+                            delivered += 1;
+                        } else {
+                            tracing::warn!(
+                                consumer = consumer.name(), event = %ev.id, error = %e, attempts,
+                                "consumer failed, event stays undelivered"
+                            );
+                        }
                     }
-                    Err(e) if self.record_failure(consumer.name(), ev.id) => {
-                        tracing::error!(
-                            consumer = consumer.name(), event = %ev.id, error = %e,
-                            attempts = self.cfg.max_event_attempts,
-                            "consumer gave up on event (dead letter), marked as delivered"
-                        );
-                        ok_ids.push(ev.id);
-                    }
-                    Err(e) => tracing::warn!(
-                        consumer = consumer.name(), event = %ev.id, error = %e,
-                        "consumer failed, event stays undelivered"
-                    ),
                 }
             }
             tx.outbox().mark_delivered(consumer.name(), &ok_ids).await?;

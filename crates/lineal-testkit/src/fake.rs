@@ -123,6 +123,18 @@ impl OutboxRepo for FakeTx {
     async fn mark_delivered(&mut self, _consumer: &str, _ids: &[EventId]) -> AppResult<()> {
         Ok(())
     }
+    async fn record_failure(&mut self, _c: &str, _e: EventId, _err: &str) -> AppResult<i32> {
+        Ok(1)
+    }
+    async fn mark_dead_letter(&mut self, _consumer: &str, _event: EventId) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_dead_letters(
+        &mut self,
+        _limit: i64,
+    ) -> AppResult<Vec<lineal_app::ports::repos::outbox::DeadLetter>> {
+        Ok(vec![])
+    }
     async fn mark_processed(&mut self, _consumers: &[String]) -> AppResult<u64> {
         Ok(0)
     }

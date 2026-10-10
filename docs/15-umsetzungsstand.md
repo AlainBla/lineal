@@ -60,7 +60,7 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 
 ### 3.3 Hintergrundjobs
 
-Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min), `purge` (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).
+Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in `outbox_delivery.attempts`/`last_error` und überleben Neustarts; nach `max_event_attempts` (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit `last_error`, abfragbar über `OutboxRepo::list_dead_letters`). Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min), `purge` (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).
 
 ## 4. Sicherheitsmaßnahmen
 

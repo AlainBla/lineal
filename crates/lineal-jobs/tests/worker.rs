@@ -99,3 +99,70 @@ async fn worker_delivers_each_event_once_per_consumer_and_runs_periodic_once(poo
         (3, 3, 1)
     );
 }
+
+/// Schlägt immer fehl; zählt die Aufrufe.
+struct Failing(Arc<AtomicUsize>);
+
+#[async_trait]
+impl EventConsumer for Failing {
+    fn name(&self) -> &'static str {
+        "failing"
+    }
+    async fn handle(&self, _app: &App, _ev: &StoredEvent) -> AppResult<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(lineal_app::AppError::internal(
+            "boom: downstream unavailable",
+        ))
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn dead_letter_limit_survives_a_worker_restart(pool: PgPool) {
+    let app = test_app(Arc::new(PgStore::new(pool)));
+    let mut tx = app.store.begin(OrgId::new_v7()).await.unwrap();
+    tx.outbox()
+        .push(NewEvent::new(
+            DomainEvent::IssueCreated {
+                issue_id: IssueId::new_v7(),
+                team_id: TeamId::new_v7(),
+                mentioned_user_ids: vec![],
+            },
+            EventOrigin::User,
+        ))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let worker = |app: &Arc<App>| {
+        Worker::with(
+            app.clone(),
+            vec![Arc::new(Failing(calls.clone()))],
+            vec![],
+            WorkerConfig {
+                max_event_attempts: 3,
+                ..WorkerConfig::default()
+            },
+        )
+    };
+    // Zwei Versuche mit dem ersten Worker ...
+    let first = worker(&app);
+    for _ in 0..2 {
+        assert_eq!(first.tick().await.unwrap().deliveries, 0);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // ... ein "Neustart" (neuer Worker, leerer Speicher) zählt weiter: der dritte Versuch gibt auf.
+    let second = worker(&app);
+    assert_eq!(second.tick().await.unwrap().deliveries, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    // Danach wird das Event nicht mehr angefasst.
+    assert_eq!(second.tick().await.unwrap().deliveries, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+    let mut tx = app.store.begin_system().await.unwrap();
+    let dead = tx.outbox().list_dead_letters(10).await.unwrap();
+    assert_eq!(dead.len(), 1);
+    assert_eq!(dead[0].consumer, "failing");
+    assert_eq!(dead[0].attempts, 3);
+    assert!(dead[0].last_error.contains("boom"));
+}
