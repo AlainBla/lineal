@@ -300,13 +300,15 @@ impl TriageRepo for PgTx {
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(row.map_or_else(IssueAutomation::default, |r| IssueAutomation {
-            auto_closed_by_parent_closing: r.0,
-            sla_rule_id: r.1,
-            sla_set_notified_at: r.2,
-            sla_high_risk_notified_at: r.3,
-            sla_breached_notified_at: r.4,
-        }))
+        Ok(
+            row.map_or_else(IssueAutomation::default, |r| IssueAutomation {
+                auto_closed_by_parent_closing: r.0,
+                sla_rule_id: r.1,
+                sla_set_notified_at: r.2,
+                sla_high_risk_notified_at: r.3,
+                sla_breached_notified_at: r.4,
+            }),
+        )
     }
 
     async fn set_closed_by_parent(&mut self, issue: IssueId, value: bool) -> AppResult<()> {
@@ -323,13 +325,17 @@ impl TriageRepo for PgTx {
     }
 
     async fn set_sla_rule(&mut self, issue: IssueId, rule: Option<Uuid>) -> AppResult<()> {
-        sqlx::query("UPDATE issue SET sla_rule_id = $3 WHERE organization_id = $1 AND id = $2")
-            .bind(self.org.0)
-            .bind(issue.0)
-            .bind(rule)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE issue SET sla_rule_id = $3, sla_set_notified_at = NULL, \
+             sla_high_risk_notified_at = NULL, sla_breached_notified_at = NULL \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(rule)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 
@@ -350,6 +356,26 @@ impl TriageRepo for PgTx {
         .bind(self.org.0)
         .bind(issue.0)
         .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn set_sla_thresholds(
+        &mut self,
+        issue: IssueId,
+        medium: DateTime<Utc>,
+        high: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE issue SET sla_medium_risk_at = $3, sla_high_risk_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(medium)
+        .bind(high)
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -505,9 +531,12 @@ impl TriageRepo for PgTx {
 
     async fn orgs_with_sla(&mut self) -> AppResult<Vec<OrgId>> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT DISTINCT organization_id FROM issue WHERE sla_breaches_at IS NOT NULL \
-             AND state_type NOT IN ('completed', 'canceled', 'duplicate') AND archived_at IS NULL AND NOT trashed \
-             ORDER BY organization_id",
+            "SELECT DISTINCT organization_id FROM ( \
+               SELECT organization_id FROM team WHERE sla_enabled AND NOT trashed \
+               UNION ALL \
+               SELECT organization_id FROM issue WHERE sla_breaches_at IS NOT NULL \
+                 AND state_type NOT IN ('completed', 'canceled', 'duplicate') AND archived_at IS NULL AND NOT trashed \
+             ) o ORDER BY organization_id",
         )
         .fetch_all(&mut *self.tx)
         .await
@@ -564,6 +593,33 @@ impl TriageRepo for PgTx {
                 in_unfinished_project: p,
             })
             .collect())
+    }
+
+    async fn auto_close_info(
+        &mut self,
+        issue: IssueId,
+        now: DateTime<Utc>,
+    ) -> AppResult<AutoCloseCandidate> {
+        let row: Option<(bool, bool)> = sqlx::query_as(
+            "SELECT \
+               EXISTS (SELECT 1 FROM cycle c WHERE c.id = i.cycle_id AND c.completed_at IS NULL \
+                       AND c.starts_at <= $3 AND $3 < c.ends_at), \
+               (i.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project p JOIN project_status ps ON ps.id = p.status_id \
+                       WHERE p.id = i.project_id AND ps.type NOT IN ('completed', 'canceled'))) \
+             FROM issue i WHERE i.organization_id = $1 AND i.id = $2",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(now)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let (c, p) = row.unwrap_or((false, false));
+        Ok(AutoCloseCandidate {
+            issue_id: issue,
+            in_active_cycle: c,
+            in_unfinished_project: p,
+        })
     }
 
     async fn auto_archive_candidates(
@@ -632,6 +688,30 @@ impl TriageRepo for PgTx {
         )
         .bind(self.org.0)
         .bind(now)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(IssueId).collect())
+    }
+
+    async fn sla_rule_candidates(
+        &mut self,
+        since: DateTime<Utc>,
+        after: Option<IssueId>,
+        limit: i64,
+    ) -> AppResult<Vec<IssueId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT i.id FROM issue i JOIN team t ON t.id = i.team_id \
+             WHERE i.organization_id = $1 AND t.sla_enabled \
+               AND i.state_type NOT IN ('completed', 'canceled', 'duplicate') \
+               AND i.archived_at IS NULL AND NOT i.trashed AND i.updated_at >= $2 \
+               AND ($3::uuid IS NULL OR i.id > $3) \
+             ORDER BY i.id LIMIT $4",
+        )
+        .bind(self.org.0)
+        .bind(since)
+        .bind(after.map(|i| i.0))
         .bind(limit)
         .fetch_all(&mut *self.tx)
         .await

@@ -112,8 +112,34 @@ fn transition_error(e: DomainError) -> AppError {
 }
 
 /// Statuswechsel mit Zeitstempeln und `sortOrder` (docs/03 §1.6, §12). `explicit_sort` hat Vorrang.
+///
+/// Zusätzlich zur Kernlogik ([`change_state_core`]) laufen hier die Automationen von WP12:
+/// Auto-Cycle (docs/04 §1.6), Parent-/Child-Auto-Close (docs/03 §3.4) und die Triage-
+/// Verantwortung beim Eintritt in Triage (docs/03 §10.6). Automatisch geänderte Issues werden
+/// in der Transaktion des Aufrufers gespeichert; `issue` selbst speichert der Aufrufer.
 #[allow(clippy::too_many_arguments)]
 pub async fn change_state(
+    tx: &mut dyn Tx,
+    team: &Team,
+    issue: &mut Issue,
+    new: &WorkflowState,
+    source: TransitionSource,
+    explicit_sort: Option<f64>,
+    now: DateTime<Utc>,
+    check: bool,
+) -> AppResult<()> {
+    if new.id == issue.state_id {
+        return Ok(());
+    }
+    let old = issue.state_type;
+    change_state_core(tx, team, issue, new, source, explicit_sort, now, check).await?;
+    crate::usecases::triage::automation::after_state_change(tx, team, issue, old, now).await
+}
+
+/// Kern des Statuswechsels ohne Parent-/Child- und Triage-Automationen (Zeitstempel,
+/// `sortOrder`, Auto-Cycle). Wird auch für automatisch geänderte Issues benutzt.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn change_state_core(
     tx: &mut dyn Tx,
     team: &Team,
     issue: &mut Issue,
@@ -180,6 +206,14 @@ pub async fn change_state(
     issue.state_id = new.id;
     issue.state_type = new.state_type;
     issue.state_entered_at = now;
+    // Auto-Cycle (docs/04 §1.6): nur Issues ohne Cycle.
+    if issue.cycle_id.is_none()
+        && let Some(c) =
+            crate::usecases::cycle::auto_cycle_for_state(tx, team, new.state_type, now).await?
+    {
+        issue.cycle_id = Some(c.id);
+        issue.added_to_cycle_at = Some(now);
+    }
     Ok(())
 }
 

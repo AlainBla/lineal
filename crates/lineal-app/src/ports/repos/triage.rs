@@ -237,6 +237,7 @@ pub trait TriageRepo: Send {
     async fn set_closed_by_parent(&mut self, _issue: IssueId, _value: bool) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Setzt die auslösende Regel und leert die Meldemarken (ein neues SLA meldet neu).
     async fn set_sla_rule(&mut self, _issue: IssueId, _rule: Option<Uuid>) -> AppResult<()> {
         unimplemented_repo()
     }
@@ -245,6 +246,16 @@ pub trait TriageRepo: Send {
         _issue: IssueId,
         _marker: SlaMarker,
         _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Schreibt die abgeleiteten Risikoschwellen (`version + 1`, aber ohne `updated_at`: ein
+    /// Job darf die Inaktivität des Issues nicht zurücksetzen).
+    async fn set_sla_thresholds(
+        &mut self,
+        _issue: IssueId,
+        _medium: DateTime<Utc>,
+        _high: DateTime<Utc>,
     ) -> AppResult<()> {
         unimplemented_repo()
     }
@@ -287,7 +298,7 @@ pub trait TriageRepo: Send {
     async fn orgs_with_trashed_issues(&mut self) -> AppResult<Vec<OrgId>> {
         unimplemented_repo()
     }
-    /// Workspaces mit offenem SLA-Issue (mandantenübergreifend).
+    /// Workspaces mit SLA-Team oder offenem SLA-Issue (mandantenübergreifend).
     async fn orgs_with_sla(&mut self) -> AppResult<Vec<OrgId>> {
         unimplemented_repo()
     }
@@ -309,6 +320,14 @@ pub trait TriageRepo: Send {
     ) -> AppResult<Vec<AutoCloseCandidate>> {
         unimplemented_repo()
     }
+    /// Cycle- und Projektangaben eines einzelnen Issues für die Auto-Close-Ausnahmen.
+    async fn auto_close_info(
+        &mut self,
+        _issue: IssueId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<AutoCloseCandidate> {
+        unimplemented_repo()
+    }
     /// Geschlossene Issues, die nach docs/03 §9.2 archiviert werden dürfen.
     async fn auto_archive_candidates(
         &mut self,
@@ -328,6 +347,16 @@ pub trait TriageRepo: Send {
     }
     /// Offene Issues mit SLA, die eine Meldung oder Neuberechnung der Schwellen brauchen.
     async fn sla_due(&mut self, _now: DateTime<Utc>, _limit: i64) -> AppResult<Vec<IssueId>> {
+        unimplemented_repo()
+    }
+    /// Offene Issues in Teams mit aktiviertem SLA, die seit `since` geändert wurden
+    /// (Kandidaten der Regelauswertung), aufsteigend nach ID ab `after`.
+    async fn sla_rule_candidates(
+        &mut self,
+        _since: DateTime<Utc>,
+        _after: Option<IssueId>,
+        _limit: i64,
+    ) -> AppResult<Vec<IssueId>> {
         unimplemented_repo()
     }
     /// Triage-Issues, deren Snooze abgelaufen ist.
