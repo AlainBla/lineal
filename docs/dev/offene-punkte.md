@@ -69,3 +69,5 @@ WP12-Leftovers:
 WP10-Leftovers:
 - Dokument-Kaskade (trash_documents_of/restore_documents_of) in delete_issue, set_project_trashed, Team-Löschen einhängen -> Orchestrator/WP16.
 - Snapshot-Bündelung, Dokument-Mentions/Abos, documentMoved, CRDT; useDefaultTemplate API; Form-Templates; get_issue.attachments/documents einhängen.
+WP11-Leftovers: ancestors.some nur id; Favoriten-Umsortieren; View-Abos; View-Archiv bei Team-Löschung; Eigentümerwechsel; Suche 'simple' statt Stemming; Triage-Ausblendung flache MCP-Params.
+Erledigt durch Orchestrator: GraphQL `users(query, team, first)` -> [UserRef] ohne E-Mail (für WP13-Assignee-Picker/Mentions; WP14 bzw. Nachtrag WP13 einhängen).

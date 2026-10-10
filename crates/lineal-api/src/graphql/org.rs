@@ -6,7 +6,9 @@ use crate::context::{app, request_ctx};
 use async_graphql::{Context, ErrorExtensions, InputObject, Object, SimpleObject};
 use lineal_app::AppError;
 use lineal_app::ports::repos::org::Org;
+use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::usecases::org::UpdateWorkspaceInput;
+use lineal_app::usecases::user::ListUsersInput;
 
 /// Fehler nach docs/09 §1.2: `extensions.code` = `error` aus docs/00 §7.
 pub(crate) fn gql_err(e: AppError) -> async_graphql::Error {
@@ -75,6 +77,57 @@ impl OrgQuery {
             .map_err(gql_err)?;
         Ok(org.into())
     }
+
+    /// Für den Aufrufer sichtbare User (Assignee-Picker, Erwähnungen). Ohne E-Mail-Adressen
+    /// (Sicherheits-Checkliste Punkt 6); optional auf ein Team und einen Suchbegriff begrenzt.
+    async fn users(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<String>,
+        team: Option<String>,
+        #[graphql(default = 50)] first: i32,
+    ) -> async_graphql::Result<Vec<UserRefGql>> {
+        if !(1..=250).contains(&first) {
+            return Err(gql_err(AppError::invalid_request(
+                "`first` must be between 1 and 250",
+            )));
+        }
+        let page = app(ctx)?
+            .list_users(
+                request_ctx(ctx)?,
+                ListUsersInput {
+                    query,
+                    team,
+                    page: PageRequest {
+                        limit: i64::from(first),
+                        ..Default::default()
+                    },
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|u| u.active)
+            .map(|u| UserRefGql {
+                id: u.id.to_string(),
+                name: u.name,
+                display_name: u.display_name,
+                avatar_url: u.avatar_url,
+            })
+            .collect())
+    }
+}
+
+/// Öffentliche User-Angaben (ohne E-Mail).
+#[derive(SimpleObject)]
+#[graphql(name = "UserRef")]
+pub struct UserRefGql {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Default)]

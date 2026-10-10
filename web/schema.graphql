@@ -1348,6 +1348,11 @@ type Query {
 	"""
 	workspace: Organization!
 	"""
+	Für den Aufrufer sichtbare User (Assignee-Picker, Erwähnungen). Ohne E-Mail-Adressen
+	(Sicherheits-Checkliste Punkt 6); optional auf ein Team und einen Suchbegriff begrenzt.
+	"""
+	users(query: String, team: String, first: Int! = 50): [UserRef!]!
+	"""
 	Sichtbare Teams (private Teams ohne Mitgliedschaft erscheinen nicht).
 	"""
 	teams(query: String, parentTeam: String, ancestorTeam: String, includeArchived: Boolean, first: Int): [Team!]!
@@ -1860,6 +1865,16 @@ type UploadPayload {
 	success: Boolean!
 	lastSyncId: Float!
 	uploadFile: UploadFile
+}
+
+"""
+Öffentliche User-Angaben (ohne E-Mail).
+"""
+type UserRef {
+	id: String!
+	name: String!
+	displayName: String!
+	avatarUrl: String
 }
 
 """
