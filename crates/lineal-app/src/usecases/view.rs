@@ -289,6 +289,8 @@ pub(crate) async fn build_eval(
         Vec::new()
     };
     Ok(FilterEval {
+        org: ctx.org_id,
+        is_guest: snap.actor.role == UserRole::Guest,
         now,
         timezone,
         me,

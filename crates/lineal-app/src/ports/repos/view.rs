@@ -30,6 +30,10 @@ pub struct FilterEval {
     pub now: DateTime<Utc>,
     /// IANA-Zeitzone des Auswertenden (`User.timezone`), ersatzweise `UTC`.
     pub timezone: String,
+    /// Workspace (jede Teilabfrage trägt `organization_id`).
+    pub org: lineal_domain::ids::OrgId,
+    /// Gäste sehen keine Initiativen: Filter über Initiativen treffen für sie nichts.
+    pub is_guest: bool,
     /// Aufrufender User (`isMe`); `None` bei System/App ohne User → `isMe` trifft nichts.
     pub me: Option<UserId>,
     /// `visibleTeamIds` des Aufrufers (Berechtigungsfilter, immer UND).

@@ -46,6 +46,7 @@ const T_USER: &str = "\"user\"";
 const VIS: &str = "(SELECT id FROM lf_vis)";
 const NOW: &str = "(SELECT now FROM lf_cx)";
 const ME: &str = "(SELECT me FROM lf_cx)";
+const ORG: &str = "(SELECT org FROM lf_cx)";
 const OPEN_STATES: &str = "('completed','canceled','duplicate')";
 
 /// Art einer Referenz im Filter (für die Existenz-/Sichtbarkeitsprüfung, docs/05 §1.8 Punkt 2).
@@ -120,10 +121,12 @@ impl<'e> Cx<'e> {
 pub fn push_cte_prefix<'q>(qb: &mut Qb<'q>, ev: &FilterEval) {
     qb.push("WITH lf_vis(id) AS (SELECT unnest(");
     qb.push_bind(ev.visible_teams.iter().map(|t| t.0).collect::<Vec<Uuid>>());
-    qb.push("::uuid[])), lf_cx(now, me) AS (SELECT ");
+    qb.push("::uuid[])), lf_cx(now, me, org) AS (SELECT ");
     qb.push_bind(ev.now);
     qb.push("::timestamptz, ");
     qb.push_bind(ev.me.map(|u| u.0));
+    qb.push("::uuid, ");
+    qb.push_bind(ev.org.0);
     qb.push("::uuid)");
 }
 
@@ -209,7 +212,7 @@ impl Ent {
                     Vis::IssueTeam => format!(" AND {x}.team_id IN {VIS}"),
                 };
                 format!(
-                    "(SELECT {x}.{c} FROM {t} {x} WHERE {x}.id = {id}{vis})",
+                    "(SELECT {x}.{c} FROM {t} {x} WHERE {x}.organization_id = {ORG} AND {x}.id = {id}{vis})",
                     t = self.table,
                     id = self.id
                 )
@@ -229,12 +232,18 @@ impl Ent {
 
     /// To-One-Relation dieser Zeile über die FK-Spalte `fk`.
     fn to(&self, cx: &Cx<'_>, fk: &str, table: &'static str, vis: Vis) -> Ent {
-        Ent {
+        let mut e = Ent {
             id: self.col(cx, fk),
             alias: None,
             table,
             vis,
+        };
+        // Sichtbarkeitsbeschränkte Relationen: schon die ID ist `NULL`, wenn das Objekt
+        // unsichtbar ist – so erreichen auch Unterrelationen (children, comments, …) nichts.
+        if vis != Vis::None {
+            e.id = e.col(cx, "id");
         }
+        e
     }
 }
 
@@ -885,6 +894,16 @@ struct Coll {
     elem: Ent,
 }
 
+impl Coll {
+    /// Bedingung samt Mandant des Elements (jede Teilabfrage trägt `organization_id`).
+    fn cond_org(&self) -> String {
+        match &self.elem.alias {
+            Some(a) => format!("{a}.organization_id = {ORG} AND {}", self.cond),
+            None => self.cond.clone(),
+        }
+    }
+}
+
 fn collection<'q, T>(
     qb: &mut Qb<'q>,
     cx: &Cx<'_>,
@@ -898,7 +917,7 @@ fn collection<'q, T>(
         g.next(qb);
         qb.push(format!(
             "EXISTS (SELECT 1 FROM {} WHERE {} AND ",
-            spec.from, spec.cond
+            spec.from, spec.cond_org()
         ));
         elem(qb, cx, &spec.elem, t)?;
         qb.push(")");
@@ -907,7 +926,7 @@ fn collection<'q, T>(
         g.next(qb);
         qb.push(format!(
             "NOT EXISTS (SELECT 1 FROM {} WHERE {} AND NOT ",
-            spec.from, spec.cond
+            spec.from, spec.cond_org()
         ));
         elem(qb, cx, &spec.elem, t)?;
         qb.push(")");
@@ -916,7 +935,7 @@ fn collection<'q, T>(
         g.next(qb);
         let sub = format!(
             "(SELECT count(*) FROM {} WHERE {})",
-            spec.from, spec.cond
+            spec.from, spec.cond_org()
         );
         number_cmp(qb, &sub, n)?;
     }
@@ -926,7 +945,7 @@ fn collection<'q, T>(
             "{}EXISTS (SELECT 1 FROM {} WHERE {})",
             if v { "NOT " } else { "" },
             spec.from,
-            spec.cond
+            spec.cond_org()
         ));
     }
     if let Some(list) = &c.and {
@@ -1736,6 +1755,15 @@ fn project_status_filter<'q>(
     Ok(())
 }
 
+/// Initiative ist sichtbar: nicht für Gäste; Lead-Team (falls gesetzt) sichtbar.
+fn initiative_visible_cond(cx: &Cx<'_>, alias: &str) -> String {
+    if cx.ev.is_guest {
+        "FALSE".to_owned()
+    } else {
+        format!("({alias}.lead_team_id IS NULL OR {alias}.lead_team_id IN {VIS})")
+    }
+}
+
 /// Projekt ist sichtbar, wenn mindestens ein beteiligtes Team sichtbar ist.
 fn project_visible_cond(alias_id: &str) -> String {
     format!(
@@ -1829,7 +1857,11 @@ fn project_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &ProjectFilter) 
             from: format!(
                 "initiative_to_project {j} JOIN initiative {i} ON {i}.id = {j}.initiative_id"
             ),
-            cond: format!("{j}.project_id = {} AND NOT {i}.trashed", e.id),
+            cond: format!(
+                "{j}.project_id = {} AND NOT {i}.trashed AND {}",
+                e.id,
+                initiative_visible_cond(cx, &i)
+            ),
             elem: Ent::row(&i, "initiative"),
         };
         collection(qb, cx, c, &spec, &|qb, cx, row, nf: &IdNameFilter| {
@@ -1979,7 +2011,11 @@ fn initiative_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &InitiativeFi
                 from: format!(
                     "initiative_parent {j} JOIN initiative {i} ON {i}.id = {j}.{elem_col}"
                 ),
-                cond: format!("{j}.{from_col} = {} AND NOT {i}.trashed", e.id),
+                cond: format!(
+                    "{j}.{from_col} = {} AND NOT {i}.trashed AND {}",
+                    e.id,
+                    initiative_visible_cond(cx, &i)
+                ),
                 elem: Ent::row(&i, "initiative"),
             };
             collection(qb, cx, c, &spec, &|qb, cx, row, nf: &IdNameFilter| {
@@ -2136,6 +2172,8 @@ mod tests {
 
     fn ev() -> FilterEval {
         FilterEval {
+            org: lineal_domain::ids::OrgId::nil(),
+            is_guest: false,
             now: "2026-10-10T07:15:00Z".parse().unwrap_or_default(),
             timezone: "Europe/Berlin".into(),
             me: None,

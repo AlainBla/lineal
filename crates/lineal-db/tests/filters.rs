@@ -720,3 +720,41 @@ async fn sub_issue_of_an_invisible_parent_does_not_leak_through_nested_filters(p
     assert_eq!(got, set(&["Logo refresh"]));
     let _ = d;
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn filters_cannot_probe_content_of_invisible_linked_issues(pool: PgPool) {
+    let dx = fixture(pool).await;
+    let d = dx.fx.data;
+    let logo = dx.ids["Logo refresh"];
+    let redirect = dx.ids["Fix redirect"];
+    let blocked = dx.ids["Blocked task"];
+    // „Fix redirect“ (ENG) hängt unter dem DES-Issue, das DES-Issue blockiert „Blocked task“.
+    dx.fx.set(redirect, &format!("parent_id = '{logo}'")).await;
+    sqlx::query("DELETE FROM issue_relation WHERE type = 'blocks'").execute(&dx.fx.pool).await.unwrap();
+    dx.fx.relate(logo, blocked, "blocks").await;
+    sqlx::query("INSERT INTO comment (organization_id, body, user_id, issue_id) VALUES ($1,'secret roadmap',$2,$3)")
+        .bind(d.org.0)
+        .bind(d.bob.0)
+        .bind(logo)
+        .execute(&dx.fx.pool)
+        .await
+        .unwrap();
+    let probes = [
+        json!({"parent": {"title": {"contains": "Logo"}}}),
+        json!({"parent": {"comments": {"some": {"body": {"contains": "secret"}}}}}),
+        json!({"parent": {"children": {"length": {"gt": 0}}}}),
+        json!({"parent": {"assignee": {"name": {"contains": "Bob"}}}}),
+        json!({"parent": {"team": {"key": {"eq": "DES"}}}}),
+        json!({"hasBlockedByRelations": {"eq": true}, "title": {"eq": "Blocked task"}}),
+    ];
+    for p in &probes {
+        let got = titles(&dx.fx, &alice(), p.clone()).await.unwrap();
+        assert!(got.is_empty(), "{p} leaked {got:?}");
+    }
+    for p in &probes[..5] {
+        let got = titles(&dx.fx, &bob(), p.clone()).await.unwrap();
+        assert!(!got.is_empty(), "{p}");
+    }
+    let got = titles(&dx.fx, &bob(), probes[5].clone()).await.unwrap();
+    assert_eq!(got, set(&["Blocked task"]));
+}
