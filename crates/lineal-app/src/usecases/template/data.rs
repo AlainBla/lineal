@@ -25,6 +25,14 @@ pub const MAX_PROJECT_ISSUES: usize = 100;
 pub const MAX_PROJECT_DOCS: usize = 20;
 /// Obergrenze für relative Fälligkeiten in Tagen (verhindert Überläufe).
 pub const MAX_RELATIVE_DAYS: i64 = 36_500;
+/// Maximale Gesamtgröße von `templateData` (serialisiert, Bytes).
+pub const MAX_DATA_BYTES: usize = 256 * 1024;
+/// Maximale Länge von Beschreibungen/Inhalten (Zeichen, wie bei Issues).
+pub const MAX_TEXT_CHARS: usize = 500_000;
+/// Maximale Zahl von Labels und Abonnenten je Issue-Eintrag.
+pub const MAX_REFS: usize = 50;
+/// Maximale Zahl von Platzhaltern je Text.
+pub const MAX_PLACEHOLDERS: usize = 200;
 
 /// Issue-Template (`type = issue`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -194,6 +202,13 @@ pub fn parse<T: for<'de> Deserialize<'de>>(data: &Value) -> AppResult<T> {
     if !data.is_object() {
         return Err(bad("templateData", "templateData must be an object"));
     }
+    if data.to_string().len() > MAX_DATA_BYTES {
+        return Err(AppError::limit_exceeded(format!(
+            "templateData must not exceed {} KB",
+            MAX_DATA_BYTES / 1024
+        ))
+        .with_details(json!({ "field": "templateData", "limit": MAX_DATA_BYTES })));
+    }
     serde_json::from_value(data.clone())
         .map_err(|e| bad("templateData", format!("invalid templateData: {e}")))
 }
@@ -291,18 +306,18 @@ fn check_estimate(field: &str, e: f64) -> AppResult<()> {
 
 fn count_subs(subs: &[SubIssueData], depth: usize, total: &mut usize) -> AppResult<()> {
     if depth > MAX_SUB_DEPTH {
-        return Err(bad(
-            "subIssues",
-            format!("sub-issues may be nested at most {MAX_SUB_DEPTH} levels deep"),
-        ));
+        return Err(AppError::limit_exceeded(format!(
+            "sub-issues may be nested at most {MAX_SUB_DEPTH} levels deep"
+        ))
+        .with_details(json!({ "field": "subIssues", "limit": MAX_SUB_DEPTH })));
     }
     for s in subs {
         *total += 1;
         if *total > MAX_SUB_TOTAL {
-            return Err(bad(
-                "subIssues",
-                format!("a template may contain at most {MAX_SUB_TOTAL} sub-issues"),
-            ));
+            return Err(AppError::limit_exceeded(format!(
+                "a template may contain at most {MAX_SUB_TOTAL} sub-issues"
+            ))
+            .with_details(json!({ "field": "subIssues", "limit": MAX_SUB_TOTAL })));
         }
         if let Some(children) = &s.sub_issues {
             count_subs(children, depth + 1, total)?;
@@ -311,8 +326,76 @@ fn count_subs(subs: &[SubIssueData], depth: usize, total: &mut usize) -> AppResu
     Ok(())
 }
 
+fn check_text(field: &str, t: &str) -> AppResult<()> {
+    if t.chars().count() > MAX_TEXT_CHARS {
+        return Err(AppError::limit_exceeded(format!(
+            "`{field}` exceeds {MAX_TEXT_CHARS} characters"
+        ))
+        .with_details(json!({ "field": field })));
+    }
+    if t.matches("{{placeholder:").count() > MAX_PLACEHOLDERS {
+        return Err(AppError::limit_exceeded("too many placeholders")
+            .with_details(json!({ "field": field, "limit": MAX_PLACEHOLDERS })));
+    }
+    Ok(())
+}
+
+fn check_sub_limits(subs: &[SubIssueData], depth: usize, path: &str) -> AppResult<()> {
+    if depth > MAX_SUB_DEPTH {
+        return Err(AppError::limit_exceeded("sub-issues nested too deep")
+            .with_details(json!({ "field": path, "limit": MAX_SUB_DEPTH })));
+    }
+    for (i, s) in subs.iter().enumerate() {
+        let p = format!("{path}[{i}]");
+        if s.title.chars().count() > 255 {
+            return Err(AppError::limit_exceeded("title exceeds 255 characters")
+                .with_details(json!({ "field": format!("{p}.title") })));
+        }
+        if let Some(d) = &s.description {
+            check_text(&format!("{p}.description"), d)?;
+        }
+        if s.label_ids.as_ref().is_some_and(|l| l.len() > MAX_REFS) {
+            return Err(AppError::limit_exceeded("too many labels")
+                .with_details(json!({ "field": format!("{p}.labelIds"), "limit": MAX_REFS })));
+        }
+        if let Some(c) = &s.sub_issues {
+            check_sub_limits(c, depth + 1, &format!("{p}.subIssues"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Grenzen eines Issue-Templates (Tiefe, Anzahl, Textlängen, Labels); gilt beim Speichern
+/// und beim Anwenden.
+pub fn check_issue_limits(d: &IssueData) -> AppResult<()> {
+    if let Some(t) = &d.title
+        && t.chars().count() > 255
+    {
+        return Err(AppError::limit_exceeded("title exceeds 255 characters")
+            .with_details(json!({ "field": "title" })));
+    }
+    if let Some(t) = &d.description {
+        check_text("description", t)?;
+    }
+    if d.label_ids.as_ref().is_some_and(|l| l.len() > MAX_REFS)
+        || d.subscriber_ids
+            .as_ref()
+            .is_some_and(|l| l.len() > MAX_REFS)
+    {
+        return Err(AppError::limit_exceeded("too many labels or subscribers")
+            .with_details(json!({ "limit": MAX_REFS })));
+    }
+    if let Some(subs) = &d.sub_issues {
+        let mut total = 0;
+        count_subs(subs, 1, &mut total)?;
+        check_sub_limits(subs, 1, "subIssues")?;
+    }
+    Ok(())
+}
+
 /// Formale Prüfung eines Issue-Templates (ohne Datenbankzugriff).
 pub fn check_issue_data(d: &IssueData, workspace: bool, path: &str) -> AppResult<()> {
+    check_issue_limits(d)?;
     let f = |name: &str| format!("{path}{name}");
     if let Some(t) = &d.title
         && t.chars().count() > 255

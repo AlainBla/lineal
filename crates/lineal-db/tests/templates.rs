@@ -478,7 +478,11 @@ async fn workspace_templates_scope_inheritance_and_visibility(pool: PgPool) {
                 },
             )
             .await;
-        assert_eq!(kind(r), ErrorKind::InvalidRequest, "{data}");
+        let k = kind(r);
+        assert!(
+            k == ErrorKind::InvalidRequest || k == ErrorKind::LimitExceeded,
+            "{k:?} {data}"
+        );
     }
     // Doppelter Name im selben Geltungsbereich -> conflict; Name auf anderer Ebene erlaubt.
     let dup = env
@@ -958,4 +962,52 @@ async fn template_content_is_sanitized_on_save_and_apply(pool: PgPool) {
             assert!(!all.contains(bad), "{bad} in {all}");
         }
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn limits_are_enforced_on_save_and_apply(pool: PgPool) {
+    let env = setup(pool.clone()).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let save = |data: Value| {
+        let env = &env;
+        let alice = alice.clone();
+        async move {
+            env.app
+                .save_template(
+                    &alice,
+                    SaveTemplateInput {
+                        template_type: Some(TemplateType::Issue),
+                        name: Some(format!("L{}", Uuid::now_v7())),
+                        team: Some("ENG".into()),
+                        template_data: Some(data),
+                        ..Default::default()
+                    },
+                )
+                .await
+        }
+    };
+    let deep = json!({ "title": "t", "subIssues": [ { "title": "1", "subIssues": [ { "title": "2", "subIssues": [ { "title": "3", "subIssues": [ { "title": "4" } ] } ] } ] } ] });
+    let many = json!({ "title": "t", "subIssues": (0..51).map(|i| json!({ "title": format!("s{i}") })).collect::<Vec<_>>() });
+    let huge = json!({ "title": "t", "description": "x".repeat(300 * 1024) });
+    let long = json!({ "title": "t", "subIssues": [ { "title": "s", "description": "x".repeat(500_001) } ] });
+    for d in [deep, many, huge, long] {
+        assert_eq!(kind(save(d).await), ErrorKind::LimitExceeded);
+    }
+    // Ein altes, unvalidiert gespeichertes Template wird beim Anwenden ebenfalls abgelehnt,
+    // ohne dass Issues entstehen.
+    let ok = save(json!({ "title": "t" })).await.unwrap();
+    let many = json!({ "title": "t", "subIssues": (0..51).map(|i| json!({ "title": format!("s{i}") })).collect::<Vec<_>>() });
+    sqlx::query("UPDATE template SET template_data = $2 WHERE id = $1")
+        .bind(ok.template.id.0)
+        .bind(many)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = last_issue_number(&env, SeedData::acme().eng).await;
+    let r = env
+        .app
+        .create_issue_from_template(&alice, &ok.template.id.to_string(), issue_input("ENG"), &[])
+        .await;
+    assert_eq!(kind(r), ErrorKind::LimitExceeded);
+    assert_eq!(last_issue_number(&env, SeedData::acme().eng).await, before);
 }

@@ -466,6 +466,7 @@ fn create_subs<'a>(
                     ));
                 }
                 let base: IssueData = parse(&tpl.template_data).map_err(|e| with_path(e, &p))?;
+                super::data::check_issue_limits(&base).map_err(|e| with_path(e, &p))?;
                 if base.sub_issues.as_ref().is_some_and(|x| !x.is_empty()) {
                     return Err(with_path(
                         invalid(
@@ -875,6 +876,7 @@ pub(crate) async fn apply_project_children(
                     ));
                 }
                 let d: IssueData = parse(&tpl.template_data).map_err(|e| with_path(e, &path))?;
+                super::data::check_issue_limits(&d).map_err(|e| with_path(e, &path))?;
                 (d, Some(tpl))
             }
             None => (e.issue.clone().unwrap_or_default(), None),
@@ -962,6 +964,7 @@ pub(crate) async fn prepare_issue_template(
             .with_details(json!({ "reference": template_ref, "type": "Template" })));
     }
     let data: IssueData = parse(&tpl.template_data)?;
+    super::data::check_issue_limits(&data)?;
     if input.parent.is_some() && data.sub_issues.as_ref().is_some_and(|s| !s.is_empty()) {
         return Err(AppError::invalid_request(
             "a template with sub-issues cannot be applied to a sub-issue",

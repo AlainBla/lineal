@@ -33,7 +33,12 @@ pub enum Command {
     /// Datenbankmigrationen anwenden.
     Migrate,
     /// Beispiel-Workspace `acme` anlegen.
-    Seed,
+    Seed {
+        /// Zusätzlich realistische Demo-Daten für die Web-UI anlegen (Issues, Projekte, Cycle,
+        /// Templates, Dokumente).
+        #[arg(long)]
+        demo: bool,
+    },
     /// GraphQL-Schema als SDL exportieren.
     SchemaExport {
         /// Zieldatei.
@@ -48,7 +53,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Serve => serve::run().await,
         Command::Worker => worker::run().await,
         Command::Migrate => migrate::run().await,
-        Command::Seed => seed::run().await,
+        Command::Seed { demo } => seed::run(demo).await,
         Command::SchemaExport { out } => schema_export::run(&out),
     }
 }
