@@ -210,6 +210,13 @@ pub struct IssueListFilter {
     pub include_archived: bool,
     /// Nur Issues, die mit diesen IDs geteilt sind, zusätzlich zu `team_ids` (Sharing).
     pub shared_with: Option<UserId>,
+    /// Filterbaum (Custom View, Ad-hoc-Filter; WP11). Setzt `eval` voraus. Wird im Adapter
+    /// parametrisiert nach SQL übersetzt und immer per UND mit der Sichtbarkeit verknüpft.
+    pub ast: Option<Box<lineal_domain::rules::filter::IssueFilter>>,
+    /// Auswertungskontext für `ast` (Zeitpunkt, Zeitzone, „ich“, sichtbare Teams).
+    pub eval: Option<super::view::FilterEval>,
+    /// Volltext-/Kennungssuche (`list_issues.query`, WP11): höchstens 500 Treffer.
+    pub search: Option<String>,
 }
 
 /// Zugriff eines Users auf ein einzelnes Issue (Sharing, docs/02).

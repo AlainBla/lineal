@@ -460,11 +460,8 @@ fn update_input(id: &str, args: &Value) -> AppResult<UpdateIssueInput> {
 }
 
 fn list_input(args: &Value, now: DateTime<Utc>) -> AppResult<(ListIssuesInput, String)> {
-    for k in ["customView", "query"] {
-        if args.get(k).is_some_and(|v| !v.is_null()) {
-            return Err(bad(k, format!("`{k}` is not supported yet")));
-        }
-    }
+    // `query` und `customView` schließen sich aus (docs/05 §4.3, §5.5); die App meldet
+    // `invalid_request` auch dann, wenn ein Adapter beide setzt.
     let limit = parse_limit(args, 50, 250)?;
     let fingerprint = query_fingerprint(args);
     let order_by = match arg_str(args, "orderBy")? {
@@ -499,6 +496,9 @@ fn list_input(args: &Value, now: DateTime<Utc>) -> AppResult<(ListIssuesInput, S
     };
     Ok((
         ListIssuesInput {
+            custom_view: arg_str(args, "customView")?.map(str::to_owned),
+            query: arg_str(args, "query")?.map(str::to_owned),
+            filter: None,
             team: arg_str(args, "team")?.map(str::to_owned),
             include_sub_teams: args
                 .get("includeSubTeams")
