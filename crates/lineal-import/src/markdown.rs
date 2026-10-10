@@ -18,9 +18,42 @@ static IDENT: LazyLock<Regex> = LazyLock::new(|| re(r"^([A-Za-z][A-Za-z0-9]*)-(\
 
 /// HTML-Elemente, die Lineal nach der Bereinigung behält/versteht; alles andere wird gemeldet.
 const KNOWN_TAGS: &[&str] = &[
-    "a", "b", "i", "u", "em", "strong", "code", "pre", "p", "br", "ul", "ol", "li", "blockquote", "h1",
-    "h2", "h3", "h4", "h5", "h6", "hr", "img", "table", "thead", "tbody", "tr", "td", "th", "del", "s",
-    "sub", "sup", "details", "summary", "span", "div",
+    "a",
+    "b",
+    "i",
+    "u",
+    "em",
+    "strong",
+    "code",
+    "pre",
+    "p",
+    "br",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "img",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "td",
+    "th",
+    "del",
+    "s",
+    "sub",
+    "sup",
+    "details",
+    "summary",
+    "span",
+    "div",
 ];
 
 /// Kontext des Umschreibens.
@@ -110,7 +143,8 @@ impl RewriteCtx {
             text = other
                 .replace_all(&text, |c: &Captures| {
                     let slug = c[2].rsplit('-').next().unwrap_or(&c[2]);
-                    let slug = if slug.len() == 12 && slug.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                    let slug = if slug.len() == 12 && slug.chars().all(|ch| ch.is_ascii_hexdigit())
+                    {
                         slug.to_lowercase()
                     } else {
                         c[2].to_owned()
@@ -165,7 +199,10 @@ mod tests {
             1000,
         );
         assert!(out.text.contains("See ENGX-12 and"), "{}", out.text);
-        assert!(out.text.contains("https://lineal.example.com/acme/issue/WEB-3"));
+        assert!(
+            out.text
+                .contains("https://lineal.example.com/acme/issue/WEB-3")
+        );
         assert!(
             out.text.contains("https://linear.app/other/issue/ENG-1/x"),
             "foreign workspaces stay untouched"
@@ -205,7 +242,11 @@ mod tests {
             "![x](https://lineal.example.com/assets/other-org/aaa/bbb) <img src=\"https://lineal.example.com/assets/k\">",
             1000,
         );
-        assert!(!out.text.contains("lineal.example.com/assets/"), "{}", out.text);
+        assert!(
+            !out.text.contains("lineal.example.com/assets/"),
+            "{}",
+            out.text
+        );
     }
 
     #[test]

@@ -54,13 +54,19 @@ impl FakeSource {
         };
         let mut data: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
         for e in SourceEntity::ALL {
-            let items = v["entities"][e.as_str()].as_array().cloned().unwrap_or_default();
+            let items = v["entities"][e.as_str()]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             data.insert(e.as_str(), items);
         }
         let mut files = HashMap::new();
         if let Some(m) = v["files"].as_object() {
             for (url, f) in m {
-                let ct = f["contentType"].as_str().unwrap_or("application/octet-stream").to_owned();
+                let ct = f["contentType"]
+                    .as_str()
+                    .unwrap_or("application/octet-stream")
+                    .to_owned();
                 let bytes = match (f["hex"].as_str(), f["text"].as_str()) {
                     (Some(h), _) => hex::decode(h).map_err(|e| e.to_string())?,
                     (None, Some(t)) => t.as_bytes().to_vec(),
@@ -98,13 +104,18 @@ impl FakeSource {
 
     /// Objekte einer Entität (Kopie).
     pub fn entity(&self, entity: SourceEntity) -> Vec<Value> {
-        lock(&self.data).get(entity.as_str()).cloned().unwrap_or_default()
+        lock(&self.data)
+            .get(entity.as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Setzt Felder eines Objekts (Delta-Tests); `patch` ist ein JSON-Objekt.
     pub fn patch(&self, entity: SourceEntity, id: &str, patch: &Value) -> bool {
         let mut data = lock(&self.data);
-        let Some(list) = data.get_mut(entity.as_str()) else { return false };
+        let Some(list) = data.get_mut(entity.as_str()) else {
+            return false;
+        };
         for item in list.iter_mut() {
             if item["id"].as_str() == Some(id) {
                 if let (Some(obj), Some(p)) = (item.as_object_mut(), patch.as_object()) {
@@ -135,7 +146,10 @@ impl FakeSource {
 
     /// Anzahl gelesener Seiten je Entität.
     pub fn page_calls(&self, entity: SourceEntity) -> usize {
-        lock(&self.page_calls).get(entity.as_str()).copied().unwrap_or(0)
+        lock(&self.page_calls)
+            .get(entity.as_str())
+            .copied()
+            .unwrap_or(0)
     }
 
     /// URLs, die heruntergeladen wurden.
@@ -175,7 +189,10 @@ impl ImportSource for FakeSource {
             return Err(err);
         }
         *lock(&self.page_calls).entry(q.entity.as_str()).or_default() += 1;
-        let all = lock(&self.data).get(q.entity.as_str()).cloned().unwrap_or_default();
+        let all = lock(&self.data)
+            .get(q.entity.as_str())
+            .cloned()
+            .unwrap_or_default();
         let items: Vec<Value> = match q.updated_after {
             Some(after) => all
                 .into_iter()
@@ -188,12 +205,22 @@ impl ImportSource for FakeSource {
                 .collect(),
             None => all,
         };
-        let start: usize = q.cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(0);
+        let start: usize = q
+            .cursor
+            .as_deref()
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0);
         let limit = q.limit.clamp(1, 100) as usize;
         let end = (start + limit).min(items.len());
-        let page: Vec<Value> = items.get(start..end).map(<[Value]>::to_vec).unwrap_or_default();
+        let page: Vec<Value> = items
+            .get(start..end)
+            .map(<[Value]>::to_vec)
+            .unwrap_or_default();
         let next = (end < items.len()).then(|| end.to_string());
-        Ok(SourcePage { items: page, next_cursor: next })
+        Ok(SourcePage {
+            items: page,
+            next_cursor: next,
+        })
     }
 
     async fn download(&self, url: &str) -> SourceResult<Downloaded> {
@@ -211,10 +238,18 @@ impl ImportSource for FakeSource {
         if bytes.len() as u64 > self.policy.max_bytes {
             return Err(SourceError::Rejected("file is too large".into()));
         }
-        let base = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let base = ct
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         if !self.policy.allowed_content_types.contains(&base) {
             return Err(SourceError::Rejected("content type is not allowed".into()));
         }
-        Ok(Downloaded { bytes, content_type: base })
+        Ok(Downloaded {
+            bytes,
+            content_type: base,
+        })
     }
 }

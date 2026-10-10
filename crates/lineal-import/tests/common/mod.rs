@@ -11,8 +11,8 @@ use lineal_domain::enums::UserRole;
 use lineal_domain::ids::{OrgId, UserId};
 use lineal_import::blob::MemoryBlobSink;
 use lineal_import::engine::{EngineConfig, ImportEngine, RunOutcome};
-use lineal_import::{FakeSource, ImportSource};
 use lineal_import::fixtures;
+use lineal_import::{FakeSource, ImportSource};
 use lineal_testkit::test_app;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -42,12 +42,16 @@ impl TestClock {
 
 impl Clock for TestClock {
     fn now(&self) -> DateTime<Utc> {
-        Utc.timestamp_opt(self.0.load(Ordering::SeqCst), 0).single().unwrap()
+        Utc.timestamp_opt(self.0.load(Ordering::SeqCst), 0)
+            .single()
+            .unwrap()
     }
 }
 
 pub fn t0() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 10, 10, 8, 0, 0).single().unwrap()
+    Utc.with_ymd_and_hms(2026, 10, 10, 8, 0, 0)
+        .single()
+        .unwrap()
 }
 
 pub struct Env {
@@ -79,29 +83,57 @@ impl Env {
     }
 
     pub async fn count(&self, sql: &str) -> i64 {
-        sqlx::query_scalar(&format!("SELECT ({sql})::bigint")).fetch_one(&self.pool).await.unwrap()
+        sqlx::query_scalar(&format!("SELECT ({sql})::bigint"))
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
     }
 
     /// Zeilenzahlen der wichtigsten Tabellen dieses Workspace.
     pub async fn snapshot(&self) -> Vec<(String, i64)> {
         let mut out = Vec::new();
         for t in [
-            "team", "workflow_state", "issue_label", "issue", "issue_relation", "issue_history", "comment", "reaction",
-            "attachment", "project", "project_milestone", "initiative", "cycle", "document", "project_update",
-            "initiative_update", "issue_subscription", "issue_to_label", "issue_identifier_alias", "project_team",
-            "team_membership", "\"user\"", "import_mapping",
+            "team",
+            "workflow_state",
+            "issue_label",
+            "issue",
+            "issue_relation",
+            "issue_history",
+            "comment",
+            "reaction",
+            "attachment",
+            "project",
+            "project_milestone",
+            "initiative",
+            "cycle",
+            "document",
+            "project_update",
+            "initiative_update",
+            "issue_subscription",
+            "issue_to_label",
+            "issue_identifier_alias",
+            "project_team",
+            "team_membership",
+            "\"user\"",
+            "import_mapping",
         ] {
-            let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {t} WHERE organization_id = $1"))
-                .bind(self.org.0)
-                .fetch_one(&self.pool)
-                .await
-                .unwrap();
+            let n: i64 = sqlx::query_scalar(&format!(
+                "SELECT count(*) FROM {t} WHERE organization_id = $1"
+            ))
+            .bind(self.org.0)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
             out.push((t.to_owned(), n));
         }
         out
     }
 
-    pub fn engine<'a>(&'a self, source: &'a dyn ImportSource, cfg: EngineConfig) -> ImportEngine<'a> {
+    pub fn engine<'a>(
+        &'a self,
+        source: &'a dyn ImportSource,
+        cfg: EngineConfig,
+    ) -> ImportEngine<'a> {
         ImportEngine::new(&self.app, source, &*self.sink).with_config(cfg)
     }
 
@@ -111,30 +143,60 @@ impl Env {
             .app
             .import_scan(
                 &self.alice_ctx(),
-                ImportScanInput { source: "linear".into(), token: TOKEN.into() },
+                ImportScanInput {
+                    source: "linear".into(),
+                    token: TOKEN.into(),
+                },
             )
             .await
             .unwrap();
         assert_eq!(run.status, "scanning");
-        self.engine(source, EngineConfig::default()).scan(self.org, run.id).await.unwrap();
-        let planned = self.app.import_get_run(&self.alice_ctx(), run.id).await.unwrap();
-        assert_eq!(planned.status, "planned", "scan failed: {:?}", planned.error);
+        self.engine(source, EngineConfig::default())
+            .scan(self.org, run.id)
+            .await
+            .unwrap();
+        let planned = self
+            .app
+            .import_get_run(&self.alice_ctx(), run.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            planned.status, "planned",
+            "scan failed: {:?}",
+            planned.error
+        );
         planned
     }
 
     pub async fn start(&self, run: Uuid, input: ImportStartInput) -> ImportRun {
         self.app
-            .import_start(&self.alice_ctx(), ImportStartInput { run_id: run, ..input })
+            .import_start(
+                &self.alice_ctx(),
+                ImportStartInput {
+                    run_id: run,
+                    ..input
+                },
+            )
             .await
             .unwrap()
     }
 
     /// Scan + Start + Lauf mit Standardoptionen und kleiner Seitengröße.
-    pub async fn import_all(&self, source: &dyn ImportSource, input: ImportStartInput) -> (Uuid, RunOutcome) {
+    pub async fn import_all(
+        &self,
+        source: &dyn ImportSource,
+        input: ImportStartInput,
+    ) -> (Uuid, RunOutcome) {
         let planned = self.scan(source).await;
         self.start(planned.id, input).await;
         let out = self
-            .engine(source, EngineConfig { page_size: 40, ..Default::default() })
+            .engine(
+                source,
+                EngineConfig {
+                    page_size: 40,
+                    ..Default::default()
+                },
+            )
             .run(self.org, planned.id)
             .await
             .unwrap();
@@ -148,13 +210,26 @@ pub async fn env(pool: PgPool) -> Env {
 
 /// Workspace Nr. `n` (mehrere Workspaces in einer Testdatenbank, z. B. für Vergleichsläufe).
 pub async fn env_n(pool: PgPool, n: u128) -> Env {
-    let _ = tracing_subscriber::fmt().with_test_writer().with_env_filter("warn").try_init();
-    let org = OrgId(Uuid::from_u128(0xAC3E_0000_0000_7000_8000_00FF_0000_0000 + n));
-    let alice = UserId(Uuid::from_u128(0xA11C_E000_0000_7000_8000_00FF_0000_0000 + n));
-    let bob = UserId(Uuid::from_u128(0xB0B0_0000_0000_7000_8000_00FF_0000_0000 + n));
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("warn")
+        .try_init();
+    let org = OrgId(Uuid::from_u128(
+        0xAC3E_0000_0000_7000_8000_00FF_0000_0000 + n,
+    ));
+    let alice = UserId(Uuid::from_u128(
+        0xA11C_E000_0000_7000_8000_00FF_0000_0000 + n,
+    ));
+    let bob = UserId(Uuid::from_u128(
+        0xB0B0_0000_0000_7000_8000_00FF_0000_0000 + n,
+    ));
     sqlx::query("INSERT INTO organization (id, name, url_key) VALUES ($1, 'Acme', $2)")
         .bind(org.0)
-        .bind(if n == 1 { "acme".to_owned() } else { format!("acme-{n}") })
+        .bind(if n == 1 {
+            "acme".to_owned()
+        } else {
+            format!("acme-{n}")
+        })
         .execute(&pool)
         .await
         .unwrap();
@@ -176,10 +251,20 @@ pub async fn env_n(pool: PgPool, n: u128) -> Env {
         .unwrap();
     }
     let clock = Arc::new(TestClock::at(t0()));
-    let mut app = Arc::try_unwrap(test_app(Arc::new(PgStore::new(pool.clone())))).ok().unwrap();
+    let mut app = Arc::try_unwrap(test_app(Arc::new(PgStore::new(pool.clone()))))
+        .ok()
+        .unwrap();
     app.clock = clock.clone();
     app.ids = Arc::new(V7Ids);
-    Env { app: Arc::new(app), pool, org, alice, bob, clock, sink: Arc::new(MemoryBlobSink::default()) }
+    Env {
+        app: Arc::new(app),
+        pool,
+        org,
+        alice,
+        bob,
+        clock,
+        sink: Arc::new(MemoryBlobSink::default()),
+    }
 }
 
 pub fn fake() -> FakeSource {

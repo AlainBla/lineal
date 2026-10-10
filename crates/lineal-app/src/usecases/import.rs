@@ -12,7 +12,7 @@ use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, require_workspace};
 use crate::ports::repos::import::{ImportRun, ImportRunUpdate, NewImportRun};
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload, AeadCore};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::{DateTime, Duration, Utc};
 use hkdf::Hkdf;
@@ -40,8 +40,7 @@ impl Secret {
     /// Prüft Form und Länge (nur druckbares ASCII ohne Leerzeichen, 8–512 Zeichen).
     pub fn new(raw: &str) -> AppResult<Self> {
         let t = raw.trim();
-        let ok = (8..=MAX_TOKEN_LEN).contains(&t.len())
-            && t.bytes().all(|b| b.is_ascii_graphic());
+        let ok = (8..=MAX_TOKEN_LEN).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_graphic());
         if !ok {
             return Err(AppError::invalid_request("the token has an invalid format")
                 .with_details(json!({ "field": "token" })));
@@ -109,7 +108,8 @@ pub fn decrypt_token(session_secret: &str, run_id: Uuid, blob: &[u8]) -> AppResu
             },
         )
         .map_err(|_| AppError::internal("stored credential cannot be decrypted"))?;
-    let text = String::from_utf8(plain).map_err(|_| AppError::internal("stored credential is corrupt"))?;
+    let text =
+        String::from_utf8(plain).map_err(|_| AppError::internal("stored credential is corrupt"))?;
     Ok(Secret(text))
 }
 
@@ -137,7 +137,11 @@ pub struct ImportStartInput {
 }
 
 /// Aufbereitete Optionen (`import_run.options`), vom Importer gelesen.
-pub fn options_json(input: &ImportStartInput, teams: &[String], updated_after: Option<DateTime<Utc>>) -> Value {
+pub fn options_json(
+    input: &ImportStartInput,
+    teams: &[String],
+    updated_after: Option<DateTime<Utc>>,
+) -> Value {
     json!({
         "teams": teams,
         "userMapping": input.user_mapping,
@@ -167,7 +171,11 @@ impl App {
     /// `importScan`: legt einen Lauf im Status `scanning` an und speichert das Token verschlüsselt.
     /// Der Scan selbst (Verbindung prüfen, Mengen zählen) läuft im Import-Job
     /// (`lineal-import`), damit kein HTTP in Request-Handlern passiert.
-    pub async fn import_scan(&self, ctx: &RequestCtx, input: ImportScanInput) -> AppResult<ImportRun> {
+    pub async fn import_scan(
+        &self,
+        ctx: &RequestCtx,
+        input: ImportScanInput,
+    ) -> AppResult<ImportRun> {
         if input.source != SOURCE_LINEAR {
             return Err(invalid(
                 "source",
@@ -233,14 +241,22 @@ impl App {
                 },
             )
             .await?;
-        let run = tx.imports().get_import_run(id).await?.ok_or_else(not_found)?;
+        let run = tx
+            .imports()
+            .get_import_run(id)
+            .await?
+            .ok_or_else(not_found)?;
         tx.commit().await?;
         Ok(run)
     }
 
     /// `importStart`: validiert Team-Auswahl/Key-Konflikte und stellt den Lauf auf `running`
     /// (der Job oder die CLI führt ihn aus).
-    pub async fn import_start(&self, ctx: &RequestCtx, input: ImportStartInput) -> AppResult<ImportRun> {
+    pub async fn import_start(
+        &self,
+        ctx: &RequestCtx,
+        input: ImportStartInput,
+    ) -> AppResult<ImportRun> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         require_workspace(&mut *tx, ctx, Action::ManageImport).await?;
         let run = tx
@@ -278,13 +294,18 @@ impl App {
             let Some((src_id, _)) = scan_teams.iter().find(|(_, k)| k == key) else {
                 return Err(invalid("teams", format!("unknown team `{key}`")));
             };
-            let target = input.key_mapping.get(key).cloned().unwrap_or_else(|| key.clone());
+            let target = input
+                .key_mapping
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| key.clone());
             if lineal_domain::identifier::TeamKey::parse(&target).is_err() {
                 conflicts.push(json!({ "key": key, "target": target, "reason": "invalid_key" }));
                 continue;
             }
             if targets.insert(target.clone(), key.clone()).is_some() {
-                conflicts.push(json!({ "key": key, "target": target, "reason": "duplicate_target" }));
+                conflicts
+                    .push(json!({ "key": key, "target": target, "reason": "duplicate_target" }));
                 continue;
             }
             let existing = tx.imports().find_team_by_key(&target).await?;
@@ -312,11 +333,12 @@ impl App {
             None
         };
         if input.delta && updated_after.is_none() {
-            return Err(invalid("delta", "there is no completed import to continue from"));
+            return Err(invalid(
+                "delta",
+                "there is no completed import to continue from",
+            ));
         }
-        tx.imports()
-            .delete_report_entries(run.id)
-            .await?;
+        tx.imports().delete_report_entries(run.id).await?;
         tx.imports()
             .update_import_run(
                 run.id,
@@ -332,7 +354,11 @@ impl App {
                 },
             )
             .await?;
-        let run = tx.imports().get_import_run(run.id).await?.ok_or_else(not_found)?;
+        let run = tx
+            .imports()
+            .get_import_run(run.id)
+            .await?
+            .ok_or_else(not_found)?;
         tx.commit().await?;
         Ok(run)
     }
@@ -405,7 +431,11 @@ impl App {
             let ids: Vec<Uuid> = teams.iter().map(|m| m.target_id).collect();
             tx.imports().set_team_import_lock(&ids, None).await?;
         }
-        let run = tx.imports().get_import_run(run_id).await?.ok_or_else(not_found)?;
+        let run = tx
+            .imports()
+            .get_import_run(run_id)
+            .await?
+            .ok_or_else(not_found)?;
         tx.commit().await?;
         Ok(run)
     }
@@ -421,7 +451,11 @@ impl App {
     }
 
     /// `importRuns`: neueste zuerst.
-    pub async fn import_list_runs(&self, ctx: &RequestCtx, limit: i64) -> AppResult<Vec<ImportRun>> {
+    pub async fn import_list_runs(
+        &self,
+        ctx: &RequestCtx,
+        limit: i64,
+    ) -> AppResult<Vec<ImportRun>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         require_workspace(&mut *tx, ctx, Action::ManageImport).await?;
         tx.imports().list_import_runs(limit).await
@@ -435,7 +469,10 @@ impl App {
         severity: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> AppResult<(Vec<crate::ports::repos::import::ReportEntry>, Vec<(String, i64)>)> {
+    ) -> AppResult<(
+        Vec<crate::ports::repos::import::ReportEntry>,
+        Vec<(String, i64)>,
+    )> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         require_workspace(&mut *tx, ctx, Action::ManageImport).await?;
         tx.imports()
@@ -452,11 +489,18 @@ impl App {
 
     /// Entschlüsselt das Token eines Laufs (nur für den Importer in Job/CLI; System- oder
     /// Admin-Kontext, kein GraphQL-Pfad).
-    pub async fn import_load_token(&self, org_run: (lineal_domain::ids::OrgId, Uuid)) -> AppResult<Option<Secret>> {
+    pub async fn import_load_token(
+        &self,
+        org_run: (lineal_domain::ids::OrgId, Uuid),
+    ) -> AppResult<Option<Secret>> {
         let mut tx = self.store.begin(org_run.0).await?;
         let blob = tx.imports().get_import_credential(org_run.1).await?;
         match blob {
-            Some(b) => Ok(Some(decrypt_token(&self.config.session_secret, org_run.1, &b)?)),
+            Some(b) => Ok(Some(decrypt_token(
+                &self.config.session_secret,
+                org_run.1,
+                &b,
+            )?)),
             None => Ok(None),
         }
     }
@@ -480,9 +524,7 @@ mod tests {
         let t = Secret::new("lin_api_TESTSECRET1234").unwrap();
         let blob = encrypt_token("a-session-secret-of-32-bytes-or-more", run, &t).unwrap();
         assert!(
-            !blob
-                .windows(10)
-                .any(|w| w == b"TESTSECRET"),
+            !blob.windows(10).any(|w| w == b"TESTSECRET"),
             "ciphertext must not contain the token"
         );
         assert_eq!(
@@ -492,7 +534,14 @@ mod tests {
             t.expose()
         );
         assert!(decrypt_token("another-session-secret-32-bytes-xx", run, &blob).is_err());
-        assert!(decrypt_token("a-session-secret-of-32-bytes-or-more", Uuid::new_v4(), &blob).is_err());
+        assert!(
+            decrypt_token(
+                "a-session-secret-of-32-bytes-or-more",
+                Uuid::new_v4(),
+                &blob
+            )
+            .is_err()
+        );
         // zwei Verschlüsselungen desselben Tokens unterscheiden sich (Zufalls-Nonce)
         let blob2 = encrypt_token("a-session-secret-of-32-bytes-or-more", run, &t).unwrap();
         assert_ne!(blob, blob2);

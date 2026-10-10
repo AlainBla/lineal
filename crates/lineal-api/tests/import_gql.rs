@@ -12,7 +12,11 @@ use std::sync::Arc;
 
 const TOKEN: &str = "lin_api_GQLSECRETTOKEN0123456789";
 
-async fn run(schema: &lineal_api::graphql::LinealSchema, who: SeedUser, q: &str) -> (Value, Vec<String>, String) {
+async fn run(
+    schema: &lineal_api::graphql::LinealSchema,
+    who: SeedUser,
+    q: &str,
+) -> (Value, Vec<String>, String) {
     let res = schema.execute(Request::new(q).data(ctx_for(who))).await;
     let codes = res
         .errors
@@ -40,12 +44,17 @@ async fn setup(pool: PgPool) -> lineal_api::graphql::LinealSchema {
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn only_admins_can_use_the_import_api(pool: PgPool) {
     let schema = setup(pool).await;
-    let scan = format!("mutation {{ importScan(input: {{ source: \"linear\", token: \"{TOKEN}\" }}) {{ id status }} }}");
+    let scan = format!(
+        "mutation {{ importScan(input: {{ source: \"linear\", token: \"{TOKEN}\" }}) {{ id status }} }}"
+    );
     // Bob (user) und Carol (guest): forbidden, und das Token steht in keiner Fehlermeldung.
     for who in [SeedUser::Bob, SeedUser::Carol] {
         let (_, codes, raw) = run(&schema, who, &scan).await;
         assert_eq!(codes, ["\"forbidden\""], "{who:?}");
-        assert!(!raw.contains("GQLSECRETTOKEN"), "token in error output: {raw}");
+        assert!(
+            !raw.contains("GQLSECRETTOKEN"),
+            "token in error output: {raw}"
+        );
         let (_, codes, _) = run(&schema, who, "{ importRuns { id } }").await;
         assert_eq!(codes, ["\"forbidden\""]);
     }
@@ -93,7 +102,12 @@ async fn only_admins_can_use_the_import_api(pool: PgPool) {
     .await;
     assert_eq!(codes, ["\"invalid_request\""]);
     assert!(!raw.contains("a b"));
-    let (_, codes, _) = run(&schema, SeedUser::Alice, "{ importRun(id: \"nope\") { id } }").await;
+    let (_, codes, _) = run(
+        &schema,
+        SeedUser::Alice,
+        "{ importRun(id: \"nope\") { id } }",
+    )
+    .await;
     assert_eq!(codes, ["\"invalid_request\""]);
     // Abbrechen löscht das Token.
     let (d, codes, _) = run(

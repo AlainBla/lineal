@@ -1,4 +1,6 @@
-//! Periodischer Job `import_runner` (WP18). Im Scaffold ein No-op.
+//! Periodischer Job `import_runner` (WP18): führt Scan- und Importläufe aus (`lineal-import`) und
+//! löscht abgelaufene Token-Zugangsdaten (7 Tage). Läufe tragen eine Lease, sodass mehrere
+//! Worker oder die CLI denselben Lauf nie gleichzeitig bearbeiten.
 
 use crate::{PeriodicJob, Schedule};
 use async_trait::async_trait;
@@ -15,10 +17,11 @@ impl PeriodicJob for ImportRunnerJob {
     }
 
     fn schedule(&self) -> Schedule {
-        Schedule::Every(Duration::from_secs(300))
+        Schedule::Every(Duration::from_secs(10))
     }
 
-    async fn run(&self, _app: &App, _now: DateTime<Utc>) -> AppResult<()> {
-        Ok(())
+    async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()> {
+        // Ein Lauf je Takt; langlaufende Importe halten ihre Lease selbst.
+        lineal_import::runner::tick(app, now).await.map(|_| ())
     }
 }

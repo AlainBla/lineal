@@ -309,11 +309,7 @@ pub trait ImportRepo: Send {
 
     // --- Bericht ---------------------------------------------------------------------------
 
-    async fn add_report_entries(
-        &mut self,
-        run_id: Uuid,
-        entries: &[ReportEntry],
-    ) -> AppResult<()> {
+    async fn add_report_entries(&mut self, run_id: Uuid, entries: &[ReportEntry]) -> AppResult<()> {
         let _ = (run_id, entries);
         nyi()
     }

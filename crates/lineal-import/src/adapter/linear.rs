@@ -30,7 +30,10 @@ enum Kind {
     /// Liste ohne Paginierung (`templates { ... }`).
     List,
     /// Kindobjekte der Issues (`issues { nodes { id <child_field> {...} } }`), flach als eigene Items.
-    ViaIssues { child: &'static str, as_subscription: bool },
+    ViaIssues {
+        child: &'static str,
+        as_subscription: bool,
+    },
 }
 
 struct QuerySpec {
@@ -234,12 +237,19 @@ pub fn authorization_value(token: &Secret) -> String {
 pub fn flatten_connections(v: Value) -> Value {
     match v {
         Value::Object(mut m) => {
-            if m.len() <= 2 && m.contains_key("nodes") && m.keys().all(|k| k == "nodes" || k == "pageInfo") {
+            if m.len() <= 2
+                && m.contains_key("nodes")
+                && m.keys().all(|k| k == "nodes" || k == "pageInfo")
+            {
                 if let Some(nodes) = m.remove("nodes") {
                     return flatten_connections(nodes);
                 }
             }
-            Value::Object(m.into_iter().map(|(k, v)| (k, flatten_connections(v))).collect())
+            Value::Object(
+                m.into_iter()
+                    .map(|(k, v)| (k, flatten_connections(v)))
+                    .collect(),
+            )
         }
         Value::Array(a) => Value::Array(a.into_iter().map(flatten_connections).collect()),
         other => other,
@@ -388,8 +398,14 @@ impl LinearSource {
                 Ok(v) => return Ok(v),
                 Err(SourceError::RateLimited(wait)) if attempt < self.config.max_retries => {
                     attempt += 1;
-                    let wait = wait.unwrap_or(Duration::from_secs(60)).min(self.config.max_wait);
-                    tracing::warn!(attempt, wait_ms = wait.as_millis() as u64, "import source rate limit, waiting");
+                    let wait = wait
+                        .unwrap_or(Duration::from_secs(60))
+                        .min(self.config.max_wait);
+                    tracing::warn!(
+                        attempt,
+                        wait_ms = wait.as_millis() as u64,
+                        "import source rate limit, waiting"
+                    );
                     self.defer(wait);
                 }
                 Err(SourceError::Transport(m)) if attempt < self.config.max_retries.min(3) => {
@@ -416,16 +432,28 @@ impl LinearSource {
         let status = resp.status();
         let headers = resp.headers().clone();
         let num = |name: &str| -> Option<u64> {
-            headers.get(name)?.to_str().ok()?.trim().parse::<f64>().ok().map(|f| f as u64)
+            headers
+                .get(name)?
+                .to_str()
+                .ok()?
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .map(|f| f as u64)
         };
-        let reset_wait = |name: &str| num(name).map(|ms| wait_from_reset_ms(ms, self.config.max_wait));
+        let reset_wait =
+            |name: &str| num(name).map(|ms| wait_from_reset_ms(ms, self.config.max_wait));
         // Vorausschauend drosseln.
-        if num("x-ratelimit-requests-remaining").is_some_and(|r| r <= self.config.low_requests_threshold) {
+        if num("x-ratelimit-requests-remaining")
+            .is_some_and(|r| r <= self.config.low_requests_threshold)
+        {
             if let Some(w) = reset_wait("x-ratelimit-requests-reset") {
                 self.defer(w);
             }
         }
-        if num("x-ratelimit-complexity-remaining").is_some_and(|r| r <= self.config.low_complexity_threshold) {
+        if num("x-ratelimit-complexity-remaining")
+            .is_some_and(|r| r <= self.config.low_complexity_threshold)
+        {
             if let Some(w) = reset_wait("x-ratelimit-complexity-reset") {
                 self.defer(w);
             }
@@ -470,8 +498,14 @@ impl LinearSource {
             }
             if payload.get("data").is_none_or(Value::is_null) {
                 let c = errors.first().map(code).unwrap_or_default();
-                let c: String = c.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ' ').take(60).collect();
-                return Err(SourceError::Invalid(format!("the source returned an error ({c})")));
+                let c: String = c
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ' ')
+                    .take(60)
+                    .collect();
+                return Err(SourceError::Invalid(format!(
+                    "the source returned an error ({c})"
+                )));
             }
         }
         if !status.is_success() {
@@ -491,12 +525,14 @@ impl ImportSource for LinearSource {
     }
 
     async fn workspace(&self) -> SourceResult<SourceWorkspace> {
-        let body = json!({ "query": "query { viewer { id email } organization { id name urlKey } }" });
+        let body =
+            json!({ "query": "query { viewer { id email } organization { id name urlKey } }" });
         let data = self.execute(&body).await?;
         let org = &data["organization"];
         let text = |v: &Value| v.as_str().map(str::to_owned);
         Ok(SourceWorkspace {
-            id: text(&org["id"]).ok_or_else(|| SourceError::Invalid("organization missing".into()))?,
+            id: text(&org["id"])
+                .ok_or_else(|| SourceError::Invalid("organization missing".into()))?,
             name: text(&org["name"]).unwrap_or_default(),
             url_key: text(&org["urlKey"]).unwrap_or_default(),
             viewer_email: text(&data["viewer"]["email"]),
@@ -586,7 +622,10 @@ mod tests {
             limit: 50,
         });
         let q = body["query"].as_str().unwrap();
-        assert!(q.starts_with("query("), "must be a query, never a mutation: {q}");
+        assert!(
+            q.starts_with("query("),
+            "must be a query, never a mutation: {q}"
+        );
         assert!(!q.contains("mutation"));
         assert!(q.contains("issues(first: $first, after: $after, includeArchived: true"));
         assert!(q.contains("filter: { updatedAt: { gt: \"2026-03-01T10:00:00.000Z\" } }"));

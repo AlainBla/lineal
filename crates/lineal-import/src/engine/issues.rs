@@ -26,7 +26,8 @@ impl Session<'_, '_> {
                 self.item_result("Issue", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::Issues, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::Issues, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -35,7 +36,10 @@ impl Session<'_, '_> {
     }
 
     async fn issue(&mut self, n: N<'_>) -> AppResult<()> {
-        let src = n.id().ok_or_else(|| AppError::invalid_request("issue without id"))?.to_owned();
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("issue without id"))?
+            .to_owned();
         let Some(team_src) = n.ref_id("team") else {
             return Err(AppError::invalid_request("issue without team"));
         };
@@ -50,13 +54,21 @@ impl Session<'_, '_> {
         // Nummer aus Linear; ersatzweise aus der Kennung (`ENG-123`).
         let number = n
             .int("number")
-            .or_else(|| n.str("identifier").and_then(|i| i.rsplit('-').next()?.parse().ok()))
+            .or_else(|| {
+                n.str("identifier")
+                    .and_then(|i| i.rsplit('-').next()?.parse().ok())
+            })
             .filter(|x| *x > 0 && *x < i32::MAX as i64)
             .ok_or_else(|| AppError::invalid_request("issue without a valid number"))?;
         let state = match self.target_opt("WorkflowState", n.ref_id("state")).await? {
             Some(s) => s,
             None => {
-                self.note("warning", "Issue", Some(&src), "workflow state was not imported; the team's default state was used");
+                self.note(
+                    "warning",
+                    "Issue",
+                    Some(&src),
+                    "workflow state was not imported; the team's default state was used",
+                );
                 self.tx()?
                     .imports()
                     .first_state_of_types(team, &["backlog", "unstarted"])
@@ -71,7 +83,8 @@ impl Session<'_, '_> {
         let creator = self.target_opt("User", n.ref_id("creator")).await?;
         let project = self.target_opt("Project", n.ref_id("project")).await?;
         let milestone = if project.is_some() {
-            self.target_opt("ProjectMilestone", n.ref_id("projectMilestone")).await?
+            self.target_opt("ProjectMilestone", n.ref_id("projectMilestone"))
+                .await?
         } else {
             None
         };
@@ -89,18 +102,42 @@ impl Session<'_, '_> {
         let sort = n.float("sortOrder").unwrap_or(0.0);
         if let Some(p) = project {
             // Ein Issue mit Projekt braucht die project_team-Zeile seines Teams (Linear fügt sie implizit hinzu).
-            let r = row(vec![("project_id", json!(p)), ("team_id", json!(team)), ("created_at", jts(Some(now)))]);
-            self.tx()?.imports().insert_row_ignore(ImportTable::ProjectTeam, &Value::Object(r)).await?;
+            let r = row(vec![
+                ("project_id", json!(p)),
+                ("team_id", json!(team)),
+                ("created_at", jts(Some(now))),
+            ]);
+            self.tx()?
+                .imports()
+                .insert_row_ignore(ImportTable::ProjectTeam, &Value::Object(r))
+                .await?;
         }
         let r: Map<String, Value> = row(vec![
             ("team_id", json!(team)),
             ("number", json!(number)),
-            ("title", json!(clean_title(n.str("title"), 255, "(untitled)"))),
+            (
+                "title",
+                json!(clean_title(n.str("title"), 255, "(untitled)")),
+            ),
             ("description", json!(description)),
             ("state_id", json!(state)),
             ("state_entered_at", jts(Some(state_entered))),
-            ("priority", json!(n.int("priority").filter(|p| (0..=4).contains(p)).unwrap_or(0))),
-            ("estimate", json!(n.float("estimate").filter(|e| *e >= 0.0).map(|e| e.round() as i64))),
+            (
+                "priority",
+                json!(
+                    n.int("priority")
+                        .filter(|p| (0..=4).contains(p))
+                        .unwrap_or(0)
+                ),
+            ),
+            (
+                "estimate",
+                json!(
+                    n.float("estimate")
+                        .filter(|e| *e >= 0.0)
+                        .map(|e| e.round() as i64)
+                ),
+            ),
             ("assignee_id", json!(assignee)),
             ("creator_id", json!(creator)),
             ("parent_id", json!(parent)),
@@ -131,7 +168,9 @@ impl Session<'_, '_> {
             ("created_at", jts(Some(created))),
             ("updated_at", jts(Some(updated))),
         ]);
-        let up = self.upsert("Issue", n, ImportTable::Issue, r, false).await?;
+        let up = self
+            .upsert("Issue", n, ImportTable::Issue, r, false)
+            .await?;
         if !up.wrote() {
             return Ok(());
         }
@@ -153,12 +192,19 @@ impl Session<'_, '_> {
         }
         // Labels und frühere Kennungen neu schreiben.
         if up.outcome == Outcome::Updated {
-            self.tx()?.imports().delete_rows_where(ImportTable::IssueToLabel, "issue_id", up.id).await?;
+            self.tx()?
+                .imports()
+                .delete_rows_where(ImportTable::IssueToLabel, "issue_id", up.id)
+                .await?;
         }
         for l in n.ref_ids("labels", 50) {
-            let Some(label) = self.label_target(l).await? else { continue };
+            let Some(label) = self.label_target(l).await? else {
+                continue;
+            };
             let group = match self.labels.get(l).and_then(|m| m.parent.clone()) {
-                Some(g) if self.labels.get(&g).is_some_and(|m| m.is_group) => self.target("IssueLabel", &g).await?,
+                Some(g) if self.labels.get(&g).is_some_and(|m| m.is_group) => {
+                    self.target("IssueLabel", &g).await?
+                }
                 _ => None,
             };
             let r = row(vec![
@@ -167,7 +213,11 @@ impl Session<'_, '_> {
                 ("single_select_group_id", json!(group)),
                 ("created_at", jts(Some(created))),
             ]);
-            let inserted = self.tx()?.imports().insert_row_ignore(ImportTable::IssueToLabel, &Value::Object(r)).await?;
+            let inserted = self
+                .tx()?
+                .imports()
+                .insert_row_ignore(ImportTable::IssueToLabel, &Value::Object(r))
+                .await?;
             if !inserted {
                 self.note("info", "Issue", Some(&src), "a label of an exclusive group was skipped (group already has a label on this issue)");
             }
@@ -175,7 +225,9 @@ impl Session<'_, '_> {
         if let Some(prev) = n.0.get("previousIdentifiers").and_then(Value::as_array) {
             for p in prev.iter().filter_map(Value::as_str).take(20) {
                 let ident = p.trim().to_uppercase();
-                let Some((prefix, num)) = ident.rsplit_once('-') else { continue };
+                let Some((prefix, num)) = ident.rsplit_once('-') else {
+                    continue;
+                };
                 if prefix.is_empty() || num.parse::<u32>().is_err() || ident.len() > 32 {
                     continue;
                 }
@@ -186,19 +238,35 @@ impl Session<'_, '_> {
                     ("team_key", json!(prefix)),
                     ("created_at", jts(Some(created))),
                 ]);
-                self.tx()?.imports().insert_row_ignore(ImportTable::IssueIdentifierAlias, &Value::Object(r)).await?;
+                self.tx()?
+                    .imports()
+                    .insert_row_ignore(ImportTable::IssueIdentifierAlias, &Value::Object(r))
+                    .await?;
             }
         }
         let ev = if up.outcome == Outcome::Created {
-            DomainEvent::IssueCreated { issue_id: IssueId(up.id), team_id: TeamId(team), mentioned_user_ids: vec![] }
+            DomainEvent::IssueCreated {
+                issue_id: IssueId(up.id),
+                team_id: TeamId(team),
+                mentioned_user_ids: vec![],
+            }
         } else {
             DomainEvent::IssueUpdated {
                 issue_id: IssueId(up.id),
                 team_id: TeamId(team),
-                changed: ["title", "description", "stateId", "priority", "assigneeId", "parentId", "projectId", "cycleId"]
-                    .iter()
-                    .map(|s| (*s).to_owned())
-                    .collect(),
+                changed: [
+                    "title",
+                    "description",
+                    "stateId",
+                    "priority",
+                    "assigneeId",
+                    "parentId",
+                    "projectId",
+                    "cycleId",
+                ]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
                 mentioned_user_ids: vec![],
             }
         };
@@ -211,7 +279,11 @@ impl Session<'_, '_> {
         let source = self.source().to_owned();
         loop {
             self.begin_unit().await?;
-            let links = self.tx()?.imports().list_mappings(&source, LINK_TYPE, None, 100).await?;
+            let links = self
+                .tx()?
+                .imports()
+                .list_mappings(&source, LINK_TYPE, None, 100)
+                .await?;
             if links.is_empty() {
                 self.end_unit(None).await?;
                 return Ok(());
@@ -220,13 +292,29 @@ impl Session<'_, '_> {
                 let parent_src = m.checksum.clone().unwrap_or_default();
                 match self.target("Issue", &parent_src).await? {
                     Some(parent) if parent != m.target_id => {
-                        self.tx()?.imports().set_row_uuid(ImportTable::Issue, "parent_id", m.target_id, Some(parent)).await?;
+                        self.tx()?
+                            .imports()
+                            .set_row_uuid(
+                                ImportTable::Issue,
+                                "parent_id",
+                                m.target_id,
+                                Some(parent),
+                            )
+                            .await?;
                     }
                     _ => {
-                        self.note("warning", "Issue", Some(&m.source_id), "the parent issue was not imported; the sub-issue link was dropped");
+                        self.note(
+                            "warning",
+                            "Issue",
+                            Some(&m.source_id),
+                            "the parent issue was not imported; the sub-issue link was dropped",
+                        );
                     }
                 }
-                self.tx()?.imports().delete_mapping(&source, LINK_TYPE, &m.source_id).await?;
+                self.tx()?
+                    .imports()
+                    .delete_mapping(&source, LINK_TYPE, &m.source_id)
+                    .await?;
             }
             self.end_unit(None).await?;
             if self.dry {
@@ -247,7 +335,8 @@ impl Session<'_, '_> {
                 self.item_result("IssueRelation", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::IssueRelations, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::IssueRelations, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -258,7 +347,15 @@ impl Session<'_, '_> {
     async fn relation(&mut self, n: N<'_>) -> AppResult<()> {
         let Some(ty) = one_of(n.str("type"), RELATION_TYPES) else {
             self.counters("IssueRelation").errors += 1;
-            self.note("warning", "IssueRelation", n.id(), format!("unknown relation type `{}`; skipped", clean_text(n.str("type").unwrap_or(""), 40, false)));
+            self.note(
+                "warning",
+                "IssueRelation",
+                n.id(),
+                format!(
+                    "unknown relation type `{}`; skipped",
+                    clean_text(n.str("type").unwrap_or(""), 40, false)
+                ),
+            );
             return Ok(());
         };
         let a = self.target_opt("Issue", n.ref_id("issue")).await?;
@@ -277,19 +374,34 @@ impl Session<'_, '_> {
             ("related_issue_id", json!(b)),
             ("type", json!(ty)),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(self.now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(self.now)).or(Some(created))),
+            ),
         ]);
-        match self.upsert("IssueRelation", n, ImportTable::IssueRelation, r, true).await {
+        match self
+            .upsert("IssueRelation", n, ImportTable::IssueRelation, r, true)
+            .await
+        {
             Ok(up) => {
                 if up.outcome == Outcome::Created {
-                    self.event(DomainEvent::IssueRelationCreated { relation_id: IssueRelationId(up.id), issue_id: IssueId(a) }).await?;
+                    self.event(DomainEvent::IssueRelationCreated {
+                        relation_id: IssueRelationId(up.id),
+                        issue_id: IssueId(a),
+                    })
+                    .await?;
                 }
                 Ok(())
             }
             Err(e) if e.kind == ErrorKind::Conflict => {
                 // Gegenrichtung bzw. zweite Duplicate-Relation existiert bereits.
                 self.counters("IssueRelation").skipped += 1;
-                self.note("info", "IssueRelation", n.id(), "an equivalent relation already exists; skipped");
+                self.note(
+                    "info",
+                    "IssueRelation",
+                    n.id(),
+                    "an equivalent relation already exists; skipped",
+                );
                 Ok(())
             }
             Err(e) => Err(e),
@@ -307,7 +419,8 @@ impl Session<'_, '_> {
                 self.item_result("IssueHistory", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::IssueHistory, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::IssueHistory, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -334,8 +447,10 @@ impl Session<'_, '_> {
         let mut changes: Map<String, Value> = Map::new();
         if n.ref_id("toState").is_some() || n.ref_id("fromState").is_some() {
             let (f, t) = (
-                self.target_opt("WorkflowState", n.ref_id("fromState")).await?,
-                self.target_opt("WorkflowState", n.ref_id("toState")).await?,
+                self.target_opt("WorkflowState", n.ref_id("fromState"))
+                    .await?,
+                self.target_opt("WorkflowState", n.ref_id("toState"))
+                    .await?,
             );
             self.change(&mut changes, "stateId", f, t).await;
         }
@@ -347,7 +462,10 @@ impl Session<'_, '_> {
             self.change(&mut changes, "assigneeId", f, t).await;
         }
         if n.int("toPriority").is_some() {
-            changes.insert("priority".into(), json!({ "from": n.int("fromPriority"), "to": n.int("toPriority") }));
+            changes.insert(
+                "priority".into(),
+                json!({ "from": n.int("fromPriority"), "to": n.int("toPriority") }),
+            );
         }
         if n.ref_id("toTeam").is_some() || n.ref_id("fromTeam").is_some() {
             let (f, t) = (
@@ -383,7 +501,8 @@ impl Session<'_, '_> {
             ("changes", Value::Object(changes)),
             ("created_at", jts(Some(created))),
         ]);
-        self.upsert("IssueHistory", n, ImportTable::IssueHistory, r, true).await?;
+        self.upsert("IssueHistory", n, ImportTable::IssueHistory, r, true)
+            .await?;
         Ok(())
     }
 
@@ -398,7 +517,8 @@ impl Session<'_, '_> {
                 self.item_result("IssueSubscription", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::IssueSubscriptions, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::IssueSubscriptions, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -420,9 +540,21 @@ impl Session<'_, '_> {
             ("reason", json!("manual")),
             ("created_at", jts(Some(self.now))),
         ]);
-        let up = self.upsert("IssueSubscription", n, ImportTable::IssueSubscription, r, true).await?;
+        let up = self
+            .upsert(
+                "IssueSubscription",
+                n,
+                ImportTable::IssueSubscription,
+                r,
+                true,
+            )
+            .await?;
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::IssueSubscriptionCreated { issue_id: IssueId(issue), user_id: UserId(user) }).await?;
+            self.event(DomainEvent::IssueSubscriptionCreated {
+                issue_id: IssueId(issue),
+                user_id: UserId(user),
+            })
+            .await?;
         }
         Ok(())
     }

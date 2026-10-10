@@ -89,8 +89,7 @@ impl From<MappingDbRow> for MappingRow {
     }
 }
 
-const MAPPING_COLS: &str =
-    "import_run_id, source, source_type, source_id, target_id, source_updated_at, checksum, imported_at";
+const MAPPING_COLS: &str = "import_run_id, source, source_type, source_id, target_id, source_updated_at, checksum, imported_at";
 
 fn check_ident(name: &str) -> AppResult<()> {
     let mut chars = name.chars();
@@ -162,13 +161,14 @@ impl ImportRepo for PgTx {
     }
 
     async fn list_import_runs(&mut self, limit: i64) -> AppResult<Vec<ImportRun>> {
-        let rows: Vec<RunRow> =
-            sqlx::query_as(&run_select("AND archived_at IS NULL ORDER BY created_at DESC, id LIMIT $2"))
-                .bind(self.org.0)
-                .bind(limit.clamp(1, 200))
-                .fetch_all(&mut *self.tx)
-                .await
-                .map_err(db_err)?;
+        let rows: Vec<RunRow> = sqlx::query_as(&run_select(
+            "AND archived_at IS NULL ORDER BY created_at DESC, id LIMIT $2",
+        ))
+        .bind(self.org.0)
+        .bind(limit.clamp(1, 200))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
@@ -244,13 +244,15 @@ impl ImportRepo for PgTx {
         id: Uuid,
         lease_until: Option<DateTime<Utc>>,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE import_run SET lease_until = $3 WHERE organization_id = $1 AND id = $2")
-            .bind(self.org.0)
-            .bind(id)
-            .bind(lease_until)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE import_run SET lease_until = $3 WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(lease_until)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 
@@ -288,12 +290,14 @@ impl ImportRepo for PgTx {
     }
 
     async fn delete_import_credential(&mut self, run_id: Uuid) -> AppResult<()> {
-        sqlx::query("DELETE FROM import_credential WHERE organization_id = $1 AND import_run_id = $2")
-            .bind(self.org.0)
-            .bind(run_id)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        sqlx::query(
+            "DELETE FROM import_credential WHERE organization_id = $1 AND import_run_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(run_id)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 
@@ -658,7 +662,8 @@ impl ImportRepo for PgTx {
     ) -> AppResult<i32> {
         match counter {
             ImportCounter::Project => {
-                let team = scope.ok_or_else(|| AppError::internal("project counter needs a team"))?;
+                let team =
+                    scope.ok_or_else(|| AppError::internal("project counter needs a team"))?;
                 sqlx::query_scalar(
                     "UPDATE team SET last_project_number = last_project_number + 1 \
                      WHERE organization_id = $1 AND id = $2 RETURNING last_project_number",

@@ -24,7 +24,11 @@ impl<'a> N<'a> {
 
     /// `{ "id": "…" }` -> ID.
     pub fn ref_id(&self, key: &str) -> Option<&'a str> {
-        self.0.get(key)?.get("id")?.as_str().filter(|s| !s.is_empty())
+        self.0
+            .get(key)?
+            .get("id")?
+            .as_str()
+            .filter(|s| !s.is_empty())
     }
 
     pub fn ts(&self, key: &str) -> Option<DateTime<Utc>> {
@@ -34,7 +38,9 @@ impl<'a> N<'a> {
     pub fn date(&self, key: &str) -> Option<String> {
         let s = self.str(key)?;
         let head = s.get(..10)?;
-        NaiveDate::parse_from_str(head, "%Y-%m-%d").ok().map(|d| d.to_string())
+        NaiveDate::parse_from_str(head, "%Y-%m-%d")
+            .ok()
+            .map(|d| d.to_string())
     }
 
     pub fn int(&self, key: &str) -> Option<i64> {
@@ -82,7 +88,13 @@ impl<'a> N<'a> {
         self.0
             .get(key)
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_f64).filter(|f| f.is_finite()).take(max).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_f64)
+                    .filter(|f| f.is_finite())
+                    .take(max)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -139,7 +151,11 @@ pub fn clean_title(s: Option<&str>, max: usize, fallback: &str) -> String {
 /// Farbe `^#[0-9A-Fa-f]{6}$`, sonst `default`.
 pub fn color_or(c: Option<&str>, default: &str) -> String {
     match c {
-        Some(c) if c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit()) => {
+        Some(c)
+            if c.len() == 7
+                && c.starts_with('#')
+                && c[1..].chars().all(|x| x.is_ascii_hexdigit()) =>
+        {
             c.to_owned()
         }
         _ => default.to_owned(),
@@ -149,7 +165,9 @@ pub fn color_or(c: Option<&str>, default: &str) -> String {
 /// Icon `^[A-Za-z0-9_:-]{1,64}$`, sonst `None`.
 pub fn icon_or_none(i: Option<&str>) -> Option<String> {
     let i = i?;
-    let ok = (1..=64).contains(&i.len()) && i.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-'));
+    let ok = (1..=64).contains(&i.len())
+        && i.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-'));
     ok.then(|| i.to_owned())
 }
 
@@ -178,7 +196,10 @@ mod tests {
         let a = json!({"a":1,"b":{"x":[1,2],"y":null}});
         let b = json!({"b":{"y":null,"x":[1,2]},"a":1});
         assert_eq!(checksum_of(&a), checksum_of(&b));
-        assert_ne!(checksum_of(&a), checksum_of(&json!({"a":2,"b":{"x":[1,2],"y":null}})));
+        assert_ne!(
+            checksum_of(&a),
+            checksum_of(&json!({"a":2,"b":{"x":[1,2],"y":null}}))
+        );
     }
 
     #[test]
@@ -190,7 +211,10 @@ mod tests {
         assert_eq!(icon_or_none(Some("<script>")), None);
         assert_eq!(clean_title(Some("  a\u{0}b  "), 10, "x"), "ab");
         assert_eq!(clean_title(Some("   "), 10, "untitled"), "untitled");
-        assert_eq!(one_of(Some("started"), &["started", "backlog"]), Some("started"));
+        assert_eq!(
+            one_of(Some("started"), &["started", "backlog"]),
+            Some("started")
+        );
         assert_eq!(one_of(Some("bogus"), &["started"]), None);
     }
 }

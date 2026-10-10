@@ -146,19 +146,29 @@ pub struct ImportStartInputGql {
 }
 
 fn user_mapping(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String, Option<Uuid>>> {
-    let Some(Json(v)) = v else { return Ok(BTreeMap::new()) };
+    let Some(Json(v)) = v else {
+        return Ok(BTreeMap::new());
+    };
     let Some(m) = v.as_object() else {
-        return Err(gql_err(AppError::invalid_request("userMapping must be an object")));
+        return Err(gql_err(AppError::invalid_request(
+            "userMapping must be an object",
+        )));
     };
     if m.len() > 10_000 {
-        return Err(gql_err(AppError::invalid_request("userMapping is too large")));
+        return Err(gql_err(AppError::invalid_request(
+            "userMapping is too large",
+        )));
     }
     let mut out = BTreeMap::new();
     for (k, val) in m {
         let target = match val {
             Value::Null => None,
             Value::String(s) => Some(parse_id(s)?),
-            _ => return Err(gql_err(AppError::invalid_request("userMapping values must be ids or null"))),
+            _ => {
+                return Err(gql_err(AppError::invalid_request(
+                    "userMapping values must be ids or null",
+                )));
+            }
         };
         out.insert(k.clone(), target);
     }
@@ -166,17 +176,25 @@ fn user_mapping(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String
 }
 
 fn key_mapping(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String, String>> {
-    let Some(Json(v)) = v else { return Ok(BTreeMap::new()) };
+    let Some(Json(v)) = v else {
+        return Ok(BTreeMap::new());
+    };
     let Some(m) = v.as_object() else {
-        return Err(gql_err(AppError::invalid_request("keyMapping must be an object")));
+        return Err(gql_err(AppError::invalid_request(
+            "keyMapping must be an object",
+        )));
     };
     if m.len() > 1_000 {
-        return Err(gql_err(AppError::invalid_request("keyMapping is too large")));
+        return Err(gql_err(AppError::invalid_request(
+            "keyMapping is too large",
+        )));
     }
     let mut out = BTreeMap::new();
     for (k, val) in m {
         let Some(target) = val.as_str() else {
-            return Err(gql_err(AppError::invalid_request("keyMapping values must be strings")));
+            return Err(gql_err(AppError::invalid_request(
+                "keyMapping values must be strings",
+            )));
         };
         out.insert(k.clone(), target.to_owned());
     }
@@ -189,7 +207,11 @@ pub struct ImportQuery;
 #[Object]
 impl ImportQuery {
     /// Ein Importlauf mit Status, Fortschritt und Plan (nur Admins).
-    async fn import_run(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<ImportRunGql> {
+    async fn import_run(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_get_run(request_ctx(ctx)?, parse_id(&id)?)
             .await
@@ -198,7 +220,11 @@ impl ImportQuery {
     }
 
     /// Alle Importläufe, neueste zuerst (nur Admins).
-    async fn import_runs(&self, ctx: &Context<'_>, first: Option<i32>) -> async_graphql::Result<Vec<ImportRunGql>> {
+    async fn import_runs(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<ImportRunGql>> {
         let runs = app(ctx)?
             .import_list_runs(request_ctx(ctx)?, i64::from(first.unwrap_or(20)))
             .await
@@ -225,7 +251,12 @@ impl ImportQuery {
             )
             .await
             .map_err(gql_err)?;
-        let n = |s: &str| counts.iter().find(|(k, _)| k == s).map_or(0, |(_, n)| *n as i32);
+        let n = |s: &str| {
+            counts
+                .iter()
+                .find(|(k, _)| k == s)
+                .map_or(0, |(_, n)| *n as i32)
+        };
         Ok(ImportReportGql {
             info_count: n("info"),
             warning_count: n("warning"),
@@ -242,7 +273,11 @@ pub struct ImportMutation;
 impl ImportMutation {
     /// Verbindung prüfen und Plan vorbereiten: legt einen Lauf (`scanning`) an und speichert das
     /// Token verschlüsselt; der Import-Job liest Teams, User und Mengen (Status danach `planned`).
-    async fn import_scan(&self, ctx: &Context<'_>, input: ImportScanInputGql) -> async_graphql::Result<ImportRunGql> {
+    async fn import_scan(
+        &self,
+        ctx: &Context<'_>,
+        input: ImportScanInputGql,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_scan(
                 request_ctx(ctx)?,
@@ -257,7 +292,11 @@ impl ImportMutation {
     }
 
     /// Lauf starten (asynchron als Job). Key-Konflikte mit bestehenden Teams brechen vorher ab.
-    async fn import_start(&self, ctx: &Context<'_>, input: ImportStartInputGql) -> async_graphql::Result<ImportRunGql> {
+    async fn import_start(
+        &self,
+        ctx: &Context<'_>,
+        input: ImportStartInputGql,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_start(
                 request_ctx(ctx)?,
@@ -275,7 +314,11 @@ impl ImportMutation {
         Ok(run.into())
     }
 
-    async fn import_pause(&self, ctx: &Context<'_>, run_id: String) -> async_graphql::Result<ImportRunGql> {
+    async fn import_pause(
+        &self,
+        ctx: &Context<'_>,
+        run_id: String,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_pause(request_ctx(ctx)?, parse_id(&run_id)?)
             .await
@@ -283,7 +326,11 @@ impl ImportMutation {
         Ok(run.into())
     }
 
-    async fn import_resume(&self, ctx: &Context<'_>, run_id: String) -> async_graphql::Result<ImportRunGql> {
+    async fn import_resume(
+        &self,
+        ctx: &Context<'_>,
+        run_id: String,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_resume(request_ctx(ctx)?, parse_id(&run_id)?)
             .await
@@ -291,7 +338,11 @@ impl ImportMutation {
         Ok(run.into())
     }
 
-    async fn import_cancel(&self, ctx: &Context<'_>, run_id: String) -> async_graphql::Result<ImportRunGql> {
+    async fn import_cancel(
+        &self,
+        ctx: &Context<'_>,
+        run_id: String,
+    ) -> async_graphql::Result<ImportRunGql> {
         let run = app(ctx)?
             .import_cancel(request_ctx(ctx)?, parse_id(&run_id)?)
             .await

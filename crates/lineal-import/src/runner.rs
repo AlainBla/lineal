@@ -38,10 +38,22 @@ pub async fn fail_run(app: &App, org: OrgId, run_id: Uuid, message: &str) -> App
 pub async fn run_claimed(app: &App, run: &ImportRun) -> AppResult<()> {
     let org = OrgId(run.org_id);
     if run.source != "linear" {
-        return fail_run(app, org, run.id, "runs of this source are executed by the command line").await;
+        return fail_run(
+            app,
+            org,
+            run.id,
+            "runs of this source are executed by the command line",
+        )
+        .await;
     }
     let Some(token) = app.import_load_token((org, run.id)).await? else {
-        return fail_run(app, org, run.id, "the stored credentials are no longer available; start a new scan").await;
+        return fail_run(
+            app,
+            org,
+            run.id,
+            "the stored credentials are no longer available; start a new scan",
+        )
+        .await;
     };
     let source = match LinearSource::new(&token) {
         Ok(s) => s,

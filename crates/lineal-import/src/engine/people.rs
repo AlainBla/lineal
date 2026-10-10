@@ -20,7 +20,12 @@ impl Session<'_, '_> {
         let base = lineal_app::usecases::user::display_name_base(email);
         let mut candidate = base.clone();
         let mut i = 2;
-        while self.tx()?.imports().user_display_name_taken(&candidate).await? {
+        while self
+            .tx()?
+            .imports()
+            .user_display_name_taken(&candidate)
+            .await?
+        {
             let suffix = i.to_string();
             let keep: String = base.chars().take(40 - suffix.len()).collect();
             candidate = format!("{keep}{suffix}");
@@ -63,7 +68,12 @@ impl Session<'_, '_> {
             if self.tx()?.users().get(UserId(id)).await?.is_some() {
                 target = Some(id);
             } else {
-                self.note("warning", "User", Some(&src), "the mapped Lineal user does not exist; falling back to e-mail matching");
+                self.note(
+                    "warning",
+                    "User",
+                    Some(&src),
+                    "the mapped Lineal user does not exist; falling back to e-mail matching",
+                );
             }
         }
         if target.is_none()
@@ -74,9 +84,13 @@ impl Session<'_, '_> {
         let target = match target {
             Some(t) => t,
             None => {
-                let email = email.ok_or_else(|| AppError::invalid_request("user without e-mail address"))?;
-                if !email.contains('@') || email.len() > 254 || email.contains(char::is_whitespace) {
-                    return Err(AppError::invalid_request("user has an invalid e-mail address"));
+                let email = email
+                    .ok_or_else(|| AppError::invalid_request("user without e-mail address"))?;
+                if !email.contains('@') || email.len() > 254 || email.contains(char::is_whitespace)
+                {
+                    return Err(AppError::invalid_request(
+                        "user has an invalid e-mail address",
+                    ));
                 }
                 let id = self.new_id();
                 let display = self.free_display_name(&email).await?;
@@ -99,8 +113,14 @@ impl Session<'_, '_> {
                     ("created_at", jts(Some(created))),
                     ("updated_at", jts(Some(created))),
                 ]);
-                self.tx()?.imports().insert_row(ImportTable::User, &Value::Object(r)).await?;
-                self.event(DomainEvent::UserCreated { user_id: UserId(id) }).await?;
+                self.tx()?
+                    .imports()
+                    .insert_row(ImportTable::User, &Value::Object(r))
+                    .await?;
+                self.event(DomainEvent::UserCreated {
+                    user_id: UserId(id),
+                })
+                .await?;
                 id
             }
         };
@@ -139,7 +159,12 @@ impl Session<'_, '_> {
                 // Zyklus oder fehlende Eltern: Rest als Wurzeln importieren.
                 for v in next.drain(..) {
                     let n = N(v);
-                    self.note("warning", "Team", n.id(), "parent team could not be resolved; imported as a top-level team");
+                    self.note(
+                        "warning",
+                        "Team",
+                        n.id(),
+                        "parent team could not be resolved; imported as a top-level team",
+                    );
                     let r = self.team_with_parent(n, None).await;
                     self.item_result("Team", n.id(), r)?;
                 }
@@ -156,7 +181,12 @@ impl Session<'_, '_> {
             Some(p) => self.target("Team", p).await?,
             None => {
                 if n.ref_id("parent").is_some() {
-                    self.note("warning", "Team", n.id(), "the parent team is not part of this import; imported as a top-level team");
+                    self.note(
+                        "warning",
+                        "Team",
+                        n.id(),
+                        "the parent team is not part of this import; imported as a top-level team",
+                    );
                 }
                 None
             }
@@ -185,30 +215,102 @@ impl Session<'_, '_> {
             row(vec![
                 ("name", json!(name)),
                 ("key", json!(key)),
-                ("description", json!(n.text("description").map(|d| clean_text(d, 2000, true)))),
+                (
+                    "description",
+                    json!(n.text("description").map(|d| clean_text(d, 2000, true))),
+                ),
                 ("icon", json!(icon_or_none(n.str("icon")))),
                 ("color", json!(color_or(n.str("color"), "#5E6AD2"))),
                 ("parent_id", json!(parent)),
-                ("visibility", json!(if n.bool("private").unwrap_or(false) { "private" } else { "public" })),
+                (
+                    "visibility",
+                    json!(if n.bool("private").unwrap_or(false) {
+                        "private"
+                    } else {
+                        "public"
+                    }),
+                ),
                 ("timezone", json!(tz)),
-                ("triage_enabled", json!(n.bool("triageEnabled").unwrap_or(false))),
-                ("require_priority_to_leave_triage", json!(n.bool("requirePriorityToLeaveTriage").unwrap_or(false))),
+                (
+                    "triage_enabled",
+                    json!(n.bool("triageEnabled").unwrap_or(false)),
+                ),
+                (
+                    "require_priority_to_leave_triage",
+                    json!(n.bool("requirePriorityToLeaveTriage").unwrap_or(false)),
+                ),
                 ("auto_close_period", json!(period("autoClosePeriod"))),
-                ("auto_archive_period", json!(period("autoArchivePeriod").unwrap_or(6))),
-                ("group_issue_history", json!(n.bool("groupIssueHistory").unwrap_or(true))),
+                (
+                    "auto_archive_period",
+                    json!(period("autoArchivePeriod").unwrap_or(6)),
+                ),
+                (
+                    "group_issue_history",
+                    json!(n.bool("groupIssueHistory").unwrap_or(true)),
+                ),
                 (
                     "set_issue_sort_order_on_state_change",
-                    json!(one_of(n.str("setIssueSortOrderOnStateChange"), SORT_ON_STATE).unwrap_or("top")),
+                    json!(
+                        one_of(n.str("setIssueSortOrderOnStateChange"), SORT_ON_STATE)
+                            .unwrap_or("top")
+                    ),
                 ),
-                ("issue_estimation_type", json!(one_of(n.str("issueEstimationType"), ESTIMATION).unwrap_or("notUsed"))),
-                ("issue_estimation_extended", json!(n.bool("issueEstimationExtended").unwrap_or(false))),
-                ("issue_estimation_allow_zero", json!(n.bool("issueEstimationAllowZero").unwrap_or(false))),
-                ("default_issue_estimate", json!(n.int("defaultIssueEstimate").filter(|e| *e >= 0).unwrap_or(1))),
-                ("cycles_enabled", json!(n.bool("cyclesEnabled").unwrap_or(false))),
-                ("cycle_duration", json!(n.int("cycleDuration").filter(|d| (1..=8).contains(d)).unwrap_or(2))),
-                ("cycle_cooldown_time", json!(n.int("cycleCooldownTime").filter(|d| (0..=4).contains(d)).unwrap_or(0))),
-                ("cycle_start_day", json!(n.int("cycleStartDay").filter(|d| (0..=6).contains(d)).unwrap_or(1))),
-                ("upcoming_cycle_count", json!(n.int("upcomingCycleCount").filter(|d| (1..=15).contains(d)).unwrap_or(2))),
+                (
+                    "issue_estimation_type",
+                    json!(one_of(n.str("issueEstimationType"), ESTIMATION).unwrap_or("notUsed")),
+                ),
+                (
+                    "issue_estimation_extended",
+                    json!(n.bool("issueEstimationExtended").unwrap_or(false)),
+                ),
+                (
+                    "issue_estimation_allow_zero",
+                    json!(n.bool("issueEstimationAllowZero").unwrap_or(false)),
+                ),
+                (
+                    "default_issue_estimate",
+                    json!(
+                        n.int("defaultIssueEstimate")
+                            .filter(|e| *e >= 0)
+                            .unwrap_or(1)
+                    ),
+                ),
+                (
+                    "cycles_enabled",
+                    json!(n.bool("cyclesEnabled").unwrap_or(false)),
+                ),
+                (
+                    "cycle_duration",
+                    json!(
+                        n.int("cycleDuration")
+                            .filter(|d| (1..=8).contains(d))
+                            .unwrap_or(2)
+                    ),
+                ),
+                (
+                    "cycle_cooldown_time",
+                    json!(
+                        n.int("cycleCooldownTime")
+                            .filter(|d| (0..=4).contains(d))
+                            .unwrap_or(0)
+                    ),
+                ),
+                (
+                    "cycle_start_day",
+                    json!(
+                        n.int("cycleStartDay")
+                            .filter(|d| (0..=6).contains(d))
+                            .unwrap_or(1)
+                    ),
+                ),
+                (
+                    "upcoming_cycle_count",
+                    json!(
+                        n.int("upcomingCycleCount")
+                            .filter(|d| (1..=15).contains(d))
+                            .unwrap_or(2)
+                    ),
+                ),
                 ("retired_at", jts(archived)),
                 ("import_locked_until", jts(Some(lock_until))),
                 ("created_at", jts(Some(created))),
@@ -223,14 +325,22 @@ impl Session<'_, '_> {
         {
             // Teamname bereits vergeben (Name ist je Workspace eindeutig): mit Zusatz erneut versuchen.
             let alt = format!("{} (Linear)", clean_text(&name, 70, false));
-            self.note("warning", "Team", n.id(), format!("team name already exists in Lineal; imported as `{alt}`"));
+            self.note(
+                "warning",
+                "Team",
+                n.id(),
+                format!("team name already exists in Lineal; imported as `{alt}`"),
+            );
             up = self
                 .upsert("Team", n, ImportTable::Team, make_row(&alt), false)
                 .await;
         }
         let up = up?;
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::TeamCreated { team_id: TeamId(up.id) }).await?;
+            self.event(DomainEvent::TeamCreated {
+                team_id: TeamId(up.id),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -246,7 +356,8 @@ impl Session<'_, '_> {
                 self.item_result("TeamMembership", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(super::Step::Memberships, next.clone()))).await?;
+            self.end_unit(Some(self.cp(super::Step::Memberships, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -266,7 +377,12 @@ impl Session<'_, '_> {
         let user = self.target_opt("User", n.ref_id("user")).await?;
         let (Some(team), Some(user)) = (team, user) else {
             self.counters("TeamMembership").skipped += 1;
-            self.note("warning", "TeamMembership", n.id(), "team or user was not imported; membership skipped");
+            self.note(
+                "warning",
+                "TeamMembership",
+                n.id(),
+                "team or user was not imported; membership skipped",
+            );
             return Ok(());
         };
         let created = n.ts("createdAt").unwrap_or(self.now).min(self.now);
@@ -275,9 +391,14 @@ impl Session<'_, '_> {
             ("user_id", json!(user)),
             ("owner", json!(n.bool("owner").unwrap_or(false))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(self.now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(self.now)).or(Some(created))),
+            ),
         ]);
-        let up = self.upsert("TeamMembership", n, ImportTable::TeamMembership, r, false).await?;
+        let up = self
+            .upsert("TeamMembership", n, ImportTable::TeamMembership, r, false)
+            .await?;
         if up.outcome == Outcome::Created {
             self.event(DomainEvent::TeamMembershipCreated {
                 team_id: TeamId(team),

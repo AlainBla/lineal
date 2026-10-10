@@ -23,10 +23,10 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use lineal_app::App;
 use lineal_app::error::{AppError, AppResult, ErrorKind};
 use lineal_app::ports::Tx;
+use lineal_app::ports::repos::NewEvent;
 use lineal_app::ports::repos::import::{
     ImportRun, ImportRunUpdate, ImportTable, MappingRow, NewMapping, ReportEntry,
 };
-use lineal_app::ports::repos::NewEvent;
 use lineal_domain::events::{DomainEvent, EventOrigin};
 use lineal_domain::ids::OrgId;
 use node::{N, checksum_of};
@@ -79,7 +79,9 @@ pub enum RunOutcome {
     Paused,
     Canceled,
     /// Nur mit `stop_after_phase`: Lauf bleibt `running` mit Checkpoint.
-    Stopped { after_phase: u8 },
+    Stopped {
+        after_phase: u8,
+    },
     /// Lauf ist fehlgeschlagen (fortsetzbar); Text ohne Zugangsdaten.
     Failed(String),
 }
@@ -106,7 +108,11 @@ impl Options {
     fn parse(v: &Value) -> Options {
         let strings = |k: &str| -> Vec<String> {
             v[k].as_array()
-                .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         let user_mapping = v["userMapping"]
@@ -204,7 +210,11 @@ impl Step {
     pub const fn phase(&self) -> u8 {
         match self {
             Self::Users | Self::Teams | Self::Memberships => 1,
-            Self::States | Self::Labels | Self::ProjectStatuses | Self::ProjectLabels | Self::Templates => 2,
+            Self::States
+            | Self::Labels
+            | Self::ProjectStatuses
+            | Self::ProjectLabels
+            | Self::Templates => 2,
             Self::Cycles | Self::Initiatives | Self::Projects | Self::Milestones => 3,
             Self::Issues | Self::IssueParents | Self::IssueRelations => 4,
             Self::Comments | Self::IssueHistory | Self::IssueSubscriptions => 5,
@@ -340,6 +350,19 @@ pub(crate) struct LabelMeta {
     pub is_group: bool,
 }
 
+/// Die offene Transaktion. Der `Mutex` macht die Sitzung `Sync` (Futures bleiben `Send`); es gibt
+/// nie parallelen Zugriff, `get_mut` sperrt nicht.
+#[derive(Default)]
+pub(crate) struct TxSlot(std::sync::Mutex<Option<Box<dyn Tx>>>);
+
+impl TxSlot {
+    pub(crate) fn slot(&mut self) -> &mut Option<Box<dyn Tx>> {
+        self.0
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// Zustand eines laufenden Importlaufs.
 pub(crate) struct Session<'e, 'a> {
     pub eng: &'e ImportEngine<'a>,
@@ -348,7 +371,7 @@ pub(crate) struct Session<'e, 'a> {
     pub opts: Options,
     pub dry: bool,
     pub now: DateTime<Utc>,
-    pub tx: Option<Box<dyn Tx>>,
+    pub tx: TxSlot,
     pub report: Vec<ReportEntry>,
     pub report_total: usize,
     pub stats: BTreeMap<String, Counters>,
@@ -401,17 +424,25 @@ impl<'a> ImportEngine<'a> {
         let dry = opts.dry_run;
         let stats = run.stats["entities"]
             .as_object()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), Counters::from_json(v))).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), Counters::from_json(v)))
+                    .collect()
+            })
             .unwrap_or_default();
         let mut s = Session {
             eng: self,
             org,
-            source_kind: if run.source == "linearCsv" { "linearCsv" } else { "linear" },
+            source_kind: if run.source == "linearCsv" {
+                "linearCsv"
+            } else {
+                "linear"
+            },
             run,
             opts,
             dry,
             now: self.app.clock.now(),
-            tx: None,
+            tx: TxSlot::default(),
             report: Vec::new(),
             report_total: 0,
             stats,
@@ -434,7 +465,7 @@ impl<'a> ImportEngine<'a> {
 
 impl Session<'_, '_> {
     pub(crate) fn tx(&mut self) -> AppResult<&mut dyn Tx> {
-        match self.tx.as_mut() {
+        match self.tx.slot().as_mut() {
             Some(t) => Ok(&mut **t),
             None => Err(AppError::internal("no open import transaction")),
         }
@@ -449,7 +480,13 @@ impl Session<'_, '_> {
     }
 
     /// Bericht: Eintrag vormerken (Obergrenze je Lauf).
-    pub(crate) fn note(&mut self, severity: &str, ty: &str, id: Option<&str>, message: impl Into<String>) {
+    pub(crate) fn note(
+        &mut self,
+        severity: &str,
+        ty: &str,
+        id: Option<&str>,
+        message: impl Into<String>,
+    ) {
         self.report_total += 1;
         if self.report_total > self.eng.config.max_report_entries {
             return;
@@ -488,8 +525,9 @@ impl Session<'_, '_> {
     /// Öffnet (falls nötig) die Transaktion der aktuellen Einheit.
     pub(crate) async fn begin_unit(&mut self) -> HResult<()> {
         self.check_control().await?;
-        if self.tx.is_none() {
-            self.tx = Some(self.eng.app.store.begin(self.org).await?);
+        if self.tx.slot().is_none() {
+            let tx = self.eng.app.store.begin(self.org).await?;
+            *self.tx.slot() = Some(tx);
         }
         Ok(())
     }
@@ -514,7 +552,8 @@ impl Session<'_, '_> {
         let now = self.eng.app.clock.now();
         let report = std::mem::take(&mut self.report);
         let stats = self.stats_json();
-        let lease = now + ChronoDuration::from_std(self.eng.config.lease).unwrap_or(ChronoDuration::minutes(2));
+        let lease = now
+            + ChronoDuration::from_std(self.eng.config.lease).unwrap_or(ChronoDuration::minutes(2));
         let run_id = self.run.id;
         let tx = self.tx()?;
         if !report.is_empty() {
@@ -532,7 +571,7 @@ impl Session<'_, '_> {
             )
             .await?;
         tx.imports().set_import_lease(run_id, Some(lease)).await?;
-        if let Some(tx) = self.tx.take() {
+        if let Some(tx) = self.tx.slot().take() {
             tx.commit().await?;
         }
         Ok(())
@@ -548,7 +587,11 @@ impl Session<'_, '_> {
     }
 
     /// Mapping inkl. Checksum.
-    pub(crate) async fn mapping(&mut self, ty: &'static str, src: &str) -> AppResult<Option<MappingRow>> {
+    pub(crate) async fn mapping(
+        &mut self,
+        ty: &'static str,
+        src: &str,
+    ) -> AppResult<Option<MappingRow>> {
         let source = self.source().to_owned();
         let rows = self
             .tx()?
@@ -570,7 +613,11 @@ impl Session<'_, '_> {
         Ok(m.map(|m| m.target_id))
     }
 
-    pub(crate) async fn target_opt(&mut self, ty: &'static str, src: Option<&str>) -> AppResult<Option<Uuid>> {
+    pub(crate) async fn target_opt(
+        &mut self,
+        ty: &'static str,
+        src: Option<&str>,
+    ) -> AppResult<Option<Uuid>> {
         match src {
             Some(s) => self.target(ty, s).await,
             None => Ok(None),
@@ -628,18 +675,31 @@ impl Session<'_, '_> {
             None => {
                 let id = self.new_id();
                 row.insert("id".into(), json!(id));
-                self.tx()?.imports().insert_row(table, &Value::Object(row)).await?;
+                self.tx()?
+                    .imports()
+                    .insert_row(table, &Value::Object(row))
+                    .await?;
                 self.put_mapping(ty, &src, id, node, &checksum).await?;
                 self.counters(ty).created += 1;
-                Ok(Upserted { id, outcome: Outcome::Created })
+                Ok(Upserted {
+                    id,
+                    outcome: Outcome::Created,
+                })
             }
             Some(m) => {
                 self.cache.insert((ty, src.clone()), m.target_id);
                 if insert_only || m.checksum.as_deref() == Some(checksum.as_str()) {
                     self.counters(ty).unchanged += 1;
-                    return Ok(Upserted { id: m.target_id, outcome: Outcome::Unchanged });
+                    return Ok(Upserted {
+                        id: m.target_id,
+                        outcome: Outcome::Unchanged,
+                    });
                 }
-                let current = self.tx()?.imports().row_updated_at(table, m.target_id).await?;
+                let current = self
+                    .tx()?
+                    .imports()
+                    .row_updated_at(table, m.target_id)
+                    .await?;
                 if current.is_some_and(|u| u > m.imported_at) {
                     self.counters(ty).conflicts += 1;
                     self.note(
@@ -648,7 +708,10 @@ impl Session<'_, '_> {
                         Some(&src),
                         "changed in Lineal since the import; the Lineal state was kept",
                     );
-                    return Ok(Upserted { id: m.target_id, outcome: Outcome::Conflict });
+                    return Ok(Upserted {
+                        id: m.target_id,
+                        outcome: Outcome::Conflict,
+                    });
                 }
                 // `created_at` bleibt wie importiert.
                 row.remove("created_at");
@@ -659,18 +722,34 @@ impl Session<'_, '_> {
                     .await?;
                 if !existed {
                     self.counters(ty).errors += 1;
-                    self.note("error", ty, Some(&src), "the mapped object no longer exists in Lineal");
-                    return Ok(Upserted { id: m.target_id, outcome: Outcome::Conflict });
+                    self.note(
+                        "error",
+                        ty,
+                        Some(&src),
+                        "the mapped object no longer exists in Lineal",
+                    );
+                    return Ok(Upserted {
+                        id: m.target_id,
+                        outcome: Outcome::Conflict,
+                    });
                 }
-                self.put_mapping(ty, &src, m.target_id, node, &checksum).await?;
+                self.put_mapping(ty, &src, m.target_id, node, &checksum)
+                    .await?;
                 self.counters(ty).updated += 1;
-                Ok(Upserted { id: m.target_id, outcome: Outcome::Updated })
+                Ok(Upserted {
+                    id: m.target_id,
+                    outcome: Outcome::Updated,
+                })
             }
         }
     }
 
     /// Eine Seite lesen (außerhalb jeder Transaktion; Dry-Run hält seine eine Transaktion offen).
-    pub(crate) async fn fetch(&self, entity: SourceEntity, cursor: Option<String>) -> HResult<SourcePage> {
+    pub(crate) async fn fetch(
+        &self,
+        entity: SourceEntity,
+        cursor: Option<String>,
+    ) -> HResult<SourcePage> {
         Ok(self
             .eng
             .source
@@ -699,7 +778,12 @@ impl Session<'_, '_> {
 
     /// Fehler eines einzelnen Objekts melden, ohne den Lauf abzubrechen. Datenbank-/Systemfehler
     /// (alles außer `conflict`/`invalid_request`) brechen den Lauf ab.
-    pub(crate) fn item_result(&mut self, ty: &'static str, id: Option<&str>, r: AppResult<()>) -> HResult<()> {
+    pub(crate) fn item_result(
+        &mut self,
+        ty: &'static str,
+        id: Option<&str>,
+        r: AppResult<()>,
+    ) -> HResult<()> {
         match r {
             Ok(()) => Ok(()),
             Err(e) if matches!(e.kind, ErrorKind::Conflict | ErrorKind::InvalidRequest) => {
@@ -712,7 +796,13 @@ impl Session<'_, '_> {
     }
 
     /// Rewrite für Markdown inkl. Bericht über unbekannte Elemente.
-    pub(crate) fn md(&mut self, ty: &str, id: &str, text: Option<&str>, max: usize) -> Option<String> {
+    pub(crate) fn md(
+        &mut self,
+        ty: &str,
+        id: &str,
+        text: Option<&str>,
+        max: usize,
+    ) -> Option<String> {
         let text = text?;
         // Externe Bild-URLs werden nie abgerufen (kein Server-Request aus importiertem Inhalt).
         let external = text
@@ -731,11 +821,21 @@ impl Session<'_, '_> {
         let out = self.rewrite.rewrite(text, max);
         for t in &out.unknown_tags {
             if self.reported_tags.insert(t.clone()) {
-                self.note("info", ty, Some(id), format!("unknown markup element <{t}> was removed"));
+                self.note(
+                    "info",
+                    ty,
+                    Some(id),
+                    format!("unknown markup element <{t}> was removed"),
+                );
             }
         }
         if out.truncated {
-            self.note("warning", ty, Some(id), "text exceeded the length limit and was truncated");
+            self.note(
+                "warning",
+                ty,
+                Some(id),
+                "text exceeded the length limit and was truncated",
+            );
         }
         Some(out.text)
     }
@@ -760,7 +860,10 @@ impl Session<'_, '_> {
             after = page.last().map(|m| m.source_id.clone());
             ids.extend(page.iter().map(|m| m.target_id));
         }
-        self.tx()?.imports().set_team_import_lock(&ids, Some(until)).await?;
+        self.tx()?
+            .imports()
+            .set_team_import_lock(&ids, Some(until))
+            .await?;
         Ok(())
     }
 
@@ -778,7 +881,10 @@ impl Session<'_, '_> {
                 .get_mappings(&source, "User", std::slice::from_ref(src))
                 .await?;
             if let Some(m) = rows.first()
-                && let Some(u) = tx.users().get(lineal_domain::ids::UserId(m.target_id)).await?
+                && let Some(u) = tx
+                    .users()
+                    .get(lineal_domain::ids::UserId(m.target_id))
+                    .await?
             {
                 self.rewrite.users.insert(uname.clone(), u.display_name);
             }
@@ -805,7 +911,13 @@ impl Session<'_, '_> {
         // (siehe `people::users`); nach einem Neustart aus dem Mapping rekonstruiert.
         let mut rewrite = RewriteCtx {
             source_ws: ws.url_key.clone(),
-            target_base: self.eng.app.config.base_url.trim_end_matches('/').to_owned(),
+            target_base: self
+                .eng
+                .app
+                .config
+                .base_url
+                .trim_end_matches('/')
+                .to_owned(),
             asset_prefix: self.eng.app.asset_prefix(),
             ..Default::default()
         };
@@ -822,7 +934,9 @@ impl Session<'_, '_> {
         self.refresh_user_names().await?;
         for t in self.fetch_all_unfiltered(SourceEntity::Teams).await? {
             let n = N(&t);
-            let (Some(id), Some(key)) = (n.id(), n.text("key")) else { continue };
+            let (Some(id), Some(key)) = (n.id(), n.text("key")) else {
+                continue;
+            };
             self.team_keys.insert(id.to_owned(), key.to_owned());
             if self.opts.teams.is_empty() || self.opts.teams.iter().any(|k| k == key) {
                 self.selected.insert(id.to_owned());

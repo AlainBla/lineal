@@ -65,7 +65,10 @@ impl UrlPolicy {
         Self {
             allowed_hosts: hosts,
             max_bytes: DEFAULT_MAX_DOWNLOAD_BYTES,
-            allowed_content_types: ALLOWED_CONTENT_TYPES.iter().map(|s| (*s).to_owned()).collect(),
+            allowed_content_types: ALLOWED_CONTENT_TYPES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
             allow_local_for_tests: false,
             timeout: Duration::from_secs(60),
         }
@@ -83,7 +86,8 @@ impl UrlPolicy {
     pub fn check_url(&self, raw: &str) -> SourceResult<Url> {
         let rej = |m: &str| SourceError::Rejected(m.to_owned());
         let url = Url::parse(raw).map_err(|_| rej("not a valid URL"))?;
-        let scheme_ok = url.scheme() == "https" || (self.allow_local_for_tests && url.scheme() == "http");
+        let scheme_ok =
+            url.scheme() == "https" || (self.allow_local_for_tests && url.scheme() == "http");
         if !scheme_ok {
             return Err(rej("only https URLs are allowed"));
         }
@@ -105,15 +109,21 @@ impl UrlPolicy {
     }
 
     fn content_type_ok(&self, ct: &str) -> bool {
-        let base = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-        self.allowed_content_types.iter().any(|a| *a == base)
+        let base = ct
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        self.allowed_content_types.contains(&base)
     }
 
     /// Löst den Host auf und lehnt ab, wenn irgendeine Adresse privat/lokal ist.
     async fn resolve(&self, url: &Url) -> SourceResult<(String, Vec<SocketAddr>)> {
         let host = url.host_str().unwrap_or_default().to_owned();
         let port = url.port_or_known_default().unwrap_or(443);
-        let addrs: Vec<SocketAddr> = if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
+        let addrs: Vec<SocketAddr> = if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>()
+        {
             vec![SocketAddr::new(ip, port)]
         } else {
             tokio::net::lookup_host((host.as_str(), port))
@@ -124,18 +134,20 @@ impl UrlPolicy {
         if addrs.is_empty() {
             return Err(SourceError::Transport("host cannot be resolved".into()));
         }
-        if !self.allow_local_for_tests {
-            if addrs.iter().any(|a| is_forbidden_ip(a.ip())) {
-                return Err(SourceError::Rejected(
-                    "host resolves to a private or local address".into(),
-                ));
-            }
+        if !self.allow_local_for_tests && addrs.iter().any(|a| is_forbidden_ip(a.ip())) {
+            return Err(SourceError::Rejected(
+                "host resolves to a private or local address".into(),
+            ));
         }
         Ok((host, addrs))
     }
 
     /// Lädt die Datei (siehe Moduldoku). Fehlertexte enthalten weder Token noch Antwortinhalt.
-    pub async fn fetch(&self, raw_url: &str, auth_header: Option<&str>) -> SourceResult<Downloaded> {
+    pub async fn fetch(
+        &self,
+        raw_url: &str,
+        auth_header: Option<&str>,
+    ) -> SourceResult<Downloaded> {
         let url = self.check_url(raw_url)?;
         {
             let (host, addrs) = self.resolve(&url).await?;
@@ -161,11 +173,16 @@ impl UrlPolicy {
                 // Weiterleitung an andere Ziele gelangen.
                 return Err(SourceError::Rejected("redirects are not followed".into()));
             }
-            if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
                 return Err(SourceError::Auth);
             }
             if !status.is_success() {
-                return Err(SourceError::Transport(format!("download failed with HTTP {}", status.as_u16())));
+                return Err(SourceError::Transport(format!(
+                    "download failed with HTTP {}",
+                    status.as_u16()
+                )));
             }
             let content_type = resp
                 .headers()
@@ -182,13 +199,14 @@ impl UrlPolicy {
             let mut bytes: Vec<u8> = Vec::new();
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|_| SourceError::Transport("download interrupted".into()))?;
+                let chunk =
+                    chunk.map_err(|_| SourceError::Transport("download interrupted".into()))?;
                 if (bytes.len() as u64).saturating_add(chunk.len() as u64) > self.max_bytes {
                     return Err(SourceError::Rejected("file is too large".into()));
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            return Ok(Downloaded {
+            Ok(Downloaded {
                 bytes,
                 content_type: content_type
                     .split(';')
@@ -196,7 +214,7 @@ impl UrlPolicy {
                     .unwrap_or("")
                     .trim()
                     .to_ascii_lowercase(),
-            });
+            })
         }
     }
 }
@@ -264,10 +282,16 @@ mod tests {
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
         ] {
-            assert!(is_forbidden_ip(ip.parse().unwrap()), "{ip} must be rejected");
+            assert!(
+                is_forbidden_ip(ip.parse().unwrap()),
+                "{ip} must be rejected"
+            );
         }
         for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(!is_forbidden_ip(ip.parse().unwrap()), "{ip} must be allowed");
+            assert!(
+                !is_forbidden_ip(ip.parse().unwrap()),
+                "{ip} must be allowed"
+            );
         }
     }
 

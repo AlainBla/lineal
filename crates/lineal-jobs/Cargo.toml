@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 lineal-domain.workspace = true
+lineal-import.workspace = true
 lineal-app.workspace = true
 async-trait.workspace = true
 chrono.workspace = true

@@ -442,6 +442,108 @@ type FavoritePayload {
 	favorite: Favorite
 }
 
+"""
+Ein Eintrag des Berichts (`ImportIssue`).
+"""
+type ImportIssue {
+	"""
+	`info`, `warning`, `error`.
+	"""
+	severity: String!
+	sourceType: String
+	sourceId: String
+	message: String!
+	createdAt: String
+}
+
+"""
+Bericht eines Laufs.
+"""
+type ImportReport {
+	entries: [ImportIssue!]!
+	infoCount: Int!
+	warningCount: Int!
+	errorCount: Int!
+}
+
+"""
+Ein Importlauf (`ImportRun`). `scan` und `stats` sind JSON (Plan bzw. Zähler je Entität).
+"""
+type ImportRun {
+	id: String!
+	"""
+	`linear` oder `linearCsv`.
+	"""
+	source: String!
+	"""
+	`scanning`, `planned`, `running`, `paused`, `failed`, `completed`, `canceled`.
+	"""
+	status: String!
+	"""
+	Aktuelle Phase (1–8) laut Checkpoint, `null` vor dem Start.
+	"""
+	phase: Int
+	"""
+	Aktueller Schritt laut Checkpoint (z. B. `Issues`).
+	"""
+	step: String
+	dryRun: Boolean!
+	"""
+	Ergebnis des Scans: Workspace, Teams (mit Mengen), User, Zählungen, Key-Konflikte.
+	"""
+	scan: JSON
+	"""
+	Zähler je Entität (`entities`), Verifikation (`verification`).
+	"""
+	stats: JSON!
+	options: JSON!
+	checkpoint: JSON!
+	error: String
+	startedBy: String
+	startedAt: String
+	finishedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+"""
+Eingabe `importScan`. Das Token ist `secret`: es erscheint in keinem Fehler- oder Log-Output.
+"""
+input ImportScanInput {
+	"""
+	`linear`.
+	"""
+	source: String!
+	token: String!
+}
+
+"""
+Eingabe `importStart`.
+"""
+input ImportStartInput {
+	runId: String!
+	"""
+	Linear-Team-Keys; leer = alle gescannten Teams.
+	"""
+	teams: [String!]! = []
+	"""
+	Objekt `{ "<Linear-User-ID>": "<Lineal-User-ID>" | null }`.
+	"""
+	userMapping: JSON
+	"""
+	Objekt `{ "<Linear-Team-Key>": "<Ziel-Key in Lineal>" }`.
+	"""
+	keyMapping: JSON
+	"""
+	Probelauf: Mapping und Validierung ohne Schreiben.
+	"""
+	dryRun: Boolean! = false
+	"""
+	Nur Änderungen seit dem letzten erfolgreichen Lauf übernehmen.
+	"""
+	delta: Boolean! = false
+}
+
 type Initiative {
 	id: String!
 	identifier: String!
@@ -1003,9 +1105,17 @@ type Mutation {
 	"""
 	_webhookMutationReady: Boolean!
 	"""
-	Platzhalter des Scaffolds.
+	Verbindung prüfen und Plan vorbereiten: legt einen Lauf (`scanning`) an und speichert das
+	Token verschlüsselt; der Import-Job liest Teams, User und Mengen (Status danach `planned`).
 	"""
-	_importMutationReady: Boolean!
+	importScan(input: ImportScanInput!): ImportRun!
+	"""
+	Lauf starten (asynchron als Job). Key-Konflikte mit bestehenden Teams brechen vorher ab.
+	"""
+	importStart(input: ImportStartInput!): ImportRun!
+	importPause(runId: String!): ImportRun!
+	importResume(runId: String!): ImportRun!
+	importCancel(runId: String!): ImportRun!
 }
 
 input NestTeamOptions {
@@ -1521,9 +1631,17 @@ type Query {
 	"""
 	_webhookReady: Boolean!
 	"""
-	Platzhalter des Scaffolds.
+	Ein Importlauf mit Status, Fortschritt und Plan (nur Admins).
 	"""
-	_importReady: Boolean!
+	importRun(id: String!): ImportRun!
+	"""
+	Alle Importläufe, neueste zuerst (nur Admins).
+	"""
+	importRuns(first: Int): [ImportRun!]!
+	"""
+	Bericht eines Laufs (übernommen, übersprungen, Warnungen, Konflikte).
+	"""
+	importReport(runId: String!, severity: String, first: Int, offset: Int): ImportReport!
 }
 
 """

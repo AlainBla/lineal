@@ -11,8 +11,23 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-const STATE_TYPES: &[&str] = &["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
-const PROJECT_STATUS_TYPES: &[&str] = &["backlog", "planned", "started", "paused", "completed", "canceled"];
+const STATE_TYPES: &[&str] = &[
+    "triage",
+    "backlog",
+    "unstarted",
+    "started",
+    "completed",
+    "canceled",
+    "duplicate",
+];
+const PROJECT_STATUS_TYPES: &[&str] = &[
+    "backlog",
+    "planned",
+    "started",
+    "paused",
+    "completed",
+    "canceled",
+];
 const RESERVED_LABELS: &[&str] = &[
     "assignee", "cycle", "effort", "estimate", "hours", "priority", "project", "state", "status",
 ];
@@ -29,7 +44,8 @@ impl Session<'_, '_> {
                 self.item_result("WorkflowState", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::States, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::States, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => break,
@@ -52,11 +68,17 @@ impl Session<'_, '_> {
             return Ok(());
         };
         let name = clean_title(n.str("name"), 80, "State");
-        let mut ty = one_of(n.str("type"), STATE_TYPES).unwrap_or_else(|| {
-            "backlog"
-        });
+        let mut ty = one_of(n.str("type"), STATE_TYPES).unwrap_or("backlog");
         if n.str("type").is_some() && one_of(n.str("type"), STATE_TYPES).is_none() {
-            self.note("warning", "WorkflowState", n.id(), format!("unknown state type `{}`; imported as backlog", clean_text(n.str("type").unwrap_or(""), 40, false)));
+            self.note(
+                "warning",
+                "WorkflowState",
+                n.id(),
+                format!(
+                    "unknown state type `{}`; imported as backlog",
+                    clean_text(n.str("type").unwrap_or(""), 40, false)
+                ),
+            );
         }
         // Linear führt den Duplicate-Status als `canceled`; Lineal hat dafür einen eigenen Typ.
         if ty == "canceled" && name.eq_ignore_ascii_case("duplicate") {
@@ -69,20 +91,47 @@ impl Session<'_, '_> {
                 ("name", json!(name)),
                 ("type", json!(ty)),
                 ("color", json!(color_or(n.str("color"), "#95A2B3"))),
-                ("description", json!(n.text("description").map(|d| clean_text(d, 2000, true)))),
+                (
+                    "description",
+                    json!(n.text("description").map(|d| clean_text(d, 2000, true))),
+                ),
                 ("position", json!(n.float("position").unwrap_or(0.0))),
                 ("archived_at", jts(n.ts("archivedAt"))),
                 ("created_at", jts(Some(created))),
-                ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+                (
+                    "updated_at",
+                    jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+                ),
             ])
         };
-        let mut up = self.upsert("WorkflowState", n, ImportTable::WorkflowState, make(&name), false).await;
+        let mut up = self
+            .upsert(
+                "WorkflowState",
+                n,
+                ImportTable::WorkflowState,
+                make(&name),
+                false,
+            )
+            .await;
         if let Err(e) = &up
             && e.kind == ErrorKind::Conflict
         {
             let alt = format!("{} (2)", clean_text(&name, 70, false));
-            self.note("warning", "WorkflowState", n.id(), format!("state name already exists in the team; imported as `{alt}`"));
-            up = self.upsert("WorkflowState", n, ImportTable::WorkflowState, make(&alt), false).await;
+            self.note(
+                "warning",
+                "WorkflowState",
+                n.id(),
+                format!("state name already exists in the team; imported as `{alt}`"),
+            );
+            up = self
+                .upsert(
+                    "WorkflowState",
+                    n,
+                    ImportTable::WorkflowState,
+                    make(&alt),
+                    false,
+                )
+                .await;
         }
         let up = up?;
         if up.outcome == Outcome::Created {
@@ -101,18 +150,39 @@ impl Session<'_, '_> {
         self.begin_unit().await?;
         for v in &teams {
             let n = N(v);
-            let Some(src) = n.id().filter(|id| self.selected.contains(*id)) else { continue };
-            let Some(team) = self.target("Team", src).await? else { continue };
-            let mut default = self.target_opt("WorkflowState", n.ref_id("defaultIssueState")).await?;
+            let Some(src) = n.id().filter(|id| self.selected.contains(*id)) else {
+                continue;
+            };
+            let Some(team) = self.target("Team", src).await? else {
+                continue;
+            };
+            let mut default = self
+                .target_opt("WorkflowState", n.ref_id("defaultIssueState"))
+                .await?;
             if default.is_none() {
-                default = self.tx()?.imports().first_state_of_types(team, &["backlog", "unstarted"]).await?;
+                default = self
+                    .tx()?
+                    .imports()
+                    .first_state_of_types(team, &["backlog", "unstarted"])
+                    .await?;
             }
-            let mut triage = self.target_opt("WorkflowState", n.ref_id("triageIssueState")).await?;
+            let mut triage = self
+                .target_opt("WorkflowState", n.ref_id("triageIssueState"))
+                .await?;
             if triage.is_none() && n.bool("triageEnabled").unwrap_or(false) {
-                triage = self.tx()?.imports().first_state_of_types(team, &["triage"]).await?;
+                triage = self
+                    .tx()?
+                    .imports()
+                    .first_state_of_types(team, &["triage"])
+                    .await?;
             }
-            let close = self.target_opt("WorkflowState", n.ref_id("autoCloseState")).await?;
-            self.tx()?.imports().set_team_states(team, default, triage, close).await?;
+            let close = self
+                .target_opt("WorkflowState", n.ref_id("autoCloseState"))
+                .await?;
+            self.tx()?
+                .imports()
+                .set_team_states(team, default, triage, close)
+                .await?;
         }
         self.end_unit(None).await?;
         Ok(())
@@ -121,11 +191,14 @@ impl Session<'_, '_> {
     pub(crate) async fn step_labels(&mut self) -> HResult<()> {
         let nodes = self.fetch_all(SourceEntity::IssueLabels).await?;
         // Gruppen (und Wurzeln) vor ihren Kindern.
-        let (roots, children): (Vec<&Value>, Vec<&Value>) = nodes.iter().partition(|v| N(v).ref_id("parent").is_none());
+        let (roots, children): (Vec<&Value>, Vec<&Value>) =
+            nodes.iter().partition(|v| N(v).ref_id("parent").is_none());
         self.begin_unit().await?;
         for v in roots.into_iter().chain(children) {
             let n = N(v);
-            let r = self.label(n, "IssueLabel", ImportTable::IssueLabel, true).await;
+            let r = self
+                .label(n, "IssueLabel", ImportTable::IssueLabel, true)
+                .await;
             self.item_result("IssueLabel", n.id(), r)?;
         }
         self.end_unit(None).await?;
@@ -134,18 +207,27 @@ impl Session<'_, '_> {
 
     pub(crate) async fn step_project_labels(&mut self) -> HResult<()> {
         let nodes = self.fetch_all(SourceEntity::ProjectLabels).await?;
-        let (roots, children): (Vec<&Value>, Vec<&Value>) = nodes.iter().partition(|v| N(v).ref_id("parent").is_none());
+        let (roots, children): (Vec<&Value>, Vec<&Value>) =
+            nodes.iter().partition(|v| N(v).ref_id("parent").is_none());
         self.begin_unit().await?;
         for v in roots.into_iter().chain(children) {
             let n = N(v);
-            let r = self.label(n, "ProjectLabel", ImportTable::ProjectLabel, false).await;
+            let r = self
+                .label(n, "ProjectLabel", ImportTable::ProjectLabel, false)
+                .await;
             self.item_result("ProjectLabel", n.id(), r)?;
         }
         self.end_unit(None).await?;
         Ok(())
     }
 
-    async fn label(&mut self, n: N<'_>, ty: &'static str, table: ImportTable, issue_label: bool) -> AppResult<()> {
+    async fn label(
+        &mut self,
+        n: N<'_>,
+        ty: &'static str,
+        table: ImportTable,
+        issue_label: bool,
+    ) -> AppResult<()> {
         let now = self.now;
         let team = match n.ref_id("team") {
             Some(t) if !self.selected.contains(t) => {
@@ -166,7 +248,12 @@ impl Session<'_, '_> {
                 Some(id) => Some(id),
                 None => {
                     self.counters(ty).skipped += 1;
-                    self.note("warning", ty, n.id(), "the label group was not imported; label skipped");
+                    self.note(
+                        "warning",
+                        ty,
+                        n.id(),
+                        "the label group was not imported; label skipped",
+                    );
                     return Ok(());
                 }
             },
@@ -176,7 +263,12 @@ impl Session<'_, '_> {
         let mut name = clean_title(n.str("name"), 80, "Label");
         if issue_label && RESERVED_LABELS.contains(&name.to_lowercase().as_str()) {
             name = format!("{name} label");
-            self.note("info", ty, n.id(), "the label name is reserved in Lineal and was renamed");
+            self.note(
+                "info",
+                ty,
+                n.id(),
+                "the label name is reserved in Lineal and was renamed",
+            );
         }
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let creator = self.target_opt("User", n.ref_id("creator")).await?;
@@ -184,20 +276,29 @@ impl Session<'_, '_> {
             let mut m: Map<String, Value> = row(vec![
                 ("name", json!(name)),
                 ("color", json!(color_or(n.str("color"), "#95A2B3"))),
-                ("description", json!(n.text("description").map(|d| clean_text(d, 2000, true)))),
+                (
+                    "description",
+                    json!(n.text("description").map(|d| clean_text(d, 2000, true))),
+                ),
                 ("parent_id", json!(parent)),
                 ("is_group", json!(is_group)),
                 ("creator_id", json!(creator)),
                 ("retired_at", jts(n.ts("retiredAt"))),
                 ("created_at", jts(Some(created))),
-                ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+                (
+                    "updated_at",
+                    jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+                ),
             ]);
             if issue_label {
                 m.insert("team_id".into(), json!(team));
                 m.insert(
                     "group_type".into(),
                     if is_group {
-                        json!(one_of(n.str("groupType"), &["singleSelect", "multiSelect"]).unwrap_or("singleSelect"))
+                        json!(
+                            one_of(n.str("groupType"), &["singleSelect", "multiSelect"])
+                                .unwrap_or("singleSelect")
+                        )
                     } else {
                         Value::Null
                     },
@@ -212,12 +313,20 @@ impl Session<'_, '_> {
             && e.kind == ErrorKind::Conflict
         {
             let alt = format!("{} (Linear)", clean_text(&name, 68, false));
-            self.note("warning", ty, n.id(), format!("a label with this name already exists; imported as `{alt}`"));
+            self.note(
+                "warning",
+                ty,
+                n.id(),
+                format!("a label with this name already exists; imported as `{alt}`"),
+            );
             up = self.upsert(ty, n, table, make(&alt), false).await;
         }
         let up = up?;
         if issue_label && up.outcome == Outcome::Created {
-            self.event(DomainEvent::IssueLabelCreated { label_id: LabelId(up.id) }).await?;
+            self.event(DomainEvent::IssueLabelCreated {
+                label_id: LabelId(up.id),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -233,7 +342,8 @@ impl Session<'_, '_> {
                 self.item_result("ProjectStatus", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::ProjectStatuses, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::ProjectStatuses, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -250,14 +360,23 @@ impl Session<'_, '_> {
             ("name", json!(name)),
             ("type", json!(ty)),
             ("color", json!(color_or(n.str("color"), "#95A2B3"))),
-            ("description", json!(n.text("description").map(|d| clean_text(d, 2000, true)))),
+            (
+                "description",
+                json!(n.text("description").map(|d| clean_text(d, 2000, true))),
+            ),
             ("position", json!(n.float("position").unwrap_or(0.0))),
             ("indefinite", json!(n.bool("indefinite").unwrap_or(true))),
             ("archived_at", jts(n.ts("archivedAt"))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
-        match self.upsert("ProjectStatus", n, ImportTable::ProjectStatus, r, false).await {
+        match self
+            .upsert("ProjectStatus", n, ImportTable::ProjectStatus, r, false)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) if e.kind == ErrorKind::Conflict => {
                 // Projektstatus sind Workspace-Konfiguration: ein gleichnamiger vorhandener Status
@@ -270,9 +389,15 @@ impl Session<'_, '_> {
                 match (existing, n.id()) {
                     (Some(id), Some(src)) => {
                         let checksum = super::node::checksum_of(n.0);
-                        self.put_mapping("ProjectStatus", src, id, n, &checksum).await?;
+                        self.put_mapping("ProjectStatus", src, id, n, &checksum)
+                            .await?;
                         self.counters("ProjectStatus").unchanged += 1;
-                        self.note("info", "ProjectStatus", Some(src), "mapped to the existing project status of the same name");
+                        self.note(
+                            "info",
+                            "ProjectStatus",
+                            Some(src),
+                            "mapped to the existing project status of the same name",
+                        );
                         Ok(())
                     }
                     _ => Err(e),
@@ -300,7 +425,15 @@ impl Session<'_, '_> {
             Some(t @ ("issue" | "project" | "document")) => t,
             other => {
                 self.counters("Template").skipped += 1;
-                self.note("info", "Template", n.id(), format!("template type `{}` is not supported; skipped", clean_text(other.unwrap_or(""), 40, false)));
+                self.note(
+                    "info",
+                    "Template",
+                    n.id(),
+                    format!(
+                        "template type `{}` is not supported; skipped",
+                        clean_text(other.unwrap_or(""), 40, false)
+                    ),
+                );
                 return Ok(());
             }
         };
@@ -314,23 +447,42 @@ impl Session<'_, '_> {
         };
         let (data, dropped) = self.template_data(n, ty).await?;
         if !dropped.is_empty() {
-            self.note("info", "Template", n.id(), format!("template fields without a Lineal equivalent were discarded: {}", dropped.join(", ")));
+            self.note(
+                "info",
+                "Template",
+                n.id(),
+                format!(
+                    "template fields without a Lineal equivalent were discarded: {}",
+                    dropped.join(", ")
+                ),
+            );
         }
         let creator = self.target_opt("User", n.ref_id("creator")).await?;
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let r = row(vec![
             ("type", json!(ty)),
             ("name", json!(clean_title(n.str("name"), 200, "Template"))),
-            ("description", json!(n.text("description").map(|d| clean_text(d, 2000, true)))),
+            (
+                "description",
+                json!(n.text("description").map(|d| clean_text(d, 2000, true))),
+            ),
             ("team_id", json!(team)),
             ("template_data", data),
             ("creator_id", json!(creator)),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
-        let up = self.upsert("Template", n, ImportTable::Template, r, false).await?;
+        let up = self
+            .upsert("Template", n, ImportTable::Template, r, false)
+            .await?;
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::TemplateCreated { template_id: TemplateId(up.id) }).await?;
+            self.event(DomainEvent::TemplateCreated {
+                template_id: TemplateId(up.id),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -357,19 +509,37 @@ impl Session<'_, '_> {
                 ("issue", "description") | ("document", "content") => {
                     let id = n.id().unwrap_or("").to_owned();
                     v.as_str().map(|s| {
-                        let t = self.md("Template", &id, Some(s), super::MAX_DESCRIPTION).unwrap_or_default();
-                        out.insert(if ty == "issue" { "description" } else { "content" }.into(), json!(t));
+                        let t = self
+                            .md("Template", &id, Some(s), super::MAX_DESCRIPTION)
+                            .unwrap_or_default();
+                        out.insert(
+                            if ty == "issue" {
+                                "description"
+                            } else {
+                                "content"
+                            }
+                            .into(),
+                            json!(t),
+                        );
                     })
                 }
                 ("issue", "priority") => v.as_i64().filter(|p| (0..=4).contains(p)).map(|p| {
                     out.insert("priority".into(), json!(p));
                 }),
-                ("issue", "estimate") => v.as_f64().filter(|e| *e >= 0.0 && e.is_finite()).map(|e| {
-                    out.insert("estimate".into(), json!(e));
-                }),
+                ("issue", "estimate") => {
+                    v.as_f64().filter(|e| *e >= 0.0 && e.is_finite()).map(|e| {
+                        out.insert("estimate".into(), json!(e));
+                    })
+                }
                 ("issue", "labelIds") => {
                     let mut ids = Vec::new();
-                    for l in v.as_array().into_iter().flatten().filter_map(Value::as_str).take(50) {
+                    for l in v
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .take(50)
+                    {
                         if let Some(t) = self.target("IssueLabel", l).await? {
                             ids.push(t.to_string());
                         }

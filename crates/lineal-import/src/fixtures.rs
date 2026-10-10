@@ -52,7 +52,12 @@ pub fn acceptance_workspace() -> Value {
         { "id": "m-8", "user": id("u-dave"), "team": id("t-plt"), "owner": false, "createdAt": at(3) },
     ]);
     let mut states: Vec<Value> = Vec::new();
-    for (key, team) in [("ENG", "t-eng"), ("PLT", "t-plt"), ("WEB", "t-web"), ("DES", "t-des")] {
+    for (key, team) in [
+        ("ENG", "t-eng"),
+        ("PLT", "t-plt"),
+        ("WEB", "t-web"),
+        ("DES", "t-des"),
+    ] {
         let mut defs = vec![
             ("backlog", "Backlog", "backlog", 0.0),
             ("todo", "Todo", "unstarted", 1.0),
@@ -123,7 +128,9 @@ pub fn acceptance_workspace() -> Value {
     ]);
 
     // --- Issues -------------------------------------------------------------------------
-    let eng_gaps = [7, 21, 33, 50, 64, 77, 88, 99, 101, 110, 111, 112, 115, 118, 119, 120, 121, 122, 124, 125];
+    let eng_gaps = [
+        7, 21, 33, 50, 64, 77, 88, 99, 101, 110, 111, 112, 115, 118, 119, 120, 121, 122, 124, 125,
+    ];
     let mut plan: Vec<(&str, &str, i64)> = Vec::new();
     for n in 1..=130 {
         if !eng_gaps.contains(&n) {
@@ -150,7 +157,11 @@ pub fn acceptance_workspace() -> Value {
             state = "duplicate".into();
         }
         let created = (idx as i64) * 2 + 30;
-        let assignee = if n % 7 == 0 { Value::Null } else { id(user_ids[(n as usize) % 2]) };
+        let assignee = if n % 7 == 0 {
+            Value::Null
+        } else {
+            id(user_ids[(n as usize) % 2])
+        };
         let mut labels: Vec<Value> = Vec::new();
         if n % 7 == 0 {
             labels.push(id("l-bug"));
@@ -168,7 +179,14 @@ pub fn acceptance_workspace() -> Value {
             labels.push(id("l-frontend"));
         }
         let (project, milestone) = match (key, n) {
-            ("ENG", n) if n % 13 == 0 => (id("p-1"), if n % 2 == 0 { id("ms-1-1") } else { id("ms-1-2") }),
+            ("ENG", n) if n % 13 == 0 => (
+                id("p-1"),
+                if n % 2 == 0 {
+                    id("ms-1-1")
+                } else {
+                    id("ms-1-2")
+                },
+            ),
             ("WEB", n) if n % 9 == 0 => (id("p-1"), id("ms-1-1")),
             ("ENG", n) if n % 17 == 0 => (id("p-2"), id("ms-2-1")),
             ("PLT", n) if n % 10 == 0 => (id("p-2"), Value::Null),
@@ -189,9 +207,7 @@ pub fn acceptance_workspace() -> Value {
         };
         let mut description = format!("Task {key}-{n} in the acme workspace.");
         match (key, n) {
-            (_, n) if n % 10 == 0 => description.push_str(&format!(
-                "\n\nSee <issue id=\"x\" href=\"https://linear.app/acme/issue/ENG-12/foo\">ENG-12</issue> and https://linear.app/acme/issue/WEB-3/bar"
-            )),
+            (_, n) if n % 10 == 0 => description.push_str("\n\nSee <issue id=\"x\" href=\"https://linear.app/acme/issue/ENG-12/foo\">ENG-12</issue> and https://linear.app/acme/issue/WEB-3/bar"),
             ("ENG", 5) => description.push_str("\n\n<script>alert(1)</script> [x](javascript:alert(1)) <linear-image>{}</linear-image>"),
             ("ENG", 8) => description.push_str("\n\n![shot](https://uploads.linear.app/acme/abc/shot.png)"),
             ("ENG", 9) => description.push_str("\n\n[@Bob](https://linear.app/acme/profiles/bob) please look"),
@@ -300,7 +316,9 @@ pub fn acceptance_workspace() -> Value {
         });
         if n == 1 {
             c["quotedText"] = json!("quoted part");
-            c["body"] = json!("Inline comment <img src=x onerror=alert(1)> with file https://uploads.linear.app/acme/abc/diagram.png");
+            c["body"] = json!(
+                "Inline comment <img src=x onerror=alert(1)> with file https://uploads.linear.app/acme/abc/diagram.png"
+            );
         }
         comments.push(c);
         comments.push(json!({

@@ -62,7 +62,11 @@ fn priority(s: &str) -> i64 {
         "high" => 2,
         "medium" => 3,
         "low" => 4,
-        other => other.parse::<i64>().ok().filter(|p| (0..=4).contains(p)).unwrap_or(0),
+        other => other
+            .parse::<i64>()
+            .ok()
+            .filter(|p| (0..=4).contains(p))
+            .unwrap_or(0),
     }
 }
 
@@ -72,11 +76,23 @@ fn state_type(name: &str) -> &'static str {
         "triage"
     } else if n.contains("backlog") {
         "backlog"
-    } else if n.contains("done") || n.contains("complete") || n.contains("released") || n.contains("merged") {
+    } else if n.contains("done")
+        || n.contains("complete")
+        || n.contains("released")
+        || n.contains("merged")
+    {
         "completed"
-    } else if n.contains("cancel") || n.contains("duplicate") || n.contains("won't") || n.contains("wont") {
+    } else if n.contains("cancel")
+        || n.contains("duplicate")
+        || n.contains("won't")
+        || n.contains("wont")
+    {
         "canceled"
-    } else if n.contains("progress") || n.contains("review") || n.contains("doing") || n.contains("testing") {
+    } else if n.contains("progress")
+        || n.contains("review")
+        || n.contains("doing")
+        || n.contains("testing")
+    {
         "started"
     } else {
         "unstarted"
@@ -86,9 +102,7 @@ fn state_type(name: &str) -> &'static str {
 impl CsvSource {
     /// Liest den CSV-Inhalt. `team_filter` (Key) beschränkt auf ein Team.
     pub fn from_csv(bytes: &[u8], team_filter: Option<&str>) -> Result<Self, String> {
-        let mut rdr = csv::ReaderBuilder::new()
-            .flexible(true)
-            .from_reader(bytes);
+        let mut rdr = csv::ReaderBuilder::new().flexible(true).from_reader(bytes);
         let headers: Vec<String> = rdr
             .headers()
             .map_err(|_| "the CSV header cannot be read".to_owned())?
@@ -119,8 +133,12 @@ impl CsvSource {
             }
             let rec = rec.map_err(|_| format!("row {} cannot be read", n_row + 2))?;
             let ident = rec.get(id_col).unwrap_or("").trim().to_uppercase();
-            let Some((key, num)) = ident.rsplit_once('-') else { continue };
-            let Ok(number) = num.parse::<i64>() else { continue };
+            let Some((key, num)) = ident.rsplit_once('-') else {
+                continue;
+            };
+            let Ok(number) = num.parse::<i64>() else {
+                continue;
+            };
             if key.is_empty() || number <= 0 {
                 continue;
             }
@@ -128,7 +146,13 @@ impl CsvSource {
                 continue;
             }
             let team_name = get(&rec, "team");
-            teams.entry(key.to_owned()).or_insert_with(|| if team_name.is_empty() { key.to_owned() } else { team_name.clone() });
+            teams.entry(key.to_owned()).or_insert_with(|| {
+                if team_name.is_empty() {
+                    key.to_owned()
+                } else {
+                    team_name.clone()
+                }
+            });
             let team_id = format!("csv-team-{key}");
             let mut node = Map::new();
             node.insert("id".into(), json!(format!("csv-issue-{ident}")));
@@ -143,7 +167,10 @@ impl CsvSource {
                 states.entry((key.to_owned(), status.clone())).or_insert(ty);
                 let pos = state_pos.len() as f64;
                 state_pos.entry(format!("{key}/{status}")).or_insert(pos);
-                node.insert("state".into(), json!({ "id": format!("csv-state-{key}-{}", slug(&status)) }));
+                node.insert(
+                    "state".into(),
+                    json!({ "id": format!("csv-state-{key}-{}", slug(&status)) }),
+                );
             }
             node.insert("priority".into(), json!(priority(&get(&rec, "priority"))));
             if let Ok(e) = get(&rec, "estimate").parse::<f64>() {
@@ -190,7 +217,10 @@ impl CsvSource {
             }
             let parent = get(&rec, "parent issue").to_uppercase();
             if !parent.is_empty() {
-                node.insert("parent".into(), json!({ "id": format!("csv-issue-{parent}") }));
+                node.insert(
+                    "parent".into(),
+                    json!({ "id": format!("csv-issue-{parent}") }),
+                );
             }
             if !get(&rec, "project").is_empty() || !get(&rec, "project id").is_empty() {
                 had_projects = true;
@@ -266,7 +296,9 @@ impl ImportSource for CsvSource {
     }
 
     async fn download(&self, _url: &str) -> SourceResult<Downloaded> {
-        Err(SourceError::Rejected("downloads are not available for CSV imports".into()))
+        Err(SourceError::Rejected(
+            "downloads are not available for CSV imports".into(),
+        ))
     }
 }
 
@@ -294,18 +326,39 @@ WEB-7,Web,Other team,,In Progress,,,,,,,2025-01-09T09:00:00.000Z,2025-01-09T09:0
         assert_eq!(issues[1]["createdAt"], "2025-01-07T10:00:00+00:00");
         let teams = src.collect(SourceEntity::Teams, None, 5).await.unwrap();
         assert_eq!(teams.len(), 2);
-        let states = src.collect(SourceEntity::WorkflowStates, None, 5).await.unwrap();
-        assert!(states.iter().any(|s| s["name"] == "Done" && s["type"] == "completed"));
+        let states = src
+            .collect(SourceEntity::WorkflowStates, None, 5)
+            .await
+            .unwrap();
+        assert!(
+            states
+                .iter()
+                .any(|s| s["name"] == "Done" && s["type"] == "completed")
+        );
         let users = src.collect(SourceEntity::Users, None, 5).await.unwrap();
-        assert!(users.iter().all(|u| u["email"].as_str().unwrap().ends_with("@import.invalid")));
+        assert!(
+            users
+                .iter()
+                .all(|u| u["email"].as_str().unwrap().ends_with("@import.invalid"))
+        );
     }
 
     #[tokio::test]
     async fn team_filter_and_errors() {
         let src = CsvSource::from_csv(CSV.as_bytes(), Some("web")).unwrap();
-        assert_eq!(src.collect(SourceEntity::Issues, None, 5).await.unwrap().len(), 1);
+        assert_eq!(
+            src.collect(SourceEntity::Issues, None, 5)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(CsvSource::from_csv(b"a,b\n1,2\n", None).is_err());
         assert!(CsvSource::from_csv(CSV.as_bytes(), Some("NOPE")).is_err());
-        assert!(src.download("https://uploads.linear.app/x.png").await.is_err());
+        assert!(
+            src.download("https://uploads.linear.app/x.png")
+                .await
+                .is_err()
+        );
     }
 }

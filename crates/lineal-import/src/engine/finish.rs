@@ -1,7 +1,7 @@
 //! Ablaufsteuerung (Phasen, Checkpoints), Phase 8 (Abschluss), Lauf-Abschluss und Scan.
 
 use super::node::N;
-use super::{Halt, HResult, ImportEngine, RunOutcome, Session, Step, src_err};
+use super::{HResult, Halt, ImportEngine, RunOutcome, Session, Step, src_err};
 use crate::port::SourceEntity;
 use chrono::Utc;
 use lineal_app::error::AppResult;
@@ -33,7 +33,11 @@ impl Session<'_, '_> {
         };
         for idx in start..Step::ALL.len() {
             let step = Step::ALL[idx];
-            let cursor = if idx == start { start_cursor.clone() } else { None };
+            let cursor = if idx == start {
+                start_cursor.clone()
+            } else {
+                None
+            };
             if idx == start || step.phase() != Step::ALL[idx - 1].phase() {
                 self.begin_unit().await?;
                 self.lock_teams().await?;
@@ -55,7 +59,11 @@ impl Session<'_, '_> {
                 return Err(Halt::Stop(stop));
             }
         }
-        Ok(if self.dry { RunOutcome::DryRunFinished } else { RunOutcome::Completed })
+        Ok(if self.dry {
+            RunOutcome::DryRunFinished
+        } else {
+            RunOutcome::Completed
+        })
     }
 
     async fn run_step(&mut self, step: Step, cursor: Option<String>) -> HResult<()> {
@@ -118,7 +126,10 @@ impl Session<'_, '_> {
     async fn step_finalize(&mut self) -> HResult<()> {
         self.begin_unit().await?;
         let team_ids = self.mapped_team_ids().await?;
-        self.tx()?.imports().finalize_import_counters(&team_ids).await?;
+        self.tx()?
+            .imports()
+            .finalize_import_counters(&team_ids)
+            .await?;
         let source = self.source().to_owned();
         let mapped: BTreeMap<String, i64> = self
             .tx()?
@@ -143,17 +154,26 @@ impl Session<'_, '_> {
         let mut verification = serde_json::Map::new();
         for (ty, table) in checks {
             let m = mapped.get(ty).copied().unwrap_or(0);
-            let present = self.tx()?.imports().count_mapped_rows(&source, ty, table).await?;
+            let present = self
+                .tx()?
+                .imports()
+                .count_mapped_rows(&source, ty, table)
+                .await?;
             let scanned = self.run.stats["scan"]["counts"][ty].as_i64();
             if present < m {
                 self.note(
                     "warning",
                     ty,
                     None,
-                    format!("verification: {m} objects are mapped but only {present} exist in Lineal"),
+                    format!(
+                        "verification: {m} objects are mapped but only {present} exist in Lineal"
+                    ),
                 );
             }
-            verification.insert(ty.to_owned(), json!({ "mapped": m, "present": present, "scanned": scanned }));
+            verification.insert(
+                ty.to_owned(),
+                json!({ "mapped": m, "present": present, "scanned": scanned }),
+            );
         }
         if let Some(stats) = self.run.stats.as_object_mut() {
             stats.insert("verification".into(), Value::Object(verification));
@@ -168,7 +188,7 @@ impl Session<'_, '_> {
     pub(crate) async fn finish(mut self, result: HResult<RunOutcome>) -> AppResult<RunOutcome> {
         // Eine angefangene Einheit wird verworfen (Rollback beim Drop).
         let dry = self.dry;
-        self.tx = None;
+        *self.tx.slot() = None;
         let now = self.eng.app.clock.now();
         let run_id = self.run.id;
         let stats = self.stats_json();
@@ -249,7 +269,10 @@ async fn unlock_teams(tx: &mut dyn lineal_app::ports::Tx, source: &str) -> AppRe
     let mut ids = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = tx.imports().list_mappings(source, "Team", after.as_deref(), 500).await?;
+        let page = tx
+            .imports()
+            .list_mappings(source, "Team", after.as_deref(), 500)
+            .await?;
         if page.is_empty() {
             break;
         }
@@ -293,14 +316,25 @@ impl ImportEngine<'_> {
 
     async fn scan_inner(&self, org: OrgId) -> AppResult<Value> {
         let ws = self.source.workspace().await.map_err(src_err)?;
-        let teams = self.source.collect(SourceEntity::Teams, None, SCAN_MAX_PAGES).await.map_err(src_err)?;
-        let users = self.source.collect(SourceEntity::Users, None, SCAN_MAX_PAGES).await.map_err(src_err)?;
+        let teams = self
+            .source
+            .collect(SourceEntity::Teams, None, SCAN_MAX_PAGES)
+            .await
+            .map_err(src_err)?;
+        let users = self
+            .source
+            .collect(SourceEntity::Users, None, SCAN_MAX_PAGES)
+            .await
+            .map_err(src_err)?;
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         let mut issues_per_team: BTreeMap<String, i64> = BTreeMap::new();
         let mut truncated = Vec::new();
         for entity in SourceEntity::ALL {
             // Abgeleitete Entitäten (History, Abos) werden nicht gezählt (würde alle Issues erneut lesen).
-            if matches!(entity, SourceEntity::IssueHistory | SourceEntity::IssueSubscriptions) {
+            if matches!(
+                entity,
+                SourceEntity::IssueHistory | SourceEntity::IssueSubscriptions
+            ) {
                 continue;
             }
             let mut cursor = None;
@@ -343,13 +377,16 @@ impl ImportEngine<'_> {
         let mut conflicts = Vec::new();
         for v in &teams {
             let n = N(v);
-            let (Some(id), Some(key)) = (n.id(), n.text("key")) else { continue };
+            let (Some(id), Some(key)) = (n.id(), n.text("key")) else {
+                continue;
+            };
             let existing = tx.imports().find_team_by_key(key).await?;
             let mapped = tx
                 .imports()
                 .get_mappings("linear", "Team", &[id.to_owned()])
                 .await?;
-            let conflict = existing.is_some() && !mapped.iter().any(|m| Some(m.target_id) == existing);
+            let conflict =
+                existing.is_some() && !mapped.iter().any(|m| Some(m.target_id) == existing);
             if conflict {
                 conflicts.push(json!({ "key": key, "reason": "key_exists" }));
             }
@@ -385,4 +422,3 @@ impl ImportEngine<'_> {
         }))
     }
 }
-

@@ -31,7 +31,8 @@ impl Session<'_, '_> {
                 self.item_result("Cycle", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::Cycles, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::Cycles, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -52,8 +53,11 @@ impl Session<'_, '_> {
             return Ok(());
         };
         let number = n.int("number").filter(|x| *x > 0 && *x < i32::MAX as i64);
-        let (Some(number), Some(starts), Some(ends)) = (number, n.ts("startsAt"), n.ts("endsAt")) else {
-            return Err(AppError::invalid_request("cycle without number or valid period"));
+        let (Some(number), Some(starts), Some(ends)) = (number, n.ts("startsAt"), n.ts("endsAt"))
+        else {
+            return Err(AppError::invalid_request(
+                "cycle without number or valid period",
+            ));
         };
         if ends <= starts {
             return Err(AppError::invalid_request("cycle ends before it starts"));
@@ -64,8 +68,14 @@ impl Session<'_, '_> {
         let r = row(vec![
             ("team_id", json!(team)),
             ("number", json!(number)),
-            ("name", json!(n.text("name").map(|s| clean_text(s, 255, false)))),
-            ("description", json!(n.text("description").map(|s| clean_text(s, 5000, true)))),
+            (
+                "name",
+                json!(n.text("name").map(|s| clean_text(s, 255, false))),
+            ),
+            (
+                "description",
+                json!(n.text("description").map(|s| clean_text(s, 5000, true))),
+            ),
             ("starts_at", jts(Some(starts))),
             ("ends_at", jts(Some(ends))),
             ("completed_at", jts(n.ts("completedAt"))),
@@ -73,14 +83,26 @@ impl Session<'_, '_> {
             ("completed_scope_history", arr("completedScopeHistory")),
             ("in_progress_scope_history", arr("inProgressScopeHistory")),
             ("issue_count_history", arr("issueCountHistory")),
-            ("completed_issue_count_history", arr("completedIssueCountHistory")),
+            (
+                "completed_issue_count_history",
+                arr("completedIssueCountHistory"),
+            ),
             ("archived_at", jts(n.ts("archivedAt"))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
-        let up = self.upsert("Cycle", n, ImportTable::Cycle, r, false).await?;
+        let up = self
+            .upsert("Cycle", n, ImportTable::Cycle, r, false)
+            .await?;
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::CycleCreated { cycle_id: CycleId(up.id), team_id: TeamId(team) }).await?;
+            self.event(DomainEvent::CycleCreated {
+                cycle_id: CycleId(up.id),
+                team_id: TeamId(team),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -105,18 +127,32 @@ impl Session<'_, '_> {
             }
             for p in parents {
                 if p == child || reachable(&children, child, p) {
-                    self.note("warning", "Initiative", Some(child), "the parent link would create a cycle and was skipped");
+                    self.note(
+                        "warning",
+                        "Initiative",
+                        Some(child),
+                        "the parent link would create a cycle and was skipped",
+                    );
                     continue;
                 }
-                children.entry(p.to_owned()).or_default().push(child.to_owned());
-                let (pt, ct) = (self.target("Initiative", p).await?, self.target("Initiative", child).await?);
+                children
+                    .entry(p.to_owned())
+                    .or_default()
+                    .push(child.to_owned());
+                let (pt, ct) = (
+                    self.target("Initiative", p).await?,
+                    self.target("Initiative", child).await?,
+                );
                 if let (Some(pt), Some(ct)) = (pt, ct) {
                     let r = row(vec![
                         ("parent_id", json!(pt)),
                         ("child_id", json!(ct)),
                         ("created_at", jts(Some(self.now))),
                     ]);
-                    self.tx()?.imports().insert_row_ignore(ImportTable::InitiativeParent, &Value::Object(r)).await?;
+                    self.tx()?
+                        .imports()
+                        .insert_row_ignore(ImportTable::InitiativeParent, &Value::Object(r))
+                        .await?;
                 }
             }
         }
@@ -125,7 +161,10 @@ impl Session<'_, '_> {
     }
 
     async fn initiative(&mut self, n: N<'_>) -> AppResult<()> {
-        let src = n.id().ok_or_else(|| AppError::invalid_request("initiative without id"))?.to_owned();
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("initiative without id"))?
+            .to_owned();
         let now = self.now;
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let owner = self.target_opt("User", n.ref_id("owner")).await?;
@@ -136,16 +175,27 @@ impl Session<'_, '_> {
             Some(s) => s,
             None => {
                 if n.str("status").is_some() {
-                    self.note("warning", "Initiative", Some(&src), "unknown initiative status; imported as Planned");
+                    self.note(
+                        "warning",
+                        "Initiative",
+                        Some(&src),
+                        "unknown initiative status; imported as Planned",
+                    );
                 }
                 "Planned"
             }
         };
         let mut r = row(vec![
             ("name", json!(clean_title(n.str("name"), 255, "Initiative"))),
-            ("description", json!(n.text("description").map(|s| clean_text(s, 255, false)))),
+            (
+                "description",
+                json!(n.text("description").map(|s| clean_text(s, 255, false))),
+            ),
             ("content", json!(content)),
-            ("color", json!(n.str("color").map(|c| color_or(Some(c), "#5E6AD2")))),
+            (
+                "color",
+                json!(n.str("color").map(|c| color_or(Some(c), "#5E6AD2"))),
+            ),
             ("icon", json!(icon_or_none(n.str("icon")))),
             ("status", json!(status)),
             ("owner_id", json!(owner)),
@@ -156,30 +206,51 @@ impl Session<'_, '_> {
             ("completed_at", jts(n.ts("completedAt"))),
             ("archived_at", jts(n.ts("archivedAt"))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
         if let Some(slug) = valid_slug(n.str("slugId")) {
             r.insert("slug_id".into(), json!(slug));
         }
         let is_new = self.mapping("Initiative", &src).await?.is_none();
         if is_new {
-            let number = self.tx()?.imports().next_import_number(ImportCounter::Initiative, None).await?;
+            let number = self
+                .tx()?
+                .imports()
+                .next_import_number(ImportCounter::Initiative, None)
+                .await?;
             r.insert("number".into(), json!(number));
         }
-        let up = self.upsert("Initiative", n, ImportTable::Initiative, r.clone(), false).await;
+        let up = self
+            .upsert("Initiative", n, ImportTable::Initiative, r.clone(), false)
+            .await;
         let up = match up {
             Err(e) if e.kind == ErrorKind::Conflict && is_new => {
                 // Name oder Slug schon vergeben.
-                let alt = format!("{} (Linear)", clean_text(n.str("name").unwrap_or("Initiative"), 240, false));
-                self.note("warning", "Initiative", Some(&src), format!("initiative name already exists; imported as `{alt}`"));
+                let alt = format!(
+                    "{} (Linear)",
+                    clean_text(n.str("name").unwrap_or("Initiative"), 240, false)
+                );
+                self.note(
+                    "warning",
+                    "Initiative",
+                    Some(&src),
+                    format!("initiative name already exists; imported as `{alt}`"),
+                );
                 r.insert("name".into(), json!(alt));
                 r.remove("slug_id");
-                self.upsert("Initiative", n, ImportTable::Initiative, r, false).await?
+                self.upsert("Initiative", n, ImportTable::Initiative, r, false)
+                    .await?
             }
             other => other?,
         };
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::InitiativeCreated { initiative_id: InitiativeId(up.id) }).await?;
+            self.event(DomainEvent::InitiativeCreated {
+                initiative_id: InitiativeId(up.id),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -195,7 +266,8 @@ impl Session<'_, '_> {
                 self.item_result("Project", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::Projects, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::Projects, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -204,7 +276,10 @@ impl Session<'_, '_> {
     }
 
     async fn project(&mut self, n: N<'_>) -> AppResult<()> {
-        let src = n.id().ok_or_else(|| AppError::invalid_request("project without id"))?.to_owned();
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("project without id"))?
+            .to_owned();
         // Teams: nur importierte; das erste ist das Lead-Team.
         let mut teams: Vec<Uuid> = Vec::new();
         for t in n.ref_ids("teams", 50) {
@@ -216,7 +291,12 @@ impl Session<'_, '_> {
         }
         let Some(&lead_team) = teams.first() else {
             self.counters("Project").skipped += 1;
-            self.note("info", "Project", Some(&src), "none of the project's teams is part of this import; project skipped");
+            self.note(
+                "info",
+                "Project",
+                Some(&src),
+                "none of the project's teams is part of this import; project skipped",
+            );
             return Ok(());
         };
         let Some(status) = self.target_opt("ProjectStatus", n.ref_id("status")).await? else {
@@ -230,7 +310,12 @@ impl Session<'_, '_> {
         let (start, target) = (n.date("startDate"), n.date("targetDate"));
         let start = match (&start, &target) {
             (Some(s), Some(t)) if s > t => {
-                self.note("warning", "Project", Some(&src), "start date is after the target date; start date dropped");
+                self.note(
+                    "warning",
+                    "Project",
+                    Some(&src),
+                    "start date is after the target date; start date dropped",
+                );
                 None
             }
             _ => start,
@@ -238,12 +323,22 @@ impl Session<'_, '_> {
         let mut r: Map<String, Value> = row(vec![
             ("name", json!(clean_title(n.str("name"), 255, "Project"))),
             ("lead_team_id", json!(lead_team)),
-            ("description", json!(n.text("description").map(|s| clean_text(s, 255, false)))),
+            (
+                "description",
+                json!(n.text("description").map(|s| clean_text(s, 255, false))),
+            ),
             ("content", json!(content)),
             ("color", json!(color_or(n.str("color"), "#5E6AD2"))),
             ("icon", json!(icon_or_none(n.str("icon")))),
             ("status_id", json!(status)),
-            ("priority", json!(n.int("priority").filter(|p| (0..=4).contains(p)).unwrap_or(0))),
+            (
+                "priority",
+                json!(
+                    n.int("priority")
+                        .filter(|p| (0..=4).contains(p))
+                        .unwrap_or(0)
+                ),
+            ),
             ("sort_order", json!(n.float("sortOrder").unwrap_or(0.0))),
             ("lead_id", json!(lead)),
             ("creator_id", json!(creator)),
@@ -255,44 +350,84 @@ impl Session<'_, '_> {
             ("health", json!(one_of(n.str("health"), HEALTH))),
             ("archived_at", jts(n.ts("archivedAt"))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
         if let Some(slug) = valid_slug(n.str("slugId")) {
             r.insert("slug_id".into(), json!(slug));
         }
         if self.mapping("Project", &src).await?.is_none() {
-            let number = self.tx()?.imports().next_import_number(ImportCounter::Project, Some(lead_team)).await?;
+            let number = self
+                .tx()?
+                .imports()
+                .next_import_number(ImportCounter::Project, Some(lead_team))
+                .await?;
             r.insert("number".into(), json!(number));
         }
-        let up = self.upsert("Project", n, ImportTable::Project, r, false).await?;
+        let up = self
+            .upsert("Project", n, ImportTable::Project, r, false)
+            .await?;
         if !up.wrote() {
             return Ok(());
         }
         let ignore = |t: ImportTable, pairs: Vec<(&str, Value)>| (t, Value::Object(row(pairs)));
         let mut side: Vec<(ImportTable, Value)> = Vec::new();
         for t in &teams {
-            side.push(ignore(ImportTable::ProjectTeam, vec![("project_id", json!(up.id)), ("team_id", json!(t)), ("created_at", jts(Some(now)))]));
+            side.push(ignore(
+                ImportTable::ProjectTeam,
+                vec![
+                    ("project_id", json!(up.id)),
+                    ("team_id", json!(t)),
+                    ("created_at", jts(Some(now))),
+                ],
+            ));
         }
         for u in n.ref_ids("members", 200) {
             if let Some(uid) = self.target("User", u).await? {
-                side.push(ignore(ImportTable::ProjectMember, vec![("project_id", json!(up.id)), ("user_id", json!(uid)), ("created_at", jts(Some(now)))]));
+                side.push(ignore(
+                    ImportTable::ProjectMember,
+                    vec![
+                        ("project_id", json!(up.id)),
+                        ("user_id", json!(uid)),
+                        ("created_at", jts(Some(now))),
+                    ],
+                ));
             }
         }
         for l in n.ref_ids("labels", 50) {
             if let Some(lid) = self.target("ProjectLabel", l).await? {
-                side.push(ignore(ImportTable::ProjectToLabel, vec![("project_id", json!(up.id)), ("label_id", json!(lid)), ("created_at", jts(Some(now)))]));
+                side.push(ignore(
+                    ImportTable::ProjectToLabel,
+                    vec![
+                        ("project_id", json!(up.id)),
+                        ("label_id", json!(lid)),
+                        ("created_at", jts(Some(now))),
+                    ],
+                ));
             }
         }
         for i in n.ref_ids("initiatives", 50) {
             if let Some(iid) = self.target("Initiative", i).await? {
-                side.push(ignore(ImportTable::InitiativeToProject, vec![("initiative_id", json!(iid)), ("project_id", json!(up.id)), ("created_at", jts(Some(now)))]));
+                side.push(ignore(
+                    ImportTable::InitiativeToProject,
+                    vec![
+                        ("initiative_id", json!(iid)),
+                        ("project_id", json!(up.id)),
+                        ("created_at", jts(Some(now))),
+                    ],
+                ));
             }
         }
         for (t, v) in side {
             self.tx()?.imports().insert_row_ignore(t, &v).await?;
         }
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::ProjectCreated { project_id: ProjectId(up.id) }).await?;
+            self.event(DomainEvent::ProjectCreated {
+                project_id: ProjectId(up.id),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -308,7 +443,8 @@ impl Session<'_, '_> {
                 self.item_result("ProjectMilestone", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::Milestones, next.clone()))).await?;
+            self.end_unit(Some(self.cp(Step::Milestones, next.clone())))
+                .await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -317,14 +453,22 @@ impl Session<'_, '_> {
     }
 
     async fn milestone(&mut self, n: N<'_>) -> AppResult<()> {
-        let src = n.id().ok_or_else(|| AppError::invalid_request("milestone without id"))?.to_owned();
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("milestone without id"))?
+            .to_owned();
         let Some(project) = self.target_opt("Project", n.ref_id("project")).await? else {
             self.counters("ProjectMilestone").skipped += 1;
             return Ok(());
         };
         let now = self.now;
         let created = n.ts("createdAt").unwrap_or(now).min(now);
-        let description = self.md("ProjectMilestone", &src, n.str("description"), MAX_DESCRIPTION);
+        let description = self.md(
+            "ProjectMilestone",
+            &src,
+            n.str("description"),
+            MAX_DESCRIPTION,
+        );
         let r = row(vec![
             ("project_id", json!(project)),
             ("name", json!(clean_title(n.str("name"), 255, "Milestone"))),
@@ -333,11 +477,26 @@ impl Session<'_, '_> {
             ("sort_order", json!(n.float("sortOrder").unwrap_or(0.0))),
             ("archived_at", jts(n.ts("archivedAt"))),
             ("created_at", jts(Some(created))),
-            ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
+            (
+                "updated_at",
+                jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
+            ),
         ]);
-        let up = self.upsert("ProjectMilestone", n, ImportTable::ProjectMilestone, r, false).await?;
+        let up = self
+            .upsert(
+                "ProjectMilestone",
+                n,
+                ImportTable::ProjectMilestone,
+                r,
+                false,
+            )
+            .await?;
         if up.outcome == Outcome::Created {
-            self.event(DomainEvent::ProjectMilestoneCreated { milestone_id: MilestoneId(up.id), project_id: ProjectId(project) }).await?;
+            self.event(DomainEvent::ProjectMilestoneCreated {
+                milestone_id: MilestoneId(up.id),
+                project_id: ProjectId(project),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -377,7 +536,10 @@ mod tests {
 
     #[test]
     fn slug_validation() {
-        assert_eq!(valid_slug(Some("0123456789AB")).as_deref(), Some("0123456789ab"));
+        assert_eq!(
+            valid_slug(Some("0123456789AB")).as_deref(),
+            Some("0123456789ab")
+        );
         assert_eq!(valid_slug(Some("short")), None);
         assert_eq!(valid_slug(Some("zzzzzzzzzzzz")), None);
     }

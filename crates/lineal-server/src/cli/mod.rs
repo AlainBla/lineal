@@ -39,6 +39,8 @@ pub enum Command {
         #[arg(long)]
         demo: bool,
     },
+    /// Import aus Linear (API oder CSV-Export).
+    Import(import::ImportArgs),
     /// GraphQL-Schema als SDL exportieren.
     SchemaExport {
         /// Zieldatei.
@@ -54,6 +56,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Worker => worker::run().await,
         Command::Migrate => migrate::run().await,
         Command::Seed { demo } => seed::run(demo).await,
+        Command::Import(args) => import::run(args).await,
         Command::SchemaExport { out } => schema_export::run(&out),
     }
 }
