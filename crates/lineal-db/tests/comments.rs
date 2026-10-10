@@ -1383,3 +1383,64 @@ async fn upload_with_expired_or_foreign_reservation_fails(pool: PgPool) {
         ErrorKind::NotFound
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn attachment_ids_are_scoped_and_deletes_restricted(pool: PgPool) {
+    let env = setup(pool).await;
+    let eng = make_issue(&env, env.data.eng).await;
+    let bob = ctx_for(SeedUser::Bob);
+    let alice = ctx_for(SeedUser::Alice); // Workspace-Owner
+    let carol = ctx_for(SeedUser::Carol); // Gast ohne ENG
+    let att = env
+        .app
+        .link_attachment(
+            &alice,
+            LinkAttachmentInput {
+                issue: eng.to_string(),
+                url: "https://example.com/a".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = att.view.attachment.id.to_string();
+    // Gast ohne Team-Zugriff: nur not_found, auch bei erratener ID
+    assert_eq!(
+        kind(env.app.get_attachment(&carol, &id).await),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        kind(env.app.delete_attachment(&carol, &id).await),
+        ErrorKind::NotFound
+    );
+    // Fremde Organisation: ID unbekannt
+    let mut foreign = ctx_for(SeedUser::Alice);
+    foreign.org_id = lineal_domain::ids::OrgId(Uuid::now_v7());
+    assert_eq!(
+        kind(env.app.get_attachment(&foreign, &id).await),
+        ErrorKind::NotFound
+    );
+    // Nicht-Ersteller ohne Owner-/Admin-Rolle darf nicht löschen, Admin schon
+    assert_eq!(
+        kind(env.app.delete_attachment(&bob, &id).await),
+        ErrorKind::Forbidden
+    );
+    env.app.delete_attachment(&alice, &id).await.unwrap();
+    // Ersteller darf eigenen Anhang löschen
+    let own = env
+        .app
+        .link_attachment(
+            &bob,
+            LinkAttachmentInput {
+                issue: eng.to_string(),
+                url: "https://example.com/b".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    env.app
+        .delete_attachment(&bob, &own.view.attachment.id.to_string())
+        .await
+        .unwrap();
+}
