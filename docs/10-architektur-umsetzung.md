@@ -731,7 +731,7 @@ Die konkrete Struktur von Repository, Crates und Modulen steht in [11-implementi
 | MCP | `rmcp` (offizielles Rust-SDK) | Streamable HTTP, Tool-Definitionen; Eingabeschemas aus `mcp-tools.snapshot.json` |
 | Serialisierung | `serde`, `serde_json` | Standard |
 | Validierung | eigene Value-Objects im Crate `lineal-domain` | Regeln an einer Stelle, keine Laufzeit-Annotationen |
-| IDs / Zeit | `uuid` (v7 für neue Datensätze), `time` | v7 ist zeitlich sortierbar und gut für Indizes |
+| IDs / Zeit | `uuid` (v7 für neue Datensätze), `chrono` + `chrono-tz` | v7 ist zeitlich sortierbar; `chrono-tz` liefert die Zeitzonendatenbank für DST-sichere Cycle-Grenzen |
 | Passwort / Hash | `argon2`; `sha2` + `hmac` für Token-Hashes und Webhook-Signaturen | etablierte Verfahren |
 | OAuth 2.1 / PKCE | `oauth2` (Client-Seite), eigener Authorization-Server mit geprüften Bausteinen | MCP verlangt einen eigenen Authorization-Server |
 | Fehler | `thiserror` im Domain-Code, Abbildung auf das Fehlermodell aus [00](00-konventionen.md#7-fehlermodell) im Adapter | klare Fehlertypen |

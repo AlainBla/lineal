@@ -32,6 +32,8 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <a href="#ch-10-architektur-umsetzung">10 Architektur &amp; Plan</a>
 <a href="#ch-11-implementierungsarchitektur">11 Implementierungsarchitektur</a>
 <a href="#ch-12-arbeitspakete">12 Arbeitspakete</a>
+<a href="#ch-13-import-linear">13 Import aus Linear</a>
+<a href="#ch-14-firmenweite-sicht">14 Firmenweite Sicht</a>
 <a href="mcp-tools.snapshot.json">MCP-Tool-Snapshot (JSON)</a></nav>
 <main>
 <section id="diagramme" class="chapter"><h1>Diagramm-Übersicht</h1>
@@ -49,7 +51,9 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <li><a href="#ch-09-api-events">09 API &amp; Events</a>: 4 Diagramme</li>
 <li><a href="#ch-10-architektur-umsetzung">10 Architektur &amp; Plan</a>: 4 Diagramme</li>
 <li><a href="#ch-11-implementierungsarchitektur">11 Implementierungsarchitektur</a>: 3 Diagramme</li>
-<li><a href="#ch-12-arbeitspakete">12 Arbeitspakete</a>: 1 Diagramme</li></ul></section>
+<li><a href="#ch-12-arbeitspakete">12 Arbeitspakete</a>: 1 Diagramme</li>
+<li><a href="#ch-13-import-linear">13 Import aus Linear</a>: 2 Diagramme</li>
+<li><a href="#ch-14-firmenweite-sicht">14 Firmenweite Sicht</a>: 1 Diagramme</li></ul></section>
 <section id="ch-readme" class="chapter"><div class="src">Quelle: <a href="README.md">README.md</a></div><h1 id="ch-readme-lineal-implementationsdokumentation-f-r-einen-linear-nachbau">Lineal – Implementationsdokumentation für einen Linear-Nachbau</h1>
 <p>Diese Dokumentation beschreibt einen funktionalen Nachbau der Kernfunktionen von <a href="https://linear.app">Linear</a> mit <strong>mehreren Teams</strong> und einem <strong>eigenen MCP-Server</strong>. Sie ist so geschrieben, dass ein Team das System in einer beliebigen Programmiersprache und mit beliebigem Stack umsetzen kann: Datenmodelle, Regeln, Schnittstellen und Abläufe sind sprachneutral spezifiziert (Tabellen, JSON Schema, Mermaid-Diagramme, Pseudocode).</p>
 <p>Grundlage (Stand 2026-10-10):
@@ -132,6 +136,16 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <td><a href="#ch-12-arbeitspakete">Arbeitspakete</a></td>
 <td>Wellen, Abhängigkeiten, Datei-Eigentum, DoD je Paket</td>
 </tr>
+<tr>
+<td>13</td>
+<td><a href="#ch-13-import-linear">Import aus Linear</a></td>
+<td>Migration eines Linear-Workspaces: Mapping, Phasen, Delta-Import, Sicherheit</td>
+</tr>
+<tr>
+<td>14</td>
+<td><a href="#ch-14-firmenweite-sicht">Firmenweite Sicht</a></td>
+<td>Teamübergreifende Issues, Dashboard, Roadmap, Auslastung</td>
+</tr>
 </tbody>
 </table>
 <p>Eine gerenderte Übersicht mit allen Diagrammen liegt in <a href="index.html">index.html</a>.</p>
@@ -148,7 +162,8 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 - Filter, Anzeigeoptionen, Custom Views, Favoriten, „My Issues“, Volltextsuche
 - Inbox/Benachrichtigungen inkl. Snooze und Abo-Regeln
 - Dokumente und Templates
-- Öffentliche API, Webhooks, eigener MCP-Server</p>
+- Öffentliche API, Webhooks, eigener MCP-Server
+- Import/Migration aus Linear (API und CSV), firmenweite teamübergreifende Sicht</p>
 <p><strong>Bewusst außerhalb des Scopes</strong> (werden nur als Erweiterungspunkte erwähnt): Code-Review/Diffs, Releases und Release Notes, Agent Skills und Delegation an KI-Agenten (das Feld <code>delegate</code> wird als optionales Feld vorgesehen), Customer Requests/Customer Needs, Triage Intelligence (KI-Vorschläge), Git-/Slack-/Zendesk-Integrationen, Insights/Analytics, Asks, Pulse, Billing, SSO/SCIM.</p>
 <h2 id="ch-readme-systemkontext">Systemkontext</h2>
 <pre class="mermaid">flowchart LR
@@ -31671,8 +31686,8 @@ Then  hat &quot;I-3&quot; die Eltern &quot;I-2&quot; und &quot;I-1&quot; (DAG is
 </tr>
 <tr>
 <td>IDs / Zeit</td>
-<td><code>uuid</code> (v7 für neue Datensätze), <code>time</code></td>
-<td>v7 ist zeitlich sortierbar und gut für Indizes</td>
+<td><code>uuid</code> (v7 für neue Datensätze), <code>chrono</code> + <code>chrono-tz</code></td>
+<td>v7 ist zeitlich sortierbar; <code>chrono-tz</code> liefert die Zeitzonendatenbank für DST-sichere Cycle-Grenzen</td>
 </tr>
 <tr>
 <td>Passwort / Hash</td>
@@ -31854,7 +31869,7 @@ Then  hat &quot;I-3&quot; die Eltern &quot;I-2&quot; und &quot;I-1&quot; (DAG is
 <pre><code class="language-text">lineal/
 ├── Cargo.toml                  # Workspace, gemeinsame Dependency-Versionen
 ├── rust-toolchain.toml         # stable
-├── docker-compose.yml          # PostgreSQL :5440, MinIO :9000
+├── docker-compose.yml          # name: lineal; PostgreSQL :5440
 ├── .env.example
 ├── scripts/
 │   ├── check.sh                # komplette Prüfung (CI und lokal)
@@ -31905,7 +31920,7 @@ Then  hat &quot;I-3&quot; die Eltern &quot;I-2&quot; und &quot;I-1&quot; (DAG is
   TESTKIT --&gt; DB
 </pre>
 <p>Regeln:
-- <code>lineal-domain</code> hängt nur von <code>serde</code>, <code>uuid</code>, <code>time</code>, <code>thiserror</code> ab.
+- <code>lineal-domain</code> hängt nur von <code>serde</code>, <code>uuid</code>, <code>chrono</code>, <code>chrono-tz</code>, <code>thiserror</code> und reinen Regel-Crates (z. B. <code>pulldown-cmark</code>, <code>ammonia</code>) ab – nie von I/O-Crates.
 - <code>lineal-app</code> kennt keine Datenbank, kein HTTP. Es definiert die <strong>Ports</strong> als Traits.
 - Adapter (<code>api</code>, <code>mcp</code>, <code>sync</code>, <code>jobs</code>) kennen <code>lineal-app</code>, aber nicht <code>lineal-db</code>. Sie erhalten zur Laufzeit ein <code>Arc&lt;App&gt;</code>.
 - Nur <code>lineal-server</code> kennt alle Crates und verdrahtet sie (Composition Root).
@@ -32020,7 +32035,7 @@ pub trait Tx: Send {
 <ul>
 <li><code>PgStore</code> implementiert <code>Store</code>; <code>PgTx</code> hält eine <code>sqlx::Transaction&lt;'static, Postgres&gt;</code> und implementiert <strong>alle</strong> Repo-Traits, je Trait in einer eigenen Datei <code>src/repos/&lt;bereich&gt;.rs</code>.</li>
 <li>Jede Abfrage ist parametrisiert und enthält <code>organization_id = $1</code>.</li>
-<li>Migrationen: <code>crates/lineal-db/migrations/&lt;NNNN&gt;_&lt;name&gt;.sql</code>. Das komplette Schema aus <a href="#ch-01-domaenenmodell">01</a> entsteht im Scaffold (<code>0001</code>–<code>0099</code>). Arbeitspakete dürfen nur Migrationen in ihrem zugewiesenen Nummernbereich hinzufügen (siehe <a href="#ch-12-arbeitspakete">12</a>), z. B. für zusätzliche Indizes.</li>
+<li>Migrationen: <code>crates/lineal-db/migrations/&lt;NNNN&gt;_&lt;name&gt;.sql</code>. <code>0001</code> legt die Infrastruktur-Tabellen an (Outbox, Jobs, Sync-Sequenz), <code>0010</code>–<code>0099</code> das komplette Schema aus <a href="#ch-01-domaenenmodell">01</a>. Arbeitspakete dürfen nur Migrationen in ihrem zugewiesenen Nummernbereich hinzufügen (siehe <a href="#ch-12-arbeitspakete">12</a>), z. B. für zusätzliche Indizes.</li>
 <li>Tests: <code>#[sqlx::test(migrations = "./migrations")]</code> – jede Testfunktion bekommt eine frische Datenbank; parallele Arbeitspakete teilen sich gefahrlos denselben PostgreSQL-Container.</li>
 </ul>
 <h3 id="ch-11-implementierungsarchitektur-3-4-adapter">3.4 Adapter</h3>
@@ -32032,7 +32047,7 @@ pub struct QueryRoot(OrgQuery, TeamQuery, IssueQuery, LabelQuery, CommentQuery, 
 #[derive(MergedObject, Default)]
 pub struct MutationRoot(/* dieselben Bereiche als *Mutation */);
 </code></pre>
-<p>Der <code>RequestCtx</code> und <code>Arc&lt;App&gt;</code> liegen in den GraphQL-Context-Daten. Das Schema wird mit <code>lineal schema-export &gt; web/schema.graphql</code> exportiert; der Check prüft, dass die Datei aktuell ist.</p>
+<p>Der <code>RequestCtx</code> und <code>Arc&lt;App&gt;</code> liegen in den GraphQL-Context-Daten. Das Schema wird mit <code>lineal schema-export</code> nach <code>web/schema.graphql</code> exportiert; <code>scripts/check.sh</code> <strong>erzeugt</strong> die Datei neu (statt sie zu vergleichen), damit parallele Pakete nicht an ihr scheitern. Der Orchestrator committet sie nach jedem Merge.</p>
 <p><strong>MCP (<code>lineal-mcp</code>).</strong> <code>tools/list</code> liefert genau den Inhalt von <code>docs/mcp-tools.snapshot.json</code> (zur Build-Zeit eingebettet). <code>tools/call</code> verteilt nach Tool-Namen an eine Handler-Datei pro Gruppe aus <a href="#ch-07-mcp-server">07</a> (<code>handlers/issues.rs</code>, <code>handlers/projects.rs</code> …). Nicht implementierte Tools antworten mit <code>isError: true</code> und <code>error: "internal"</code>, Meldung <code>not implemented</code>. Eingaben werden gegen das Snapshot-Schema validiert, bevor der Handler läuft.</p>
 <p><strong>HTTP-Oberfläche:</strong></p>
 <table>
@@ -32139,7 +32154,7 @@ pub struct MutationRoot(/* dieselben Bereiche als *Mutation */);
 </ul>
 <h2 id="ch-11-implementierungsarchitektur-5-entwicklungsumgebung">5. Entwicklungsumgebung</h2>
 <pre><code class="language-bash">cp .env.example .env
-docker compose up -d                      # postgres :5440, minio :9000
+docker compose up -d                      # Projektname &quot;lineal&quot;: in allen Worktrees derselbe Container auf :5440
 cargo run -p lineal-server -- migrate     # Migrationen
 cargo run -p lineal-server -- seed        # Beispiel-Workspace acme
 cargo run -p lineal-server -- serve       # http://localhost:8080
@@ -32260,9 +32275,10 @@ RUST_LOG=info,lineal=debug
     WP13[&quot;WP13 Web Issues&quot;]
     WP14[&quot;WP14 Web Planung, Inbox, Settings&quot;]
   end
-  subgraph W4[&quot;Welle 4: Echtzeit und Integration&quot;]
+  subgraph W4[&quot;Welle 4: Echtzeit, Integration, Import&quot;]
     WP15[&quot;WP15 Sync-Engine&quot;]
     WP16[&quot;WP16 Webhooks und OAuth&quot;]
+    WP18[&quot;WP18 Linear-Import&quot;]
   end
   subgraph W5[&quot;Welle 5: Haertung&quot;]
     WP17[&quot;WP17 Haertung und E2E&quot;]
@@ -32310,8 +32326,8 @@ RUST_LOG=info,lineal=debug
 </tr>
 <tr>
 <td>4</td>
-<td>WP15–WP16</td>
-<td>2</td>
+<td>WP15, WP16, WP18</td>
+<td>3</td>
 <td>Welle 3 gemergt</td>
 </tr>
 <tr>
@@ -32322,8 +32338,8 @@ RUST_LOG=info,lineal=debug
 </tr>
 </tbody>
 </table>
-<p>Agenten-Budget: 19 Pakete + 1 Reserve für Integrationsfehler = 20.</p>
-<p><strong>Ablauf pro Welle (Orchestrator):</strong> Agenten starten → Branches nacheinander in <code>main</code> mergen → nach jedem Merge <code>scripts/check.sh</code> → Konflikte und Integrationsfehler beheben → <code>target/</code> der Worktrees löschen → nächste Welle.</p>
+<p>Agenten-Budget: 20 Pakete (S1, S2, WP01–WP18) = 20. Es gibt keine Reserve-Agenten; Integrationsfehler behebt der Orchestrator selbst.</p>
+<p><strong>Ablauf pro Welle (Orchestrator):</strong> Agenten starten → Branches nacheinander in <code>main</code> mergen → nach jedem Merge <code>scripts/check.sh</code>, <code>web/schema.graphql</code> neu erzeugen und committen → Konflikte und Integrationsfehler beheben (Lockfiles: eine Seite nehmen, neu bauen) → <code>target/</code> der Worktrees löschen → nächste Welle.</p>
 <h2 id="ch-12-arbeitspakete-migrationsbereiche">Migrationsbereiche</h2>
 <table>
 <thead>
@@ -32334,7 +32350,11 @@ RUST_LOG=info,lineal=debug
 </thead>
 <tbody>
 <tr>
-<td><code>0001</code>–<code>0099</code></td>
+<td><code>0001</code>–<code>0009</code></td>
+<td>S1 (Outbox, Jobs, Sync-Sequenz)</td>
+</tr>
+<tr>
+<td><code>0010</code>–<code>0099</code></td>
 <td>S2 (komplettes Schema aus <a href="#ch-01-domaenenmodell">01</a>)</td>
 </tr>
 <tr>
@@ -32377,11 +32397,16 @@ RUST_LOG=info,lineal=debug
 <td><code>1600</code>–<code>1699</code></td>
 <td>WP16</td>
 </tr>
+<tr>
+<td><code>1800</code>–<code>1899</code></td>
+<td>WP18</td>
+</tr>
 </tbody>
 </table>
 <p>Zusätzliche Migrationen dürfen das Schema nur <strong>ergänzen</strong> (Indizes, Spalten, Tabellen), nie Objekte anderer Bereiche löschen.</p>
 <h2 id="ch-12-arbeitspakete-gemeinsame-dateien-nur-s1-danach-nur-der-orchestrator">Gemeinsame Dateien (nur S1, danach nur der Orchestrator)</h2>
 <p><code>Cargo.toml</code> (Workspace), alle <code>Cargo.toml</code> der Crates, <code>crates/*/src/lib.rs</code>, <code>crates/lineal-app/src/ports/mod.rs</code> und <code>ports/tx.rs</code>, <code>crates/lineal-db/src/store.rs</code>, <code>crates/lineal-api/src/graphql/mod.rs</code>, <code>crates/lineal-api/src/router.rs</code>, <code>crates/lineal-mcp/src/dispatch.rs</code>, <code>crates/lineal-jobs/src/registry.rs</code>, <code>crates/lineal-testkit/src/seed/mod.rs</code>, <code>web/package.json</code>, <code>web/vite.config.ts</code>, <code>web/tsconfig*.json</code>, <code>scripts/*</code>, <code>docker-compose.yml</code>.</p>
+<p><strong>Generierte Dateien und Lockfiles</strong> (<code>web/schema.graphql</code>, <code>Cargo.lock</code>, <code>web/package-lock.json</code>): Arbeitspakete dürfen sie ändern; bei Merge-Konflikten nimmt der Orchestrator eine Seite, baut neu (<code>cargo build</code>, <code>npm install</code>, <code>lineal schema-export</code>) und committet das Ergebnis. <code>scripts/check.sh</code> erzeugt <code>web/schema.graphql</code> neu, statt es zu vergleichen.</p>
 <p>Braucht ein WP eine neue Crate-Abhängigkeit, darf es <strong>ausnahmsweise</strong> die <code>[dependencies]</code> seines Crates erweitern und meldet das im Abschlussbericht (der Orchestrator löst Konflikte beim Merge).</p>
 <hr />
 <h2 id="ch-12-arbeitspakete-welle-0">Welle 0</h2>
@@ -32390,24 +32415,26 @@ RUST_LOG=info,lineal=debug
 <p><strong>Spezifikation:</strong> <a href="#ch-11-implementierungsarchitektur">11</a> vollständig, <a href="#ch-00-konventionen">00</a>, <a href="#ch-10-architektur-umsetzung">10 §11</a>.</p>
 <p><strong>Liefert:</strong>
 - Workspace mit allen Crates aus <a href="#ch-11-implementierungsarchitektur">11 §1</a>, Abhängigkeitsrichtung wie <a href="#ch-11-implementierungsarchitektur">11 §2</a>, <code>rust-toolchain.toml</code>, <code>#![forbid(unsafe_code)]</code>.
+- Zeit: <code>chrono</code> + <code>chrono-tz</code> in allen Crates (<code>DateTime&lt;Utc&gt;</code> gespeichert, <code>chrono_tz::Tz</code> für Team-Zeitzonen); sqlx-Feature <code>chrono</code>. <strong>Kein</strong> MCP-Crate (<code>rmcp</code> o. ä.) hinzufügen – das entscheidet WP04.
+- <strong>Jede</strong> im Scaffold deklarierte Trait-Methode hat einen kompilierenden Stub (<code>Ok(None)</code>, <code>Ok(vec![])</code> oder <code>Err(AppError::internal("not implemented"))</code>); jede Datei, die ein späteres WP besitzt, existiert bereits als lauffähiger Stub (REST-Endpunkte → 501, <code>lineal-server/src/adapters.rs</code> mit System-Clock, UUID-v7-IdGen, Dummy-BlobStore und Dummy-Hasher).
 - <code>lineal-domain</code>: <code>ids</code> (alle Newtypes), <code>enums</code> (alle Enums aus 00 §4 mit serde-Schreibweise exakt), <code>identifier::TeamKey</code> mit Validierung + Tests, <code>events::DomainEvent</code> (Varianten für alle Ereignisse aus <a href="#ch-09-api-events">09 §6</a>, Felder minimal: betroffene IDs), <code>error::DomainError</code>. Leeres Modul <code>rules/mod.rs</code>.
 - <code>lineal-app</code>: <code>RequestCtx</code>, <code>Actor</code>, <code>Scopes</code>, <code>AppError</code>/<code>ErrorKind</code>, <code>App</code>-Struktur, alle Port-Traits (<code>Store</code>, <code>Tx</code> mit <strong>allen</strong> Accessoren aus <a href="#ch-11-implementierungsarchitektur">11 §3.2</a>, je Repo-Trait eine Datei <code>ports/repos/&lt;bereich&gt;.rs</code> – zunächst leer bis auf die unten genannten Methoden), <code>Clock</code>, <code>IdGen</code>, <code>BlobStore</code>, <code>SearchIndex</code>, <code>PasswordHasher</code>, <code>Mailer</code>. Module <code>policy/</code>, <code>resolve/</code>, <code>usecases/</code> mit je einer leeren Datei pro Bereich: <code>org, user, auth, team, state, label, issue, comment, attachment, cycle, project, initiative, view, notification, document, template, triage, webhook</code>.
   - Bereits implementierte Methoden: <code>OutboxRepo::push(event)</code>, <code>JobRepo</code> (enqueue, claim mit <code>SKIP LOCKED</code>, complete, fail), <code>AuthRepo::find_principal_by_token_hash(hash) -&gt; Option&lt;Principal&gt;</code> (Signatur; Implementierung durch WP02).
-- <code>lineal-db</code>: <code>PgStore</code>/<code>PgTx</code> (begin/commit, setzt <code>lastSyncId</code> über Sequenz <code>sync_seq</code>), je Repo eine Datei <code>repos/&lt;bereich&gt;.rs</code> mit leerem <code>impl … for PgTx</code>; Outbox und Job implementiert; Migration <code>0000_bootstrap.sql</code> nur für <code>outbox_event</code>, <code>outbox_delivery</code>, <code>job</code>, <code>sync_seq</code> (S2 übernimmt den Rest ab <code>0001</code>).
-- <code>lineal-api</code>: axum-Router mit allen Pfaden aus <a href="#ch-11-implementierungsarchitektur">11 §3.4</a> (nicht implementierte antworten <code>501</code>), GraphQL-Schema mit <code>MergedObject</code>-Roots und einem Teilobjekt pro Bereich in <code>graphql/&lt;bereich&gt;.rs</code> (je ein verstecktes Platzhalterfeld), Context-Daten (<code>Arc&lt;App&gt;</code>, <code>RequestCtx</code>), <code>/healthz</code>.
+- <code>lineal-db</code>: <code>PgStore</code>/<code>PgTx</code> (begin/commit, setzt <code>lastSyncId</code> über Sequenz <code>sync_seq</code>), je Repo eine Datei <code>repos/&lt;bereich&gt;.rs</code> mit <code>impl … for PgTx</code> (Stubs); Outbox und Job implementiert; Migration <code>0001_bootstrap.sql</code> nur für <code>outbox_event</code> (ohne FK, mit <code>organization_id</code> und <code>origin</code> <code>user|system|import</code>, siehe <a href="#ch-13-import-linear">13 §4.3</a>), <code>outbox_delivery</code>, <code>job</code>, <code>sync_seq</code> (S2 übernimmt ab <code>0010</code>).
+- <code>lineal-api</code>: axum-Router mit allen Pfaden aus <a href="#ch-11-implementierungsarchitektur">11 §3.4</a> (nicht implementierte antworten <code>501</code>), GraphQL-Schema mit <code>MergedObject</code>-Roots und einem Teilobjekt pro Bereich in <code>graphql/&lt;bereich&gt;.rs</code> (je ein Platzhalterfeld; prüfe per Test, dass <code>Schema::build</code> damit durchläuft – falls versteckte Felder nicht reichen, sichtbares Feld <code>_&lt;bereich&gt;Ready: Boolean</code>, das das zuständige WP löscht), Context-Daten (<code>Arc&lt;App&gt;</code>, <code>RequestCtx</code>), <code>/healthz</code>.
 - <code>lineal-mcp</code>: <code>dispatch.rs</code> mit Zuordnung aller 55 Tool-Namen aus <code>docs/mcp-tools.snapshot.json</code> zu Handler-Dateien <code>handlers/&lt;gruppe&gt;.rs</code> (Gruppen: <code>teams_users, issues, statuses, labels, comments, attachments, projects, milestones, cycles, initiatives, status_updates, views, inbox, triage, documents, templates, sharing</code>), jede Handler-Funktion liefert <code>not implemented</code>.
 - <code>lineal-jobs</code>: Traits <code>EventConsumer</code>, <code>PeriodicJob</code>, <code>registry.rs</code> (Liste aller Konsumenten/Jobs, Einträge pro Bereich als leere Module <code>consumers/&lt;name&gt;.rs</code>, <code>periodic/&lt;name&gt;.rs</code>), Worker-Schleife.
 - <code>lineal-server</code>: Subcommands <code>serve</code>, <code>worker</code>, <code>migrate</code>, <code>seed</code>, <code>schema-export</code>; Konfiguration aus Umgebung.
-- <code>lineal-testkit</code>: <code>seed/mod.rs</code> ruft <code>seed::identity</code>, <code>seed::issues</code>, <code>seed::planning</code>, <code>seed::content</code> (leere Funktionen in eigenen Dateien) auf; Helper <code>ctx_for(user)</code>.
+- <code>lineal-testkit</code>: <code>seed/mod.rs</code> ruft <code>seed::identity</code>, <code>seed::issues</code>, <code>seed::planning</code>, <code>seed::content</code> (leere Funktionen in eigenen Dateien) auf; Helper <code>ctx_for(user)</code>; <code>FakeStore</code>/<code>FakeTx</code> (alle Repos als Stubs, konfigurierbare <code>find_principal_by_token_hash</code>), damit WP03/WP04 Auth ohne WP02 testen können; README mit Testmuster <code>#[sqlx::test(migrations = "../lineal-db/migrations")]</code> für Crates außerhalb von <code>lineal-db</code>.
 - <code>web/</code>: Vite + React 19 + TS strict + Tailwind v4 + shadcn/ui-Init + TanStack Router (dateibasiert, <code>routeTree.gen.ts</code> in <code>.gitignore</code>) + TanStack Query + ESLint/Prettier + Vitest; eine Route <code>/</code> „Lineal“; Proxy <code>/graphql</code>, <code>/auth</code>, <code>/sync</code>, <code>/mcp</code> → <code>:8080</code>.
-- <code>docker-compose.yml</code> (postgres:16 auf <strong>5440</strong>, User/Passwort/DB <code>lineal</code>, MinIO optional), <code>.env.example</code>, <code>.gitignore</code>, <code>scripts/check.sh</code> (fmt, clippy, test, <code>npm ci</code>/typecheck/lint/test), <code>scripts/dev.sh</code>, <code>README.md</code> (Entwickler-Schnellstart).</p>
-<p><strong>DoD:</strong> <code>docker compose up -d &amp;&amp; scripts/check.sh</code> grün; <code>cargo run -p lineal-server -- serve</code> startet und <code>/healthz</code> liefert 200; <code>tools/list</code> über MCP liefert 55 Tools.</p>
+- <code>docker-compose.yml</code> mit <code>name: lineal</code> ganz oben (alle Worktrees teilen denselben Container), postgres:16 auf <strong>5440</strong>, User/Passwort/DB <code>lineal</code>; <code>.env.example</code>; <code>.gitignore</code> erweitern; <code>scripts/check.sh</code> (exportiert <code>DATABASE_URL</code> mit Default <code>postgres://lineal:lineal@localhost:5440/lineal</code>, <code>docker compose up -d --wait</code>, fmt, clippy, test, <code>schema-export</code> neu erzeugen, <code>npm ci</code>/typecheck/lint/test); <code>scripts/dev.sh</code>; <code>README.md</code> (Entwickler-Schnellstart).</p>
+<p><strong>DoD:</strong> <code>scripts/check.sh</code> grün; <code>cargo run -p lineal-server -- serve</code> startet und <code>/healthz</code> liefert 200; Unit-Test: <code>dispatch.rs</code> kennt exakt die 55 Tool-Namen aus dem Snapshot plus die Lineal-Erweiterung <code>get_workspace_overview</code> (<a href="#ch-14-firmenweite-sicht">14 §4</a>); Handler-Gruppe <code>workspace</code> dafür angelegt.</p>
 <h3 id="ch-12-arbeitspakete-s2-datenbankschema">S2 – Datenbankschema</h3>
 <p><strong>Ziel:</strong> Das vollständige relationale Schema aus <a href="#ch-01-domaenenmodell">01</a> als Migrationen <code>0001</code>–<code>0099</code>.</p>
-<p><strong>Eigentum:</strong> <code>crates/lineal-db/migrations/0001_*.sql</code> … <code>0099_*.sql</code>, <code>crates/lineal-db/tests/schema.rs</code>, <code>docs/</code> nichts.</p>
-<p><strong>Inhalt:</strong> Alle Entitäten aus 01 (inkl. <code>Draft</code>, <code>Invitation</code>, <code>IssueIdentifierAlias</code>, <code>TeamKey</code>, <code>DocumentContent</code>, Join-Tabellen, <code>InitiativeParent</code>), Spaltennamen <code>snake_case</code> (Feld <code>issueCount</code> → <code>issue_count</code>), <code>organization_id</code> in jeder Tabelle mit zusammengesetzten FKs wo in 01 beschrieben, Unique-Constraints und Indizes aus 01 §7, Check-Constraints (Enums als <code>text</code> + <code>CHECK (... IN (...))</code>, genau-ein-Parent bei Dokumenten), <code>version int not null default 1</code>, Audit-Spalten. Volltext: <code>issue.search_vector tsvector</code> generiert aus Titel/Beschreibung + GIN-Index, <code>pg_trgm</code>-Index auf Kennungen. Reihenfolge der Dateien nach FK-Abhängigkeit (Org/User/Team → States/Labels → Issues → …).</p>
+<p><strong>Eigentum:</strong> <code>crates/lineal-db/migrations/0010_*.sql</code> … <code>0099_*.sql</code>, <code>crates/lineal-db/tests/schema.rs</code>. <strong>Nicht</strong> anlegen: <code>outbox_event</code>, <code>outbox_delivery</code>, <code>job</code>, <code>sync_seq</code> (gehören S1).</p>
+<p><strong>Inhalt:</strong> Alle Entitäten aus 01 (inkl. <code>Draft</code>, <code>Invitation</code>, <code>IssueIdentifierAlias</code>, <code>TeamKey</code>, <code>DocumentContent</code>, Join-Tabellen, <code>InitiativeParent</code>) sowie die Import-Ergänzungen aus <a href="#ch-13-import-linear">13 §5</a> (<code>import_run</code>, <code>import_mapping</code>, <code>import_issue</code>, <code>import_credential</code>, <code>user.status</code> mit Wert <code>imported</code>, <code>team.import_locked_until</code>, <code>issue_history.source</code>), Spaltennamen <code>snake_case</code> (Feld <code>issueCount</code> → <code>issue_count</code>), <code>organization_id</code> in jeder Tabelle mit zusammengesetzten FKs wo in 01 beschrieben, Unique-Constraints und Indizes aus 01 §7, Check-Constraints (Enums als <code>text</code> + <code>CHECK (... IN (...))</code>, genau-ein-Parent bei Dokumenten), <code>version int not null default 1</code>, Audit-Spalten. Volltext: <code>issue.search_vector tsvector</code> generiert aus Titel/Beschreibung + GIN-Index, <code>pg_trgm</code>-Index auf Kennungen. Reihenfolge der Dateien nach FK-Abhängigkeit (Org/User/Team → States/Labels → Issues → …).</p>
 <p><strong>Tests:</strong> <code>schema.rs</code> mit <code>#[sqlx::test]</code>: Migrationen laufen durch; Stichproben-Inserts (Org, Team, State, Issue) und Constraint-Verletzungen (zwei Issues gleiche Nummer im Team → Fehler; ungültiger <code>state_type</code> → Fehler; Dokument mit zwei Parents → Fehler).</p>
-<p><strong>DoD:</strong> <code>cargo test -p lineal-db --test schema</code> grün (nach Merge mit S1); Migrationen laufen auch mit <code>psql -f</code> in Reihenfolge gegen leere DB.</p>
+<p><strong>DoD:</strong> Im eigenen Worktree gibt es noch kein Crate – Prüfung mit <code>psql</code> gegen eine temporäre Datenbank im Container auf 5440 (alle Dateien in Reihenfolge anwenden, Smoke-Inserts, Constraint-Verletzungen). <code>tests/schema.rs</code> wird geschrieben und vom Orchestrator nach dem Merge ausgeführt.</p>
 <hr />
 <h2 id="ch-12-arbeitspakete-welle-1">Welle 1</h2>
 <h3 id="ch-12-arbeitspakete-wp01-domain-regeln">WP01 – Domain-Regeln</h3>
@@ -32434,7 +32461,7 @@ RUST_LOG=info,lineal=debug
 - <code>crates/lineal-api/src/graphql/{org,team}.rs</code>, <code>crates/lineal-api/src/rest/auth.rs</code>
 - <code>crates/lineal-mcp/src/handlers/{teams_users,statuses}.rs</code>
 - <code>crates/lineal-testkit/src/seed/identity.rs</code></p>
-<p><strong>Liefert:</strong> Workspace anlegen (Default-Team), User, Passwort-Login mit Session-Cookie (<code>/auth/login|logout|me</code>), API-Keys (anlegen, Hash, widerrufen), <code>AuthRepo::find_principal_by_token_hash</code>, Einladungen, Teams (Key-Generierung/-Validierung/-Änderung mit Historie, Default-Workflow beim Anlegen, Copy settings, retire/delete), Mitgliedschaften + Owner, Sichtbarkeit public/private/restricted, Sub-Teams (Nesting inkl. Vorschau, Vererbungsflags, Tiefenlimit), Workflow-Status CRUD (≥ 1 pro Kategorie, Duplicate system-verwaltet), <code>policy::visible_team_ids</code>, <code>policy::require</code> mit Matrix aus 02 §6, Referenzauflösung Team/User/State. Seed: acme, ENG, WEB (Sub-Team von ENG), DES (privat), Alice/Bob/Carol wie in 02.</p>
+<p><strong>Liefert:</strong> Workspace anlegen (Default-Team), User, Passwort-Login mit Session-Cookie (<code>/auth/login|logout|me</code>), API-Keys (anlegen, Hash, widerrufen), <code>AuthRepo::find_principal_by_token_hash</code>, Teams (Key-Generierung/-Validierung, Default-Workflow beim Anlegen), Mitgliedschaften + Owner, Sichtbarkeit public/private/restricted, Sub-Teams (Nesting inkl. Vorschau, Vererbungsflags, Tiefenlimit), Workflow-Status CRUD (≥ 1 pro Kategorie, Duplicate system-verwaltet), <code>policy::visible_team_ids</code>, <code>policy::require</code> mit Matrix aus 02 §6, Referenzauflösung Team/User/State. Seed: acme, ENG, WEB (Sub-Team von ENG), DES (privat), Alice/Bob/Carol wie in 02.</p>
 <p><strong>Tests:</strong> Zähler-Spalte initial, Key-Regeln, Nesting-Zyklus verboten, privates Team → <code>not_found</code> für Nicht-Mitglied (Review-Fokus 2), Gast sieht nur seine Teams, Status-Löschen mit Migrationsziel, Login/Logout, MCP <code>list_teams</code>/<code>get_team</code>/<code>list_users</code>/<code>get_user</code>/<code>list_issue_statuses</code>/<code>get_issue_status</code>/<code>get_workspace</code> Contract.</p>
 <h3 id="ch-12-arbeitspakete-wp03-api-plattform">WP03 – API-Plattform</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-09-api-events">09</a> §1–3, <a href="#ch-10-architektur-umsetzung">10 §11.4</a>, <a href="#ch-11-implementierungsarchitektur">11 §3.4–3.5</a>.</p>
@@ -32456,12 +32483,12 @@ RUST_LOG=info,lineal=debug
 <h3 id="ch-12-arbeitspakete-wp06-issues-kern-inkl-labels-relationen-teamwechsel">WP06 – Issues-Kern (inkl. Labels, Relationen, Teamwechsel)</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-03-issues-workflow">03</a> §2–5, §8–9, §12, <a href="#ch-02-teams-rechte">02 §7</a> (Teamwechsel), <a href="#ch-06-dokumente-templates">06 §2</a> nur Verweis, <a href="#ch-07-mcp-server">07</a> Gruppen <code>issues</code>, <code>labels</code>, <code>sharing</code>.</p>
 <p><strong>Eigentum:</strong> <code>usecases/{issue,label}.rs</code>, <code>ports/repos/{issue,label}.rs</code>, <code>resolve/{issue,label}.rs</code>, <code>lineal-db/src/repos/{issue,label}.rs</code>, Migrationen <code>0600</code>–<code>0699</code>, <code>graphql/{issue,label}.rs</code>, <code>mcp/handlers/{issues,labels,sharing}.rs</code>, <code>testkit/src/seed/issues.rs</code>.</p>
-<p><strong>Liefert:</strong> create (atomarer Zähler, Default-State, Triage-State für Nicht-Mitglieder, sortOrder), update mit Tri-State und Patch, Statuswechsel mit Zeitstempeln, Priorität, Schätzung (Skala des Teams), Labels (Workspace/Team/vererbt, Gruppen, retire/restore), Sub-Issues (Zyklen verboten), Relationen inkl. Duplicate → Duplicate-State, History mit Coalescing, Teamwechsel (17 Schritte aus 02 §7), Papierkorb/Restore, Kennungsauflösung inkl. Alias, <code>list_issues</code> mit den MCP-Filterparametern (ohne <code>customView</code>/<code>query</code> – kommt in WP11), Outbox-Events.</p>
+<p><strong>Liefert:</strong> create (atomarer Zähler, Default-State, Triage-State für Nicht-Mitglieder, sortOrder), update mit Tri-State und Patch, Zuordnung zu Cycle/Projekt/Meilenstein inkl. Validierung (Issue-Team am Projekt beteiligt, Cycle gehört zum Team, Meilenstein zum Projekt) per SQL gegen das S2-Schema, Statuswechsel mit Zeitstempeln, Priorität, Schätzung (Skala des Teams), Labels (Workspace/Team/vererbt, Gruppen, retire/restore), Sub-Issues (Zyklen verboten), Relationen inkl. Duplicate → Duplicate-State, History mit Coalescing, Teamwechsel (17 Schritte aus 02 §7), Papierkorb/Restore, Kennungsauflösung inkl. Alias, <code>list_issues</code> mit den MCP-Filterparametern (ohne <code>customView</code>/<code>query</code> – kommt in WP11), Outbox-Events.</p>
 <p><strong>Tests:</strong> Review-Fokus 1 (20 parallele Creates), 2 (Issue in privatem Team), 3 (Teamwechsel), 4 (Patch über <code>save_issue</code>); singleSelect-Gruppe; Duplicate; MCP-Contract für alle Issue-/Label-Tools.</p>
 <h3 id="ch-12-arbeitspakete-wp07-planung">WP07 – Planung</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-04-planung">04</a> komplett, <a href="#ch-07-mcp-server">07</a> Gruppen <code>projects</code>, <code>milestones</code>, <code>cycles</code>, <code>initiatives</code>, <code>status_updates</code>.</p>
 <p><strong>Eigentum:</strong> <code>usecases/{cycle,project,initiative}.rs</code>, <code>ports/repos/{cycle,project,initiative}.rs</code>, <code>resolve/{cycle,project,initiative}.rs</code>, <code>lineal-db/src/repos/{cycle,project,initiative}.rs</code>, Migrationen <code>0700</code>–<code>0799</code>, <code>graphql/{cycle,project,initiative}.rs</code>, <code>mcp/handlers/{projects,milestones,cycles,initiatives,status_updates}.rs</code>, <code>lineal-jobs/src/periodic/{cycles,update_reminders}.rs</code>, <code>testkit/src/seed/planning.rs</code>.</p>
-<p><strong>Liefert:</strong> Cycle-Einstellungen, Generierung (WP01-Kalender), Cycle-Wechsel-Job mit Rollover und Snapshots, Sub-Team-Vererbung; Projekte mit mehreren Teams, Lead-Team, <code>P-KEY-n</code>, Projektstatus, Meilensteine, Fortschritt; Initiativen als DAG (Zyklenprüfung, Tiefe), Projektzuordnung; Status-Updates mit Health und Thread; Issue ↔ Cycle/Projekt/Meilenstein-Zuordnungsregeln als Use-Case-Funktionen, die WP06-Updates aufrufen (<code>App::assign_issue_to_cycle</code> etc.).</p>
+<p><strong>Liefert:</strong> Cycle-Einstellungen, Generierung (WP01-Kalender), Cycle-Wechsel-Job mit Rollover und Snapshots, Sub-Team-Vererbung; Projekte mit mehreren Teams, Lead-Team, <code>P-KEY-n</code>, Projektstatus, Meilensteine, Fortschritt; Initiativen als DAG (Zyklenprüfung, Tiefe), Projektzuordnung; Status-Updates mit Health und Thread; Fortschritt/Scope werden per SQL aus der Issue-Tabelle gelesen; die Zuordnung von Issues zu Cycles/Projekten/Meilensteinen gehört zu WP06.</p>
 <p><strong>Tests:</strong> Review-Fokus 5 (DST), Rollover, Projekt mit Team ohne Mitgliedschaft, Initiative-Zyklus → <code>invalid_request</code>, MCP-Contract.</p>
 <h3 id="ch-12-arbeitspakete-wp08-inbox-notifications-abonnements">WP08 – Inbox, Notifications, Abonnements</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-05-views-suche-inbox">05 §6</a>, <a href="#ch-10-architektur-umsetzung">10 §4</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>inbox</code>.</p>
@@ -32481,10 +32508,10 @@ RUST_LOG=info,lineal=debug
 <strong>Liefert:</strong> Dokumente mit genau einem Parent, Reparent, Snapshot-Historie, Patch; Templates (issue/project/document, Workspace/Team, Vererbung), <code>applyTemplate</code> inkl. Sub-Issues in einer Transaktion; Integration in <code>create_issue</code>/<code>create_project</code> über <code>template</code>-Parameter.
 <strong>Tests:</strong> Dokument mit zwei Parents → <code>invalid_request</code>; Template mit 3 Sub-Issues → lückenlose Nummern; Merge-Regeln der Beschreibung.</p>
 <h3 id="ch-12-arbeitspakete-wp11-views-filter-suche">WP11 – Views, Filter, Suche</h3>
-<p><strong>Spezifikation:</strong> <a href="#ch-05-views-suche-inbox">05 §1–5</a>, <a href="#ch-10-architektur-umsetzung">10 §5</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>views</code>, <code>list_issues</code> (<code>query</code>, <code>customView</code>).
-<strong>Eigentum:</strong> <code>usecases/view.rs</code>, <code>ports/repos/view.rs</code>, <code>lineal-db/src/repos/view.rs</code>, <code>lineal-db/src/{filter_sql.rs,search.rs}</code>, Migrationen <code>1100</code>–<code>1199</code>, <code>graphql/{view,search}.rs</code>, <code>mcp/handlers/views.rs</code>, <code>lineal-jobs/src/consumers/search_index.rs</code>. Darf in <code>repos/issue.rs</code> und <code>handlers/issues.rs</code> ausschließlich die Listen-/Suchfunktion erweitern.
-<strong>Liefert:</strong> Filter-AST → SQL (alle Comparators, to-many, relative Daten, <code>me</code>), immer AND mit Sichtbarkeitsfilter; Custom Views (personal/team/workspace), Favoriten; Volltextsuche (Issues inkl. <code>previousIdentifiers</code>, Projekte, Dokumente) mit Ranking; Anzeigeoptionen-Persistenz.
-<strong>Tests:</strong> Filter-Beispiele aus 05 als Tabellentests; Suche findet kein Issue aus privatem Team (Review-Fokus 2); View + Zusatzfilter = AND.</p>
+<p><strong>Spezifikation:</strong> <a href="#ch-05-views-suche-inbox">05 §1–5</a>, <a href="#ch-14-firmenweite-sicht">14</a> (Backend), <a href="#ch-10-architektur-umsetzung">10 §5</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>views</code>, <code>list_issues</code> (<code>query</code>, <code>customView</code>).
+<strong>Eigentum:</strong> <code>usecases/view.rs</code>, <code>ports/repos/view.rs</code>, <code>lineal-db/src/repos/view.rs</code>, <code>lineal-db/src/{filter_sql.rs,search.rs}</code>, Migrationen <code>1100</code>–<code>1199</code>, <code>graphql/{view,search,overview}.rs</code>, <code>mcp/handlers/{views,workspace}.rs</code>, <code>lineal-app/src/usecases/overview.rs</code>, <code>lineal-db/src/repos/overview.rs</code>, <code>lineal-jobs/src/consumers/search_index.rs</code>. Darf in <code>repos/issue.rs</code> und <code>handlers/issues.rs</code> ausschließlich die Listen-/Suchfunktion erweitern.
+<strong>Liefert:</strong> Filter-AST → SQL (alle Comparators, to-many, relative Daten, <code>me</code>), immer AND mit Sichtbarkeitsfilter; Custom Views (personal/team/workspace), Favoriten; Volltextsuche (Issues inkl. <code>previousIdentifiers</code>, Projekte, Dokumente) mit Ranking; Anzeigeoptionen-Persistenz; firmenweite Sicht: <code>workspaceOverview</code>, <code>workload</code>, <code>activeCycles</code>, MCP <code>get_workspace_overview</code>, Rollups über Sub-Teams.
+<strong>Tests:</strong> Filter-Beispiele aus 05 als Tabellentests; Suche findet kein Issue aus privatem Team (Review-Fokus 2); View + Zusatzfilter = AND; Abnahmekriterien 1–4 aus <a href="#ch-14-firmenweite-sicht">14 §6</a>.</p>
 <h3 id="ch-12-arbeitspakete-wp12-triage-und-automationen">WP12 – Triage und Automationen</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-03-issues-workflow">03 §9–11</a>, <a href="#ch-10-architektur-umsetzung">10 §3</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>triage</code>.
 <strong>Eigentum:</strong> <code>usecases/triage.rs</code>, <code>ports/repos/triage.rs</code>, <code>lineal-db/src/repos/triage.rs</code>, Migrationen <code>1200</code>–<code>1299</code>, <code>graphql/triage.rs</code>, <code>mcp/handlers/triage.rs</code>, <code>lineal-jobs/src/periodic/{auto_close,auto_archive,purge,sla,triage_rotation}.rs</code>.
@@ -32496,9 +32523,9 @@ RUST_LOG=info,lineal=debug
 <strong>Liefert:</strong> Liste und Board (Gruppierung nach Status, Drag &amp; Drop mit <code>dnd-kit</code>), Issue-Detail mit Property-Sidebar, Activity, Sub-Issues, Relationen, Kommentaren (TipTap-Editor mit Mentions), Create-Modal (Template, „Create more“), Shortcuts S/A/P/L/E/C, Teamwechsel-Dialog, My Issues.
 <strong>Tests:</strong> Komponententests für Modal, Property-Picker, Board-Spaltenlogik.</p>
 <h3 id="ch-12-arbeitspakete-wp14-web-planung-inbox-views-suche-settings">WP14 – Web: Planung, Inbox, Views, Suche, Settings</h3>
-<p><strong>Spezifikation:</strong> <a href="#ch-08-userflows">08</a> F1, F2, F9–F16.
-<strong>Eigentum:</strong> <code>web/src/features/{planning,inbox,views,search,docs,settings}/**</code>, <code>web/src/routes/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document}/**</code>.
-<strong>Liefert:</strong> Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys).
+<p><strong>Spezifikation:</strong> <a href="#ch-08-userflows">08</a> F1, F2, F9–F16, <a href="#ch-14-firmenweite-sicht">14</a> (UI), <a href="#ch-13-import-linear">13 §6–7</a> (Import-Assistent in den Settings).
+<strong>Eigentum:</strong> <code>web/src/features/{planning,inbox,views,search,docs,settings,overview,import}/**</code>, <code>web/src/routes/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document,overview,issues,workload}/**</code>.
+<strong>Liefert:</strong> Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys); firmenweite Sicht (Overview-Dashboard, Workspace-Issues gruppiert nach Team, Roadmap-Timeline, Workload, Cycle-Übersicht); Import-Assistent (Token, Plan, Fortschritt, Bericht) gegen die in <a href="#ch-13-import-linear">13 §6</a> definierten Operationen.
 <strong>Tests:</strong> Filter-Bar erzeugt korrektes Filter-JSON; Inbox-Aktionen.</p>
 <hr />
 <h2 id="ch-12-arbeitspakete-welle-4">Welle 4</h2>
@@ -32507,11 +32534,16 @@ RUST_LOG=info,lineal=debug
 <strong>Eigentum:</strong> <code>crates/lineal-sync/**</code>, <code>lineal-jobs/src/consumers/sync.rs</code>, Migrationen <code>1500</code>–<code>1599</code>, <code>web/src/lib/store/**</code>; in <code>web/src/features/**</code> nur Austausch der Datenquelle (Hooks) für Issues, Projekte, Notifications.
 <strong>Liefert:</strong> <code>sync_log</code>, Bootstrap-Endpunkt, WebSocket mit <code>since</code>, Filter nach sichtbaren Teams, Reconnect; Client-Store (MobX + IndexedDB), optimistische Mutationen mit Rollback.
 <strong>Tests:</strong> User sieht keine SyncActions privater Teams; Reconnect liefert Lücke nach.</p>
-<h3 id="ch-12-arbeitspakete-wp16-webhooks-oauth-authorization-server-api-keys">WP16 – Webhooks, OAuth-Authorization-Server, API-Keys</h3>
+<h3 id="ch-12-arbeitspakete-wp16-webhooks-oauth-team-lebenszyklus">WP16 – Webhooks, OAuth, Team-Lebenszyklus</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-09-api-events">09 §2, §4</a>, <a href="#ch-07-mcp-server">07 §1</a> (OAuth 2.1 + PKCE + DCR).
-<strong>Eigentum:</strong> <code>usecases/webhook.rs</code>, <code>ports/repos/webhook.rs</code>, <code>lineal-db/src/repos/webhook.rs</code>, Migrationen <code>1600</code>–<code>1699</code>, <code>lineal-api/src/oauth/**</code>, <code>lineal-jobs/src/consumers/webhooks.rs</code>, <code>graphql/</code> neue Datei <code>webhook.rs</code> (Orchestrator ergänzt Root).
-<strong>Liefert:</strong> Webhook-CRUD, Zustellung mit HMAC-Signatur <code>Lineal-Signature</code>, Retries 1 min/1 h/6 h, Deaktivierung; OAuth <code>/oauth/register|authorize|token</code> mit PKCE, Refresh-Rotation, Scopes; MCP akzeptiert OAuth-Tokens.
+<strong>Eigentum:</strong> <code>usecases/{webhook,team_lifecycle,invitation}.rs</code>, <code>ports/repos/webhook.rs</code>, <code>lineal-db/src/repos/webhook.rs</code> (Team-Lebenszyklus-Methoden in neuer Datei <code>repos/team_lifecycle.rs</code>), Migrationen <code>1600</code>–<code>1699</code>, <code>lineal-api/src/oauth/**</code>, <code>lineal-jobs/src/consumers/webhooks.rs</code>, <code>graphql/</code> neue Datei <code>webhook.rs</code> (Orchestrator ergänzt Root).
+<strong>Liefert:</strong> Webhook-CRUD, Zustellung mit HMAC-Signatur <code>Lineal-Signature</code>, Retries 1 min/1 h/6 h, Deaktivierung; OAuth <code>/oauth/register|authorize|token</code> mit PKCE, Refresh-Rotation, Scopes; MCP akzeptiert OAuth-Tokens. Aus WP02 übernommen: Einladungen (invite/accept/resend/revoke), Team-Key-Änderung mit Historie und Alias, Copy settings, Team retire/restore/delete (30 Tage).
 <strong>Tests:</strong> Signatur prüfbar, Retry-Plan, PKCE-Fehlerfälle, MCP-Call mit OAuth-Token.</p>
+<h3 id="ch-12-arbeitspakete-wp18-import-aus-linear">WP18 – Import aus Linear</h3>
+<p><strong>Spezifikation:</strong> <a href="#ch-13-import-linear">13</a> komplett.
+<strong>Eigentum:</strong> neues Crate <code>crates/lineal-import/**</code> (Orchestrator trägt es beim Merge in den Workspace ein; das WP darf das Workspace-<code>Cargo.toml</code> dafür ausnahmsweise ergänzen), <code>usecases/import.rs</code>, <code>ports/repos/import.rs</code>, <code>lineal-db/src/repos/import.rs</code>, Migrationen <code>1800</code>–<code>1899</code>, <code>graphql/import.rs</code> (Orchestrator ergänzt Root), <code>lineal-server/src/cli/import.rs</code>, <code>lineal-jobs/src/periodic/import_runner.rs</code>.
+<strong>Liefert:</strong> <code>ImportSource</code>-Port mit Linear-GraphQL-Adapter (Paginierung, Rate-Limit-Steuerung über Header) und CSV-Adapter, Fake-Quelle aus JSON-Fixtures, Phasen 1–8 mit Checkpoints, <code>import_mapping</code>-Upserts, Nummernübernahme und Zähler-Setzen, Markdown-Umschreibung, Datei-Download in den Blob-Store, Dry-Run, Delta-Import mit Konflikterkennung, <code>origin = import</code> für alle Events, verschlüsselte Token-Ablage, GraphQL-Operationen und CLI.
+<strong>Tests:</strong> Abnahmekriterien 1–6 aus <a href="#ch-13-import-linear">13 §9</a> gegen die Fake-Quelle. <strong>Kein Test darf gegen das echte Linear laufen.</strong></p>
 <h2 id="ch-12-arbeitspakete-welle-5">Welle 5</h2>
 <h3 id="ch-12-arbeitspakete-wp17-h-rtung-und-e2e">WP17 – Härtung und E2E</h3>
 <p><strong>Eigentum:</strong> alle <code>lineal-db/src/repos/*.rs</code> (nur Umstellung auf <code>query!</code>/<code>query_as!</code>), <code>.sqlx/</code>, <code>deny.toml</code>, <code>web/e2e/**</code>, <code>scripts/check.sh</code> (Erweiterung).
@@ -32527,6 +32559,583 @@ RUST_LOG=info,lineal=debug
 6. Rufe niemals Linear-MCP-Tools auf. Nur erfundene Daten.
 7. Abschlussbericht (max. 15 Zeilen): Branch, letzter Commit-SHA, was fertig ist, was offen ist, geänderte Dateien außerhalb der Eigentumsliste (sollte leer sein) und neue Abhängigkeiten.
 </code></pre></section>
+<section id="ch-13-import-linear" class="chapter"><div class="src">Quelle: <a href="13-import-linear.md">13-import-linear.md</a></div><h1 id="ch-13-import-linear-13-import-aus-linear-migration">13 – Import aus Linear (Migration)</h1>
+<p>Lineal kann einen bestehenden Linear-Workspace vollständig übernehmen, damit Teams ohne Datenverlust umziehen können. Dieses Kapitel spezifiziert Quelle, Mapping, Ablauf, Sicherheit und Wiederholbarkeit des Imports.</p>
+<h2 id="ch-13-import-linear-1-ziele-und-grunds-tze">1. Ziele und Grundsätze</h2>
+<ol>
+<li><strong>Verlustarm:</strong> Alle Kernobjekte aus dem Scope (README) werden übernommen, inklusive Erstellzeitpunkten, Autoren, Kommentaren und Anhängen.</li>
+<li><strong>Kennungen bleiben gleich:</strong> <code>ENG-123</code> in Linear ist nach dem Import <code>ENG-123</code> in Lineal. Links in Beschreibungen und Kommentaren funktionieren weiter.</li>
+<li><strong>Idempotent und fortsetzbar:</strong> Ein abgebrochener Import läuft beim nächsten Start dort weiter, wo er aufgehört hat. Ein erneuter Lauf („Delta-Import“) übernimmt nur Änderungen seit dem letzten Lauf.</li>
+<li><strong>Ruhig:</strong> Während des Imports entstehen keine Benachrichtigungen, keine Webhooks, keine Automationen (Auto-Close, SLA, Triage-Regeln).</li>
+<li><strong>Nur lesend auf Linear-Seite:</strong> Der Import ruft ausschließlich lesende Linear-API-Operationen auf.</li>
+<li><strong>Sicher:</strong> Der Linear-API-Schlüssel wird nie im Klartext gespeichert und nie geloggt.</li>
+</ol>
+<h2 id="ch-13-import-linear-2-quelle">2. Quelle</h2>
+<table>
+<thead>
+<tr>
+<th>Quelle</th>
+<th>Umfang</th>
+<th>Einsatz</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Linear GraphQL API</strong> (<code>https://api.linear.app/graphql</code>) mit Personal API Key oder OAuth-Token (Scope <code>read</code>)</td>
+<td>vollständig: alle Entitäten, Beziehungen, Historie, Anhänge</td>
+<td><strong>Standardweg</strong></td>
+</tr>
+<tr>
+<td>Linear CSV-Export</td>
+<td>nur Issues mit Basisfeldern</td>
+<td>Notlösung ohne API-Zugang; wird als eigenes Format unterstützt, mit Warnung über fehlende Daten</td>
+</tr>
+</tbody>
+</table>
+<p>Der Import ist als <strong>Adapter mit eigenem Port</strong> gebaut (<code>ImportSource</code>), damit später weitere Quellen (Jira, GitHub Issues) dazukommen können.</p>
+<pre><code class="language-text">trait ImportSource {
+  async fn workspace(&amp;self) -&gt; SourceWorkspace
+  async fn page(&amp;self, entity: SourceEntity, cursor: Option&lt;Cursor&gt;, updated_after: Option&lt;DateTime&gt;) -&gt; SourcePage
+  async fn download(&amp;self, url: Url) -&gt; Bytes
+}
+</code></pre>
+<p><strong>Rate-Limits der Quelle:</strong> Linear erlaubt mit API-Key etwa 2 500 Requests pro Stunde und begrenzt die Abfragekomplexität (siehe <a href="#ch-09-api-events">09</a>). Der Importer liest die Header <code>X-RateLimit-Requests-Remaining</code> und <code>X-RateLimit-Complexity-Remaining</code>, drosselt vorausschauend und wartet bei <code>RATELIMITED</code> bis zum Reset. Seitengröße 50–100, Felder pro Abfrage minimal, verschachtelte Listen (Labels, Kommentare) in eigenen Abfragen.</p>
+<h2 id="ch-13-import-linear-3-mapping">3. Mapping</h2>
+<p>Jedes übernommene Objekt wird in der Tabelle <code>import_mapping</code> vermerkt:</p>
+<table>
+<thead>
+<tr>
+<th>Feld</th>
+<th>Typ</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>importRunId</code></td>
+<td>UUID</td>
+<td>Lauf</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>Enum <code>linear</code>, <code>linearCsv</code></td>
+<td>Quelle</td>
+</tr>
+<tr>
+<td><code>sourceType</code></td>
+<td>String</td>
+<td>z. B. <code>Issue</code>, <code>Team</code>, <code>Comment</code></td>
+</tr>
+<tr>
+<td><code>sourceId</code></td>
+<td>String</td>
+<td>ID in der Quelle</td>
+</tr>
+<tr>
+<td><code>targetId</code></td>
+<td>UUID</td>
+<td>ID in Lineal</td>
+</tr>
+<tr>
+<td><code>sourceUpdatedAt</code></td>
+<td>DateTime</td>
+<td>Stand beim Import (für Delta)</td>
+</tr>
+<tr>
+<td><code>checksum</code></td>
+<td>String</td>
+<td>Hash der übernommenen Felder</td>
+</tr>
+</tbody>
+</table>
+<p>Unique: <code>(organizationId, source, sourceType, sourceId)</code>.</p>
+<h3 id="ch-13-import-linear-3-1-entit-ten">3.1 Entitäten</h3>
+<table>
+<thead>
+<tr>
+<th>Linear</th>
+<th>Lineal</th>
+<th>Besonderheiten</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Organization</td>
+<td>Workspace</td>
+<td>Import läuft in einen <strong>bestehenden</strong> Lineal-Workspace; Name/URL-Key werden nicht überschrieben</td>
+</tr>
+<tr>
+<td>User</td>
+<td>User</td>
+<td>Zuordnung per E-Mail (case-insensitiv). Unbekannte User → <strong>Platzhalter-User</strong> (<code>status = imported</code>, kein Login, keine Lizenz), die bei späterer Einladung mit derselben E-Mail automatisch verknüpft werden. Rollen: Linear-Admin → <code>admin</code>, Guest → <code>guest</code>, sonst <code>user</code>.</td>
+</tr>
+<tr>
+<td>Team (inkl. <code>parent</code>)</td>
+<td>Team</td>
+<td><code>key</code> identisch; Kollision mit bestehendem Lineal-Team → Abbruch vor dem Start mit Liste (oder Ziel-Key per Mapping-Datei). Sub-Team-Hierarchie, Sichtbarkeit, Zeitzone, Cycle-/Estimate-/Triage-Einstellungen, Auto-Close/Archive übernehmen.</td>
+</tr>
+<tr>
+<td>TeamMembership</td>
+<td>TeamMembership</td>
+<td>inkl. <code>owner</code></td>
+</tr>
+<tr>
+<td>WorkflowState</td>
+<td>WorkflowState</td>
+<td>gleicher Name, <code>type</code>, Farbe, Position. Der Default-Workflow eines neu angelegten Teams wird <strong>ersetzt</strong>, nicht ergänzt. Duplicate-State wird zugeordnet, nicht doppelt angelegt.</td>
+</tr>
+<tr>
+<td>IssueLabel (Workspace/Team, Gruppen)</td>
+<td>Label</td>
+<td>Gruppen mit <code>groupType</code>; retired Labels bleiben retired</td>
+</tr>
+<tr>
+<td>Cycle</td>
+<td>Cycle</td>
+<td>Nummer, Zeitraum, abgeschlossene Cycles mit eingefrorenen Scope-Historien</td>
+</tr>
+<tr>
+<td>Project, ProjectStatus, ProjectMilestone, ProjectUpdate, ProjectLabel</td>
+<td>dto.</td>
+<td>Lead-Team, Teams, Members, <code>P-KEY-n</code> aus Linear übernommen</td>
+</tr>
+<tr>
+<td>Initiative (+ Sub-Initiativen), InitiativeUpdate</td>
+<td>dto.</td>
+<td>DAG-Kanten aus <code>parentInitiatives</code></td>
+</tr>
+<tr>
+<td>Issue</td>
+<td>Issue</td>
+<td><strong><code>number</code> aus Linear übernommen</strong> (siehe 3.2); Felder: Titel, Beschreibung, State, Priority, Estimate, Assignee, Creator, Labels, Cycle, Project, Milestone, Parent, Due Date, SLA-Felder, sortOrder, Zeitstempel (<code>createdAt</code>, <code>startedAt</code>, <code>completedAt</code>, <code>canceledAt</code>, <code>archivedAt</code>), <code>previousIdentifiers</code></td>
+</tr>
+<tr>
+<td>IssueRelation</td>
+<td>IssueRelation</td>
+<td><code>blocks</code>, <code>related</code>, <code>duplicate</code>, <code>similar</code></td>
+</tr>
+<tr>
+<td>IssueHistory</td>
+<td>IssueHistory</td>
+<td>als Einträge mit <code>source = import</code>; nur Statuswechsel, Assignee, Priorität, Team, Projekt, Cycle (reicht für Cycle-/Projekt-Graphen)</td>
+</tr>
+<tr>
+<td>Comment (Threads, Replies, Reaktionen, Inline-Kommentare)</td>
+<td>Comment, Reaction</td>
+<td>Autor, <code>createdAt</code>, <code>editedAt</code>; Inline-Anker über <code>quotedText</code></td>
+</tr>
+<tr>
+<td>Attachment, eingebettete Uploads</td>
+<td>Attachment, Blob</td>
+<td>Uploads aus <code>uploads.linear.app</code> herunterladen und im Lineal-Blob-Store ablegen; URLs in Markdown umschreiben. Externe Links bleiben Links.</td>
+</tr>
+<tr>
+<td>Document</td>
+<td>Document</td>
+<td>Parent (Project/Initiative/Team/Issue/Cycle)</td>
+</tr>
+<tr>
+<td>Template</td>
+<td>Template</td>
+<td><code>templateData</code> übersetzt; nicht abbildbare Felder werden verworfen und protokolliert</td>
+</tr>
+<tr>
+<td>CustomView, Favorite</td>
+<td>CustomView, Favorite</td>
+<td>Filter werden in das Lineal-Filtermodell übersetzt (gleiche Struktur, siehe <a href="#ch-05-views-suche-inbox">05</a>); unbekannte Filterfelder → View wird mit Warnung ohne dieses Kriterium angelegt</td>
+</tr>
+<tr>
+<td>IssueSubscription</td>
+<td>IssueSubscription</td>
+<td>ja</td>
+</tr>
+<tr>
+<td>Notifications</td>
+<td>–</td>
+<td><strong>nicht</strong> übernommen (flüchtig)</td>
+</tr>
+<tr>
+<td>Webhooks, API-Keys, OAuth-Apps, Integrationen</td>
+<td>–</td>
+<td>nicht übernommen (Sicherheit; müssen neu eingerichtet werden)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ch-13-import-linear-3-2-issue-nummern-und-z-hler">3.2 Issue-Nummern und Zähler</h3>
+<ul>
+<li>Importierte Issues behalten ihre Linear-Nummer. Lücken (in Linear gelöschte Issues) bleiben Lücken. <strong>Ausnahme zur Regel „lückenlos“</strong> aus <a href="#ch-00-konventionen">00 §2</a>: gilt nur für importierte Issues.</li>
+<li>Nach dem Import: <code>team.lastIssueNumber = max(number)</code> des Teams. Neue Issues zählen nahtlos weiter.</li>
+<li>Linear-<code>previousIdentifiers</code> (nach früheren Teamwechseln) werden als Aliase übernommen; alte Links bleiben auflösbar.</li>
+<li>Importiert man in ein Team, das in Lineal bereits Issues hat, ist das ein Konflikt (Nummernüberschneidung) → Import für dieses Team nur mit explizitem Ziel-Key eines neuen Teams.</li>
+</ul>
+<h3 id="ch-13-import-linear-3-3-inhalte-umschreiben">3.3 Inhalte umschreiben</h3>
+<p>Linear-Markdown enthält eigene Elemente. Der Importer übersetzt:</p>
+<table>
+<thead>
+<tr>
+<th>Linear</th>
+<th>Lineal</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;issue id="…" href="…"&gt;ENG-12&lt;/issue&gt;</code></td>
+<td><code>ENG-12</code> (wird von Lineal verlinkt)</td>
+</tr>
+<tr>
+<td>Links <code>https://linear.app/&lt;ws&gt;/issue/ENG-12/...</code></td>
+<td><code>https://&lt;lineal&gt;/&lt;ws&gt;/issue/ENG-12</code></td>
+</tr>
+<tr>
+<td>Links auf Projekte/Dokumente/Views</td>
+<td>Lineal-URLs über <code>import_mapping</code></td>
+</tr>
+<tr>
+<td><code>@user</code>-Erwähnungen</td>
+<td><code>@displayName</code> des zugeordneten Lineal-Users</td>
+</tr>
+<tr>
+<td><code>&lt;linear-image&gt;{json}&lt;/linear-image&gt;</code>, Upload-URLs</td>
+<td>heruntergeladene Datei, Lineal-Blob-URL</td>
+</tr>
+<tr>
+<td>unbekannte Tags</td>
+<td>als Text erhalten, im Bericht gelistet</td>
+</tr>
+</tbody>
+</table>
+<p>Anschließend läuft die normale Markdown-Bereinigung (Allowlist, <a href="#ch-10-architektur-umsetzung">10 §11.4</a>).</p>
+<h2 id="ch-13-import-linear-4-ablauf">4. Ablauf</h2>
+<pre class="mermaid">flowchart TD
+  START[&quot;Admin startet Import&quot;] --&gt; CONNECT[&quot;Linear-API-Key eingeben&lt;br/&gt;Verbindung pruefen&quot;]
+  CONNECT --&gt; SCAN[&quot;Scan: Teams, User, Mengen zaehlen&quot;]
+  SCAN --&gt; PLAN[&quot;Import-Plan anzeigen&lt;br/&gt;Teams waehlen, User-Zuordnung, Key-Konflikte&quot;]
+  PLAN --&gt; DRY{&quot;Probelauf?&quot;}
+  DRY --&gt;|ja| DRYRUN[&quot;Dry-Run: Mapping und Validierung&lt;br/&gt;ohne Schreiben, Bericht&quot;]
+  DRYRUN --&gt; PLAN
+  DRY --&gt;|nein| RUN[&quot;Import-Lauf in Phasen&quot;]
+  RUN --&gt; VERIFY[&quot;Verifikation: Zaehlungen und Stichproben&quot;]
+  VERIFY --&gt; REPORT[&quot;Bericht: uebernommen, uebersprungen, Warnungen&quot;]
+  REPORT --&gt; DELTA{&quot;Delta-Import spaeter?&quot;}
+  DELTA --&gt;|ja| RUN
+  DELTA --&gt;|nein| DONE[&quot;Fertig: Zaehler gesetzt, Automationen wieder aktiv&quot;]
+</pre>
+<h3 id="ch-13-import-linear-4-1-phasen-reihenfolge-nach-abh-ngigkeiten">4.1 Phasen (Reihenfolge nach Abhängigkeiten)</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Inhalt</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>User, Teams (Eltern vor Kindern), Mitgliedschaften</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Workflow-States, Labels (Gruppen vor Labels), Projektstatus, Templates</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Cycles, Initiativen (Topologische Sortierung des DAG), Projekte, Meilensteine</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Issues ohne Parent-Bezug (nach <code>number</code> aufsteigend pro Team), dann Parent-Bezüge und Relationen</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Kommentare, Reaktionen, History, Abos</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Anhänge und eingebettete Dateien (parallel, begrenzt auf 4 gleichzeitige Downloads)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Dokumente, Status-Updates, Custom Views, Favoriten</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Abschluss: Zähler setzen, Suchindex füllen, Fortschritt/Scope neu berechnen, Automationen freigeben</td>
+</tr>
+</tbody>
+</table>
+<p>Jede Phase verarbeitet Seiten von 50–100 Objekten pro Transaktion und speichert den Cursor in <code>import_run.checkpoint</code>. Bei Neustart wird ab dem Checkpoint fortgesetzt; bereits gemappte Objekte werden über <code>import_mapping</code> erkannt (Upsert statt Doppel-Anlage).</p>
+<h3 id="ch-13-import-linear-4-2-delta-import">4.2 Delta-Import</h3>
+<p>Läuft mit <code>updatedAfter = letzter erfolgreicher Laufbeginn</code>. Geänderte Objekte werden aktualisiert, wenn sich die <code>checksum</code> unterscheidet und das Objekt <strong>in Lineal seit dem Import nicht geändert</strong> wurde (<code>updatedAt &lt;= importedAt</code>). Sonst Konflikt → Lineal-Stand bleibt, Eintrag im Bericht. In Linear gelöschte Objekte werden nicht automatisch gelöscht (nur gemeldet). Typischer Einsatz: Testimport → paralleler Betrieb → finaler Delta-Import am Umstellungstag.</p>
+<h3 id="ch-13-import-linear-4-3-stille-w-hrend-des-imports">4.3 Stille während des Imports</h3>
+<ul>
+<li>Domain-Events des Imports tragen <code>origin = import</code>. Die Konsumenten <code>notifications</code> und <code>webhooks</code> überspringen sie; <code>search_index</code> und <code>sync</code> verarbeiten sie.</li>
+<li>Periodische Jobs (Auto-Close, Auto-Archive, SLA, Cycle-Wechsel) überspringen Teams mit laufendem Import (<code>team.importLockedUntil</code>).</li>
+<li>Importierte Issues landen <strong>nicht</strong> in Triage, egal wer sie erstellt hat; der State kommt aus Linear.</li>
+</ul>
+<h2 id="ch-13-import-linear-5-datenmodell-erg-nzungen">5. Datenmodell-Ergänzungen</h2>
+<table>
+<thead>
+<tr>
+<th>Entität</th>
+<th>Felder</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ImportRun</code></td>
+<td><code>id</code>, <code>organizationId</code>, <code>source</code>, <code>status</code> (<code>scanning</code>, <code>planned</code>, <code>running</code>, <code>paused</code>, <code>failed</code>, <code>completed</code>), <code>options</code> (JSON: Teams, User-Zuordnung, Key-Mapping, dryRun), <code>checkpoint</code> (JSON: Phase, Entität, Cursor), <code>stats</code> (JSON: Zähler pro Entität), <code>startedBy</code>, <code>startedAt</code>, <code>finishedAt</code>, <code>error</code></td>
+</tr>
+<tr>
+<td><code>ImportMapping</code></td>
+<td>siehe Abschnitt 3</td>
+</tr>
+<tr>
+<td><code>ImportIssue</code> (Bericht)</td>
+<td><code>importRunId</code>, <code>severity</code> (<code>info</code>, <code>warning</code>, <code>error</code>), <code>sourceType</code>, <code>sourceId</code>, <code>message</code></td>
+</tr>
+<tr>
+<td><code>ImportCredential</code></td>
+<td><code>importRunId</code>, <code>encryptedToken</code> (AES-GCM mit Server-Schlüssel), <code>expiresAt</code> – wird nach Abschluss gelöscht</td>
+</tr>
+<tr>
+<td><code>User.status</code></td>
+<td>zusätzlicher Wert <code>imported</code> (Platzhalter)</td>
+</tr>
+<tr>
+<td><code>Team.importLockedUntil</code></td>
+<td>DateTime?</td>
+</tr>
+<tr>
+<td><code>IssueHistory.source</code></td>
+<td><code>user</code>, <code>system</code>, <code>import</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="ch-13-import-linear-6-schnittstellen">6. Schnittstellen</h2>
+<p><strong>GraphQL (nur Admins):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Zweck</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>importScan(input: { source, token })</code> → <code>ImportRun</code> mit Mengen und Konflikten</td>
+<td>Verbindung prüfen, Plan vorbereiten</td>
+</tr>
+<tr>
+<td><code>importStart(input: { runId, teams, userMapping, keyMapping, dryRun })</code></td>
+<td>Lauf starten (asynchron als Job)</td>
+</tr>
+<tr>
+<td><code>importPause(runId)</code>, <code>importResume(runId)</code>, <code>importCancel(runId)</code></td>
+<td>Steuerung</td>
+</tr>
+<tr>
+<td><code>importRun(id)</code>, <code>importRuns</code></td>
+<td>Status, Fortschritt, Bericht</td>
+</tr>
+</tbody>
+</table>
+<p><strong>CLI</strong> (für große Workspaces, ohne Browser-Timeouts):</p>
+<pre><code class="language-bash">lineal import linear --org acme --token-env LINEAR_API_KEY --teams ENG,DES --dry-run
+lineal import linear --org acme --token-env LINEAR_API_KEY --resume &lt;runId&gt;
+lineal import linear-csv --org acme --file export.csv --team ENG
+</code></pre>
+<p><strong>MCP:</strong> kein Tool – der Import ist eine Admin-Aktion und bewusst nicht für Agenten freigegeben.</p>
+<h2 id="ch-13-import-linear-7-user-flow">7. User Flow</h2>
+<pre class="mermaid">sequenceDiagram
+  actor A as &quot;Admin Alice&quot;
+  participant UI as &quot;Lineal Settings Import&quot;
+  participant API as &quot;Lineal API&quot;
+  participant W as &quot;Import-Worker&quot;
+  participant L as &quot;Linear API&quot;
+  A-&gt;&gt;UI: Linear-API-Key eingeben
+  UI-&gt;&gt;API: importScan
+  API-&gt;&gt;L: viewer, teams, users, Mengen
+  L--&gt;&gt;API: Daten
+  API--&gt;&gt;UI: Plan mit Konflikten
+  A-&gt;&gt;UI: Teams und User-Zuordnung bestaetigen
+  UI-&gt;&gt;API: importStart
+  API-&gt;&gt;W: Job einreihen
+  loop Phasen 1 bis 8
+    W-&gt;&gt;L: Seite lesen mit Rate-Limit
+    W-&gt;&gt;W: mappen, Markdown umschreiben
+    W-&gt;&gt;API: in Transaktion schreiben, Checkpoint
+  end
+  W--&gt;&gt;UI: Fortschritt ueber Sync
+  W--&gt;&gt;A: Bericht in der Inbox
+</pre>
+<h2 id="ch-13-import-linear-8-sicherheit">8. Sicherheit</h2>
+<ul>
+<li>Token nur verschlüsselt (<code>ImportCredential</code>), nie in Logs, Fehlermeldungen oder Berichten; Löschung nach Abschluss oder nach 7 Tagen.</li>
+<li>Nur Workspace-Admins/Owner dürfen importieren.</li>
+<li>Private Linear-Teams werden nur importiert, wenn der Token sie sehen kann; ihre Sichtbarkeit wird übernommen (nie offener).</li>
+<li>Heruntergeladene Dateien: Größenlimit, Content-Type-Prüfung, kein Ausführen; gespeichert wie normale Uploads.</li>
+<li>Eingehende Inhalte gelten als nicht vertrauenswürdig: Markdown-Bereinigung, Längenlimits, Ablehnung ungültiger Enums mit Bericht statt Abbruch.</li>
+</ul>
+<h2 id="ch-13-import-linear-9-abnahmekriterien">9. Abnahmekriterien</h2>
+<ol>
+<li>Ein Testworkspace (2 Teams, 1 Sub-Team, 1 privates Team, 200 Issues mit Sub-Issues, Relationen, Kommentaren, Anhängen, 3 Projekte, 2 Initiativen, 2 Cycles) wird vollständig übernommen; Zählungen pro Entität stimmen.</li>
+<li><code>ENG-123</code> aus Linear ist in Lineal unter <code>ENG-123</code> erreichbar; ein neues Issue erhält <code>max + 1</code>.</li>
+<li>Abbruch nach Phase 4 und Wiederaufnahme ergibt keine Duplikate.</li>
+<li>Während des Imports entsteht keine einzige Notification und kein Webhook-Aufruf.</li>
+<li>Ein zweiter Lauf ohne Änderungen in Linear ändert nichts (alle Checksummen gleich).</li>
+<li>Der Token erscheint in keiner Log-Zeile (Test durchsucht Logs).</li>
+</ol>
+<p>Für automatisierte Tests gibt es eine <strong>Fake-Quelle</strong> (<code>ImportSource</code> aus JSON-Fixtures mit erfundenen Daten), damit Tests nie gegen das echte Linear laufen.</p></section>
+<section id="ch-14-firmenweite-sicht" class="chapter"><div class="src">Quelle: <a href="14-firmenweite-sicht.md">14-firmenweite-sicht.md</a></div><h1 id="ch-14-firmenweite-sicht-14-firmenweite-sicht-team-bergreifend">14 – Firmenweite Sicht (teamübergreifend)</h1>
+<p>Neben den Team-Seiten bietet Lineal eine <strong>Workspace-Ebene</strong>, auf der Führungskräfte und Teams den Stand der ganzen Firma sehen: alle Issues aller (sichtbaren) Teams, alle Projekte und Initiativen, Auslastung und Fortschritt pro Team. Es gibt keine eigenen Daten dafür. Die firmenweite Sicht ist eine Menge von <strong>Abfragen und Ansichten über bestehende Entitäten</strong>, immer gefiltert durch die Sichtbarkeit des Betrachters (<a href="#ch-02-teams-rechte">02</a>).</p>
+<h2 id="ch-14-firmenweite-sicht-1-grunds-tze">1. Grundsätze</h2>
+<ol>
+<li><strong>Sichtbarkeit zuerst:</strong> Jede firmenweite Abfrage wird mit <code>visible_team_ids(ctx)</code> geschnitten. Private Teams, in denen der Betrachter nicht Mitglied ist, tauchen weder als Zeile noch in Summen auf. Aggregate verraten nichts über unsichtbare Teams.</li>
+<li><strong>Hierarchie-Rollups:</strong> Sub-Teams werden ihrem Parent zugerechnet, wenn „inkl. Sub-Teams“ aktiv ist (Default an). Ein Parent zeigt dann eigene Zahlen + Summe der Kinder.</li>
+<li><strong>Gleiche Bausteine wie überall:</strong> Filtermodell, Anzeigeoptionen und Custom Views aus <a href="#ch-05-views-suche-inbox">05</a>; eine firmenweite Ansicht ist eine Custom View mit Scope <code>workspace</code> und ohne Team-Filter.</li>
+<li><strong>Gäste</strong> haben keinen Zugriff auf die Workspace-Ebene (wie im Original keine Workspace-Views und keine Initiativen).</li>
+</ol>
+<h2 id="ch-14-firmenweite-sicht-2-ansichten">2. Ansichten</h2>
+<table>
+<thead>
+<tr>
+<th>Ansicht</th>
+<th>URL</th>
+<th>Inhalt</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Workspace-Issues</strong></td>
+<td><code>/{ws}/issues</code></td>
+<td>Alle Issues aller sichtbaren Teams. Default-Gruppierung <strong>nach Team</strong> (Sub-Teams eingerückt), Sub-Gruppierung nach Status-Kategorie. Umschaltbar auf Gruppierung nach Assignee, Projekt, Priorität, Label, Cycle. Liste und Board.</td>
+</tr>
+<tr>
+<td><strong>Übersicht (Dashboard)</strong></td>
+<td><code>/{ws}/overview</code></td>
+<td>Kacheln pro Team (siehe 3), Projekt-Health-Übersicht, Initiativen-Status, überfällige/SLA-gefährdete Issues</td>
+</tr>
+<tr>
+<td><strong>Portfolio / Roadmap</strong></td>
+<td><code>/{ws}/projects</code> (Layout <code>timeline</code>)</td>
+<td>Alle Projekte aller sichtbaren Teams auf einer Zeitachse, gruppiert nach Initiative oder Lead-Team; Health und Fortschritt am Balken</td>
+</tr>
+<tr>
+<td><strong>Initiativen-Baum</strong></td>
+<td><code>/{ws}/initiatives</code></td>
+<td>DAG als eingerückte Liste mit Rollup von Health und Fortschritt</td>
+</tr>
+<tr>
+<td><strong>Auslastung</strong></td>
+<td><code>/{ws}/workload</code></td>
+<td>Matrix Person × Team: offene Issues und Schätzungspunkte im aktuellen Cycle; Personen mit Arbeit in mehreren Teams sind sofort sichtbar</td>
+</tr>
+<tr>
+<td><strong>Cycle-Übersicht</strong></td>
+<td><code>/{ws}/cycles</code></td>
+<td>Aktive Cycles aller Teams nebeneinander: Fortschritt, Scope-Änderung, Restlaufzeit</td>
+</tr>
+</tbody>
+</table>
+<p>Alle Ansichten lassen sich filtern (Team-Auswahl mehrfach, „inkl. Sub-Teams“, Projekt, Initiative, Label, Assignee, Zeitraum) und als Custom View speichern und favorisieren.</p>
+<h2 id="ch-14-firmenweite-sicht-3-kennzahlen-pro-team-dashboard-kachel">3. Kennzahlen pro Team (Dashboard-Kachel)</h2>
+<table>
+<thead>
+<tr>
+<th>Kennzahl</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Offene Issues</td>
+<td>Kategorie <code>triage</code>, <code>backlog</code>, <code>unstarted</code>, <code>started</code></td>
+</tr>
+<tr>
+<td>In Arbeit</td>
+<td>Kategorie <code>started</code></td>
+</tr>
+<tr>
+<td>Triage-Eingang</td>
+<td>Kategorie <code>triage</code>, dazu ältestes Alter</td>
+</tr>
+<tr>
+<td>Erledigt (letzte 7/30 Tage)</td>
+<td><code>completedAt</code> im Zeitraum</td>
+</tr>
+<tr>
+<td>Durchsatz</td>
+<td>erledigte Issues bzw. Punkte pro Woche, letzte 6 Wochen</td>
+</tr>
+<tr>
+<td>Cycle-Fortschritt</td>
+<td><code>progress</code> des aktiven Cycles (<a href="#ch-04-planung">04</a>)</td>
+</tr>
+<tr>
+<td>Überfällig</td>
+<td><code>dueDate &lt; heute</code> und offen</td>
+</tr>
+<tr>
+<td>SLA gefährdet / verletzt</td>
+<td><code>slaHighRiskAt &lt;= now</code> bzw. <code>slaBreachesAt &lt;= now</code></td>
+</tr>
+<tr>
+<td>Projekte nach Health</td>
+<td>Anzahl <code>onTrack</code> / <code>atRisk</code> / <code>offTrack</code> / ohne Update</td>
+</tr>
+</tbody>
+</table>
+<p>Berechnung: zur Laufzeit per SQL-Aggregation (<code>GROUP BY team_id, state_type</code>) über die Issue-Tabelle mit Index <code>(organization_id, team_id, state_type)</code>. Ab ca. 100 000 Issues pro Workspace optional materialisierte Tagessnapshots (<code>team_metrics_daily</code>), gefüllt vom Snapshot-Job aus <a href="#ch-10-architektur-umsetzung">10 §3</a>.</p>
+<pre class="mermaid">flowchart LR
+  REQ[&quot;Anfrage workspaceOverview&quot;] --&gt; VIS[&quot;visible_team_ids des Betrachters&quot;]
+  VIS --&gt; TREE[&quot;Team-Baum bilden&lt;br/&gt;Sub-Teams unter Parent&quot;]
+  TREE --&gt; AGG[&quot;SQL-Aggregation&lt;br/&gt;GROUP BY team, state_type&quot;]
+  AGG --&gt; ROLL[&quot;Rollup Kinder in Parent&lt;br/&gt;wenn inkl. Sub-Teams&quot;]
+  ROLL --&gt; OUT[&quot;Kacheln, Projekte, Initiativen&quot;]
+</pre>
+<h2 id="ch-14-firmenweite-sicht-4-schnittstellen">4. Schnittstellen</h2>
+<p><strong>GraphQL:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Zweck</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issues(filter, …)</code> ohne Team-Filter</td>
+<td>Workspace-Issues (existiert bereits, <a href="#ch-09-api-events">09</a>); <code>filter.team</code> optional mit <code>includeSubTeams</code></td>
+</tr>
+<tr>
+<td><code>workspaceOverview(input: { teamIds?, includeSubTeams = true, period })</code> → <code>{ teams: [TeamMetrics], projects: ProjectHealthSummary, initiatives: [InitiativeSummary], atRisk: [IssueRef] }</code></td>
+<td>Dashboard</td>
+</tr>
+<tr>
+<td><code>workload(input: { teamIds?, cycle: current \| next })</code> → <code>[{ user, perTeam: [{ team, openIssues, points }] }]</code></td>
+<td>Auslastung</td>
+</tr>
+<tr>
+<td><code>activeCycles(teamIds?)</code></td>
+<td>Cycle-Übersicht</td>
+</tr>
+</tbody>
+</table>
+<p><strong>MCP:</strong> Agenten nutzen die bestehenden Tools teamübergreifend (<code>list_issues</code> ohne <code>team</code>, <code>list_projects</code>, <code>list_initiatives</code>). Zusätzlich gibt es ein Lineal-eigenes Tool <strong><code>get_workspace_overview</code></strong> (Eingabe: <code>teams?: string[]</code>, <code>includeSubTeams?: boolean</code>, <code>period?: "7d" | "30d"</code>; Ausgabe: Kennzahlen aus Abschnitt 3). Es ist eine bewusste, dokumentierte Erweiterung über den Linear-MCP hinaus und erscheint in <code>tools/list</code> nach den 55 kompatiblen Tools. Der Snapshot-Test prüft die 55 kompatiblen Tools exakt; Erweiterungen stehen in einer eigenen Liste.</p>
+<h2 id="ch-14-firmenweite-sicht-5-ui">5. UI</h2>
+<ul>
+<li>Sidebar, Workspace-Bereich: <strong>Overview</strong>, <strong>Issues</strong> (alle Teams), Projects, Initiatives, Views, <strong>Workload</strong>, <strong>Cycles</strong>.</li>
+<li>In der Workspace-Issue-Liste trägt jede Zeile den Team-Key (Kennung) und optional ein Team-Badge; Gruppenköpfe zeigen Team-Icon und Zahl.</li>
+<li>Tastatur: <code>g o</code> Overview, <code>g w</code> Workspace-Issues; Command-Menü „Go to company overview“.</li>
+<li>Wechsel Team ↔ Firma ohne Kontextverlust: Ein auf Team-Ebene gesetzter Filter kann per Klick „Für alle Teams anzeigen“ auf die Workspace-Liste übertragen werden (Team-Kriterium entfällt, Rest bleibt).</li>
+</ul>
+<h2 id="ch-14-firmenweite-sicht-6-abnahmekriterien">6. Abnahmekriterien</h2>
+<ol>
+<li>Bob (Mitglied in ENG, WEB, DES) sieht in <code>/acme/issues</code> Issues aller drei Teams; Alice (nicht in DES) sieht DES weder als Gruppe noch in Summen.</li>
+<li>Mit „inkl. Sub-Teams“ enthält die ENG-Kachel die Zahlen von WEB; ohne nicht.</li>
+<li>Gäste erhalten für <code>workspaceOverview</code> <code>forbidden</code>.</li>
+<li><code>get_workspace_overview</code> liefert dieselben Zahlen wie die GraphQL-Abfrage.</li>
+</ol></section>
 </main>
 <script src="assets/mermaid.min.js"></script>
 <script>mermaid.initialize({startOnLoad:true,securityLevel:'strict',theme:'neutral',er:{useMaxWidth:true},flowchart:{useMaxWidth:true}});</script>

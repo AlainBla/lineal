@@ -25,6 +25,8 @@ Grundlage (Stand 2026-10-10):
 | 10 | [Architektur & Umsetzungsplan](10-architektur-umsetzung.md) | Komponenten, Hintergrundjobs, Persistenz, Phasenplan, Abnahmekriterien, **gewählter Stack** |
 | 11 | [Implementierungsarchitektur](11-implementierungsarchitektur.md) | Rust-Crates, Ports, Repository-Layout, Frontend-Architektur, Dev-Setup |
 | 12 | [Arbeitspakete](12-arbeitspakete.md) | Wellen, Abhängigkeiten, Datei-Eigentum, DoD je Paket |
+| 13 | [Import aus Linear](13-import-linear.md) | Migration eines Linear-Workspaces: Mapping, Phasen, Delta-Import, Sicherheit |
+| 14 | [Firmenweite Sicht](14-firmenweite-sicht.md) | Teamübergreifende Issues, Dashboard, Roadmap, Auslastung |
 
 Eine gerenderte Übersicht mit allen Diagrammen liegt in [index.html](index.html).
 
@@ -44,6 +46,7 @@ Weitere Artefakte:
 - Inbox/Benachrichtigungen inkl. Snooze und Abo-Regeln
 - Dokumente und Templates
 - Öffentliche API, Webhooks, eigener MCP-Server
+- Import/Migration aus Linear (API und CSV), firmenweite teamübergreifende Sicht
 
 **Bewusst außerhalb des Scopes** (werden nur als Erweiterungspunkte erwähnt): Code-Review/Diffs, Releases und Release Notes, Agent Skills und Delegation an KI-Agenten (das Feld `delegate` wird als optionales Feld vorgesehen), Customer Requests/Customer Needs, Triage Intelligence (KI-Vorschläge), Git-/Slack-/Zendesk-Integrationen, Insights/Analytics, Asks, Pulse, Billing, SSO/SCIM.
 

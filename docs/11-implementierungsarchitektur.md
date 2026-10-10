@@ -14,7 +14,7 @@ Leitprinzipien:
 lineal/
 ├── Cargo.toml                  # Workspace, gemeinsame Dependency-Versionen
 ├── rust-toolchain.toml         # stable
-├── docker-compose.yml          # PostgreSQL :5440, MinIO :9000
+├── docker-compose.yml          # name: lineal; PostgreSQL :5440
 ├── .env.example
 ├── scripts/
 │   ├── check.sh                # komplette Prüfung (CI und lokal)
@@ -69,7 +69,7 @@ flowchart BT
 ```
 
 Regeln:
-- `lineal-domain` hängt nur von `serde`, `uuid`, `time`, `thiserror` ab.
+- `lineal-domain` hängt nur von `serde`, `uuid`, `chrono`, `chrono-tz`, `thiserror` und reinen Regel-Crates (z. B. `pulldown-cmark`, `ammonia`) ab – nie von I/O-Crates.
 - `lineal-app` kennt keine Datenbank, kein HTTP. Es definiert die **Ports** als Traits.
 - Adapter (`api`, `mcp`, `sync`, `jobs`) kennen `lineal-app`, aber nicht `lineal-db`. Sie erhalten zur Laufzeit ein `Arc<App>`.
 - Nur `lineal-server` kennt alle Crates und verdrahtet sie (Composition Root).
@@ -175,7 +175,7 @@ Weitere Ports: `Clock`, `IdGen`, `BlobStore` (signierte PUT/GET-URLs), `SearchIn
 
 - `PgStore` implementiert `Store`; `PgTx` hält eine `sqlx::Transaction<'static, Postgres>` und implementiert **alle** Repo-Traits, je Trait in einer eigenen Datei `src/repos/<bereich>.rs`.
 - Jede Abfrage ist parametrisiert und enthält `organization_id = $1`.
-- Migrationen: `crates/lineal-db/migrations/<NNNN>_<name>.sql`. Das komplette Schema aus [01](01-domaenenmodell.md) entsteht im Scaffold (`0001`–`0099`). Arbeitspakete dürfen nur Migrationen in ihrem zugewiesenen Nummernbereich hinzufügen (siehe [12](12-arbeitspakete.md)), z. B. für zusätzliche Indizes.
+- Migrationen: `crates/lineal-db/migrations/<NNNN>_<name>.sql`. `0001` legt die Infrastruktur-Tabellen an (Outbox, Jobs, Sync-Sequenz), `0010`–`0099` das komplette Schema aus [01](01-domaenenmodell.md). Arbeitspakete dürfen nur Migrationen in ihrem zugewiesenen Nummernbereich hinzufügen (siehe [12](12-arbeitspakete.md)), z. B. für zusätzliche Indizes.
 - Tests: `#[sqlx::test(migrations = "./migrations")]` – jede Testfunktion bekommt eine frische Datenbank; parallele Arbeitspakete teilen sich gefahrlos denselben PostgreSQL-Container.
 
 ### 3.4 Adapter
@@ -191,7 +191,7 @@ pub struct QueryRoot(OrgQuery, TeamQuery, IssueQuery, LabelQuery, CommentQuery, 
 pub struct MutationRoot(/* dieselben Bereiche als *Mutation */);
 ```
 
-Der `RequestCtx` und `Arc<App>` liegen in den GraphQL-Context-Daten. Das Schema wird mit `lineal schema-export > web/schema.graphql` exportiert; der Check prüft, dass die Datei aktuell ist.
+Der `RequestCtx` und `Arc<App>` liegen in den GraphQL-Context-Daten. Das Schema wird mit `lineal schema-export` nach `web/schema.graphql` exportiert; `scripts/check.sh` **erzeugt** die Datei neu (statt sie zu vergleichen), damit parallele Pakete nicht an ihr scheitern. Der Orchestrator committet sie nach jedem Merge.
 
 **MCP (`lineal-mcp`).** `tools/list` liefert genau den Inhalt von `docs/mcp-tools.snapshot.json` (zur Build-Zeit eingebettet). `tools/call` verteilt nach Tool-Namen an eine Handler-Datei pro Gruppe aus [07](07-mcp-server.md) (`handlers/issues.rs`, `handlers/projects.rs` …). Nicht implementierte Tools antworten mit `isError: true` und `error: "internal"`, Meldung `not implemented`. Eingaben werden gegen das Snapshot-Schema validiert, bevor der Handler läuft.
 
@@ -279,7 +279,7 @@ flowchart LR
 
 ```bash
 cp .env.example .env
-docker compose up -d                      # postgres :5440, minio :9000
+docker compose up -d                      # Projektname "lineal": in allen Worktrees derselbe Container auf :5440
 cargo run -p lineal-server -- migrate     # Migrationen
 cargo run -p lineal-server -- seed        # Beispiel-Workspace acme
 cargo run -p lineal-server -- serve       # http://localhost:8080
