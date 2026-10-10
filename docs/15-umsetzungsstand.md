@@ -68,6 +68,7 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 
 - Session-Cookie `lineal_session` (`HttpOnly`, `SameSite=Lax`, `Secure` bei https); API-Keys und OAuth-Tokens per `Authorization`. Tokens liegen nur als SHA-256-Hash in der Datenbank.
 - CSRF für Cookie-Sessions: `POST /graphql` und `POST /auth/logout` verlangen einen erlaubten `Origin` (ersatzweise `Referer`) **und** den Header `X-Lineal-CSRF: 1`; `/auth/login`, `/oauth/authorize` (der session-gebundene Nonce ist das Token) und signierte Uploads prüfen nur den Origin. Anfragen mit `Authorization`-Header sowie `/mcp` und `/sync` (eigene Origin-Prüfung) sind ausgenommen.
+- Einladungen: `POST /invite/accept` (JSON `token`, `email`, `name?`, `password`) nimmt eine Einladung ohne Session an, legt den User an bzw. verknüpft den Platzhalter und setzt das Session-Cookie; ungültige Tokens oder fremde E-Mails antworten einheitlich `404`; CSRF wie beim Login (nur Origin). Die Web-Seite `/invite/<token>` ist noch nicht gebaut.
 - OAuth-Zustimmung nur per `POST` mit session-gebundenem Nonce, Zielhost und Warnhinweis; CSP `form-action 'self'`.
 - Brute-Force-Schutz: fehlgeschlagene Authentifizierungen zählen je IP (20/min), beim Login zusätzlich je Paar (Account, IP) (10/15 min) und je Account gesamt (100/15 min); Zähler werden vor der Passwortprüfung atomar reserviert.
 

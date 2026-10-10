@@ -49,6 +49,7 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/auth/login", post(rest::auth::login))
         .route("/auth/logout", post(rest::auth::logout))
         .route("/auth/me", get(rest::auth::me))
+        .route("/invite/accept", post(rest::auth::accept_invite))
         .route("/uploads/{token}", put(blob::upload))
         .route("/files/{token}", get(blob::download))
         .route("/oauth/register", post(oauth::register))

@@ -12,6 +12,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use lineal_app::usecases::auth::{LoginInput, SESSION_TTL_DAYS};
+use lineal_app::usecases::invitation::AcceptInvitationInput;
 use lineal_app::{Actor, App, AppError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -138,6 +139,57 @@ pub async fn login(
             }
             error_response(e)
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AcceptInviteBody {
+    /// Token aus dem Einladungslink (`/invite/<token>`).
+    pub token: String,
+    /// Adresse, an die die Einladung ging.
+    pub email: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub password: String,
+}
+
+/// `POST /invite/accept`: nimmt eine Einladung ohne bestehende Session an (Token + E-Mail + Name +
+/// Passwort), legt den User an bzw. verknüpft den Platzhalter und setzt das Session-Cookie.
+/// Unbekannte, abgelaufene oder bereits angenommene Tokens antworten einheitlich mit `404`.
+pub async fn accept_invite(
+    State(app): State<Arc<App>>,
+    Json(body): Json<AcceptInviteBody>,
+) -> Response {
+    let result = app
+        .accept_invitation(AcceptInvitationInput {
+            token: body.token,
+            email: body.email,
+            name: body.name,
+            password: Some(body.password),
+        })
+        .await;
+    match result {
+        Ok(accepted) => {
+            let Some(login) = accepted.login else {
+                return error_response(AppError::internal("invitation accepted without session"));
+            };
+            let mut res = (
+                StatusCode::OK,
+                Json(json!({
+                    "userId": accepted.user_id.to_string(),
+                    "organizationId": accepted.org_id.to_string(),
+                    "workspace": accepted.url_key,
+                    "expiresAt": login.expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "csrfToken": login.csrf_token,
+                })),
+            )
+                .into_response();
+            if let Some(c) = session_cookie(&app, &login.token, SESSION_TTL_DAYS * 24 * 3600) {
+                res.headers_mut().append(header::SET_COOKIE, c);
+            }
+            res
+        }
+        Err(e) => error_response(e),
     }
 }
 
@@ -327,6 +379,96 @@ mod tests {
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert!(headers.contains_key(header::RETRY_AFTER));
         assert!(headers.get(header::SET_COOKIE).is_none());
+    }
+
+    fn accept_req(token: &str, email: &str, origin: Option<&str>) -> Request<Body> {
+        let mut r = Request::builder()
+            .method("POST")
+            .uri("/invite/accept")
+            .header("content-type", "application/json");
+        if let Some(o) = origin {
+            r = r.header("origin", o);
+        }
+        r.body(Body::from(
+            json!({ "token": token, "email": email, "name": "Dora Neu", "password": "ein-gutes-passwort" })
+                .to_string(),
+        ))
+        .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn invitation_can_be_accepted_without_a_session(pool: sqlx::PgPool) {
+        let store = PgStore::new(pool);
+        let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+        seed::run(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let app = test_app(Arc::new(store));
+        let created = app
+            .invite_users(
+                &ctx_for(SeedUser::Alice),
+                lineal_app::usecases::invitation::InviteUsersInput {
+                    emails: vec!["dora@acme.example".into()],
+                    role: None,
+                    teams: vec!["ENG".into()],
+                },
+            )
+            .await
+            .unwrap();
+        let token = created[0].token.clone();
+        let r = router(app, false);
+
+        // Falscher Token und fremde E-Mail: einheitlich 404, kein Cookie.
+        let (status, headers, _) =
+            send(&r, accept_req("kein-token", "dora@acme.example", None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(headers.get(header::SET_COOKIE).is_none());
+        let (status, _, _) = send(&r, accept_req(&token, "mallory@evil.example", None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Cross-Origin-Formular (CSRF): abgelehnt, bevor etwas passiert.
+        let (status, _, _) = send(
+            &r,
+            accept_req(&token, "dora@acme.example", Some("https://evil.example")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // Richtig: Session-Cookie, und `/auth/me` zeigt den neuen User samt Team.
+        let (status, headers, body) = send(
+            &r,
+            accept_req(&token, "dora@acme.example", Some("http://localhost:8080")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["workspace"], "acme");
+        let cookie = headers
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let me = Request::builder()
+            .uri("/auth/me")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (status, _, me) = send(&r, me).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(me["email"], "dora@acme.example");
+        assert!(
+            me["teams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["key"] == "ENG")
+        );
+
+        // Der Token ist verbraucht.
+        let (status, _, _) = send(&r, accept_req(&token, "dora@acme.example", None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[sqlx::test(migrations = "../lineal-db/migrations")]

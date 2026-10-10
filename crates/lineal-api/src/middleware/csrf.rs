@@ -6,7 +6,7 @@
 //! * `POST /graphql` und `POST /auth/logout`: `Origin` (ersatzweise `Referer`) muss in der
 //!   Allow-List stehen **und** der Header `X-Lineal-CSRF: 1` gesetzt sein (ein fremder Origin
 //!   kann ihn ohne CORS-Preflight nicht senden).
-//! * `POST /auth/login`, `POST /oauth/authorize` (HTML-Formulare ohne eigene Header; der
+//! * `POST /auth/login`, `POST /invite/accept`, `POST /oauth/authorize` (HTML-Formulare ohne eigene Header; der
 //!   session-gebundene Nonce ist dort das Token) und `PUT /uploads/*` (signierte URL): nur
 //!   Origin-Prüfung. Fehlt der Origin ganz (kein Browser-Cross-Site-Request), wird nicht
 //!   abgelehnt; ein vorhandener fremder Origin immer.
@@ -99,7 +99,7 @@ fn rule_for(method: &Method, path: &str, has_cookie_session: bool) -> Rule {
     }
     match path {
         "/graphql" | "/auth/logout" if has_cookie_session => Rule::OriginAndHeader,
-        "/auth/login" => Rule::OriginIfPresent,
+        "/auth/login" | "/invite/accept" => Rule::OriginIfPresent,
         "/oauth/authorize" if has_cookie_session => Rule::OriginIfPresent,
         p if p.starts_with("/uploads/") => Rule::OriginIfPresent,
         _ => Rule::None,
