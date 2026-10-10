@@ -508,37 +508,44 @@ async fn ipv6_privacy_addresses_of_one_prefix_share_the_rate_limit() {
 }
 
 #[tokio::test]
-async fn invalid_tokens_count_against_the_ip_before_the_lookup() {
+async fn switching_tokens_does_not_evade_the_ip_limit() {
     let app = app_with_keys();
     let mut cfg = PlatformConfig::new(&app, false);
-    cfg.rate.anonymous = ClassLimits {
-        requests: 2.0,
-        complexity: 100.0,
-    };
+    cfg.rate.ip_credentialed = 3.0;
     let router = apply_with(
         Router::new().route("/ping", get(|| async { "pong" })),
         app,
         cfg,
     );
-    let bad = |peer: &str| {
+    let guess = |peer: &str, n: usize| {
         let mut req = from_peer(peer, "");
-        req.headers_mut()
-            .insert("authorization", "lin_api_guess".parse().unwrap());
+        req.headers_mut().insert(
+            "authorization",
+            format!("lin_api_guess{n}").parse().unwrap(),
+        );
         req
     };
-    // Zwei Fehlversuche kosten je einen Lookup (die Route ist öffentlich, daher 200) ...
-    for _ in 0..2 {
+    // Jeder Versuch mit einem anderen erfundenen Token kostet IP-Kontingent, bevor die
+    // Datenbank gefragt wird; nach drei Versuchen ist Schluss.
+    for n in 0..3 {
         assert_eq!(
-            send(&router, bad("203.0.113.5")).await.status,
+            send(&router, guess("203.0.113.5", n)).await.status,
             StatusCode::OK
         );
     }
-    // ... danach wird derselbe Client abgelehnt (429), ohne dass die DB gefragt wird.
-    let r = send(&router, bad("203.0.113.5")).await;
+    let r = send(&router, guess("203.0.113.5", 3)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
-    // Eine andere IP ist unberührt.
+    // Auch ein gültiges Token von dieser IP wird jetzt gedrosselt, eine andere IP nicht.
+    let mut valid = from_peer("203.0.113.5", "");
+    valid
+        .headers_mut()
+        .insert("authorization", KEY_RW.parse().unwrap());
     assert_eq!(
-        send(&router, bad("203.0.113.6")).await.status,
+        send(&router, valid).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        send(&router, guess("203.0.113.6", 0)).await.status,
         StatusCode::OK
     );
 }

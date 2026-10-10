@@ -1,5 +1,8 @@
 //! Token-Bucket-Rate-Limit (docs/09 §3): pro Identität zwei Buckets (Requests, Komplexität),
 //! kontinuierliche Nachfüllung, `X-RateLimit-*`-Header und 429 mit `Retry-After`.
+//! Design: Stufe 1 (`ip_middleware`, vor dem Token-Lookup) begrenzt je Client-IP, Stufe 2
+//! (`middleware`, nach dem Lookup) je User/Token. Die Bucket-Map ist begrenzt; bei voller Map
+//! teilen sich neue Schlüssel einen Überlauf-Bucket, aktive Buckets werden nie verdrängt.
 //! Zustand liegt im Prozessspeicher (eine Instanz); die Zeit kommt aus der `Clock` der `App`.
 
 use crate::error::{ApiError, graphql_error_response};
@@ -31,6 +34,9 @@ pub struct RateLimits {
     /// Web-App über Session-Cookie: 10x OAuth.
     pub session: ClassLimits,
     pub anonymous: ClassLimits,
+    /// Requests je Client-IP (/64 bei IPv6) und Periode für Anfragen MIT Zugangsdaten, gezählt
+    /// vor dem Token-Lookup (jeder Request mit erfundenem Token kostet IP-Kontingent).
+    pub ip_credentialed: f64,
     /// Einzelquery über diesem Wert wird abgelehnt.
     pub max_query_complexity: u64,
 }
@@ -55,6 +61,7 @@ impl Default for RateLimits {
                 requests: 600.0,
                 complexity: 100_000.0,
             },
+            ip_credentialed: 10_000.0,
             max_query_complexity: 10_000,
         }
     }
@@ -92,8 +99,8 @@ pub struct Decision {
 /// Harte Obergrenze der Bucket-Anzahl (Speicherschutz gegen viele erfundene Identitäten).
 pub const MAX_BUCKETS: usize = 100_000;
 
-/// Gemeinsamer Bucket für Schlüssel, die nicht mehr in die volle Map passen.
-const OVERFLOW_KEY: &str = "\0overflow";
+/// Gemeinsamer Bucket je Klasse für Schlüssel, die nicht mehr in die volle Map passen.
+const OVERFLOW_PREFIX: &str = "\0overflow:";
 /// Mindestabstand der Bereinigung voller Buckets (sonst O(n) pro Request unter Angriff).
 const GC_INTERVAL_MS: i64 = 1_000;
 
@@ -153,17 +160,6 @@ impl RateLimiter {
             .len()
     }
 
-    /// Ob im Bucket `key` mindestens ein Token verfügbar ist (ohne zu entnehmen).
-    pub fn has_token(&self, key: &str, capacity: f64, period_secs: f64, now_ms: i64) -> bool {
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(b) = state.buckets.get(key) else {
-            return true;
-        };
-        let rate = capacity / period_secs;
-        let elapsed = (now_ms - b.updated_ms).max(0) as f64 / 1000.0;
-        (b.tokens + elapsed * rate).min(capacity) >= 1.0
-    }
-
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -188,10 +184,15 @@ impl RateLimiter {
                 b.tokens + (now_ms - b.updated_ms).max(0) as f64 / 1000.0 * rate < capacity
             });
         }
-        let key = if map.len() >= self.max_buckets && !map.contains_key(key) {
-            OVERFLOW_KEY
+        // Map voll und Schlüssel unbekannt: kein eigener Bucket, sondern der gemeinsame
+        // Überlauf-Bucket der Klasse (Präfix vor dem ersten ':') mit einem Zehntel des Limits.
+        let overflow_key;
+        let (key, capacity, rate) = if map.len() >= self.max_buckets && !map.contains_key(key) {
+            overflow_key = format!("{OVERFLOW_PREFIX}{}", key.split(':').next().unwrap_or(""));
+            let capacity = (capacity / 10.0).max(1.0);
+            (overflow_key.as_str(), capacity, capacity / period_secs)
         } else {
-            key
+            (key, capacity, rate)
         };
         let b = map.entry(key.to_owned()).or_insert(Bucket {
             tokens: capacity,
@@ -270,14 +271,8 @@ pub fn denied_error(d: &Decision, what: &str) -> AppError {
         .with_details(json!({ "retryAfter": d.retry_after_secs, "limit": d.limit }))
 }
 
-/// Bucket-Schlüssel der Client-IP; `None`, wenn die Peer-Adresse unbekannt ist (kein
-/// gemeinsamer "unknown"-Bucket für alle).
-pub(crate) fn client_bucket(req: &Request) -> Option<String> {
-    client_ip(req)
-}
-
 /// 429-Antwort passend zum Pfad (GraphQL-Fehlerformat bzw. REST-Fehlermodell).
-pub(crate) fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
+fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
     let err = denied_error(d, what);
     let mut res = if req.uri().path() == "/graphql" {
         graphql_error_response(&err)
@@ -288,6 +283,8 @@ pub(crate) fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
     res
 }
 
+/// Bucket-Schlüssel der Client-IP (IPv6 pro /64); `None`, wenn die Peer-Adresse unbekannt ist
+/// (kein gemeinsamer "unknown"-Bucket für alle).
 fn client_ip(req: &Request) -> Option<String> {
     req.extensions()
         .get::<crate::client_ip::ClientIp>()
@@ -304,7 +301,49 @@ fn exempt(path: &str) -> bool {
     matches!(path, "/healthz" | "/readyz")
 }
 
-/// Middleware: belastet den Request-Bucket, setzt Header, antwortet bei Überschreitung mit 429.
+/// Stufe 1 (vor der Authentifizierung): jeder Request kostet IP-Kontingent, bevor die
+/// Datenbank nach dem Token gefragt wird. Anfragen ohne Zugangsdaten nutzen das (kleine)
+/// Anonym-Limit, Anfragen mit Zugangsdaten ein eigenes, höheres IP-Limit (`ip_credentialed`).
+/// Ein Tokenwechsel umgeht das nicht: der Schlüssel hängt nur an der IP.
+pub async fn ip_middleware(
+    axum::extract::State(p): axum::extract::State<Platform>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if exempt(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let Some(ip) = client_ip(&req) else {
+        if p.cfg.require_peer {
+            // Produktiv liefert `serve` immer die Peer-Adresse; fehlt sie, ist die Verdrahtung
+            // kaputt. Ablehnen statt alle in einen gemeinsamen Bucket zu werfen.
+            return ApiError(AppError::internal("Peer address unavailable.")).into_response();
+        }
+        // Nur Router-Tests (`oneshot`) haben keinen Peer: dort wird nicht nach IP begrenzt.
+        return next.run(req).await;
+    };
+    let (key, capacity) = if crate::middleware::auth::extract_token(req.headers()).is_some() {
+        (format!("ipc:{ip}"), p.cfg.rate.ip_credentialed)
+    } else {
+        (format!("ip:{ip}"), p.cfg.rate.anonymous.requests)
+    };
+    let now_ms = p.app.clock.now().timestamp_millis();
+    let decision = p
+        .limiter
+        .take(&key, capacity, p.cfg.rate.period_secs, 1.0, now_ms);
+    if !decision.allowed {
+        return rejection(&req, &decision, "requests per IP");
+    }
+    let mut res = next.run(req).await;
+    // Authentifizierte Anfragen tragen die Header ihres Token-Buckets (Stufe 2).
+    if !res.headers().contains_key("x-ratelimit-requests-limit") {
+        requests_headers(res.headers_mut(), &decision);
+    }
+    res
+}
+
+/// Stufe 2 (nach der Authentifizierung): Token-/User-Bucket (Requests) und `RateHandle` für die
+/// GraphQL-Komplexität. Der `AuthState` ist nach dem Lookup unveränderlich.
 pub async fn middleware(
     axum::extract::State(p): axum::extract::State<Platform>,
     mut req: Request,
@@ -313,7 +352,6 @@ pub async fn middleware(
     if exempt(req.uri().path()) {
         return next.run(req).await;
     }
-    let anonymous_ip = client_ip(&req);
     let (class, key) = match req.extensions().get::<AuthState>() {
         Some(AuthState::Authenticated { ctx, class }) => {
             let id = match ctx.actor {
@@ -324,16 +362,8 @@ pub async fn middleware(
             };
             (*class, format!("user:{id}"))
         }
-        _ => match anonymous_ip {
-            Some(ip) => (CredentialClass::Anonymous, format!("ip:{ip}")),
-            None if p.cfg.require_peer => {
-                // Produktiv liefert `serve` immer die Peer-Adresse; fehlt sie, ist die
-                // Verdrahtung kaputt. Ablehnen statt alle in einen Bucket zu werfen.
-                return ApiError(AppError::internal("Peer address unavailable.")).into_response();
-            }
-            // Ohne Peer-Adresse (nur Router-Tests) wird nicht anonym begrenzt.
-            None => return next.run(req).await,
-        },
+        // Anonym/ungültig: bereits von Stufe 1 (IP) begrenzt.
+        _ => return next.run(req).await,
     };
     let limits = p.cfg.rate.for_class(class);
     let now_ms = p.app.clock.now().timestamp_millis();
@@ -421,7 +451,6 @@ mod tests {
             !d.allowed,
             "Verdrängung darf keine vollen Tokens zurückgeben"
         );
-        assert!(!l.has_token("ip:attacker", 3.0, 3600.0, t + 2_000));
         // Neue Schlüssel teilen sich bei voller Map den Overflow-Bucket und werden dort begrenzt.
         let late = (0..10)
             .filter(|i| {
@@ -429,12 +458,34 @@ mod tests {
                     .allowed
             })
             .count();
-        assert_eq!(late, 0, "Overflow-Bucket ist bereits erschöpft");
+        assert_eq!(
+            late, 0,
+            "Überlauf-Bucket (1/10 des Limits, geteilt) ist erschöpft"
+        );
         // Nach der natürlichen Auffüllzeit ist der Angreifer wieder frei.
         assert!(
             l.take("ip:attacker", 3.0, 3600.0, 1.0, t + 3_700_000)
                 .allowed
         );
+    }
+
+    #[test]
+    fn concurrent_requests_never_exceed_the_capacity() {
+        let l = Arc::new(RateLimiter::default());
+        let allowed: usize = (0..50)
+            .map(|_| {
+                let l = l.clone();
+                std::thread::spawn(move || {
+                    (0..20)
+                        .filter(|_| l.take("ip:shared", 10.0, 3600.0, 1.0, 1_000).allowed)
+                        .count()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .sum();
+        assert_eq!(allowed, 10, "Prüfen und Abziehen sind atomar");
     }
 
     #[test]

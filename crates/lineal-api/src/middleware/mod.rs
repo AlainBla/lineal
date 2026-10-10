@@ -123,6 +123,11 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
         .layer(Extension(app))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
         .layer(from_fn_with_state(platform.clone(), auth::middleware))
+        // IP-Limit vor dem Token-Lookup (jeder Request kostet erst IP-Kontingent).
+        .layer(from_fn_with_state(
+            platform.clone(),
+            rate_limit::ip_middleware,
+        ))
         .layer(from_fn_with_state(platform, csrf::middleware));
     if !cors_origins.is_empty() {
         router = router.layer(cors(&cors_origins));

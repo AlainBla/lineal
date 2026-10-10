@@ -118,52 +118,28 @@ pub fn clear_session_cookie(secure: bool) -> String {
 }
 
 pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next) -> Response {
-    let now_ms = p.app.clock.now().timestamp_millis();
     let state = match extract_token(req.headers()) {
         None => AuthState::Anonymous,
-        Some((token, class)) => {
-            // Fehlversuche (unbekannte/abgelaufene Tokens) zählen gegen den IP-Bucket und werden
-            // bei Erschöpfung abgelehnt, bevor die Datenbank gefragt wird.
-            let fail_key =
-                crate::rate_limit::client_bucket(&req).map(|ip| format!("authfail:{ip}"));
-            let limits = p.cfg.rate.anonymous;
-            if let Some(key) = &fail_key
-                && !p
-                    .limiter
-                    .has_token(key, limits.requests, p.cfg.rate.period_secs, now_ms)
-            {
-                let d = p
-                    .limiter
-                    .take(key, limits.requests, p.cfg.rate.period_secs, 1.0, now_ms);
-                return crate::rate_limit::rejection(&req, &d, "failed authentications");
-            }
-            match lookup_principal(&p.app, &token).await {
-                Ok(Some(principal)) => {
-                    let request_id = req
-                        .extensions()
-                        .get::<RequestId>()
-                        .map(|r| r.0.clone())
-                        .unwrap_or_default();
-                    AuthState::Authenticated {
-                        ctx: RequestCtx {
-                            org_id: principal.org_id,
-                            actor: principal.actor,
-                            request_id,
-                            scopes: principal.scopes,
-                        },
-                        class,
-                    }
+        Some((token, class)) => match lookup_principal(&p.app, &token).await {
+            Ok(Some(principal)) => {
+                let request_id = req
+                    .extensions()
+                    .get::<RequestId>()
+                    .map(|r| r.0.clone())
+                    .unwrap_or_default();
+                AuthState::Authenticated {
+                    ctx: RequestCtx {
+                        org_id: principal.org_id,
+                        actor: principal.actor,
+                        request_id,
+                        scopes: principal.scopes,
+                    },
+                    class,
                 }
-                Ok(None) => {
-                    if let Some(key) = &fail_key {
-                        p.limiter
-                            .take(key, limits.requests, p.cfg.rate.period_secs, 1.0, now_ms);
-                    }
-                    AuthState::Invalid
-                }
-                Err(e) => return ApiError(e).into_response(),
             }
-        }
+            Ok(None) => AuthState::Invalid,
+            Err(e) => return ApiError(e).into_response(),
+        },
     };
     req.extensions_mut().insert(state);
     next.run(req).await
