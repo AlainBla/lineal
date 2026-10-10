@@ -21,6 +21,8 @@ thiserror.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 sha2 = "0.10"
+aes-gcm = "0.10"
+hkdf = "0.12"
 
 [dev-dependencies]
 tokio.workspace = true
