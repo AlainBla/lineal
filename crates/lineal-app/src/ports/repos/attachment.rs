@@ -108,6 +108,10 @@ pub trait AttachmentRepo: Send {
     async fn get(&mut self, id: AttachmentId) -> AppResult<Option<Attachment>> {
         not_implemented()
     }
+    /// Nicht archivierter Anhang zu diesem Objektschlüssel.
+    async fn find_by_storage_key(&mut self, key: &str) -> AppResult<Option<Attachment>> {
+        not_implemented()
+    }
     async fn list_for_issue(&mut self, issue: IssueId) -> AppResult<Vec<Attachment>> {
         not_implemented()
     }

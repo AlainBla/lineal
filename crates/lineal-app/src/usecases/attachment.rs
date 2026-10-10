@@ -51,6 +51,19 @@ pub struct PreparedUpload {
     pub suggested_subtitle: Option<String>,
 }
 
+/// Eine Datei des eigenen Workspaces, die per `assetUrl` referenziert wird (Kommentare, Markdown).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetInfo {
+    /// Die referenzierte (dauerhafte) URL.
+    pub asset_url: String,
+    pub title: String,
+    pub content_type: Option<String>,
+    pub size: Option<i64>,
+    /// Signierte Download-URL (`GET_TTL`).
+    pub download_url: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Anhang mit Anzeigedaten.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttachmentView {
@@ -173,7 +186,8 @@ fn disposition(filename: &str) -> String {
 }
 
 impl App {
-    fn asset_prefix(&self) -> String {
+    /// Präfix der dauerhaften Asset-URLs dieses Servers (`{base_url}/assets/`).
+    pub fn asset_prefix(&self) -> String {
         format!(
             "{}/{ASSET_PATH}/",
             self.config.base_url.trim_end_matches('/')
@@ -565,6 +579,64 @@ impl App {
             .attachment_view(&mut *tx, attachment, issue.identifier)
             .await?;
         Ok(view)
+    }
+
+    /// Bildet `assetUrl`s des eigenen Workspaces auf signierte Download-URLs ab. Nur lesbare Dateien:
+    /// Issue-Anhänge nach Zugriffsprüfung auf das Issue sowie Uploads ohne Ziel-Issue (z. B. Bilder
+    /// in Markdown). Fremde, unbekannte oder nicht lesbare URLs fehlen im Ergebnis.
+    pub async fn resolve_assets(
+        &self,
+        ctx: &RequestCtx,
+        urls: &[String],
+    ) -> AppResult<Vec<AssetInfo>> {
+        if urls.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let prefix = self.asset_prefix();
+        let org_segment = ctx.org_id.0.to_string();
+        let now = self.clock.now();
+        let mut out = Vec::new();
+        for url in urls {
+            let url = url.trim();
+            let Some(key) = url.strip_prefix(&prefix) else {
+                continue;
+            };
+            let parts: Vec<&str> = key.split('/').collect();
+            if parts.len() != 3 || parts[0] != org_segment {
+                continue;
+            }
+            let (title, content_type, size) =
+                if let Some(a) = tx.attachments().find_by_storage_key(key).await? {
+                    let Some(issue) = tx.attachments().issue_ref(a.issue_id).await? else {
+                        continue;
+                    };
+                    if snap
+                        .require_team(ctx, Action::ViewTeam, issue.team_id)
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    (a.title, a.content_type, a.size)
+                } else if let Some(r) = tx.attachments().reservation_by_key(key).await? {
+                    if r.issue_id.is_some() {
+                        continue;
+                    }
+                    (r.filename, Some(r.content_type), Some(r.size))
+                } else {
+                    continue;
+                };
+            out.push(AssetInfo {
+                asset_url: url.to_owned(),
+                title,
+                content_type,
+                size,
+                download_url: self.blobs.signed_get_url(key, GET_TTL).await?,
+                expires_at: now + ChronoDuration::seconds(GET_TTL.as_secs() as i64),
+            });
+        }
+        Ok(out)
     }
 
     /// Alle Anhänge eines Issues (für `get_issue`).

@@ -1,3 +1,119 @@
+"""
+`Attachment` (Link oder hochgeladene Datei; `url` ist bei Uploads kurzlebig signiert).
+"""
+type Attachment {
+	id: String!
+	issueId: String!
+	issueIdentifier: String!
+	url: String!
+	title: String!
+	subtitle: String
+	sourceType: String
+	contentType: String
+	size: Float
+	creatorId: String
+	expiresAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+input AttachmentCreateInput {
+	issueId: String!
+	"""
+	Link-URL oder die `assetUrl` eines abgeschlossenen Uploads (`fileUpload`).
+	"""
+	url: String!
+	title: String
+	subtitle: String
+}
+
+type AttachmentDeletePayload {
+	success: Boolean!
+	lastSyncId: Float!
+	entityId: String!
+}
+
+type AttachmentPayload {
+	success: Boolean!
+	lastSyncId: Float!
+	attachment: Attachment
+}
+
+"""
+`Comment` (docs/03 §6).
+"""
+type Comment {
+	id: String!
+	body: String!
+	userId: String
+	user: CommentUser
+	issueId: String
+	projectId: String
+	projectMilestoneId: String
+	projectUpdateId: String
+	initiativeId: String
+	initiativeUpdateId: String
+	documentId: String
+	parentId: String
+	quotedText: String
+	editedAt: String
+	resolvedAt: String
+	resolvingUserId: String
+	resolvingCommentId: String
+	reactionData: [ReactionData!]!
+	createdAt: String!
+	updatedAt: String!
+}
+
+type CommentConnection {
+	nodes: [Comment!]!
+	pageInfo: PageInfo!
+}
+
+input CommentCreateInput {
+	body: String!
+	issueId: String
+	projectId: String
+	initiativeId: String
+	documentId: String
+	projectMilestoneId: String
+	projectUpdateId: String
+	initiativeUpdateId: String
+	"""
+	Antwort auf diesen Kommentar (Thread-Wurzel wird normalisiert).
+	"""
+	parentId: String
+	"""
+	Inline-Kommentar: zitierte Textstelle der Beschreibung.
+	"""
+	quotedText: String
+}
+
+type CommentDeletePayload {
+	success: Boolean!
+	lastSyncId: Float!
+	entityId: String!
+}
+
+type CommentPayload {
+	success: Boolean!
+	lastSyncId: Float!
+	comment: Comment
+}
+
+input CommentUpdateInput {
+	body: String!
+}
+
+"""
+Autor eines Kommentars.
+"""
+type CommentUser {
+	id: String!
+	name: String!
+	displayName: String!
+}
+
 type Mutation {
 	"""
 	Platzhalter des Scaffolds.
@@ -37,6 +153,50 @@ type Mutation {
 	Platzhalter des Scaffolds.
 	"""
 	_commentMutationReady: Boolean!
+	"""
+	Neuer Thread, Antwort (`parentId`) oder Inline-Kommentar (`quotedText`).
+	"""
+	commentCreate(input: CommentCreateInput!): CommentPayload!
+	"""
+	Bearbeitet den Body (nur der Autor).
+	"""
+	commentUpdate(id: String!, input: CommentUpdateInput!): CommentPayload!
+	"""
+	Löscht einen Kommentar (Autor oder Admin; Inline-Wurzeln nicht).
+	"""
+	commentDelete(id: String!): CommentDeletePayload!
+	"""
+	Löst den Thread auf (optional mit hervorgehobener Antwort).
+	"""
+	commentResolve(id: String!, resolvingCommentId: String): CommentPayload!
+	"""
+	Öffnet einen aufgelösten Thread wieder.
+	"""
+	commentUnresolve(id: String!): CommentPayload!
+	"""
+	Reaktion hinzufügen (idempotent pro User, Ziel und Emoji).
+	"""
+	reactionCreate(input: ReactionCreateInput!): ReactionPayload!
+	"""
+	Entfernt die eigene Reaktion.
+	"""
+	reactionDelete(id: String!): ReactionDeletePayload!
+	"""
+	Hängt einen Link an oder finalisiert einen Upload (`url` = `assetUrl` aus `fileUpload`).
+	"""
+	attachmentCreate(input: AttachmentCreateInput!): AttachmentPayload!
+	"""
+	Hängt einen Link an (Dedupe pro Issue und URL).
+	"""
+	attachmentLinkURL(issueId: String!, url: String!, title: String): AttachmentPayload!
+	"""
+	Entfernt einen Anhang.
+	"""
+	attachmentDelete(id: String!): AttachmentDeletePayload!
+	"""
+	Bereitet einen Direkt-Upload vor (ohne Ziel-Issue, z. B. für Bilder in Markdown).
+	"""
+	fileUpload(filename: String!, contentType: String!, size: Int!): UploadPayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -109,6 +269,24 @@ type Organization {
 	updatedAt: String!
 }
 
+"""
+Relay-`PageInfo` (09 §1.3).
+"""
+type PageInfo {
+	hasNextPage: Boolean!
+	hasPreviousPage: Boolean!
+	startCursor: String
+	endCursor: String
+}
+
+"""
+Sortierfeld, Default `updatedAt` absteigend (00 §5).
+"""
+enum PaginationOrderBy {
+	createdAt
+	updatedAt
+}
+
 type Query {
 	"""
 	Platzhalter des Scaffolds.
@@ -146,6 +324,18 @@ type Query {
 	Platzhalter des Scaffolds.
 	"""
 	_commentReady: Boolean!
+	"""
+	Ein Kommentar (Sichtbarkeit über das Elternobjekt).
+	"""
+	comment(id: String!): Comment!
+	"""
+	Kommentare eines Elternobjekts (genau eines der `*Id`-Argumente), neueste zuerst.
+	"""
+	comments(issueId: String, projectId: String, initiativeId: String, documentId: String, projectMilestoneId: String, projectUpdateId: String, initiativeUpdateId: String, first: Int, after: String, orderBy: PaginationOrderBy): CommentConnection!
+	"""
+	Ein Anhang (Uploads mit frisch signierter Download-URL).
+	"""
+	attachment(id: String!): Attachment!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -194,6 +384,49 @@ type Query {
 	Platzhalter des Scaffolds.
 	"""
 	_importReady: Boolean!
+}
+
+"""
+`Reaction`.
+"""
+type Reaction {
+	id: String!
+	emoji: String!
+	userId: String!
+	commentId: String
+	issueId: String
+	projectUpdateId: String
+	initiativeUpdateId: String
+	createdAt: String!
+}
+
+input ReactionCreateInput {
+	emoji: String!
+	commentId: String
+	issueId: String
+	projectUpdateId: String
+	initiativeUpdateId: String
+}
+
+"""
+Aggregierte Reaktionen (`reactionData`).
+"""
+type ReactionData {
+	emoji: String!
+	count: Int!
+	userIds: [String!]!
+}
+
+type ReactionDeletePayload {
+	success: Boolean!
+	lastSyncId: Float!
+	entityId: String!
+}
+
+type ReactionPayload {
+	success: Boolean!
+	lastSyncId: Float!
+	reaction: Reaction
 }
 
 type SuccessPayload {
@@ -251,6 +484,26 @@ input TeamUpdateInput {
 	visibility: String
 	triageEnabled: Boolean
 	cyclesEnabled: Boolean
+}
+
+type UploadFile {
+	uploadUrl: String!
+	headers: [UploadFileHeader!]!
+	assetUrl: String!
+	filename: String!
+	contentType: String!
+	size: Int!
+}
+
+type UploadFileHeader {
+	key: String!
+	value: String!
+}
+
+type UploadPayload {
+	success: Boolean!
+	lastSyncId: Float!
+	uploadFile: UploadFile
 }
 
 """

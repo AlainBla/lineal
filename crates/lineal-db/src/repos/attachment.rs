@@ -185,6 +185,19 @@ impl AttachmentRepo for PgTx {
         Ok(row.map(Into::into))
     }
 
+    async fn find_by_storage_key(&mut self, key: &str) -> AppResult<Option<Attachment>> {
+        let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+            "SELECT {COLS} FROM attachment WHERE organization_id = $1 AND storage_key = $2 \
+             AND archived_at IS NULL ORDER BY created_at LIMIT 1"
+        ))
+        .bind(self.org.0)
+        .bind(key)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
     async fn list_for_issue(&mut self, issue: IssueId) -> AppResult<Vec<Attachment>> {
         let rows = sqlx::query_as::<_, AttachmentRow>(&format!(
             "SELECT {COLS} FROM attachment WHERE organization_id = $1 AND issue_id = $2 \

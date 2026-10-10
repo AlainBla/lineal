@@ -485,6 +485,16 @@ async fn delete_rules(pool: PgPool) {
     );
     assert!(bodies.contains(&"Reply stays".to_string()));
     assert!(!bodies.contains(&"Bob says".to_string()));
+    // Auf eine Wurzel mit Platzhalter kann weiter geantwortet werden
+    let late = env
+        .app
+        .create_comment(&bob, reply(&rid, "Late reply"))
+        .await
+        .unwrap();
+    assert_eq!(
+        late.view.comment.parent_id.map(|p| p.to_string()),
+        Some(rid.clone())
+    );
     assert_eq!(events(&env, "CommentRemoved").await.len(), 3);
 }
 

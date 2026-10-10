@@ -352,13 +352,13 @@ async fn build_views(tx: &mut dyn Tx, comments: Vec<Comment>) -> AppResult<Vec<C
     for c in comments {
         let author = match c.user_id {
             Some(uid) => {
-                if !authors.contains_key(&uid) {
+                if let std::collections::hash_map::Entry::Vacant(e) = authors.entry(uid) {
                     let a = tx.users().get(uid).await?.map(|u| AuthorRef {
                         id: u.id,
                         name: u.name,
                         display_name: u.display_name,
                     });
-                    authors.insert(uid, a);
+                    e.insert(a);
                 }
                 authors.get(&uid).cloned().flatten()
             }
@@ -366,9 +366,9 @@ async fn build_views(tx: &mut dyn Tx, comments: Vec<Comment>) -> AppResult<Vec<C
         };
         let issue_identifier = match c.parent {
             ParentRef::Issue(i) => {
-                if !identifiers.contains_key(&i) {
+                if let std::collections::hash_map::Entry::Vacant(e) = identifiers.entry(i) {
                     let ident = tx.comments().issue_identifier(i).await?;
-                    identifiers.insert(i, ident);
+                    e.insert(ident);
                 }
                 identifiers.get(&i).cloned().flatten()
             }
@@ -515,7 +515,8 @@ impl App {
                     reply_to,
                     Action::CommentIssue,
                     true,
-                    false,
+                    // Die Wurzel eines Threads mit Platzhalter bleibt antwortbar.
+                    true,
                 )
                 .await?;
                 root = Some(target.parent_id.unwrap_or(target.id));
