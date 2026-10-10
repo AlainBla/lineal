@@ -95,8 +95,9 @@ async fn counters_are_gapless_and_atomic(pool: PgPool) {
             .unwrap(),
         5
     );
-    assert_eq!(tx.teams().next_project_number(data.eng).await.unwrap(), 1);
-    assert_eq!(tx.teams().next_cycle_number(data.eng).await.unwrap(), 1);
+    // Der Seed (planning) vergibt P-ENG-1 und vier Cycles in ENG.
+    assert_eq!(tx.teams().next_project_number(data.eng).await.unwrap(), 2);
+    assert_eq!(tx.teams().next_cycle_number(data.eng).await.unwrap(), 5);
     drop(tx); // Rollback: die Zähler springen zurück
     let mut tx = app.store.begin(data.org).await.unwrap();
     assert_eq!(
