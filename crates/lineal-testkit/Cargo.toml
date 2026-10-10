@@ -1,0 +1,22 @@
+[package]
+name = "lineal-testkit"
+description = "Seed-Daten, Fakes und Test-Helfer (nur dev-dependency)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lineal-domain.workspace = true
+lineal-app.workspace = true
+lineal-db.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+uuid.workspace = true

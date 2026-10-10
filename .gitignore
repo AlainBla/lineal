@@ -9,3 +9,6 @@ var/
 .playwright-mcp/
 .worktrees/
 *.log
+.claude/
+web/node_modules/
+.env.local

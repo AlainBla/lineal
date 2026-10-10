@@ -1,0 +1,25 @@
+[package]
+name = "lineal-mcp"
+description = "MCP-Server (Tool-Dispatch, Handler)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lineal-domain.workspace = true
+lineal-app.workspace = true
+axum.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+lineal-testkit.workspace = true
+tokio.workspace = true

@@ -1,0 +1,42 @@
+[package]
+name = "lineal-server"
+description = "Binary lineal: Composition Root, Konfiguration, Subcommands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "lineal"
+path = "src/main.rs"
+
+[features]
+default = ["seed"]
+# Seed-Subcommand benötigt die Seed-Module aus lineal-testkit.
+seed = ["dep:lineal-testkit"]
+
+[dependencies]
+lineal-domain.workspace = true
+lineal-app.workspace = true
+lineal-db.workspace = true
+lineal-api.workspace = true
+lineal-mcp.workspace = true
+lineal-sync.workspace = true
+lineal-jobs.workspace = true
+lineal-testkit = { workspace = true, optional = true }
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

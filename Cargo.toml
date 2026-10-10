@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/lineal-domain",
+    "crates/lineal-app",
+    "crates/lineal-db",
+    "crates/lineal-api",
+    "crates/lineal-mcp",
+    "crates/lineal-sync",
+    "crates/lineal-jobs",
+    "crates/lineal-server",
+    "crates/lineal-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# interne Crates
+lineal-domain = { path = "crates/lineal-domain" }
+lineal-app = { path = "crates/lineal-app" }
+lineal-db = { path = "crates/lineal-db" }
+lineal-api = { path = "crates/lineal-api" }
+lineal-mcp = { path = "crates/lineal-mcp" }
+lineal-sync = { path = "crates/lineal-sync" }
+lineal-jobs = { path = "crates/lineal-jobs" }
+lineal-testkit = { path = "crates/lineal-testkit" }
+
+# extern
+anyhow = "1"
+async-graphql = { version = "7.2", default-features = false, features = ["chrono", "uuid"] }
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros", "ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json", "migrate", "macros"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "net"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "request-id", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+http-body-util = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

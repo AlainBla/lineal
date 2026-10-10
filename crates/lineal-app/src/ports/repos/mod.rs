@@ -1,0 +1,48 @@
+//! Repository-Traits, je Bereich eine Datei. Gemeinsame Datei: nur S1 / Orchestrator.
+//! Arbeitspakete ergänzen nur Methoden in den Dateien ihrer Eigentumsliste.
+
+pub mod attachment;
+pub mod auth;
+pub mod comment;
+pub mod cycle;
+pub mod document;
+pub mod import;
+pub mod initiative;
+pub mod issue;
+pub mod job;
+pub mod label;
+pub mod notification;
+pub mod org;
+pub mod outbox;
+pub mod overview;
+pub mod project;
+pub mod state;
+pub mod team;
+pub mod template;
+pub mod triage;
+pub mod user;
+pub mod view;
+pub mod webhook;
+
+pub use attachment::AttachmentRepo;
+pub use auth::{AuthRepo, Principal};
+pub use comment::CommentRepo;
+pub use cycle::CycleRepo;
+pub use document::DocumentRepo;
+pub use import::ImportRepo;
+pub use initiative::InitiativeRepo;
+pub use issue::IssueRepo;
+pub use job::{Job, JobRepo, NewJob};
+pub use label::LabelRepo;
+pub use notification::NotificationRepo;
+pub use org::OrgRepo;
+pub use outbox::{NewEvent, OutboxRepo, StoredEvent};
+pub use overview::OverviewRepo;
+pub use project::ProjectRepo;
+pub use state::WorkflowStateRepo;
+pub use team::TeamRepo;
+pub use template::TemplateRepo;
+pub use triage::TriageRepo;
+pub use user::UserRepo;
+pub use view::ViewRepo;
+pub use webhook::WebhookRepo;

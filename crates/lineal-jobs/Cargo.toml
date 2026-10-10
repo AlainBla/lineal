@@ -1,0 +1,25 @@
+[package]
+name = "lineal-jobs"
+description = "Job-Runner, Outbox-Konsumenten, periodische Jobs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lineal-domain.workspace = true
+lineal-app.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+lineal-db.workspace = true
+lineal-testkit.workspace = true
+sqlx.workspace = true
