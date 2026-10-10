@@ -58,6 +58,10 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 - Entwicklung: PostgreSQL im Container auf `127.0.0.1:5440`, Server `:8080`, Vite-Dev `:5173`. Belegte Ports über `LINEAL_BIND`/`LINEAL_BACKEND` umstellen. E2E (`scripts/e2e.sh`) nutzt die Datenbank `lineal_e2e` und freie Ports (ab 18741 bzw. 4173).
 - Hinter einem Reverse-Proxy: `LINEAL_BASE_URL` auf die öffentliche URL, `LINEAL_TRUSTED_PROXIES` auf die Proxy-Adressen, WebSocket-Upgrade für `/sync` durchreichen.
 
+### 3.2a End-to-End-Tests
+
+`scripts/e2e.sh` (nicht Teil von `check.sh`; Laufzeit ca. 1–2 Minuten) legt die Datenbank `lineal_e2e` im Container neu an, migriert, seedet (`lineal seed --demo`), legt zwei API-Keys für Bob an (frei und auf ENG beschränkt), baut das Web und startet über Playwright `lineal serve` (mit `LINEAL_DEV=1`), `lineal worker` und `vite preview` (Proxy auf den Server) auf freien Ports; Chromium läuft headless mit `chromiumSandbox: false`. Flows (`web/e2e/*.e2e.ts`): F3 Issue anlegen (Taste `c`, „Create more“, lückenlose Kennung), F5 Status-Picker `S` durch den Workflow, F12 Filter → View → Favorit, F13 Erwähnung → Inbox eines zweiten Users, F7 Teamwechsel (`Strg+Umschalt+M`, alte Kennung bleibt auflösbar), F17 MCP-Agent per HTTP (`list_issues`, `save_issue`, team-beschränkter Key), Sichtbarkeit des privaten Teams DES. Einzelne Flows: `scripts/e2e.sh -g F3`.
+
 ### 3.3 Hintergrundjobs
 
 Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in `outbox_delivery.attempts`/`last_error` und überleben Neustarts; nach `max_event_attempts` (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit `last_error`, abfragbar über `OutboxRepo::list_dead_letters`). Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min), `purge` (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).

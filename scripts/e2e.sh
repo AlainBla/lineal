@@ -43,6 +43,20 @@ export LINEAL_BIN="$PWD/target/debug/lineal"
 )
 rm -rf /tmp/lineal-e2e-blobs
 
+step "API-Keys für den MCP-Flow (F17) anlegen: Bob, einmal frei, einmal nur ENG"
+# API-Keys lassen sich (noch) nicht über GraphQL anlegen; der Test bekommt feste, erfundene Tokens.
+export LINEAL_E2E_API_KEY="lin_api_e2e_bob_full_0000000000000001"
+export LINEAL_E2E_API_KEY_ENG="lin_api_e2e_bob_eng_0000000000000002"
+key_sql() { # $1 Token, $2 Label, $3 team_ids-Ausdruck
+  local hash
+  hash="$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)"
+  printf "INSERT INTO api_key (organization_id, user_id, label, key_prefix, key_hash, scopes, team_ids) SELECT u.organization_id, u.id, '%s', left('%s', 12), '%s', ARRAY['read','write'], %s FROM \"user\" u WHERE u.email = 'bob@acme.example';" "$2" "$1" "$hash" "$3"
+}
+{
+  key_sql "$LINEAL_E2E_API_KEY" "e2e full" "NULL"
+  key_sql "$LINEAL_E2E_API_KEY_ENG" "e2e eng only" "ARRAY(SELECT id FROM team WHERE key = 'ENG')"
+} | docker compose exec -T postgres psql -U lineal -d lineal_e2e -v ON_ERROR_STOP=1
+
 export LINEAL_E2E_API_PORT="$(free_port 18741)"
 export LINEAL_E2E_WEB_PORT="$(free_port 4173)"
 export LINEAL_E2E_DATABASE_URL="$E2E_DB_URL"
