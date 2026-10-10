@@ -45,7 +45,7 @@ describe("IssueView filter bar", () => {
         cycles: [],
         projects: TEAM_META.projects,
       }),
-      ViewsUsers: () => ({
+      KnownUsers: () => ({
         users: [{ id: "u-bob", name: "Bob", displayName: "Bob", avatarUrl: null }],
       }),
     });

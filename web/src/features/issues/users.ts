@@ -1,10 +1,12 @@
 /**
- * Bekannte Personen für Assignee-Picker und @-Mentions. Das GraphQL-Schema hat (noch) keine
- * User-/Mitgliederabfrage; bekannt sind deshalb der angemeldete User und Autoren gesehener Kommentare.
+ * Bekannte Personen für Assignee-Picker und @-Mentions: das Verzeichnis kommt aus `users(query, team, first)`
+ * (ohne E-Mail), ergänzt um Autoren gesehener Kommentare und den angemeldeten User.
  */
-import { useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type { Comment } from "@/gql/graphql";
+import { gqlRequest } from "@/lib/graphql";
 
 export interface KnownUser {
   id: string;
@@ -48,7 +50,43 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 
+export interface DirectoryUser {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
+/** Sichtbare Personen (`users`-Abfrage); gemeinsamer Query-Key `["users", query, team]`. */
+export async function fetchUsers(
+  query: string,
+  team: string | undefined,
+  first = 200,
+  signal?: AbortSignal,
+): Promise<DirectoryUser[]> {
+  const res = await gqlRequest<{ users: DirectoryUser[] }, Record<string, unknown>>(
+    `query KnownUsers($query: String, $team: String, $first: Int!) {
+      users(query: $query, team: $team, first: $first) { id name displayName }
+    }`,
+    { query: query || undefined, team, first },
+    { signal },
+  );
+  return res.users;
+}
+
+/** Lädt das Personenverzeichnis einmal und füllt damit den Speicher der bekannten Personen. */
+function useDirectory(): void {
+  const q = useQuery({
+    queryKey: ["users", "", ""] as const,
+    staleTime: 60_000,
+    queryFn: ({ signal }) => fetchUsers("", undefined, 200, signal),
+  });
+  useEffect(() => {
+    if (q.data) rememberUsers(q.data.map((u) => ({ id: u.id, name: u.displayName || u.name })));
+  }, [q.data]);
+}
+
 export function useKnownUsers(): KnownUser[] {
+  useDirectory();
   return useSyncExternalStore(
     subscribe,
     () => snapshot,
