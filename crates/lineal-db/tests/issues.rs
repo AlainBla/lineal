@@ -2078,3 +2078,123 @@ async fn list_issues_filters(pool: PgPool) {
     assert_eq!(p2.items.len(), 1);
     assert!(p2.next.is_none());
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn counterpart_checks_for_relations_parent_and_assignee(pool: PgPool) {
+    let fx = setup(pool).await;
+    fx.app
+        .create_issue(&bob(), create("ENG", "Quelle"))
+        .await
+        .unwrap();
+    fx.app
+        .create_issue(&bob(), create("WEB", "Gegenstück"))
+        .await
+        .unwrap();
+    fx.app
+        .create_issue(&bob(), create("DES", "Privat"))
+        .await
+        .unwrap();
+    let rel = |r: RelationChanges| UpdateIssueInput {
+        relations: r,
+        ..update("ENG-1")
+    };
+    for changes in [
+        RelationChanges {
+            blocks: vec!["DES-1".into()],
+            ..Default::default()
+        },
+        RelationChanges {
+            related_to: vec!["DES-1".into()],
+            ..Default::default()
+        },
+        RelationChanges {
+            duplicate_of: Some(Some("DES-1".into())),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            kind(fx.app.update_issue(&alice(), rel(changes)).await),
+            ErrorKind::NotFound
+        );
+    }
+    assert_eq!(
+        kind(
+            fx.app
+                .update_issue(
+                    &alice(),
+                    UpdateIssueInput {
+                        parent: Some(Some("DES-1".into())),
+                        ..update("ENG-1")
+                    }
+                )
+                .await
+        ),
+        ErrorKind::NotFound
+    );
+    sqlx::query("UPDATE team SET retired_at = now() WHERE id = $1")
+        .bind(fx.data.web.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    for changes in [
+        RelationChanges {
+            blocks: vec!["WEB-1".into()],
+            ..Default::default()
+        },
+        RelationChanges {
+            blocked_by: vec!["WEB-1".into()],
+            ..Default::default()
+        },
+        RelationChanges {
+            duplicate_of: Some(Some("WEB-1".into())),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            kind(fx.app.update_issue(&bob(), rel(changes)).await),
+            ErrorKind::Forbidden
+        );
+    }
+    assert_eq!(
+        kind(
+            fx.app
+                .update_issue(
+                    &bob(),
+                    UpdateIssueInput {
+                        parent: Some(Some("WEB-1".into())),
+                        ..update("ENG-1")
+                    }
+                )
+                .await
+        ),
+        ErrorKind::Forbidden
+    );
+    assert_eq!(
+        kind(
+            fx.app
+                .update_issue(
+                    &bob(),
+                    UpdateIssueInput {
+                        assignee: Some(Some("alice".into())),
+                        ..update("DES-1")
+                    }
+                )
+                .await
+        ),
+        ErrorKind::InvalidRequest
+    );
+    assert_eq!(
+        kind(
+            fx.app
+                .update_issue(
+                    &bob(),
+                    UpdateIssueInput {
+                        delegate: Some(Some("alice".into())),
+                        ..update("DES-1")
+                    }
+                )
+                .await
+        ),
+        ErrorKind::InvalidRequest
+    );
+}

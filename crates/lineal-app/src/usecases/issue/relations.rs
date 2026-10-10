@@ -67,6 +67,9 @@ async fn target(
     if other.trashed {
         return Err(resolve::issue::issue_not_found(reference));
     }
+    // Die Relation verändert auch das Gegenstück: Schreibrecht auf dessen Team nötig.
+    env.snap
+        .require_team(env.ctx, crate::policy::Action::UpdateIssue, other.team_id)?;
     if other.id == issue.id {
         return Err(
             AppError::invalid_request("an issue cannot relate to itself")

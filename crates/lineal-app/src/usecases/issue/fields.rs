@@ -324,9 +324,13 @@ pub async fn resolve_delegate(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     ctx: &RequestCtx,
+    team: &Team,
     reference: &str,
 ) -> AppResult<User> {
     let user = resolve::user::resolve_in(tx, snap, ctx, reference).await?;
+    if !user.active || !user_can_access_team(tx, &snap.tree, &user, team.id).await? {
+        return Err(no_access("delegate_has_no_access"));
+    }
     if user.role != lineal_domain::enums::UserRole::App {
         return Err(AppError::invalid_request("only app users can be delegates")
             .with_details(json!({ "field": "delegate", "reason": "delegate_must_be_app" })));
@@ -446,6 +450,7 @@ pub struct PlanningChange {
 pub async fn apply_planning(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
+    ctx: &RequestCtx,
     team: &Team,
     issue: &mut Issue,
     change: &PlanningChange,
@@ -459,6 +464,7 @@ pub async fn apply_planning(
             issue.project_id = None;
         }
         Some(Some(r)) => {
+            snap.require_team(ctx, crate::policy::Action::ManageProject, team.id)?;
             let p = resolve_project(tx, snap, team.id, r).await?;
             issue.project_id = Some(p.id);
         }
@@ -529,6 +535,8 @@ pub async fn resolve_parent(
     if parent.trashed {
         return Err(resolve::issue::issue_not_found(reference));
     }
+    // Die Zuordnung verändert auch den Parent (Children, Fortschritt): Schreibrecht nötig.
+    snap.require_team(ctx, crate::policy::Action::UpdateIssue, parent.team_id)?;
     let bad = |reason: &str, msg: &str| {
         AppError::invalid_request(msg.to_owned())
             .with_details(json!({ "field": "parentId", "reason": reason }))

@@ -581,7 +581,7 @@ impl App {
             issue.assignee_id = Some(resolve_assignee(tx, &snap, ctx, &team, r).await?.id);
         }
         if let Some(r) = &input.delegate {
-            issue.delegate_id = Some(resolve_delegate(tx, &snap, ctx, r).await?.id);
+            issue.delegate_id = Some(resolve_delegate(tx, &snap, ctx, &team, r).await?.id);
         }
         apply_due_and_sla(
             &mut issue,
@@ -597,6 +597,7 @@ impl App {
         apply_planning(
             tx,
             &snap,
+            ctx,
             &team,
             &mut issue,
             &PlanningChange {
@@ -817,7 +818,7 @@ impl App {
         }
         if let Some(d) = &input.delegate {
             issue.delegate_id = match d {
-                Some(r) => Some(resolve_delegate(tx, &snap, ctx, r).await?.id),
+                Some(r) => Some(resolve_delegate(tx, &snap, ctx, &team, r).await?.id),
                 None => None,
             };
         }
@@ -845,6 +846,7 @@ impl App {
         apply_planning(
             tx,
             &snap,
+            ctx,
             &team,
             &mut issue,
             &PlanningChange {
