@@ -1,0 +1,11 @@
+/target/
+**/target/
+node_modules/
+web/dist/
+web/src/routeTree.gen.ts
+web/src/gql/
+.env
+var/
+.playwright-mcp/
+.worktrees/
+*.log
