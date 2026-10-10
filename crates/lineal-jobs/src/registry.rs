@@ -29,6 +29,8 @@ pub fn periodic_jobs() -> Vec<Arc<dyn PeriodicJob>> {
         Arc::new(sla::SlaJob),
         Arc::new(triage_rotation::TriageRotationJob),
         Arc::new(import_runner::ImportRunnerJob),
+        Arc::new(webhooks::WebhookDeliveryJob),
+        Arc::new(team_purge::TeamPurgeJob),
     ]
 }
 

@@ -947,6 +947,9 @@ impl App {
             return reload_view(&mut *tx, team.id).await;
         }
         tx.teams().update(team.id, &patch, now).await?;
+        if cycles_touched || patch.timezone.is_some() {
+            sync_team_cycles(self, &mut *tx, ctx, &team, now).await?;
+        }
 
         if let Some(enabled) = triage_patch {
             let mut p = TeamPatch::default();
@@ -1315,6 +1318,13 @@ impl App {
                 patch.visibility = Some(TeamVisibility::Private);
             }
             tx.teams().update(team.id, &patch, now).await?;
+            // Cycles: geerbte Cycles des Teams werden eigenständig (docs/04 §1.7).
+            for c in tx.cycles().list_for_team(team.id, true).await? {
+                if c.inherited_from_id.is_some() {
+                    tx.cycles().set_inherited_from(c.id, None, now).await?;
+                }
+            }
+            tx.cycles().set_team_inherits(team.id, true, now).await?;
             emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
             let view = reload_view(&mut *tx, team.id).await?;
             tx.commit().await?;
@@ -1388,11 +1398,57 @@ impl App {
             patch.upcoming_cycle_count = Some(parent.upcoming_cycle_count);
         }
         tx.teams().update(team.id, &patch, now).await?;
+        if parent.cycles_enabled {
+            // Das Team übernimmt den Zeitplan des Parents (Cycles spiegeln, eigene künftige löschen).
+            tx.cycles().set_team_inherits(team.id, true, now).await?;
+            sync_team_cycles(self, &mut *tx, ctx, &team, now).await?;
+        }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         let view = reload_view(&mut *tx, team.id).await?;
         tx.commit().await?;
         Ok(view)
     }
+}
+
+/// Cycle-Engine nach Änderung der Cycle-Einstellungen oder der Hierarchie (WP07-Anbindung):
+/// Aktivieren/Deaktivieren, Zeitplan neu berechnen und erbenden Sub-Teams die Cycles spiegeln.
+async fn sync_team_cycles(
+    app: &App,
+    tx: &mut dyn Tx,
+    ctx: &RequestCtx,
+    before: &Team,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    use super::cycle::engine::{self, Env, inherits};
+    let Some(after) = tx.teams().get(before.id).await? else {
+        return Ok(());
+    };
+    let tree = TeamTree::new(tx.teams().list_all().await?);
+    let non_inheriting: std::collections::HashSet<TeamId> =
+        tx.cycles().teams_not_inheriting().await?.into_iter().collect();
+    let env = Env {
+        tree: &tree,
+        non_inheriting: &non_inheriting,
+        now,
+        ctx,
+        ids: &*app.ids,
+    };
+    if after.cycles_enabled && !before.cycles_enabled {
+        engine::ensure_upcoming(tx, &env, &after, None).await?;
+        engine::run_team(tx, &env, &after).await?;
+    } else if !after.cycles_enabled && before.cycles_enabled {
+        engine::deactivate(tx, &env, &after).await?;
+    } else if after.cycles_enabled {
+        // Auch ohne Änderung idempotent (Zeitplan neu berechnen, Sub-Teams nachziehen).
+        engine::ensure_upcoming(tx, &env, &after, None).await?;
+    }
+    for child in tree.children(after.id) {
+        if inherits(&env, child) {
+            engine::sync_inherited(tx, &env, child).await?;
+        }
+    }
+    engine::emit_team_updated(tx, &env, after.id).await?;
+    Ok(())
 }
 
 /// Harte Voraussetzungen des Nestings (docs/02 §3.1, §3.3 Schritt 1).

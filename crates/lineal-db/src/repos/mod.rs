@@ -22,3 +22,6 @@ mod triage;
 mod user;
 mod view;
 mod webhook;
+mod oauth;
+mod invitation;
+mod team_lifecycle;
