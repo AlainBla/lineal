@@ -19,16 +19,17 @@ use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
 use crate::ports::repos::user::{Page, PageRequest};
 use crate::ports::repos::view::{
-    AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel, ViewAccess,
-    ViewKey, ViewListFilter, ViewModel,
+    AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel, SearchHitRow,
+    SearchKind, SearchOrder, SearchQuery, ViewAccess, ViewKey, ViewListFilter, ViewModel,
 };
+use crate::usecases::issue::IssueView;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use crate::resolve::user::actor_user_id;
 use chrono::{DateTime, Utc};
 use lineal_domain::enums::UserRole;
 use lineal_domain::events::DomainEvent;
-use lineal_domain::ids::{InitiativeId, ProjectId, TeamId, UserId, ViewId};
+use lineal_domain::ids::{InitiativeId, IssueId, ProjectId, TeamId, UserId, ViewId};
 use lineal_domain::rules::filter::{
     self, FilterError, InitiativeFilter, IssueFilter, ProjectFilter,
 };
@@ -1238,5 +1239,147 @@ impl App {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Use-Cases: Suche (docs/05 §5)
+// ---------------------------------------------------------------------------------------------
+
+/// Eingabe der globalen Suche.
+#[derive(Debug, Clone)]
+pub struct SearchInput {
+    pub term: String,
+    /// Leer = alle Arten.
+    pub kinds: Vec<SearchKind>,
+    /// Zusatzfilter für Issues (`IssueFilter`-JSON), UND mit der Suche.
+    pub filter: Option<Value>,
+    pub team: Option<String>,
+    pub include_comments: bool,
+    pub include_archived: bool,
+    pub order: SearchOrder,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+impl Default for SearchInput {
+    fn default() -> Self {
+        Self {
+            term: String::new(),
+            kinds: Vec::new(),
+            filter: None,
+            team: None,
+            include_comments: false,
+            include_archived: true,
+            order: SearchOrder::Relevance,
+            offset: 0,
+            limit: 50,
+        }
+    }
+}
+
+/// Eine Trefferseite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHitRow>,
+    /// Issues der Treffer (für Adapter, die das ganze Issue ausliefern).
+    pub issues: std::collections::HashMap<Uuid, IssueView>,
+    pub next_offset: Option<i64>,
+}
+
+/// Höchstzahl der Treffer pro Suche (docs/05 §5.4).
+pub const MAX_SEARCH_HITS: i64 = 500;
+
+impl App {
+    /// Globale Volltextsuche: Issues, Projekte, Initiativen, Dokumente; nur Sichtbares.
+    pub async fn search(&self, ctx: &RequestCtx, input: SearchInput) -> AppResult<SearchPage> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let access = view_access(&snap, ctx)?;
+        let now = self.clock.now();
+        let limit = input.limit.clamp(1, 250);
+        let offset = input.offset.clamp(0, MAX_SEARCH_HITS - 1);
+        let mut kinds = if input.kinds.is_empty() {
+            vec![
+                SearchKind::Issue,
+                SearchKind::Project,
+                SearchKind::Initiative,
+                SearchKind::Document,
+            ]
+        } else {
+            input.kinds.clone()
+        };
+        if kinds.contains(&SearchKind::Initiative) {
+            let enabled = tx.orgs().get().await?.is_none_or(|o| o.initiatives_enabled);
+            if !enabled || access.is_guest {
+                kinds.retain(|k| *k != SearchKind::Initiative);
+            }
+        }
+        let team_scope = match &input.team {
+            Some(t) => Some(vec![
+                resolve::team::resolve_in(&mut *tx, &snap, t, Visibility::Content)
+                    .await?
+                    .id,
+            ]),
+            None => None,
+        };
+        let mut ast = None;
+        let mut eval = None;
+        if let Some(fj) = &input.filter {
+            let (any, norm) = parse_view_filter(ViewModel::Issue, fj)?;
+            let ev = build_eval(&mut *tx, &snap, ctx, now, true, true).await?;
+            tx.views().verify_filter_refs(&any, &ev).await?;
+            ast = Some(Box::new(
+                filter::from_json_value::<IssueFilter>(&norm).map_err(filter_error)?,
+            ));
+            eval = Some(ev);
+        }
+        let fetch = (offset + limit + 1).min(MAX_SEARCH_HITS);
+        let rows = tx
+            .views()
+            .search(&SearchQuery {
+                term: input.term.clone(),
+                kinds,
+                access,
+                team_scope,
+                include_comments: input.include_comments,
+                include_archived: input.include_archived,
+                order: input.order,
+                ast,
+                eval,
+                limit: fetch,
+            })
+            .await?;
+        let end = (offset + limit) as usize;
+        let more = rows.len() > end && (end as i64) < MAX_SEARCH_HITS;
+        let hits: Vec<SearchHitRow> = rows.into_iter().skip(offset as usize).take(limit as usize).collect();
+        let issue_ids: Vec<IssueId> = hits
+            .iter()
+            .filter(|h| h.kind == SearchKind::Issue)
+            .map(|h| IssueId(h.id))
+            .collect();
+        let mut issues = std::collections::HashMap::new();
+        if !issue_ids.is_empty() {
+            let extras = tx.issues().extras(&issue_ids).await?;
+            for id in issue_ids {
+                if let (Some(issue), Some(ex)) =
+                    (tx.issues().get(id, false).await?, extras.get(&id))
+                {
+                    issues.insert(
+                        id.0,
+                        IssueView {
+                            issue,
+                            extras: ex.clone(),
+                            previous_identifiers: Vec::new(),
+                        },
+                    );
+                }
+            }
+        }
+        Ok(SearchPage {
+            hits,
+            issues,
+            next_offset: more.then_some(end as i64),
+        })
     }
 }

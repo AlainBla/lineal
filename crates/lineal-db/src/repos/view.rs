@@ -222,6 +222,13 @@ fn not_found_ref(kind: &str, id: Uuid) -> AppError {
 
 #[async_trait]
 impl ViewRepo for PgTx {
+    async fn search(
+        &mut self,
+        q: &lineal_app::ports::repos::view::SearchQuery,
+    ) -> AppResult<Vec<lineal_app::ports::repos::view::SearchHitRow>> {
+        crate::search::search_all(&mut self.tx, self.org.0, q).await
+    }
+
     async fn insert_view(&mut self, v: &NewCustomView) -> AppResult<CustomView> {
         let (fd, pfd, ifd) = match v.model {
             ViewModel::Issue => (Some(&v.filter), None, None),

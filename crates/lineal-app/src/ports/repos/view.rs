@@ -211,9 +211,72 @@ pub enum AnyFilter {
     Initiative(InitiativeFilter),
 }
 
+/// Art eines Suchtreffers (docs/05 §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchKind {
+    Issue,
+    Project,
+    Initiative,
+    Document,
+}
+
+/// Sortierung der Suche (Default Relevanz, docs/05 §5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchOrder {
+    #[default]
+    Relevance,
+    UpdatedAt,
+    CreatedAt,
+}
+
+/// Suchanfrage. Die Berechtigung (`access`) wird in jeder Teilabfrage als UND angehängt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchQuery {
+    pub term: String,
+    pub kinds: Vec<SearchKind>,
+    pub access: ViewAccess,
+    /// Einschränkung auf diese Teams (Issues und Projekte); bereits auf sichtbare Teams geschnitten.
+    pub team_scope: Option<Vec<TeamId>>,
+    pub include_comments: bool,
+    pub include_archived: bool,
+    pub order: SearchOrder,
+    /// Zusatzfilter für Issues samt Kontext (UND mit der Suche).
+    pub ast: Option<Box<IssueFilter>>,
+    pub eval: Option<FilterEval>,
+    /// Höchstens so viele Treffer (Offset + Limit, höchstens 500).
+    pub limit: i64,
+}
+
+/// Ein Suchtreffer (nur Objekte, die der Aufrufer sehen darf).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHitRow {
+    pub kind: SearchKind,
+    pub id: Uuid,
+    /// `ENG-124`, `P-ENG-7`, `I-4`; bei Dokumenten `None`.
+    pub identifier: Option<String>,
+    pub title: String,
+    pub team_key: Option<String>,
+    /// Statuskategorie (Issue), Status (Projekt/Initiative).
+    pub status: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived: bool,
+    /// Exakter Kennungstreffer (steht an erster Stelle).
+    pub exact: bool,
+    pub rank: f64,
+    pub boost: i32,
+    /// `(Feld, Ausschnitt)`; Fundstellen mit `<mark>…</mark>`, übriger Text HTML-escaped.
+    pub highlights: Vec<(String, String)>,
+}
+
 /// Persistenzzugriff des Bereichs `view`.
 #[async_trait]
 pub trait ViewRepo: Send {
+    /// Volltextsuche über Issues, Projekte, Initiativen und Dokumente (nur sichtbare Objekte).
+    async fn search(&mut self, _q: &SearchQuery) -> AppResult<Vec<SearchHitRow>> {
+        unimplemented_repo()
+    }
+
     // --- Custom Views ---
     async fn insert_view(&mut self, _v: &NewCustomView) -> AppResult<CustomView> {
         unimplemented_repo()
