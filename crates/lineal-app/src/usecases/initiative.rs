@@ -83,6 +83,8 @@ pub struct SaveInitiativeInput {
 /// Filter von `list_initiatives`.
 #[derive(Debug, Clone, Default)]
 pub struct ListInitiativesInput {
+    /// Gespeicherte View (WP11); nicht mit `query` kombinierbar.
+    pub custom_view: Option<String>,
     pub status: Option<String>,
     pub owner: Option<String>,
     pub lead_team: Option<String>,
@@ -434,6 +436,34 @@ impl App {
                 .with_details(json!({ "reference": r, "type": "InitiativeLabel" })));
             }
             filter.label_ids = Some(ids);
+        }
+        if let Some(r) = &input.custom_view {
+            if input.query.as_deref().is_some_and(|q| !q.trim().is_empty()) {
+                return Err(
+                    AppError::invalid_request("query cannot be combined with customView")
+                        .with_details(
+                            json!({ "field": "query", "reason": "conflicts_with_customView" }),
+                        ),
+                );
+            }
+            let v = super::view::view_for_list(
+                &mut *tx,
+                &snap,
+                ctx,
+                r,
+                crate::ports::repos::view::ViewModel::Initiative,
+            )
+            .await?;
+            let eval = super::view::build_eval(&mut *tx, &snap, ctx, self.clock.now(), false, true)
+                .await?;
+            let ast: lineal_domain::rules::filter::InitiativeFilter =
+                lineal_domain::rules::filter::from_json_value(&super::view::combined_filter(
+                    &v,
+                    Vec::new(),
+                ))
+                .map_err(|e| AppError::invalid_request(format!("Invalid filter: {}", e.reason)))?;
+            filter.ast = Some(Box::new(ast));
+            filter.eval = Some(eval);
         }
         let page = tx.initiatives().list(&filter, &input.page).await?;
         let views = self

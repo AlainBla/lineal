@@ -284,6 +284,95 @@ fn ids<T: Copy + Into<Uuid>>(v: &[T]) -> Vec<Uuid> {
     v.iter().map(|i| (*i).into()).collect()
 }
 
+/// Bedingungen von [`IssueRepo::list`] (nach `WHERE i.organization_id = `): Mandant, Papierkorb,
+/// Sichtbarkeit (UND, außerhalb des Benutzerfilters), flache Filter, Filterbaum und Suche.
+fn push_list_filters<'a>(
+    qb: &mut QueryBuilder<'a, Postgres>,
+    org: Uuid,
+    f: &IssueListFilter,
+) -> AppResult<()> {
+    qb.push_bind(org);
+    qb.push(" AND NOT i.trashed");
+    qb.push(" AND (i.team_id = ANY(");
+    qb.push_bind(ids(&f.team_ids));
+    qb.push(")");
+    if let Some(u) = f.shared_with {
+        qb.push(" OR i.id IN (SELECT s.issue_id FROM issue_share s WHERE s.organization_id = i.organization_id AND s.user_id = ");
+        qb.push_bind(u.0);
+        qb.push(")");
+    }
+    qb.push(")");
+    if !f.include_archived {
+        qb.push(" AND i.archived_at IS NULL");
+    }
+    match f.assignee {
+        Some(None) => {
+            qb.push(" AND i.assignee_id IS NULL");
+        }
+        Some(Some(u)) => {
+            qb.push(" AND i.assignee_id = ").push_bind(u.0);
+        }
+        None => {}
+    }
+    if let Some(u) = f.creator {
+        qb.push(" AND i.creator_id = ").push_bind(u.0);
+    }
+    if let Some(u) = f.delegate {
+        qb.push(" AND i.delegate_id = ").push_bind(u.0);
+    }
+    if let Some(s) = &f.state_ids {
+        qb.push(" AND i.state_id = ANY(")
+            .push_bind(ids(s))
+            .push(")");
+    }
+    if let Some(t) = &f.state_types {
+        let v: Vec<String> = t.iter().map(|t| t.as_str().to_owned()).collect();
+        qb.push(" AND i.state_type = ANY(").push_bind(v).push(")");
+    }
+    if let Some(l) = &f.label_ids {
+        qb.push(
+            " AND EXISTS (SELECT 1 FROM issue_to_label il WHERE il.issue_id = i.id AND il.label_id = ANY(",
+        );
+        qb.push_bind(ids(l));
+        qb.push("))");
+    }
+    if let Some(p) = f.project_id {
+        qb.push(" AND i.project_id = ").push_bind(p.0);
+    }
+    if let Some(c) = f.cycle_id {
+        qb.push(" AND i.cycle_id = ").push_bind(c.0);
+    }
+    if let Some(p) = f.parent_id {
+        qb.push(" AND i.parent_id = ").push_bind(p.0);
+    }
+    if let Some(p) = f.priority {
+        qb.push(" AND i.priority = ").push_bind(p.value() as i32);
+    }
+    if let Some(t) = f.created_after {
+        qb.push(" AND i.created_at > ").push_bind(t);
+    }
+    if let Some(t) = f.updated_after {
+        qb.push(" AND i.updated_at > ").push_bind(t);
+    }
+    if let Some(t) = f.triaged_after {
+        qb.push(" AND i.triaged_at > ").push_bind(t);
+    }
+    if let Some(ast) = &f.ast {
+        let ev = f
+            .eval
+            .as_ref()
+            .ok_or_else(|| AppError::internal("filter without evaluation context"))?;
+        let cx = crate::filter_sql::Cx::new(ev);
+        qb.push(" AND ");
+        crate::filter_sql::push_issue_filter(qb, &cx, "i", ast)?;
+        crate::filter_sql::push_triage_guard(qb, "i", ast);
+    }
+    if let Some(text) = &f.search {
+        crate::search::push_issue_search(qb, "i", text);
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl IssueRepo for PgTx {
     async fn insert(&mut self, i: &Issue) -> AppResult<Issue> {
@@ -453,88 +542,59 @@ impl IssueRepo for PgTx {
             OrderBy::CreatedAt => "i.created_at",
             OrderBy::UpdatedAt => "i.updated_at",
         };
-        let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new(format!(
-            "SELECT {}, {order_col} AS sort_key FROM issue i WHERE i.organization_id = ",
-            COLS.split(", ")
-                .map(|c| format!("i.{c}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        qb.push_bind(self.org.0);
-        qb.push(" AND NOT i.trashed");
-        qb.push(" AND (i.team_id = ANY(");
-        qb.push_bind(ids(&f.team_ids));
-        qb.push(")");
-        if let Some(u) = f.shared_with {
-            qb.push(" OR i.id IN (SELECT s.issue_id FROM issue_share s WHERE s.organization_id = i.organization_id AND s.user_id = ");
-            qb.push_bind(u.0);
-            qb.push(")");
+        let cols = COLS
+            .split(", ")
+            .map(|c| format!("i.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("");
+        let has_cte = f.eval.is_some();
+        if let Some(ev) = &f.eval {
+            crate::filter_sql::push_cte_prefix(&mut qb, ev);
         }
-        qb.push(")");
-        if !f.include_archived {
-            qb.push(" AND i.archived_at IS NULL");
-        }
-        match f.assignee {
-            Some(None) => {
-                qb.push(" AND i.assignee_id IS NULL");
+        if f.search.is_some() {
+            // Suche: erst die besten 500 Treffer nach Sortierung bestimmen (docs/05 §5.4), dann
+            // paginieren – so bleibt der Cursor stabil und die Obergrenze hart.
+            qb.push(if has_cte {
+                ", matched AS ("
+            } else {
+                "WITH matched AS ("
+            });
+            qb.push(format!(
+                "SELECT i.id, {order_col} AS sort_key FROM issue i WHERE i.organization_id = "
+            ));
+            push_list_filters(&mut qb, self.org.0, f)?;
+            qb.push(format!(
+                " ORDER BY {order_col} DESC, i.id DESC LIMIT 500) SELECT {cols}, m.sort_key \
+                 FROM matched m JOIN issue i ON i.id = m.id WHERE TRUE"
+            ));
+            if let Some(c) = &page.cursor {
+                qb.push(" AND (m.sort_key, i.id) < (");
+                qb.push_bind(c.key);
+                qb.push(", ");
+                qb.push_bind(c.id);
+                qb.push(")");
             }
-            Some(Some(u)) => {
-                qb.push(" AND i.assignee_id = ").push_bind(u.0);
+            qb.push(" ORDER BY m.sort_key DESC, i.id DESC LIMIT ");
+            qb.push_bind(page.limit + 1);
+        } else {
+            if has_cte {
+                qb.push(" ");
             }
-            None => {}
+            qb.push(format!(
+                "SELECT {cols}, {order_col} AS sort_key FROM issue i WHERE i.organization_id = "
+            ));
+            push_list_filters(&mut qb, self.org.0, f)?;
+            if let Some(c) = &page.cursor {
+                qb.push(format!(" AND ({order_col}, i.id) < ("));
+                qb.push_bind(c.key);
+                qb.push(", ");
+                qb.push_bind(c.id);
+                qb.push(")");
+            }
+            qb.push(format!(" ORDER BY {order_col} DESC, i.id DESC LIMIT "));
+            qb.push_bind(page.limit + 1);
         }
-        if let Some(u) = f.creator {
-            qb.push(" AND i.creator_id = ").push_bind(u.0);
-        }
-        if let Some(u) = f.delegate {
-            qb.push(" AND i.delegate_id = ").push_bind(u.0);
-        }
-        if let Some(s) = &f.state_ids {
-            qb.push(" AND i.state_id = ANY(")
-                .push_bind(ids(s))
-                .push(")");
-        }
-        if let Some(t) = &f.state_types {
-            let v: Vec<String> = t.iter().map(|t| t.as_str().to_owned()).collect();
-            qb.push(" AND i.state_type = ANY(").push_bind(v).push(")");
-        }
-        if let Some(l) = &f.label_ids {
-            qb.push(
-                " AND EXISTS (SELECT 1 FROM issue_to_label il WHERE il.issue_id = i.id AND il.label_id = ANY(",
-            );
-            qb.push_bind(ids(l));
-            qb.push("))");
-        }
-        if let Some(p) = f.project_id {
-            qb.push(" AND i.project_id = ").push_bind(p.0);
-        }
-        if let Some(c) = f.cycle_id {
-            qb.push(" AND i.cycle_id = ").push_bind(c.0);
-        }
-        if let Some(p) = f.parent_id {
-            qb.push(" AND i.parent_id = ").push_bind(p.0);
-        }
-        if let Some(p) = f.priority {
-            qb.push(" AND i.priority = ").push_bind(p.value() as i32);
-        }
-        if let Some(t) = f.created_after {
-            qb.push(" AND i.created_at > ").push_bind(t);
-        }
-        if let Some(t) = f.updated_after {
-            qb.push(" AND i.updated_at > ").push_bind(t);
-        }
-        if let Some(t) = f.triaged_after {
-            qb.push(" AND i.triaged_at > ").push_bind(t);
-        }
-        if let Some(c) = &page.cursor {
-            qb.push(format!(" AND ({order_col}, i.id) < ("));
-            qb.push_bind(c.key);
-            qb.push(", ");
-            qb.push_bind(c.id);
-            qb.push(")");
-        }
-        qb.push(format!(" ORDER BY {order_col} DESC, i.id DESC LIMIT "));
-        qb.push_bind(page.limit + 1);
 
         #[derive(sqlx::FromRow)]
         struct Row {

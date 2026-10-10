@@ -169,6 +169,9 @@ pub struct ProjectFilter {
     pub include_archived: bool,
     pub created_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
+    /// Filterbaum einer Custom View (WP11); setzt `eval` voraus, immer UND mit der Sichtbarkeit.
+    pub ast: Option<Box<lineal_domain::rules::filter::ProjectFilter>>,
+    pub eval: Option<super::view::FilterEval>,
 }
 
 /// Ein Projekt-Label (Lesezugriff; Verwaltung gehört WP06).

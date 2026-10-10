@@ -130,6 +130,9 @@ pub struct InitiativeFilter {
     pub updated_after: Option<DateTime<Utc>>,
     /// Sichtbarkeit: Initiativen ohne Lead-Team oder mit Lead-Team aus dieser Menge.
     pub visible_teams: Vec<TeamId>,
+    /// Filterbaum einer Custom View (WP11); setzt `eval` voraus, immer UND mit der Sichtbarkeit.
+    pub ast: Option<Box<lineal_domain::rules::filter::InitiativeFilter>>,
+    pub eval: Option<super::view::FilterEval>,
 }
 
 /// Ein Initiative-Label (Lesezugriff; Verwaltung gehört WP06).

@@ -299,14 +299,6 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
     let args = if args.is_null() { json!({}) } else { args };
     match tool {
         "list_projects" => {
-            if arg_str(&args, "customView").is_some() {
-                return Err(AppError::invalid_request(
-                    "`customView` filters are not available yet.",
-                )
-                .with_details(
-                    json!({ "path": "/customView", "reason": "custom_view_unsupported" }),
-                ));
-            }
             let now = app.clock.now();
             let time = |key: &str| {
                 arg_str(&args, key)
@@ -319,6 +311,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             let include_milestones =
                 arg_bool(&args, "includeMilestones") || fields.iter().any(|f| f == "milestones");
             let input = ListProjectsInput {
+                custom_view: arg_str(&args, "customView").map(str::to_owned),
                 team: arg_str(&args, "team").map(str::to_owned),
                 include_sub_teams: arg_bool(&args, "includeSubTeams"),
                 initiative: arg_str(&args, "initiative").map(str::to_owned),

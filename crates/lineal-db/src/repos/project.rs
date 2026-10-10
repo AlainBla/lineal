@@ -562,7 +562,12 @@ impl ProjectRepo for PgTx {
             OrderBy::CreatedAt => "p.created_at",
             OrderBy::UpdatedAt => "p.updated_at",
         };
-        let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new(format!(
+        let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("");
+        if let Some(ev) = &f.eval {
+            crate::filter_sql::push_cte_prefix(&mut qb, ev);
+            qb.push(" ");
+        }
+        qb.push(format!(
             "SELECT {PROJECT_COLS}, {order_col} AS sort_key FROM project p WHERE p.organization_id = "
         ));
         qb.push_bind(self.org.0);
@@ -576,6 +581,15 @@ impl ProjectRepo for PgTx {
         );
         qb.push_bind(visible);
         qb.push("))");
+        if let Some(ast) = &f.ast {
+            let ev = f
+                .eval
+                .as_ref()
+                .ok_or_else(|| AppError::internal("filter without evaluation context"))?;
+            let cx = crate::filter_sql::Cx::new(ev);
+            qb.push(" AND ");
+            crate::filter_sql::push_project_filter(&mut qb, &cx, "p", ast)?;
+        }
         if let Some(teams) = &f.teams {
             let ids: Vec<Uuid> = teams.iter().map(|t| t.0).collect();
             qb.push(

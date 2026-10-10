@@ -134,14 +134,6 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
     let ws = |org: &lineal_app::ports::repos::org::Org| app.workspace_url(org);
     match tool {
         "list_initiatives" => {
-            if arg_str(&args, "customView").is_some() {
-                return Err(AppError::invalid_request(
-                    "`customView` filters are not available yet.",
-                )
-                .with_details(
-                    json!({ "path": "/customView", "reason": "custom_view_unsupported" }),
-                ));
-            }
             let now = app.clock.now();
             let time = |key: &str| {
                 arg_str(&args, key)
@@ -154,6 +146,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             let subs = arg_bool(&args, "includeSubInitiatives")
                 || fields.iter().any(|f| f == "subInitiatives");
             let input = ListInitiativesInput {
+                custom_view: arg_str(&args, "customView").map(str::to_owned),
                 status: arg_str(&args, "status").map(str::to_owned),
                 owner: arg_str(&args, "owner").map(str::to_owned),
                 lead_team: arg_str(&args, "leadTeam").map(str::to_owned),

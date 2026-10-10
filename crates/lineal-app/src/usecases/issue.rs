@@ -23,9 +23,11 @@ use crate::ports::repos::issue::{
 use crate::ports::repos::label::LabelKind;
 use crate::ports::repos::team::Team;
 use crate::ports::repos::user::{OrderBy, PageCursor, PageRequest};
+use crate::ports::repos::view::ViewModel;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use crate::resolve::user::actor_user_id;
+use crate::usecases::view;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use fields::{
     LabelPlan, PlanningChange, apply_planning, change_state, convert_estimate, default_state,
@@ -140,9 +142,18 @@ pub struct UpdateIssueInput {
     pub source: HistorySource,
 }
 
-/// Filter von `list_issues` (MCP-Parameter ohne `customView`/`query`, kommen in WP11).
+/// Filter von `list_issues` (MCP-Parameter inkl. `customView` und `query`, WP11).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListIssuesInput {
+    /// Gespeicherte View (UUID, `slugId`, URL oder exakter Name): Filter und Scope der View UND
+    /// alle weiteren Parameter; Sortierung nicht aus der View (docs/05 §4.3).
+    pub custom_view: Option<String>,
+    /// Volltext in Titel/Beschreibung oder eine Kennung (auch frühere); höchstens 500 Treffer.
+    /// Nicht mit `custom_view` kombinierbar.
+    pub query: Option<String>,
+    /// Zusätzlicher Filterbaum (`IssueFilter` als JSON, z. B. aus GraphQL); wird strikt
+    /// validiert (Referenzen müssen sichtbar existieren) und per UND angewendet.
+    pub filter: Option<Value>,
     pub team: Option<String>,
     pub include_sub_teams: bool,
     /// `Some(None)` = ohne Assignee (`null` bzw. `"null"`).
@@ -1247,6 +1258,47 @@ impl App {
         }
         if let Some(p) = input.priority {
             f.priority = Some(priority_of(p)?);
+        }
+        let query = input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty());
+        if input.custom_view.is_some() && query.is_some() {
+            return Err(
+                AppError::invalid_request("query cannot be combined with customView").with_details(
+                    json!({ "field": "query", "reason": "conflicts_with_customView" }),
+                ),
+            );
+        }
+        let mut parts: Vec<Value> = Vec::new();
+        if let Some(r) = &input.custom_view {
+            let v = view::view_for_list(tx, &snap, ctx, r, ViewModel::Issue).await?;
+            parts.push(view::combined_filter(&v, Vec::new()));
+        }
+        let mut extra = None;
+        if let Some(fj) = &input.filter {
+            extra = Some(view::parse_view_filter(ViewModel::Issue, fj)?);
+        }
+        if !parts.is_empty() || extra.is_some() {
+            let eval =
+                view::build_eval(tx, &snap, ctx, self.clock.now(), extra.is_some(), true).await?;
+            if let Some((any, norm)) = extra {
+                tx.views().verify_filter_refs(&any, &eval).await?;
+                parts.push(norm);
+            }
+            let ast: lineal_domain::rules::filter::IssueFilter =
+                lineal_domain::rules::filter::from_json_value(&json!({ "and": parts })).map_err(
+                    |e| {
+                        AppError::invalid_request(format!("Invalid filter: {}", e.reason))
+                            .with_details(json!({ "path": e.path, "reason": e.reason }))
+                    },
+                )?;
+            f.ast = Some(Box::new(ast));
+            f.eval = Some(eval);
+        }
+        if let Some(q) = query {
+            f.search = Some(q.to_owned());
         }
         let page = PageRequest {
             limit: input.limit.clamp(1, 250),
