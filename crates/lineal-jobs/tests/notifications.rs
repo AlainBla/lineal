@@ -1,4 +1,5 @@
 //! WP08: Fan-out, Inbox-Aktionen, Abos, Einstellungen und Jobs gegen echte Datenbank (Seed `acme`).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Issues und Kommentare entstehen hier per SQL (WP06/WP09 liefern die Use-Cases erst parallel).
 
 use async_trait::async_trait;

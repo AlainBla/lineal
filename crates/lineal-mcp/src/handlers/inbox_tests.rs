@@ -1,7 +1,7 @@
 //! Contract-Tests für die Gruppe `inbox` gegen echte Datenbank (Seed `acme`).
 
 use crate::dispatch::dispatch;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use lineal_app::ports::Store;
 use lineal_app::{App, ErrorKind};
 use lineal_db::PgStore;

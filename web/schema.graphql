@@ -1,3 +1,16 @@
+input ChannelSettingInput {
+	category: String!
+	channel: String!
+	enabled: Boolean!
+}
+
+type IssueSubscriptionPayload {
+	success: Boolean!
+	issueId: String!
+	userId: String!
+	changed: Boolean!
+}
+
 type Mutation {
 	"""
 	Platzhalter des Scaffolds.
@@ -62,6 +75,38 @@ type Mutation {
 	"""
 	_notificationMutationReady: Boolean!
 	"""
+	Gelesen/ungelesen, Snooze/Unsnooze.
+	"""
+	notificationUpdate(id: String!, input: NotificationUpdateInput!): NotificationPayload!
+	"""
+	Alle Notifications als gelesen markieren (`filter`: all, read, completed).
+	"""
+	notificationMarkReadAll(filter: String): NotificationBatchActionPayload!
+	"""
+	Archiviert die Gruppe der Notification (`archive: false` = Undo).
+	"""
+	notificationArchive(id: String!, archive: Boolean): NotificationPayload!
+	"""
+	Archiviert alle (`filter`: all, read, completed).
+	"""
+	notificationArchiveAll(filter: String): NotificationBatchActionPayload!
+	"""
+	Issue abonnieren (`user`: anderen User hinzufügen).
+	"""
+	issueSubscribe(id: String!, user: String): IssueSubscriptionPayload!
+	"""
+	Issue-Abo beenden.
+	"""
+	issueUnsubscribe(id: String!, user: String): IssueSubscriptionPayload!
+	"""
+	Objekt-Abo anlegen oder ändern (Upsert je Ziel und Kontext).
+	"""
+	notificationSubscriptionUpdate(input: NotificationSubscriptionInput!): NotificationSubscription!
+	"""
+	Eigene Einstellungen ändern (die Inbox ist nicht abschaltbar).
+	"""
+	notificationSettingsUpdate(input: NotificationSettingsInput!): NotificationSettings!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_documentMutationReady: Boolean!
@@ -92,6 +137,119 @@ input NestTeamOptions {
 	downgradeVisibility: Boolean
 	inheritWorkflowStatuses: Boolean
 	inheritIssueEstimation: Boolean
+}
+
+"""
+`Notification`.
+"""
+type Notification {
+	id: String!
+	type: String!
+	category: String!
+	title: String!
+	subtitle: String!
+	url: String!
+	groupKey: String!
+	actorId: String
+	actorName: String
+	issueId: String
+	issueIdentifier: String
+	projectId: String
+	initiativeId: String
+	documentId: String
+	commentId: String
+	isPriority: Boolean!
+	readAt: String
+	snoozedUntilAt: String
+	unsnoozedAt: String
+	archivedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+type NotificationBatchActionPayload {
+	success: Boolean!
+	count: Int!
+}
+
+type NotificationChannelSetting {
+	category: String!
+	channel: String!
+	enabled: Boolean!
+}
+
+type NotificationConnection {
+	nodes: [Notification!]!
+	pageInfo: NotificationPageInfo!
+}
+
+type NotificationPageInfo {
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+type NotificationPayload {
+	success: Boolean!
+	notification: Notification
+}
+
+type NotificationSettings {
+	emailEnabled: Boolean!
+	emailFormat: String!
+	emailOnlyPriority: Boolean!
+	emailHoldOutsideWorkHours: Boolean!
+	emailImmediateUrgent: Boolean!
+	dueDateReminders: Boolean!
+	priorityCategories: [String!]!
+	channels: [NotificationChannelSetting!]!
+}
+
+input NotificationSettingsInput {
+	emailEnabled: Boolean
+	emailFormat: String
+	emailOnlyPriority: Boolean
+	emailHoldOutsideWorkHours: Boolean
+	emailImmediateUrgent: Boolean
+	dueDateReminders: Boolean
+	priorityCategories: [String!]
+	channels: [ChannelSettingInput!]
+}
+
+type NotificationSubscription {
+	id: String!
+	targetType: String!
+	targetId: String!
+	contextViewType: String
+	notificationSubscriptionTypes: [String!]!
+	includeSubInitiativeUpdates: Boolean!
+	active: Boolean!
+}
+
+input NotificationSubscriptionInput {
+	"""
+	`team`, `project`, `initiative`, `cycle` oder `label`.
+	"""
+	targetType: String!
+	targetId: String!
+	contextViewType: String
+	notificationSubscriptionTypes: [String!]
+	includeSubInitiativeUpdates: Boolean
+	active: Boolean
+}
+
+input NotificationUpdateInput {
+	"""
+	`true` = gelesen, `false` = ungelesen.
+	"""
+	read: Boolean
+	"""
+	Zeitpunkt (ISO-8601) zum Snoozen.
+	"""
+	snoozedUntilAt: String
+	"""
+	`true` beendet das Snoozen.
+	"""
+	unsnooze: Boolean
 }
 
 """
@@ -170,6 +328,26 @@ type Query {
 	Platzhalter des Scaffolds.
 	"""
 	_notificationReady: Boolean!
+	"""
+	Eigene Notifications, neueste zuerst (ausgeblendet: archivierte, gesnoozte, Objekte ohne Zugriff).
+	"""
+	notifications(unreadOnly: Boolean, includeSnoozed: Boolean, includeArchived: Boolean, first: Int, after: String): NotificationConnection!
+	"""
+	Eine eigene Notification.
+	"""
+	notification(id: String!): Notification!
+	"""
+	Anzahl ungelesener Gruppen (Seitenleiste).
+	"""
+	notificationsUnreadCount: Int!
+	"""
+	Eigene Benachrichtigungs-Einstellungen.
+	"""
+	notificationSettings: NotificationSettings!
+	"""
+	Eigene Objekt-Abos (Team, Projekt, Initiative, Cycle, Label).
+	"""
+	notificationSubscriptions: [NotificationSubscription!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""
