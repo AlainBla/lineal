@@ -3,8 +3,8 @@
 //!
 //! Jede Schreiboperation läuft in genau einer Transaktion inkl. History und Outbox-Event.
 
-mod fields;
-mod history;
+pub(crate) mod fields;
+pub(crate) mod history;
 mod mentions;
 mod relations;
 
@@ -658,6 +658,23 @@ impl App {
             }
         }
         history::record_created(tx, self.ids.new_uuid(), &stored, actor, input.source, now).await?;
+        // Automationen von WP12: SLA-Regeln und Triage-Verantwortung für das neue Issue.
+        {
+            let before = stored.clone();
+            crate::usecases::triage::sla::evaluate_rules(tx, &team, &mut stored, now).await?;
+            if stored.state_type == StateType::Triage {
+                crate::usecases::triage::automation::run_triage_responsibility(
+                    tx,
+                    &team,
+                    &mut stored,
+                    now,
+                )
+                .await?;
+            }
+            if stored != before {
+                stored = tx.issues().save(&stored, now).await?;
+            }
+        }
 
         // Abos: Creator, Assignee, Erwähnte
         let mentioned = match &stored.description {

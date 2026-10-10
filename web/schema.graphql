@@ -173,6 +173,13 @@ type CyclesPayload {
 	cycles: [Cycle!]!
 }
 
+"""
+Implement the DateTime<Utc> scalar
+
+The input/output is a string in RFC3339 format.
+"""
+scalar DateTime
+
 type Initiative {
 	id: String!
 	identifier: String!
@@ -623,9 +630,41 @@ type Mutation {
 	"""
 	_templateMutationReady: Boolean!
 	"""
-	Platzhalter des Scaffolds.
+	Accept: Status `defaultIssueState` oder gewählt, optionaler Kommentar.
 	"""
-	_triageMutationReady: Boolean!
+	issueTriageAccept(id: String!, input: TriageAcceptGqlInput): IssuePayload!
+	"""
+	Decline: Status `canceled`, optionaler Begründungskommentar.
+	"""
+	issueTriageDecline(id: String!, input: TriageDeclineGqlInput): IssuePayload!
+	"""
+	Als Duplikat eines anderen Issues markieren (Anhänge wandern zum kanonischen Issue).
+	"""
+	issueTriageDuplicate(id: String!, duplicateOfId: String!, comment: String): IssuePayload!
+	"""
+	Snooze bis `snoozedUntilAt` (höchstens ein Jahr).
+	"""
+	issueTriageSnooze(id: String!, snoozedUntilAt: DateTime!): IssuePayload!
+	"""
+	Beendet ein Snooze vorzeitig.
+	"""
+	issueTriageUnsnooze(id: String!): IssuePayload!
+	"""
+	„Move to team“: im Zielteam gilt die Triage-Regel erneut.
+	"""
+	issueTriageMove(id: String!, teamId: String!): IssuePayload!
+	"""
+	Setzt die Triage-Verantwortung (Personen oder Schichtplan).
+	"""
+	triageResponsibilitySet(input: TriageResponsibilityGqlInput!): Boolean!
+	"""
+	Entfernt die Triage-Verantwortung eines Teams.
+	"""
+	triageResponsibilityDelete(teamId: String!): Boolean!
+	"""
+	Legt einen Schichtplan an (Admin).
+	"""
+	timeScheduleCreate(name: String!, entries: [TimeScheduleEntryGqlInput!]!): TimeSchedule!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -1066,9 +1105,13 @@ type Query {
 	"""
 	_templateReady: Boolean!
 	"""
-	Platzhalter des Scaffolds.
+	Triage-Liste eines Teams (nicht gesnoozte, älteste zuerst).
 	"""
-	_triageReady: Boolean!
+	triageIssues(teamId: String!, includeSnoozed: Boolean, first: Int): [Issue!]!
+	"""
+	Triage-Verantwortung eines Teams: aktueller Verantwortlicher, Aktion, kommende Schichten.
+	"""
+	triageResponsibility(teamId: String!, userId: String, first: Int): TriageResponsibility!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -1206,6 +1249,84 @@ input TeamUpdateInput {
 	cyclesEnabled: Boolean
 }
 
+type TimeSchedule {
+	id: String!
+	name: String!
+	entryCount: Int!
+}
+
+input TimeScheduleEntryGqlInput {
+	userId: String
+	userEmail: String
+	startsAt: DateTime!
+	endsAt: DateTime!
+	overriddenUserId: String
+}
+
+input TriageAcceptGqlInput {
+	"""
+	`backlog`-, `unstarted`- oder `started`-Status (Default: `defaultIssueState`).
+	"""
+	stateId: String
+	priority: Int
+	comment: String
+}
+
+input TriageDeclineGqlInput {
+	"""
+	`canceled`-Status (Default: erster `canceled`-Status).
+	"""
+	stateId: String
+	priority: Int
+	comment: String
+}
+
+"""
+Wer für die Triage eines Teams verantwortlich ist.
+"""
+type TriageResponsibility {
+	teamId: String!
+	triageEnabled: Boolean!
+	"""
+	`notify` oder `assign`.
+	"""
+	action: String
+	currentUser: TriageUser
+	scheduleId: String
+	scheduleName: String
+	upcomingShifts: [TriageShift!]!
+}
+
+input TriageResponsibilityGqlInput {
+	teamId: String!
+	"""
+	`notify` (Default) oder `assign`.
+	"""
+	action: String
+	"""
+	Manuelle Auswahl (Alternative zu `scheduleId`).
+	"""
+	userIds: [String!]
+	scheduleId: String
+}
+
+"""
+Eine Schicht der Triage-Rotation.
+"""
+type TriageShift {
+	user: TriageUser!
+	startsAt: String!
+	endsAt: String!
+}
+
+"""
+Kurzform eines Users (ohne E-Mail).
+"""
+type TriageUser {
+	id: String!
+	name: String!
+}
+
 type UploadFile {
 	uploadUrl: String!
 	headers: [UploadFileHeader!]!
@@ -1282,6 +1403,10 @@ directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 Directs the executor to skip this field or fragment when the `if` argument is true.
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
 schema {
 	query: Query
 	mutation: Mutation

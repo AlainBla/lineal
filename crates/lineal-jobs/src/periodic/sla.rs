@@ -1,4 +1,6 @@
-//! Periodischer Job `sla` (WP12). Im Scaffold ein No-op.
+//! Periodischer Job `sla` (WP12): SLA-Regeln und Meldungen (docs/03 §11). Die Logik liegt in
+//! `App::run_sla`; je SLA und Schwelle wird genau einmal gemeldet (`IssueSlaSet`, `IssueSlaHighRisk`,
+//! `IssueSlaBreached`).
 
 use crate::{PeriodicJob, Schedule};
 use async_trait::async_trait;
@@ -15,10 +17,17 @@ impl PeriodicJob for SlaJob {
     }
 
     fn schedule(&self) -> Schedule {
-        Schedule::Every(Duration::from_secs(300))
+        Schedule::Every(Duration::from_secs(60))
     }
 
-    async fn run(&self, _app: &App, _now: DateTime<Utc>) -> AppResult<()> {
+    async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()> {
+        let stats = app.run_sla(now).await?;
+        if stats.processed > 0 {
+            tracing::info!(processed = stats.processed, "sla updates");
+        }
+        if !stats.errors.is_empty() {
+            tracing::warn!(errors = ?stats.errors, "sla job finished with errors");
+        }
         Ok(())
     }
 }
