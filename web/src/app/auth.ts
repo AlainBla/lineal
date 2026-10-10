@@ -23,9 +23,20 @@ export interface SessionWorkspace {
   urlKey: string;
 }
 
+/** Team, in dem der User Mitglied ist (aus `/auth/me`). */
+export interface SessionTeam {
+  id: string;
+  key: string;
+  name: string;
+  parentId: string | null;
+  cyclesEnabled: boolean;
+  triageEnabled: boolean;
+}
+
 export interface Session {
   user: SessionUser;
   workspace: SessionWorkspace;
+  teams: SessionTeam[];
 }
 
 export const SESSION_QUERY_KEY = ["session"] as const;
@@ -35,6 +46,26 @@ const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : null;
 
 /** Wandelt die Antwort von `/auth/me` in eine `Session`; `null`, wenn Pflichtfelder fehlen. */
+function parseTeams(raw: unknown): SessionTeam[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((t): SessionTeam[] => {
+    const o = rec(t);
+    const id = str(o?.id);
+    const key = str(o?.key);
+    if (!o || !id || !key) return [];
+    return [
+      {
+        id,
+        key,
+        name: str(o.name) ?? key,
+        parentId: str(o.parentId),
+        cyclesEnabled: o.cyclesEnabled === true,
+        triageEnabled: o.triageEnabled === true,
+      },
+    ];
+  });
+}
+
 export function normalizeSession(raw: unknown): Session | null {
   const root = rec(raw);
   // `/auth/me` (WP02) liefert den User auf oberster Ebene: { id, email, …, workspace }.
@@ -53,6 +84,7 @@ export function normalizeSession(raw: unknown): Session | null {
       avatarUrl: str(u.avatarUrl) ?? null,
     },
     workspace: { id: str(w?.id) ?? urlKey, name: str(w?.name) ?? urlKey, urlKey },
+    teams: parseTeams(root?.teams),
   };
 }
 

@@ -1,9 +1,11 @@
 /**
- * Sidebar-Daten (Teams, Sub-Teams, Badges). Vorerst Mock-Daten hinter einer stabilen Schnittstelle:
- * später ersetzt eine GraphQL-Abfrage (bzw. der Sync-Store) die Implementierung von
- * `useSidebarData`, die Form `SidebarData` bleibt gleich.
+ * Sidebar-Daten (Teams, Sub-Teams, Badges) hinter einer stabilen Schnittstelle; der Sync-Store
+ * (WP15) kann die Implementierung von `useSidebarData` ersetzen, die Form `SidebarData` bleibt.
  */
 import { useQuery } from "@tanstack/react-query";
+
+import { useSession } from "@/app/auth";
+import { gqlRequest } from "@/lib/graphql";
 
 export interface SidebarTeam {
   id: string;
@@ -92,12 +94,32 @@ export function flattenTeamTree(nodes: TeamNode[]): SidebarTeam[] {
   return nodes.flatMap((n) => [n.team, ...flattenTeamTree(n.children)]);
 }
 
+const UNREAD_QUERY = "query SidebarUnread { notificationsUnreadCount }";
+
+/**
+ * Teams kommen aus der Session (`/auth/me`), der Inbox-Zähler aus GraphQL. Triage- und
+ * Draft-Zähler folgen mit WP12 bzw. dem Sync-Store (WP15).
+ */
 export function useSidebarData(): SidebarQueryResult {
+  const session = useSession();
   const q = useQuery({
-    queryKey: ["sidebar-data"],
-    // TODO(WP13/14): durch GraphQL-Abfrage bzw. Sync-Store ersetzen.
-    queryFn: async (): Promise<SidebarData> => MOCK_SIDEBAR_DATA,
-    staleTime: Infinity,
+    queryKey: ["sidebar-data", session?.user.id],
+    enabled: !!session,
+    queryFn: async (): Promise<SidebarData> => {
+      let inboxUnread = 0;
+      try {
+        const res = await gqlRequest<{ notificationsUnreadCount: number }>(UNREAD_QUERY);
+        inboxUnread = res.notificationsUnreadCount;
+      } catch {
+        // Zähler ist nicht kritisch; Sidebar bleibt nutzbar.
+      }
+      return {
+        teams: (session?.teams ?? []).map((t) => ({ ...t, triageCount: 0 })),
+        inboxUnread,
+        draftsCount: 0,
+      };
+    },
+    staleTime: 30_000,
   });
   return { data: q.data, isLoading: q.isLoading, isError: q.isError };
 }

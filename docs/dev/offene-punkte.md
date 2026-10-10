@@ -1,0 +1,56 @@
+- 07: Abweichungstabelle list_templates paginiert? (aus 06)
+- 06/01/03/10: gemeinsamer DocumentContent für Rich-Text konsistent?
+- 03 vs 10: addLabels in singleSelect-Gruppe ersetzt vorhandenes Label
+- 04 vs 10: Initiative-Zyklus -> invalid_request
+- 03 vs 10: Duplicate-State umbenennen/löschen -> invalid_request
+- 03 vs 10: Auto-Close/Archive Defaults
+- 05 vs 10: Digest-Verzögerung
+- 07 vs 04: list_cycles {cycles:[...]}, flexible team ref, isActive vs isCurrent; milestone progress 0..1
+- 01/07 vs 04: Projekt summary/content (A23)
+- 09: Default-Sortierung updatedAt ok (00 sagt updatedAt)
+- GLOBAL: Sub-Team-Key ENG-WEB -> WEB (Name "Web", Parent ENG). Key-Regel ^[A-Z][A-Z0-9]{0,6}$ ohne Bindestrich; 02 Abschnitt ~Z.107-118 + Annahme 1 umschreiben. Erst nach 01/07 fertig.
+- KONFLIKT progress: 04 sagt 0..1, 07 sagt 0..100 -> vereinheitlichen auf 0..1 (wie GraphQL-Schema Float), 07 anpassen
+- 07 isActive vs isCurrent prüfen gegen 04
+- tools.json aus scratchpad/mcp07 als docs/mcp-tools.json Fixture übernehmen
+- 05->01: reason `comment`, Felder stateEnteredAt, isPriority
+- 05->10: issueDue-Job, Abo-Tabellennamen angleichen
+- 05->09: highlights, completedIssues, notificationArchiveAll, issueUnsubscribe fehlen
+- 08->09: API-Operationen Workspace-Anlage, Einladungen, previewTeamNesting/nestTeam, Unsubscribe (U7-U9)
+- 08->01: Entitäten Draft und Invitation (U6,U7)
+- 04 §6.2: Alice legt Projekt mit DES an, ist laut 02 nicht DES-Mitglied (U12)
+- 02: Alice einmal owner, einmal admin (U13) -> vereinheitlichen
+- 08: Alice muss in F2 WEB verlassen damit F6 funktioniert (U14) – prüfen
+INTEGRATION-TODO (Orchestrator):
+- /mcp und /sync laufen nicht durch lineal-api Middleware (Security-Header, Rate-Limit, Request-ID) -> in build_router auf Gesamt-Router anwenden.
+- CSRF-Schutz für Cookie-Sessions fehlt (Header-Name festlegen, z.B. X-Lineal-CSRF / Double-Submit) -> WP16/WP17.
+- X-Forwarded-For nicht ausgewertet (hinter Proxy konfigurierbar machen) -> WP17.
+- Theme-Flash: Inline-Script index.html -> WP14 oder ich.
+FÜR WP16/WP17 (Leftovers):
+- hash_token in 3 Crates (app usecases::auth, api middleware::auth, mcp auth) -> Adapter sollen app-Version nutzen (WP17).
+- api_key.team_ids im Principal-Lookup ignoriert -> WP16.
+- Nesting: Label-Merge, Cycle-Instanzen, Projektstatus-Neuauflösung fehlen; Kinder, die selbst erben, nicht nachgezogen -> WP17 oder WP07-Nachtrag.
+- GraphQL createWorkspace fehlt -> WP16.
+- CSRF Cookie-Sessions, X-Forwarded-For -> WP16/17.
+- Legacy-SSE-Transport/stdio MCP, Origin-Prüfung -> WP17 optional.
+WP08-Leftovers:
+- email_digest eigener periodic Job + Registry-Eintrag (Orchestrator) – läuft derzeit in due_reminders.
+- issueUnassignedFromYou/issueReopened (IssueUpdated ohne alte Werte) -> evtl. `previous` im Event; issueUnblocked.
+- Kommentare an Initiativen/Dokumenten/Meilensteinen/Berichten -> Notifications; Dokument-Abos; IssueTriaged-Notifications (WP12); View-/User-Abos; 1-Min-Bündelung.
+- NotificationUpdated/Archived Events fehlen -> Sync (WP15) braucht sie.
+- Placeholder _notificationReady bleibt wegen Test in graphql/mod.rs -> Orchestrator: Test generisch machen.
+WP06-Leftovers:
+- save_issue template (WP10), links (App::link_attachment aus WP09 einhängen), releases ignoriert.
+- Parent/Child-Automationen §3.4, SLA-Risikostufen -> WP12.
+- moveSubIssues, Bulk-Move, issueBatchUpdate, issueRelationDelete, Label-Merge/-Delete -> WP13 braucht evtl. Batch; sonst WP17.
+- ENG-123-Erwähnung -> related-Relation; Duplicate: Subscriber wandern -> WP17.
+- GraphQL Payload lastSyncId, Relay-Connections -> WP15 (Sync) prüfen.
+- Share/Unshare ohne Event; issueSharingEnabled Default false.
+- Issue-Seed leer -> für Web-UI-Demo Seed nötig (WP13 eigenes seed? Orchestrator).
+- get_issue.attachments: App::list_issue_attachments (WP09) einhängen.
+WP07-Leftovers:
+- update_team ruft Cycle-Generierung nicht (Job holt nach 1 min) -> WP16 Team-Lebenszyklus: App::configure_team_cycles; Nesting: CycleRepo::set_team_inherits + engine::sync_inherited.
+- WP06 soll usecases::cycle::auto_cycle_for_state nutzen (Auto-Cycle bei Statuswechsel) -> Integration Orchestrator/WP12.
+- template/customView in save_project/list_projects -> WP10/WP11.
+- Doku-Konflikte: Lead-Team-Wechsel neue P-Nummer (04 A10 anpassen); list_projects initiative rekursiv vs. 07.
+- cycleNumberBase, Kapazität, cycle_remove_moves_to_backlog fehlen.
+- GraphQL-Platzhalter _xReady: Test in graphql/mod.rs generisch machen -> Orchestrator.

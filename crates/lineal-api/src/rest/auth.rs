@@ -159,7 +159,14 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         "email": user.user.email,
         "role": user.user.role.as_str(),
         "workspace": { "id": org.id.to_string(), "name": org.name, "urlKey": org.url_key },
-        "teams": user.teams.iter().map(|t| json!({ "id": t.team.id.to_string(), "key": t.team.key, "name": t.team.name })).collect::<Vec<_>>(),
+        "teams": user.teams.iter().map(|t| json!({
+            "id": t.team.id.to_string(),
+            "key": t.team.key,
+            "name": t.team.name,
+            "parentId": t.team.parent_id.map(|p| p.to_string()),
+            "cyclesEnabled": t.team.cycles_enabled,
+            "triageEnabled": t.team.triage_enabled,
+        })).collect::<Vec<_>>(),
     });
     (StatusCode::OK, Json(body)).into_response()
 }

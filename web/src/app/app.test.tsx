@@ -23,6 +23,14 @@ import { routeTree } from "../routeTree.gen";
 const ME = {
   user: { id: "u1", displayName: "Alice", email: "alice@acme.example" },
   organization: { id: "o1", name: "Acme", urlKey: "acme" },
+  teams: MOCK_SIDEBAR_DATA.teams.map((t) => ({
+    id: t.id,
+    key: t.key,
+    name: t.name,
+    parentId: t.parentId,
+    cyclesEnabled: t.cyclesEnabled,
+    triageEnabled: t.triageEnabled,
+  })),
 };
 
 function mockFetch(authed: boolean) {
@@ -32,6 +40,11 @@ function mockFetch(authed: boolean) {
       return authed
         ? new Response(JSON.stringify(ME), { status: 200 })
         : new Response("{}", { status: 401 });
+    }
+    if (url.endsWith("/graphql")) {
+      return new Response(JSON.stringify({ data: { notificationsUnreadCount: 3 } }), {
+        status: 200,
+      });
     }
     return new Response("{}", { status: 404 });
   });

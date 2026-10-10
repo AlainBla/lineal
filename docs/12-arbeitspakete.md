@@ -278,36 +278,36 @@ Braucht ein WP eine neue Crate-Abhängigkeit, darf es **ausnahmsweise** die `[de
 ### WP10 – Dokumente und Templates
 
 **Spezifikation:** [06](06-dokumente-templates.md), [07](07-mcp-server.md) Gruppen `documents`, `templates`.
-**Eigentum:** `usecases/{document,template}.rs`, `ports/repos/{document,template}.rs`, `lineal-db/src/repos/{document,template}.rs`, Migrationen `1000`–`1099`, `graphql/{document,template}.rs`, `mcp/handlers/{documents,templates}.rs`, `testkit/src/seed/content.rs`.
+**Eigentum:** `usecases/{document,template}.rs`, `ports/repos/{document,template}.rs`, `lineal-db/src/repos/{document,template}.rs`, Migrationen `1000`–`1099`, `graphql/{document,template}.rs`, `mcp/handlers/{documents,templates}.rs`, `testkit/src/seed/{content,issues}.rs` und neues `seed::demo` (Demo-Workspace für die Web-UI, Aufruf `lineal seed --demo`; `seed::run` bleibt unverändert). In `handlers/issues.rs`/`handlers/projects.rs` bzw. den Use-Cases nur die Zweige `template` und `links` von `save_issue`/`save_project` (`links` → `App::link_attachment` aus WP09).
 **Liefert:** Dokumente mit genau einem Parent, Reparent, Snapshot-Historie, Patch; Templates (issue/project/document, Workspace/Team, Vererbung), `applyTemplate` inkl. Sub-Issues in einer Transaktion; Integration in `create_issue`/`create_project` über `template`-Parameter.
 **Tests:** Dokument mit zwei Parents → `invalid_request`; Template mit 3 Sub-Issues → lückenlose Nummern; Merge-Regeln der Beschreibung.
 
 ### WP11 – Views, Filter, Suche
 
 **Spezifikation:** [05 §1–5](05-views-suche-inbox.md), [14](14-firmenweite-sicht.md) (Backend), [10 §5](10-architektur-umsetzung.md), [07](07-mcp-server.md) Gruppe `views`, `list_issues` (`query`, `customView`).
-**Eigentum:** `usecases/view.rs`, `ports/repos/view.rs`, `lineal-db/src/repos/view.rs`, `lineal-db/src/{filter_sql.rs,search.rs}`, Migrationen `1100`–`1199`, `graphql/{view,search,overview}.rs`, `mcp/handlers/{views,workspace}.rs`, `lineal-app/src/usecases/overview.rs`, `lineal-db/src/repos/overview.rs`, `lineal-jobs/src/consumers/search_index.rs`. Darf in `repos/issue.rs` und `handlers/issues.rs` ausschließlich die Listen-/Suchfunktion erweitern.
+**Eigentum:** `usecases/view.rs`, `ports/repos/view.rs`, `lineal-db/src/repos/view.rs`, `lineal-db/src/{filter_sql.rs,search.rs}`, Migrationen `1100`–`1199`, `graphql/{view,search,overview}.rs`, `mcp/handlers/{views,workspace}.rs`, `lineal-app/src/usecases/overview.rs`, `lineal-db/src/repos/overview.rs`, `lineal-jobs/src/consumers/search_index.rs`. Darf in `repos/issue.rs`, `usecases/issue*` und `handlers/issues.rs` ausschließlich die Listen-/Suchfunktion erweitern (`query`, `customView` in `list_issues`; `customView` in `list_projects`/`list_initiatives`). Hinweis: `issue.search_vector` ist eine generierte Spalte – vor dem Index-Design die Migrationen lesen; Projekte/Dokumente brauchen ggf. eigene Suchspalten/-tabellen.
 **Liefert:** Filter-AST → SQL (alle Comparators, to-many, relative Daten, `me`), immer AND mit Sichtbarkeitsfilter; Custom Views (personal/team/workspace), Favoriten; Volltextsuche (Issues inkl. `previousIdentifiers`, Projekte, Dokumente) mit Ranking; Anzeigeoptionen-Persistenz; firmenweite Sicht: `workspaceOverview`, `workload`, `activeCycles`, MCP `get_workspace_overview`, Rollups über Sub-Teams.
 **Tests:** Filter-Beispiele aus 05 als Tabellentests; Suche findet kein Issue aus privatem Team (Review-Fokus 2); View + Zusatzfilter = AND; Abnahmekriterien 1–4 aus [14 §6](14-firmenweite-sicht.md).
 
 ### WP12 – Triage und Automationen
 
 **Spezifikation:** [03 §9–11](03-issues-workflow.md), [10 §3](10-architektur-umsetzung.md), [07](07-mcp-server.md) Gruppe `triage`.
-**Eigentum:** `usecases/triage.rs`, `ports/repos/triage.rs`, `lineal-db/src/repos/triage.rs`, Migrationen `1200`–`1299`, `graphql/triage.rs`, `mcp/handlers/triage.rs`, `lineal-jobs/src/periodic/{auto_close,auto_archive,purge,sla,triage_rotation}.rs`.
+**Eigentum:** `usecases/triage.rs`, `ports/repos/triage.rs`, `lineal-db/src/repos/triage.rs`, Migrationen `1200`–`1299`, `graphql/triage.rs`, `mcp/handlers/triage.rs`, `lineal-jobs/src/periodic/{auto_close,auto_archive,purge,sla,triage_rotation}.rs`. Zusätzlich (einziger Bearbeiter in Welle 3): `usecases/issue/fields.rs` für Parent/Child-Auto-Close (03 §3.4) und das Einhängen von `usecases::cycle::auto_cycle_for_state` in `change_state`.
 **Liefert:** Triage accept/decline/duplicate/snooze/move, Triage-Verantwortung und Rotation, Auto-Close mit Ausnahmen, Auto-Archive, Papierkorb-Purge (30 Tage), SLA-Regeln und Risikostufen, Parent/Child-Auto-Close-Automation.
 **Tests:** Auto-Close-Ausnahmen (aktiver Cycle, unfertiges Projekt, künftiges Due-Date), Decline setzt canceled + Kommentar, Rotation wechselt Schicht.
 
 ### WP13 – Web: Issues
 
 **Spezifikation:** [08](08-userflows.md) F3–F8, Screens Issue-Liste/Board/Detail/Create-Modal.
-**Eigentum:** `web/src/features/issues/**`, `web/src/routes/{team,issue,my-issues}/**`.
+**Eigentum:** `web/src/features/issues/**`, `web/src/routes/$ws/{team,issue,my-issues}/**`.
 **Liefert:** Liste und Board (Gruppierung nach Status, Drag & Drop mit `dnd-kit`), Issue-Detail mit Property-Sidebar, Activity, Sub-Issues, Relationen, Kommentaren (TipTap-Editor mit Mentions), Create-Modal (Template, „Create more“), Shortcuts S/A/P/L/E/C, Teamwechsel-Dialog, My Issues.
 **Tests:** Komponententests für Modal, Property-Picker, Board-Spaltenlogik.
 
 ### WP14 – Web: Planung, Inbox, Views, Suche, Settings
 
 **Spezifikation:** [08](08-userflows.md) F1, F2, F9–F16, [14](14-firmenweite-sicht.md) (UI), [13 §6–7](13-import-linear.md) (Import-Assistent in den Settings).
-**Eigentum:** `web/src/features/{planning,inbox,views,search,docs,settings,overview,import}/**`, `web/src/routes/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document,overview,issues,workload}/**`.
-**Liefert:** Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys); firmenweite Sicht (Overview-Dashboard, Workspace-Issues gruppiert nach Team, Roadmap-Timeline, Workload, Cycle-Übersicht); Import-Assistent (Token, Plan, Fortschritt, Bericht) gegen die in [13 §6](13-import-linear.md) definierten Operationen.
+**Eigentum:** `web/src/features/{planning,inbox,views,search,docs,settings,overview}/**`, `web/src/routes/$ws/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document,overview,issues,workload}/**` (ohne `settings/import`). Start erst nach Merge von WP11.
+**Liefert:** Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys); firmenweite Sicht (Overview-Dashboard, Workspace-Issues gruppiert nach Team, Roadmap-Timeline, Workload, Cycle-Übersicht). Der Import-Assistent gehört zu WP18.
 **Tests:** Filter-Bar erzeugt korrektes Filter-JSON; Inbox-Aktionen.
 
 ---
@@ -331,7 +331,7 @@ Braucht ein WP eine neue Crate-Abhängigkeit, darf es **ausnahmsweise** die `[de
 ### WP18 – Import aus Linear
 
 **Spezifikation:** [13](13-import-linear.md) komplett.
-**Eigentum:** neues Crate `crates/lineal-import/**` (Orchestrator trägt es beim Merge in den Workspace ein; das WP darf das Workspace-`Cargo.toml` dafür ausnahmsweise ergänzen), `usecases/import.rs`, `ports/repos/import.rs`, `lineal-db/src/repos/import.rs`, Migrationen `1800`–`1899`, `graphql/import.rs` (Orchestrator ergänzt Root), `lineal-server/src/cli/import.rs`, `lineal-jobs/src/periodic/import_runner.rs`.
+**Eigentum:** neues Crate `crates/lineal-import/**` (Orchestrator trägt es beim Merge in den Workspace ein; das WP darf das Workspace-`Cargo.toml` dafür ausnahmsweise ergänzen), `usecases/import.rs`, `ports/repos/import.rs`, `lineal-db/src/repos/import.rs`, Migrationen `1800`–`1899`, `graphql/import.rs`, `lineal-server/src/cli/import.rs`, `lineal-jobs/src/periodic/import_runner.rs`, Web: `web/src/features/import/**` und `web/src/routes/$ws/settings/import/**` (Import-Assistent: Token, Plan, Fortschritt, Bericht).
 **Liefert:** `ImportSource`-Port mit Linear-GraphQL-Adapter (Paginierung, Rate-Limit-Steuerung über Header) und CSV-Adapter, Fake-Quelle aus JSON-Fixtures, Phasen 1–8 mit Checkpoints, `import_mapping`-Upserts, Nummernübernahme und Zähler-Setzen, Markdown-Umschreibung, Datei-Download in den Blob-Store, Dry-Run, Delta-Import mit Konflikterkennung, `origin = import` für alle Events, verschlüsselte Token-Ablage, GraphQL-Operationen und CLI.
 **Tests:** Abnahmekriterien 1–6 aus [13 §9](13-import-linear.md) gegen die Fake-Quelle. **Kein Test darf gegen das echte Linear laufen.**
 

@@ -1,0 +1,36 @@
+GEMEINSAME REGELN (gelten zusätzlich zu docs/12-arbeitspakete.md "Globale Vorgaben"):
+- Du arbeitest im aktuellen Git-Worktree (Repo Lineal, Rust-Workspace + web/). Lege Branch wp/<nr>-<name> an: `git checkout -b <branch>`.
+- Lies zuerst: docs/00-konventionen.md, docs/11-implementierungsarchitektur.md (inkl. §8 Abweichungen aus dem Scaffold), docs/12-arbeitspakete.md (Globale Vorgaben, Review-Fokus, Migrationsbereiche, Gemeinsame Dateien, dein WP), dann die in deinem WP genannten Fachkapitel. Schau dir den vorhandenen Scaffold-Code an (Ports, Stubs, Tests) und folge seinen Mustern.
+- Ändere NUR Dateien aus deiner Eigentumsliste. Ausnahme: [dependencies] des eigenen Crates, Cargo.lock, web/package-lock.json, web/schema.graphql (generiert). Falls zwingend nötig, eine gemeinsame Datei minimal anfassen und im Bericht begründen.
+- Werkzeuge: `export PATH=<rusttools>/usr/bin:$PATH` (rustfmt/clippy), `export CARGO_BUILD_JOBS=4`. Postgres läuft auf 127.0.0.1:5440 (lineal/lineal/lineal), DATABASE_URL ist über .cargo/config.toml vorbelegt. Port 5432 und 8080 NICHT benutzen (fremde Dienste); für Server-Tests LINEAL_BIND mit freiem Port oder Router-Tests per oneshot. npm (kein pnpm).
+- Schema-Eigenheiten: Tabelle "user" immer in Anführungszeichen; issue.identifier/issue.state_type pflegen Trigger; updated_at und version (+1) setzt der Core; Issue mit project_id braucht project_team-Zeile; Zähler team.last_issue_number/last_project_number/last_cycle_number, organization.last_initiative_number; team_key enthält nur frühere Keys. Schema lesen: crates/lineal-db/migrations/*.sql.
+- Arbeite testgetrieben. Jede öffentliche Use-Case-Methode mind. ein #[sqlx::test]. Nur erfundene Daten (acme, ENG, WEB, DES, Alice, Bob, Carol).
+- Fertig = `bash scripts/check.sh` grün und alles committet (Conventional Commits; jede Message endet mit der Zeile `Co-Authored-By: Claude Sonnet <noreply@anthropic.com>`). Nicht pushen, nicht mergen.
+- Rufe NIEMALS Linear-MCP-Tools (mcp__claude_ai_Linear__*) auf.
+- Abschlussbericht (max. 20 Zeilen): Branch, letzter Commit-SHA, check.sh-Ergebnis, was fertig/offen ist, Dateien außerhalb der Eigentumsliste, neue Abhängigkeiten, Hinweise für nachfolgende WPs (Interfaces, die andere nutzen sollen).
+
+ZUSATZ AB WELLE 2:
+- Lies zusätzlich docs/dev/schnittstellen.md – dort stehen alle bereits vorhandenen Schnittstellen (Schema-Eigenheiten, Policy, Zähler, Paginierung, MCP-Hilfen, Web-Hilfen, Domain-Regeln). Nutze sie, statt Eigenes zu bauen.
+- Policy: PolicySnapshot::load(tx, ctx) einmal pro Use-Case; snap.visible_team_ids(), snap.require_team(ctx, Action, team_id), require_teams, require_workspace; Kurzformen policy::visible_team_ids(tx, ctx), policy::require_team(tx, ctx, Action, id). Alle benötigten Action-Varianten existieren bereits (policy/auth.rs) – KEINE neuen hinzufügen; falls wirklich eine fehlt, im Bericht melden und die nächstpassende nehmen.
+- Zähler: TeamRepo::allocate_issue_numbers(team, count) (liefert erste Nummer), next_project_number, next_cycle_number – NICHT selbst hochzählen.
+- Events: alle DomainEvent-Varianten existieren (lineal-domain/src/events.rs) – KEINE neuen hinzufügen. Schreibe Events mit `tx.outbox().push(NewEvent::from_ctx(event, ctx))` (setzt origin und actor_id). IssueCreated/IssueUpdated/CommentCreated/CommentUpdated tragen mentioned_user_ids (und IssueUpdated `changed`: camelCase-Feldnamen) – fülle sie korrekt, WP08 baut Notifications darauf.
+- Gemeinsame Dateien (dispatch.rs, events.rs, policy/auth.rs, registry.rs, graphql/mod.rs, router.rs, lib.rs, Workspace-Cargo.toml) nicht anfassen. Deine GraphQL-Felder gehören in deine graphql/<bereich>.rs; entferne dort deinen Platzhalter `_<bereich>Ready`, sobald echte Felder existieren.
+- GraphQL-Resolver: lineal_api::context::request_ctx(ctx) + GqlResultExt::gql(ctx). MCP-Handler: Hilfen aus lineal_mcp::{envelope, fields, error}; Eingaben sind schon gegen das Snapshot-Schema validiert.
+- Seed-Daten: Nur das eigene seed-Modul (falls in deiner Eigentumsliste) – sonst Testdaten in den eigenen Tests anlegen (lineal_testkit::seed::run + eigene Inserts).
+- Wenn die Zeit knapp wird: Kernfunktion und Sicherheit (Sichtbarkeit/Rechte/Scopes) vor Vollständigkeit; im Bericht klar auflisten, was fehlt.
+
+SICHERHEITS-CHECKLISTE (aus den Review-Funden der Wellen 1–2, Pflicht für jeden Use-Case):
+1. Jeder Lese- UND Schreibpfad (GraphQL, MCP, REST, Batch, Job) läuft durch dieselbe zentrale Prüfung: Sichtbarkeit (visible_team_ids → sonst not_found) und Recht (policy::require_* mit passender Action) und Scope (write für Schreiben). Keine Geschwisterpfade ohne Prüfung.
+2. Referenzierte Objekte (Assignee, Labels, Projekt, Cycle, Parent, Relation-Gegenstück, Dokument-Parent, Attachment-Issue …) werden genauso geprüft wie das Hauptobjekt – inkl. Schreibrecht, wenn das Gegenstück mitverändert wird.
+3. Namensauflösung, Fehlermeldungen, Kandidatenlisten, Zähler und Aggregate dürfen nichts über unsichtbare Objekte verraten.
+4. Rich Text (Beschreibung, Kommentar, Dokument, Update-Body) beim Speichern mit lineal_domain::rules::markdown::sanitize bereinigen; Links/URLs nur über markdown::is_safe_url; Farben ^#[0-9A-Fa-f]{6}$; Icons ^[A-Za-z0-9_:-]{1,64}$; Längenlimits durchsetzen.
+5. Alle Abfragen mit organization_id und – bei persönlichen Daten (Notifications, Drafts, Favoriten, Views) – user_id; fremde IDs → not_found.
+6. Keine E-Mail-Adressen fremder User in Antworten außer dort, wo die Spezifikation es ausdrücklich verlangt (Admin-Sichten).
+7. Arithmetik auf Benutzereingaben (Dauern, Limits, Offsets) geprüft (checked_*), keine Panics; Eingabegrößen begrenzen.
+
+ZUSATZ AB WELLE 3:
+- Pfade: Diese Datei liegt im Repo unter docs/dev/agent-briefing.md; vorhandene Schnittstellen: docs/dev/schnittstellen.md; bekannte offene Punkte: docs/dev/offene-punkte.md.
+- check.sh-Fallback: Wenn die Sandbox `bash scripts/check.sh` blockiert, ALLE Schritte einzeln ausführen – auch die Web-Schritte: cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -q -p lineal-server -- schema-export; cd web && npm ci && npm run typecheck && npm run lint && npm test.
+- Seed-Regel: `seed::run` (gemeinsame Test-Fixture) NICHT erweitern – das hat in Welle 2 Tests anderer Pakete gebrochen. Demo-Daten nur in `seed::demo` (Eigentümer WP10, Aufruf `lineal seed --demo`). Testeigene Daten: Nummern ≥ 100 bzw. eindeutige Namen, keine Überschneidung mit Seed-Cycles (ggf. im Test vorher löschen).
+- Web: `web/package.json` (dependencies) darfst du ergänzen; Lockfile-Konflikte löst der Orchestrator. Routen liegen unter `web/src/routes/$ws/<bereich>/…` (Layout `routes/$ws.tsx` existiert, gehört dem Orchestrator). Shell-Hooks: `ui-state.createIssueOpen` (Aktion `issue.create`, Taste c), `useActions`, `useShortcutContext("list"|"issue"|"modal")`, `nav.teamPaths()/workspacePaths()`, `useSession()` (enthält `teams`), `gqlRequest` + generierte Typen aus `src/gql/graphql.ts` (aus web/schema.graphql). Programmiere gegen das, was web/schema.graphql tatsächlich enthält, nicht gegen docs/09 (Listen sind keine Relay-Connections, Payloads ohne lastSyncId).
+- Abschlussbericht zusätzlich mit Abschnitt "Doku-Widersprüche, die ich entschieden habe" (Stelle in docs + Entscheidung).

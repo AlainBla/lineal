@@ -90,6 +90,7 @@ describe("auth client", () => {
     ).toEqual({
       user: { id: "u1", name: "alice", email: "alice@acme.example", avatarUrl: null },
       workspace: { id: "o1", name: "Acme", urlKey: "acme" },
+      teams: [],
     });
     expect(normalizeSession({})).toBeNull();
   });
@@ -105,6 +106,7 @@ describe("auth client", () => {
     ).toEqual({
       user: { id: "u1", email: "bob@acme.example", name: "bob", avatarUrl: null },
       workspace: { id: "w1", name: "Acme", urlKey: "acme" },
+      teams: [],
     });
   });
 });
