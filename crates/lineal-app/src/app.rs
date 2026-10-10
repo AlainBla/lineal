@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub base_url: String,
     pub session_secret: String,
     pub blob_dir: PathBuf,
+    /// Erlaubte Origins für Cookie-Sessions (CSRF). Leer = Origin von `base_url`.
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -18,6 +20,7 @@ impl Default for AppConfig {
             base_url: "http://localhost:8080".into(),
             session_secret: "change-me-32-bytes-minimum-xxxxxxxx".into(),
             blob_dir: PathBuf::from("./var/blobs"),
+            allowed_origins: Vec::new(),
         }
     }
 }

@@ -17,6 +17,17 @@ pub struct Config {
     /// Entwicklungsmodus (GraphiQL, lockere Defaults).
     pub dev: bool,
     pub db_max_connections: u32,
+    /// `LINEAL_ALLOWED_ORIGINS` (Komma-Liste); leer = Origin von `base_url`.
+    pub allowed_origins: Vec<String>,
+}
+
+fn csv(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().trim_end_matches('/').to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// 256 Bit Zufall (zwei UUIDv4) als Hex – nur für den Dev-Modus ohne gesetztes Secret.
@@ -50,6 +61,7 @@ impl Config {
         if session_secret == DEFAULT_SESSION_SECRET && !dev {
             bail!("LINEAL_SESSION_SECRET still has the example value from .env.example");
         }
+        let allowed_origins = csv(get("LINEAL_ALLOWED_ORIGINS"));
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -62,6 +74,7 @@ impl Config {
                 .parse()
                 .context("LINEAL_BIND must be host:port")?,
             dev,
+            allowed_origins,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())
                 .transpose()

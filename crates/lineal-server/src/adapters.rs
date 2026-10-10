@@ -103,6 +103,7 @@ pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
             base_url: config.base_url.clone(),
             session_secret: config.session_secret.clone(),
             blob_dir: config.blob_dir.clone(),
+            allowed_origins: config.allowed_origins.clone(),
         },
     })
 }

@@ -83,6 +83,15 @@ fn gql(auth: Option<(&str, &str)>, query: &str) -> Request<Body> {
         .unwrap()
 }
 
+/// Browser-typische Header einer Same-Origin-Anfrage der Web-App (CSRF-Schutz, Basis-URL
+/// `http://localhost:8080` ist der Default der Test-App).
+fn same_origin(mut req: Request<Body>) -> Request<Body> {
+    let h = req.headers_mut();
+    h.insert("origin", "http://localhost:8080".parse().unwrap());
+    h.insert("x-lineal-csrf", "1".parse().unwrap());
+    req
+}
+
 fn api(app: Arc<App>) -> Router {
     lineal_api::router(app, false)
 }
@@ -169,7 +178,7 @@ async fn unauthenticated_graphql_is_401_with_code() {
         Some(("authorization", "lin_api_unknown")),
         Some(("cookie", "lineal_session=bogus")),
     ] {
-        let r = send(&router, gql(auth, "{ __typename }")).await;
+        let r = send(&router, same_origin(gql(auth, "{ __typename }"))).await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{auth:?}");
         let v = r.json();
         assert_eq!(v["errors"][0]["extensions"]["code"], "unauthenticated");
@@ -183,6 +192,64 @@ async fn unauthenticated_graphql_is_401_with_code() {
 }
 
 #[tokio::test]
+async fn csrf_protects_cookie_sessions_but_not_api_keys() {
+    let router = api(app_with_keys());
+    let cookie = Some(("cookie", "lineal_session=session-token"));
+    let q = "{ __typename }";
+    // gleiche Origin + Header: ok
+    let r = send(&router, same_origin(gql(cookie, q))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    // fremde Origin: 403
+    let mut cross = same_origin(gql(cookie, q));
+    cross
+        .headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    let r = send(&router, cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+    assert_eq!(r.json()["error"], "forbidden");
+    // Origin ok, aber ohne CSRF-Header: 403
+    let mut no_header = same_origin(gql(cookie, q));
+    no_header.headers_mut().remove("x-lineal-csrf");
+    assert_eq!(send(&router, no_header).await.status, StatusCode::FORBIDDEN);
+    // Header, aber ohne Origin/Referer: 403
+    let mut no_origin = same_origin(gql(cookie, q));
+    no_origin.headers_mut().remove("origin");
+    assert_eq!(send(&router, no_origin).await.status, StatusCode::FORBIDDEN);
+    // Referer ersetzt Origin
+    let mut referer = same_origin(gql(cookie, q));
+    referer.headers_mut().remove("origin");
+    referer.headers_mut().insert(
+        "referer",
+        "http://localhost:8080/acme/inbox".parse().unwrap(),
+    );
+    assert_eq!(send(&router, referer).await.status, StatusCode::OK);
+    // API-Key ohne Header und ohne Origin: ok
+    let r = send(&router, gql(Some(("authorization", KEY_RW)), q)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    // Logout per Cookie braucht ebenfalls Origin + Header
+    let logout = |same: bool| {
+        let mut r = Request::builder()
+            .method(Method::POST)
+            .uri("/auth/logout")
+            .header("cookie", "lineal_session=session-token")
+            .body(Body::empty())
+            .unwrap();
+        if same {
+            r = same_origin(r);
+        }
+        r
+    };
+    assert_eq!(
+        send(&router, logout(false)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        send(&router, logout(true)).await.status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn token_sources_all_authenticate() {
     let router = api(app_with_keys());
     for auth in [
@@ -193,7 +260,8 @@ async fn token_sources_all_authenticate() {
             "theme=dark; lineal_session=session-token".to_owned(),
         ),
     ] {
-        let r = send(&router, gql(Some((auth.0, &auth.1)), "{ __typename }")).await;
+        let req = same_origin(gql(Some((auth.0, &auth.1)), "{ __typename }"));
+        let r = send(&router, req).await;
         assert_eq!(r.status, StatusCode::OK, "{auth:?}: {}", r.body);
         assert_eq!(r.json()["data"]["__typename"], "Query");
         assert!(r.headers.contains_key("x-ratelimit-requests-limit"));

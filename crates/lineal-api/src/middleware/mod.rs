@@ -2,6 +2,7 @@
 //! CORS (nur dev), Auth zu `RequestCtx`, Rate-Limit. Reihenfolge von außen nach innen.
 
 pub mod auth;
+pub mod csrf;
 pub mod gql;
 pub mod request_id;
 
@@ -20,6 +21,8 @@ pub struct PlatformConfig {
     pub security: SecurityConfig,
     /// Dev: erlaubte Ursprünge des Vite-Dev-Servers. Leer = kein CORS.
     pub cors_origins: Vec<String>,
+    /// Erlaubte Origins für Cookie-Sessions (CSRF, [`csrf`]).
+    pub allowed_origins: Vec<String>,
 }
 
 impl PlatformConfig {
@@ -31,6 +34,10 @@ impl PlatformConfig {
                 hsts: app.config.base_url.starts_with("https://"),
                 dev,
             },
+            allowed_origins: csrf::effective_origins(
+                &app.config.allowed_origins,
+                &app.config.base_url,
+            ),
             cors_origins: if dev {
                 vec![
                     "http://localhost:5173".into(),
@@ -83,6 +90,7 @@ fn cors(origins: &[String]) -> CorsLayer {
             header::CONTENT_TYPE,
             header::ACCEPT,
             HeaderName::from_static("x-request-id"),
+            HeaderName::from_static(csrf::CSRF_HEADER),
         ])
         .expose_headers(exposed)
 }
@@ -106,7 +114,8 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
     let mut router = router
         .layer(Extension(app))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
-        .layer(from_fn_with_state(platform, auth::middleware));
+        .layer(from_fn_with_state(platform.clone(), auth::middleware))
+        .layer(from_fn_with_state(platform, csrf::middleware));
     if !cors_origins.is_empty() {
         router = router.layer(cors(&cors_origins));
     }

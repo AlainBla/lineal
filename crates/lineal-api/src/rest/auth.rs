@@ -249,10 +249,20 @@ mod tests {
         assert_eq!(body["role"], "owner");
         assert_eq!(body["workspace"]["urlKey"], "acme");
 
+        // Ohne Origin/CSRF-Header lehnt der Schutz für Cookie-Sessions ab.
+        let blocked = Request::builder()
+            .method("POST")
+            .uri("/auth/logout")
+            .header("cookie", &pair)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(&r, blocked).await.0, StatusCode::FORBIDDEN);
         let out = Request::builder()
             .method("POST")
             .uri("/auth/logout")
             .header("cookie", &pair)
+            .header("origin", "http://localhost:8080")
+            .header("x-lineal-csrf", "1")
             .body(Body::empty())
             .unwrap();
         let (status, headers, _) = send(&r, out).await;
