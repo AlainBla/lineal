@@ -1,0 +1,13 @@
+# Nur das, was der Build braucht (Dockerfile kopiert gezielt).
+target
+**/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/src/routeTree.gen.ts
+var
+.git
+.claude
+.env
+.env.*
+*.log
