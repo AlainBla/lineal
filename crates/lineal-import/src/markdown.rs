@@ -34,6 +34,8 @@ pub struct RewriteCtx {
     pub target_ws: String,
     /// Linear-Team-Key -> Lineal-Team-Key (nur abweichende).
     pub key_map: HashMap<String, String>,
+    /// Präfix der Lineal-Asset-URLs (`{base}/assets/`); importierter Text darf sie nie enthalten.
+    pub asset_prefix: String,
     /// Linear-Benutzername (klein) -> Lineal-`display_name`.
     pub users: HashMap<String, String>,
 }
@@ -62,8 +64,15 @@ impl RewriteCtx {
 
     /// Schreibt Linear-Elemente und -Links um, bereinigt und kürzt auf `max_chars`.
     pub fn rewrite(&self, md: &str, max_chars: usize) -> Rewritten {
+        // Importierter Text darf keine Lineal-Asset-Schlüssel (und damit keine Blobs anderer
+        // Objekte/Workspaces) einschleusen: solche Pfade werden entschärft.
+        let md = if self.asset_prefix.is_empty() {
+            std::borrow::Cow::Borrowed(md)
+        } else {
+            std::borrow::Cow::Owned(md.replace(self.asset_prefix.as_str(), "removed-asset-link:"))
+        };
         let mut text = ISSUE_TAG
-            .replace_all(md, |c: &Captures| self.map_identifier(&c[1]))
+            .replace_all(&md, |c: &Captures| self.map_identifier(&c[1]))
             .into_owned();
         if !self.source_ws.is_empty() {
             let ws = regex::escape(&self.source_ws);
@@ -139,6 +148,7 @@ mod tests {
 
     fn ctx() -> RewriteCtx {
         RewriteCtx {
+            asset_prefix: String::new(),
             source_ws: "acme".into(),
             target_base: "https://lineal.example.com".into(),
             target_ws: "acme".into(),
@@ -185,6 +195,17 @@ mod tests {
         assert!(!out.text.contains("onerror"));
         assert!(out.unknown_tags.contains("linear-image"));
         assert!(out.unknown_tags.contains("script"));
+    }
+
+    #[test]
+    fn injected_lineal_asset_paths_are_neutralized() {
+        let mut c = ctx();
+        c.asset_prefix = "https://lineal.example.com/assets/".into();
+        let out = c.rewrite(
+            "![x](https://lineal.example.com/assets/other-org/aaa/bbb) <img src=\"https://lineal.example.com/assets/k\">",
+            1000,
+        );
+        assert!(!out.text.contains("lineal.example.com/assets/"), "{}", out.text);
     }
 
     #[test]

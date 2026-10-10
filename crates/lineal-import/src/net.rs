@@ -11,7 +11,6 @@ use url::Url;
 
 /// Standard-Größenlimit je Datei (wie Uploads: 50 MB).
 pub const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_REDIRECTS: usize = 3;
 
 /// Erlaubte Content-Types (Präfix-Vergleich auf den Typ ohne Parameter). Bewusst ohne
 /// `text/html` und `image/svg+xml` (aktive Inhalte).
@@ -137,8 +136,8 @@ impl UrlPolicy {
 
     /// Lädt die Datei (siehe Moduldoku). Fehlertexte enthalten weder Token noch Antwortinhalt.
     pub async fn fetch(&self, raw_url: &str, auth_header: Option<&str>) -> SourceResult<Downloaded> {
-        let mut url = self.check_url(raw_url)?;
-        for _ in 0..=MAX_REDIRECTS {
+        let url = self.check_url(raw_url)?;
+        {
             let (host, addrs) = self.resolve(&url).await?;
             let client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -158,16 +157,9 @@ impl UrlPolicy {
                 .map_err(|_| SourceError::Transport("download request failed".into()))?;
             let status = resp.status();
             if status.is_redirection() {
-                let loc = resp
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| SourceError::Rejected("redirect without location".into()))?;
-                let next = url
-                    .join(loc)
-                    .map_err(|_| SourceError::Rejected("invalid redirect".into()))?;
-                url = self.check_url(next.as_str())?;
-                continue;
+                // Redirects werden nie gefolgt: weder Token noch Server-Rechte dürfen über eine
+                // Weiterleitung an andere Ziele gelangen.
+                return Err(SourceError::Rejected("redirects are not followed".into()));
             }
             if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
                 return Err(SourceError::Auth);
@@ -206,7 +198,6 @@ impl UrlPolicy {
                     .to_ascii_lowercase(),
             });
         }
-        Err(SourceError::Rejected("too many redirects".into()))
     }
 }
 

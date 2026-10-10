@@ -33,6 +33,13 @@ pub(crate) struct Stored {
     pub filename: String,
 }
 
+/// Nur `https://uploads.linear.app/…` (exakter Host) gilt als herunterladbarer Upload.
+fn is_upload_url(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .is_some_and(|u| u.scheme() == "https" && u.host_str() == Some(UPLOAD_HOST))
+}
+
 fn filename_of(url: &str) -> String {
     let last = url
         .split(['?', '#'])
@@ -192,7 +199,7 @@ impl Session<'_, '_> {
                 .items
                 .iter()
                 .filter_map(|v| N(v).text("url"))
-                .filter(|u| u.contains(UPLOAD_HOST))
+                .filter(|u| is_upload_url(u))
                 .map(str::to_owned)
                 .collect();
             let stored = if self.dry { HashMap::new() } else { Self::store_files(self.eng, self.org, urls).await };
@@ -220,6 +227,11 @@ impl Session<'_, '_> {
         let Some(url) = n.text("url").filter(|u| u.len() <= 2048) else {
             return Err(AppError::invalid_request("attachment without a usable url"));
         };
+        if url.starts_with(&self.eng.app.asset_prefix()) {
+            self.counters("Attachment").skipped += 1;
+            self.note("warning", "Attachment", Some(&src), "the attachment points to a Lineal asset path; skipped");
+            return Ok(());
+        }
         if !is_safe_url(url) {
             self.counters("Attachment").skipped += 1;
             self.note("warning", "Attachment", Some(&src), "the attachment URL scheme is not allowed; skipped");
@@ -246,7 +258,7 @@ impl Session<'_, '_> {
             ("created_at", jts(Some(created))),
             ("updated_at", jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created)))),
         ]);
-        if url.contains(UPLOAD_HOST) {
+        if is_upload_url(url) {
             match stored.get(url) {
                 Some(Ok(s)) => {
                     r.insert("url".into(), json!(format!("{}{}", self.eng.app.asset_prefix(), s.key)));
@@ -305,6 +317,7 @@ impl Session<'_, '_> {
                 let mut urls: Vec<String> = rows
                     .iter()
                     .flat_map(|(_, _, body)| UPLOAD_URL.find_iter(body).map(|m| m.as_str().to_owned()))
+                    .filter(|u| is_upload_url(u))
                     .collect();
                 urls.sort();
                 urls.dedup();

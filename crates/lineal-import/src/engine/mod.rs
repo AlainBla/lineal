@@ -714,6 +714,20 @@ impl Session<'_, '_> {
     /// Rewrite für Markdown inkl. Bericht über unbekannte Elemente.
     pub(crate) fn md(&mut self, ty: &str, id: &str, text: Option<&str>, max: usize) -> Option<String> {
         let text = text?;
+        // Externe Bild-URLs werden nie abgerufen (kein Server-Request aus importiertem Inhalt).
+        let external = text
+            .match_indices("](http")
+            .filter(|(i, _)| text[..*i].rfind("![").is_some())
+            .filter(|(i, _)| !text[*i..].starts_with("](https://uploads.linear.app/"))
+            .count();
+        if external > 0 {
+            self.note(
+                "info",
+                ty,
+                Some(id),
+                format!("{external} external image/link URL(s) are kept as links and are never fetched by the import"),
+            );
+        }
         let out = self.rewrite.rewrite(text, max);
         for t in &out.unknown_tags {
             if self.reported_tags.insert(t.clone()) {
@@ -792,6 +806,7 @@ impl Session<'_, '_> {
         let mut rewrite = RewriteCtx {
             source_ws: ws.url_key.clone(),
             target_base: self.eng.app.config.base_url.trim_end_matches('/').to_owned(),
+            asset_prefix: self.eng.app.asset_prefix(),
             ..Default::default()
         };
         let mut tx = self.eng.app.store.begin(self.org).await?;

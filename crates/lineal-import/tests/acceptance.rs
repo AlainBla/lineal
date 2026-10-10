@@ -826,3 +826,42 @@ async fn csv_import_end_to_end(pool: PgPool) {
     let (entries, _) = e.app.import_report(&e.alice_ctx(), run.id, Some("info"), 50, 0).await.unwrap();
     assert!(entries.iter().any(|r| r.message.contains("CSV import")), "missing data is reported");
 }
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn imported_text_cannot_make_the_server_fetch_or_embed_foreign_resources(pool: PgPool) {
+    let e = env(pool).await;
+    let source = fake();
+    let own_asset = format!("{}some-other-org/aaa/bbb", e.app.asset_prefix());
+    source.patch(
+        SourceEntity::Issues,
+        "i-ENG-1",
+        &json!({ "description": format!(
+            "![meta](http://169.254.169.254/latest/meta-data) ![evil](https://evil.example.com/a.png) ![lan](https://10.0.0.5/x.png) \
+             ![inj]({own_asset}) https://uploads.linear.app.evil.example.com/x.png"
+        ) }),
+    );
+    source.patch(
+        SourceEntity::Attachments,
+        "at-1",
+        &json!({ "url": own_asset }),
+    );
+    let (run, out) = e.import_all(&source, ImportStartInput::default()).await;
+    assert_eq!(out, RunOutcome::Completed);
+    // Kein einziger Abruf außer den echten Linear-Uploads aus den Fixtures.
+    for u in source.downloads() {
+        assert!(u.starts_with("https://uploads.linear.app/acme/"), "unexpected download {u}");
+    }
+    let d: String = sqlx::query_scalar("SELECT description FROM issue WHERE identifier = 'ENG-1'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert!(!d.contains(&e.app.asset_prefix()), "injected asset path must be neutralized: {d}");
+    // Kein Anhang verweist auf einen Lineal-Asset-Pfad, der nicht aus dem Import selbst stammt.
+    assert_eq!(
+        e.count(&format!("SELECT count(*) FROM attachment WHERE url = '{own_asset}'")).await,
+        0
+    );
+    let (entries, _) = e.app.import_report(&e.alice_ctx(), run, None, 500, 0).await.unwrap();
+    assert!(entries.iter().any(|r| r.message.contains("never fetched")), "reported");
+    assert!(entries.iter().any(|r| r.message.contains("Lineal asset path")));
+}
