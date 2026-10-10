@@ -80,16 +80,20 @@ pub(crate) fn parse_time_filter(
             let n: i64 = num.parse().map_err(|_| bad())?;
             num.clear();
             any = true;
-            total += match (c, in_time) {
-                ('Y', false) => Duration::days(365 * n),
-                ('M', false) => Duration::days(30 * n),
-                ('W', false) => Duration::weeks(n),
-                ('D', false) => Duration::days(n),
-                ('H', true) => Duration::hours(n),
-                ('M', true) => Duration::minutes(n),
-                ('S', true) => Duration::seconds(n),
+            // Geprüfte Arithmetik: übergroße Angaben (z. B. `-P99999999999Y`) sind ein
+            // Eingabefehler und dürfen keinen Überlauf/Panic auslösen.
+            let part = match (c, in_time) {
+                ('Y', false) => n.checked_mul(365).and_then(Duration::try_days),
+                ('M', false) => n.checked_mul(30).and_then(Duration::try_days),
+                ('W', false) => Duration::try_weeks(n),
+                ('D', false) => Duration::try_days(n),
+                ('H', true) => Duration::try_hours(n),
+                ('M', true) => Duration::try_minutes(n),
+                ('S', true) => Duration::try_seconds(n),
                 _ => return Err(bad()),
-            };
+            }
+            .ok_or_else(bad)?;
+            total = total.checked_add(&part).ok_or_else(bad)?;
         }
         if !num.is_empty() {
             return Err(bad());
@@ -98,7 +102,12 @@ pub(crate) fn parse_time_filter(
     if !any {
         return Err(bad());
     }
-    Ok(if negative { now - total } else { now + total })
+    if negative {
+        now.checked_sub_signed(total)
+    } else {
+        now.checked_add_signed(total)
+    }
+    .ok_or_else(bad)
 }
 
 fn filter_hash(tool: &str, args: &Value) -> String {
@@ -337,6 +346,19 @@ mod tests {
         assert!(parse_time_filter("f", "2026-10-01T00:00:00.000Z", now).is_ok());
         for bad in ["", "yesterday", "P", "-P1X", "P1"] {
             assert!(parse_time_filter("f", bad, now).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn oversized_durations_are_rejected_without_panic() {
+        let now = Utc::now();
+        for raw in [
+            "-P99999999999Y",
+            "P9223372036854775807D",
+            "-PT9223372036854775807S",
+            "P99999999999999W",
+        ] {
+            assert!(parse_time_filter("createdAt", raw, now).is_err(), "{raw}");
         }
     }
 
