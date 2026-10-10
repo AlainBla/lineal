@@ -197,8 +197,14 @@ pub fn denied_error(d: &Decision, what: &str) -> AppError {
 
 fn client_ip(req: &Request) -> String {
     req.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(|| "unknown".to_owned(), |c| c.0.ip().to_string())
+        .get::<crate::client_ip::ClientIp>()
+        .map(|c| c.0)
+        .or_else(|| {
+            req.extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|c| c.0.ip())
+        })
+        .map_or_else(|| "unknown".to_owned(), |ip| ip.to_string())
 }
 
 fn exempt(path: &str) -> bool {

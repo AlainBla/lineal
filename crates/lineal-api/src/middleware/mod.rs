@@ -23,6 +23,8 @@ pub struct PlatformConfig {
     pub cors_origins: Vec<String>,
     /// Erlaubte Origins für Cookie-Sessions (CSRF, [`csrf`]).
     pub allowed_origins: Vec<String>,
+    /// Vertrauenswürdige Proxys für `X-Forwarded-For` ([`crate::client_ip`]).
+    pub trusted_proxies: Vec<crate::client_ip::Cidr>,
 }
 
 impl PlatformConfig {
@@ -38,6 +40,7 @@ impl PlatformConfig {
                 &app.config.allowed_origins,
                 &app.config.base_url,
             ),
+            trusted_proxies: crate::client_ip::parse_list(&app.config.trusted_proxies),
             cors_origins: if dev {
                 vec![
                     "http://localhost:5173".into(),
@@ -110,6 +113,7 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
     };
     let security = platform.cfg.security;
     let cors_origins = platform.cfg.cors_origins.clone();
+    let trusted = Arc::new(platform.cfg.trusted_proxies.clone());
     // `layer` umhüllt: zuletzt hinzugefügt = äußerste Schicht.
     let mut router = router
         .layer(Extension(app))
@@ -122,4 +126,5 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
     router
         .layer(from_fn_with_state(security, security_headers::middleware))
         .layer(from_fn(request_id::middleware))
+        .layer(from_fn_with_state(trusted, crate::client_ip::middleware))
 }

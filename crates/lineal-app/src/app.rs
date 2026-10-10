@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub blob_dir: PathBuf,
     /// Erlaubte Origins für Cookie-Sessions (CSRF). Leer = Origin von `base_url`.
     pub allowed_origins: Vec<String>,
+    /// CIDR-Liste vertrauenswürdiger Proxys (`X-Forwarded-For` nur von diesen Peers).
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -21,6 +23,7 @@ impl Default for AppConfig {
             session_secret: "change-me-32-bytes-minimum-xxxxxxxx".into(),
             blob_dir: PathBuf::from("./var/blobs"),
             allowed_origins: Vec::new(),
+            trusted_proxies: Vec::new(),
         }
     }
 }

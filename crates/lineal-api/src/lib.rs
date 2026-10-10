@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blob;
+pub mod client_ip;
 pub mod context;
 pub mod error;
 pub mod graphql;

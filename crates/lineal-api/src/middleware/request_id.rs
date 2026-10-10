@@ -33,9 +33,15 @@ pub fn generate() -> String {
 pub async fn middleware(mut req: Request, next: Next) -> Response {
     let id = generate();
     req.extensions_mut().insert(RequestId(id.clone()));
+    let client_ip = req
+        .extensions()
+        .get::<crate::client_ip::ClientIp>()
+        .map(|c| c.0.to_string())
+        .unwrap_or_default();
     let span = tracing::info_span!(
         "http",
         request_id = %id,
+        client_ip = %client_ip,
         method = %req.method(),
         path = %req.uri().path(),
     );

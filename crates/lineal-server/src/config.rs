@@ -19,6 +19,8 @@ pub struct Config {
     pub db_max_connections: u32,
     /// `LINEAL_ALLOWED_ORIGINS` (Komma-Liste); leer = Origin von `base_url`.
     pub allowed_origins: Vec<String>,
+    /// `LINEAL_TRUSTED_PROXIES` (CIDR-Liste); leer = `X-Forwarded-For` wird ignoriert.
+    pub trusted_proxies: Vec<String>,
 }
 
 fn csv(value: Option<String>) -> Vec<String> {
@@ -62,6 +64,12 @@ impl Config {
             bail!("LINEAL_SESSION_SECRET still has the example value from .env.example");
         }
         let allowed_origins = csv(get("LINEAL_ALLOWED_ORIGINS"));
+        let trusted_proxies = csv(get("LINEAL_TRUSTED_PROXIES"));
+        for cidr in &trusted_proxies {
+            if lineal_api::client_ip::Cidr::parse(cidr).is_none() {
+                bail!("LINEAL_TRUSTED_PROXIES: invalid CIDR {cidr:?}");
+            }
+        }
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -75,6 +83,7 @@ impl Config {
                 .context("LINEAL_BIND must be host:port")?,
             dev,
             allowed_origins,
+            trusted_proxies,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())
                 .transpose()
@@ -129,6 +138,26 @@ mod tests {
             _ => None,
         };
         assert!(Config::from_lookup(with_secret).is_ok());
+    }
+
+    #[test]
+    fn origins_and_trusted_proxies_are_parsed_and_validated() {
+        let with = |origins: &'static str, proxies: &'static str| {
+            Config::from_lookup(move |k| match k {
+                "LINEAL_DEV" => Some("1".into()),
+                "LINEAL_ALLOWED_ORIGINS" => Some(origins.into()),
+                "LINEAL_TRUSTED_PROXIES" => Some(proxies.into()),
+                _ => None,
+            })
+        };
+        let cfg = with("https://a.example/, https://b.example", "10.0.0.0/8, ::1").unwrap();
+        assert_eq!(
+            cfg.allowed_origins,
+            ["https://a.example", "https://b.example"]
+        );
+        assert_eq!(cfg.trusted_proxies, ["10.0.0.0/8", "::1"]);
+        assert!(with("", "").unwrap().trusted_proxies.is_empty());
+        assert!(with("", "10.0.0.0/99").is_err());
     }
 
     #[test]

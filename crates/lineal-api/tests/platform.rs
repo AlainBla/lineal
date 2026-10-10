@@ -362,6 +362,70 @@ fn limited_router(app: Arc<App>, requests: f64, complexity: f64) -> Router {
     )
 }
 
+fn from_peer(peer: &str, forwarded: &str) -> Request<Body> {
+    let mut req = Request::get("/ping")
+        .header("x-forwarded-for", forwarded)
+        .body(Body::empty())
+        .unwrap();
+    let addr: std::net::SocketAddr = format!("{peer}:4000").parse().unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(addr));
+    req
+}
+
+#[tokio::test]
+async fn forged_forwarded_for_from_untrusted_peer_does_not_evade_the_rate_limit() {
+    let router = limited_router(app_with_keys(), 2.0, 100.0);
+    // Jeder Request behauptet eine andere Client-IP, kommt aber vom selben Peer.
+    for (i, expected) in [
+        StatusCode::OK,
+        StatusCode::OK,
+        StatusCode::TOO_MANY_REQUESTS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = send(&router, from_peer("203.0.113.9", &format!("1.2.3.{i}"))).await;
+        assert_eq!(r.status, expected, "request {i}");
+    }
+}
+
+#[tokio::test]
+async fn forwarded_for_is_honoured_only_behind_a_trusted_proxy() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous = ClassLimits {
+        requests: 1.0,
+        complexity: 100.0,
+    };
+    cfg.trusted_proxies = lineal_api::client_ip::parse_list(&["10.0.0.0/8".to_owned()]);
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    // Zwei verschiedene Clients hinter dem Proxy haben getrennte Buckets ...
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "198.51.100.1"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "198.51.100.2"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // ... derselbe Client wird begrenzt, auch wenn er vorn einen gefälschten Eintrag anhängt.
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "6.6.6.6, 198.51.100.1"))
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
 #[tokio::test]
 async fn request_rate_limit_returns_429_with_headers() {
     let router = limited_router(app_with_keys(), 3.0, 100.0);
