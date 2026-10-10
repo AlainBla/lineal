@@ -34,6 +34,13 @@ pub trait BlobStore: Send + Sync {
         Err(AppError::internal("blob head not supported by this store"))
     }
 
+    /// Löscht das Objekt endgültig. Ein fehlendes Objekt ist kein Fehler (idempotent).
+    /// Der Standard ist ein No-op für Stores ohne Löschfunktion (Fakes in Tests).
+    async fn delete(&self, key: &str) -> AppResult<()> {
+        let _ = key;
+        Ok(())
+    }
+
     /// Signierte Upload-URL (PUT).
     async fn signed_put_url(
         &self,

@@ -145,5 +145,19 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.details["reason"], "upload_size_mismatch");
+
+    // BlobStore::delete entfernt Daten und Metadaten, ist idempotent und lässt andere Objekte stehen.
+    let key: String = sqlx::query_scalar(
+        "SELECT storage_key FROM upload_reservation WHERE id IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(app.blobs.head(&key).await.unwrap().is_some());
+    app.blobs.delete(&key).await.unwrap();
+    assert!(app.blobs.head(&key).await.unwrap().is_none());
+    app.blobs.delete(&key).await.unwrap();
+    let data_files = std::fs::read_dir(dir.join("data")).unwrap().count();
+    assert_eq!(data_files, 1, "nur das erste, finalisierte Objekt bleibt");
     let _ = std::fs::remove_dir_all(dir);
 }

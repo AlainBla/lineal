@@ -28,6 +28,10 @@ impl PeriodicJob for PurgeJob {
         if !stats.errors.is_empty() {
             tracing::warn!(errors = ?stats.errors, "purge finished with errors");
         }
+        let reservations = app.run_upload_purge(now).await?;
+        if reservations > 0 {
+            tracing::info!(reservations, "purged expired upload reservations");
+        }
         Ok(())
     }
 }

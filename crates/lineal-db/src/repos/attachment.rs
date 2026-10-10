@@ -315,4 +315,105 @@ impl AttachmentRepo for PgTx {
         .rows_affected();
         Ok(n == 1)
     }
+
+    async fn storage_keys_for_issue(&mut self, issue: IssueId) -> AppResult<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT storage_key FROM attachment WHERE organization_id = $1 AND issue_id = $2 \
+               AND storage_key IS NOT NULL \
+             UNION SELECT storage_key FROM upload_reservation WHERE organization_id = $1 AND issue_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn storage_keys_for_team(&mut self, team: TeamId) -> AppResult<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT a.storage_key FROM attachment a JOIN issue i \
+               ON i.organization_id = a.organization_id AND i.id = a.issue_id \
+             WHERE a.organization_id = $1 AND i.team_id = $2 AND a.storage_key IS NOT NULL \
+             UNION SELECT r.storage_key FROM upload_reservation r JOIN issue i \
+               ON i.organization_id = r.organization_id AND i.id = r.issue_id \
+             WHERE r.organization_id = $1 AND i.team_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn unreferenced_storage_keys(&mut self, keys: &[String]) -> AppResult<Vec<String>> {
+        if keys.is_empty() {
+            return Ok(vec![]);
+        }
+        // Objektschlüssel sind global; auch Verweise anderer Workspaces zählen.
+        sqlx::query_scalar(
+            "SELECT k FROM unnest($1::text[]) AS k \
+             WHERE NOT EXISTS (SELECT 1 FROM attachment WHERE storage_key = k) \
+               AND NOT EXISTS (SELECT 1 FROM upload_reservation WHERE storage_key = k)",
+        )
+        .bind(keys)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn list_expired_reservations(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<(OrgId, Reservation)>> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            organization_id: Uuid,
+            #[sqlx(flatten)]
+            r: ReservationRow,
+        }
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT organization_id, id, issue_id, creator_id, storage_key, filename, content_type, size, \
+             title, subtitle, expires_at, finalized_at, created_at FROM upload_reservation \
+             WHERE finalized_at IS NULL AND expires_at < $1 ORDER BY expires_at LIMIT $2",
+        )
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let r = row.r;
+                (
+                    OrgId(row.organization_id),
+                    Reservation {
+                        id: r.id,
+                        issue_id: r.issue_id.map(IssueId),
+                        creator_id: r.creator_id.map(UserId),
+                        storage_key: r.storage_key,
+                        filename: r.filename,
+                        content_type: r.content_type,
+                        size: r.size,
+                        title: r.title,
+                        subtitle: r.subtitle,
+                        expires_at: r.expires_at,
+                        finalized_at: r.finalized_at,
+                        created_at: r.created_at,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    async fn delete_reservations(&mut self, ids: &[Uuid]) -> AppResult<()> {
+        sqlx::query("DELETE FROM upload_reservation WHERE organization_id = $1 AND id = ANY($2)")
+            .bind(self.org.0)
+            .bind(ids)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
 }

@@ -140,4 +140,31 @@ pub trait AttachmentRepo: Send {
     async fn finalize_reservation(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<bool> {
         not_implemented()
     }
+
+    /// Objektschlüssel aller Anhänge und Reservierungen dieses Issues (auch archivierte).
+    async fn storage_keys_for_issue(&mut self, issue: IssueId) -> AppResult<Vec<String>> {
+        not_implemented()
+    }
+    /// Objektschlüssel aller Anhänge und Reservierungen der Issues dieses Teams.
+    async fn storage_keys_for_team(&mut self, team: TeamId) -> AppResult<Vec<String>> {
+        not_implemented()
+    }
+    /// Teilmenge von `keys`, die weder ein Anhang noch eine Reservierung (irgendeines
+    /// Workspace) noch referenziert; nach dem Löschen der Zeilen aufrufen.
+    async fn unreferenced_storage_keys(&mut self, keys: &[String]) -> AppResult<Vec<String>> {
+        not_implemented()
+    }
+    /// Nicht finalisierte Reservierungen, die vor `cutoff` abgelaufen sind (alle Workspaces;
+    /// nur in System-Transaktionen).
+    async fn list_expired_reservations(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<(OrgId, Reservation)>> {
+        not_implemented()
+    }
+    /// Löscht Reservierungen dieses Workspace.
+    async fn delete_reservations(&mut self, ids: &[Uuid]) -> AppResult<()> {
+        not_implemented()
+    }
 }
