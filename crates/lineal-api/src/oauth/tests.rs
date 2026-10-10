@@ -101,6 +101,37 @@ fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
     r.body(Body::empty()).unwrap()
 }
 
+/// POST des Zustimmungsformulars: alle versteckten Felder der Seite plus `decision`.
+fn consent_post(page: &str, decision: &str, cookie: &str) -> Request<Body> {
+    let mut pairs = url::form_urlencoded::Serializer::new(String::new());
+    for chunk in page.split("<input type=hidden name=\"").skip(1) {
+        let name = chunk.split('"').next().unwrap();
+        let value = chunk
+            .split("value=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        let unesc = |v: &str| {
+            v.replace("&quot;", "\"")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&#39;", "'")
+                .replace("&amp;", "&")
+        };
+        pairs.append_pair(&unesc(name), &unesc(value));
+    }
+    pairs.append_pair("decision", decision);
+    Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/authorize")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, cookie)
+        .body(Body::from(pairs.finish()))
+        .unwrap()
+}
+
 fn form(uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(Method::POST)
@@ -146,15 +177,15 @@ async fn obtain_code(fx: &Fx, client: &str, cookie: &str, scope: &str) -> String
         !page.contains("<b>MCP</b>"),
         "Client-Name muss escaped werden"
     );
-    let href = page
-        .split("href=\"")
-        .nth(1)
-        .unwrap()
-        .split('"')
-        .next()
-        .unwrap()
-        .replace("&amp;", "&");
-    let (status, headers, _) = send(&fx.api, get(&href, Some(cookie))).await;
+    assert!(
+        page.contains("method=post"),
+        "Zustimmung nur per POST-Formular"
+    );
+    assert!(
+        page.contains("not verified"),
+        "Client-Name als unverifiziert markiert"
+    );
+    let (status, headers, _) = send(&fx.api, consent_post(&page, "allow", cookie)).await;
     assert!(status.is_redirection(), "{status}");
     let loc = headers
         .get(header::LOCATION)
@@ -310,12 +341,20 @@ async fn authorize_validates_client_redirect_pkce_and_login(pool: PgPool) {
     // Ablehnen.
     let uri = authorize_uri(&client, "");
     let (_, _, page) = send(&fx.api, get(&uri, Some(&fx.alice_cookie))).await;
-    let hrefs: Vec<String> = page
-        .split("href=\"")
-        .skip(1)
-        .map(|p| p.split('"').next().unwrap().replace("&amp;", "&"))
-        .collect();
-    let (s, h, _) = send(&fx.api, get(&hrefs[1], Some(&fx.alice_cookie))).await;
+    // Ein GET mit gültigem Nonce und decision=allow stellt KEINEN Code aus (nur POST zählt).
+    let nonce = page
+        .split("name=\"consent\" value=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    let via_get = authorize_uri(&client, &format!("&consent={}&decision=allow", pct(&nonce)));
+    let (s, _, again) = send(&fx.api, get(&via_get, Some(&fx.alice_cookie))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(again.contains("method=post"), "GET darf nie zustimmen");
+    let (s, h, _) = send(&fx.api, consent_post(&page, "deny", &fx.alice_cookie)).await;
     assert!(s.is_redirection());
     assert!(
         h.get(header::LOCATION)
@@ -325,7 +364,7 @@ async fn authorize_validates_client_redirect_pkce_and_login(pool: PgPool) {
             .contains("error=access_denied")
     );
     // Der Nonce gilt nur für die Session, für die er ausgestellt wurde.
-    let (s, _, page) = send(&fx.api, get(&hrefs[0], Some(&fx.bob_cookie))).await;
+    let (s, _, page) = send(&fx.api, consent_post(&page, "allow", &fx.bob_cookie)).await;
     assert_eq!(s, StatusCode::OK, "{page}");
     assert!(
         page.contains("Allow"),

@@ -311,6 +311,68 @@ fn consent_valid(
         && ct_eq(consent_nonce(app, ctx, p, exp).as_bytes(), given.as_bytes())
 }
 
+/// Zustimmungsseite: Client-Name ist vom Client frei gewählt und wird als unverifiziert
+/// gekennzeichnet; maßgeblich ist der angezeigte Ziel-Host der Weiterleitung.
+fn consent_page(
+    client_name: &str,
+    redirect_uri: &str,
+    scopes: &[String],
+    p: &HashMap<String, String>,
+    nonce: &str,
+) -> Response {
+    let host = url::Url::parse(redirect_uri)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(str::to_owned)
+                .or_else(|| Some(u.scheme().to_owned()))
+        })
+        .unwrap_or_default();
+    let mut hidden = String::new();
+    let mut keys: Vec<&String> = p
+        .keys()
+        .filter(|k| !matches!(k.as_str(), "consent" | "decision"))
+        .collect();
+    keys.sort();
+    for k in keys {
+        hidden.push_str(&format!(
+            "<input type=hidden name=\"{}\" value=\"{}\">",
+            esc(k),
+            esc(&p[k])
+        ));
+    }
+    hidden.push_str(&format!(
+        "<input type=hidden name=\"consent\" value=\"{}\">",
+        esc(nonce)
+    ));
+    let admin_warning = if scopes.iter().any(|s| s == "admin") {
+        "<p><strong>Warning:</strong> the <code>admin</code> permission allows this application to change workspace settings.</p>"
+    } else {
+        ""
+    };
+    let html = format!(
+        "<!doctype html><meta charset=utf-8><title>Authorize application</title>\
+         <h1>Authorize application</h1>\
+         <p>An application calling itself <b>{name}</b> (name not verified by Lineal) requests access to your workspace.</p>\
+         <p>After approval you will be sent to <b>{host}</b>. Only continue if you trust this site.</p>\
+         <p>Permissions: <b>{scopes}</b></p>{admin_warning}\
+         <form method=post action=\"/oauth/authorize\">{hidden}\
+         <button type=submit name=decision value=allow>Allow</button> \
+         <button type=submit name=decision value=deny>Deny</button></form>",
+        name = esc(client_name),
+        host = esc(&host),
+        scopes = esc(&scopes.join(", ")),
+    );
+    let mut res = Html(html).into_response();
+    res.headers_mut()
+        .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    res.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; form-action 'self'; frame-ancestors 'none'"),
+    );
+    no_store(res)
+}
+
 fn query_string(p: &HashMap<String, String>, extra: &[(&str, &str)]) -> String {
     let mut keys: Vec<&String> = p
         .keys()
@@ -327,11 +389,31 @@ fn query_string(p: &HashMap<String, String>, extra: &[(&str, &str)]) -> String {
     parts.join("&")
 }
 
-/// `GET /oauth/authorize`.
+/// `GET /oauth/authorize`: prüft die Anfrage und zeigt die Zustimmungsseite. Ein Code wird
+/// hier nie ausgestellt (Schutz vor Consent per Link/Prefetch).
 pub async fn authorize(
     State(app): State<Arc<App>>,
     MaybeAuth(auth): MaybeAuth,
     Query(p): Query<HashMap<String, String>>,
+) -> Response {
+    authorize_inner(app, auth, p, false).await
+}
+
+/// `POST /oauth/authorize` (form-urlencoded): Bestätigung aus dem Zustimmungsformular.
+/// Stellt den Code nur mit gültigem, an Session und Parameter gebundenem Consent-Nonce aus.
+pub async fn authorize_post(
+    State(app): State<Arc<App>>,
+    MaybeAuth(auth): MaybeAuth,
+    Form(p): Form<HashMap<String, String>>,
+) -> Response {
+    authorize_inner(app, auth, p, true).await
+}
+
+async fn authorize_inner(
+    app: Arc<App>,
+    auth: AuthState,
+    p: HashMap<String, String>,
+    is_post: bool,
 ) -> Response {
     let get = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
     // 1. Client und redirect_uri: bei Fehlern NIE weiterleiten.
@@ -404,31 +486,11 @@ pub async fn authorize(
         scopes.retain(|s| s != "admin");
     }
     let now = app.clock.now();
-    // 3. Consent: ohne gültigen Nonce die Zustimmungsseite zeigen.
-    if !consent_valid(&app, &ctx, &p, now.timestamp()) {
+    // 3. Consent: nur ein POST mit gültigem Nonce zählt als Zustimmung; sonst Formular zeigen.
+    if !is_post || !consent_valid(&app, &ctx, &p, now.timestamp()) {
         let exp = now.timestamp() + CONSENT_TTL_MIN * 60;
         let nonce = consent_nonce(&app, &ctx, &p, exp);
-        let allow = format!(
-            "/oauth/authorize?{}",
-            query_string(&p, &[("consent", &nonce), ("decision", "allow")])
-        );
-        let deny = format!(
-            "/oauth/authorize?{}",
-            query_string(&p, &[("consent", &nonce), ("decision", "deny")])
-        );
-        let html = format!(
-            "<!doctype html><meta charset=utf-8><title>Authorize {name}</title>\
-             <h1>Authorize {name}</h1><p><b>{name}</b> wants access to your Lineal workspace with these permissions: <b>{scopes}</b>.</p>\
-             <p><a href=\"{allow}\">Allow</a> &middot; <a href=\"{deny}\">Deny</a></p>",
-            name = esc(&client.client_name),
-            scopes = esc(&scopes.join(", ")),
-            allow = esc(&allow),
-            deny = esc(&deny),
-        );
-        let mut res = Html(html).into_response();
-        res.headers_mut()
-            .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-        return no_store(res);
+        return consent_page(&client.client_name, redirect_uri, &scopes, &p, &nonce);
     }
     if get("decision") != "allow" {
         return err("access_denied", "the user denied the request");

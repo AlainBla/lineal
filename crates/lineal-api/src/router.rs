@@ -52,7 +52,10 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/uploads/{token}", put(blob::upload))
         .route("/files/{token}", get(blob::download))
         .route("/oauth/register", post(oauth::register))
-        .route("/oauth/authorize", get(oauth::authorize))
+        .route(
+            "/oauth/authorize",
+            get(oauth::authorize).post(oauth::authorize_post),
+        )
         .route("/oauth/token", post(oauth::token))
         .route("/oauth/revoke", post(oauth::revoke))
         .route("/healthz", get(healthz))
