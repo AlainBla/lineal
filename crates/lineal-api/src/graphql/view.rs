@@ -582,3 +582,7 @@ impl ViewMutation {
             .into())
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;

@@ -54,3 +54,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
         ))),
     }
 }
+
+#[cfg(test)]
+#[path = "workspace_tests.rs"]
+mod tests;
