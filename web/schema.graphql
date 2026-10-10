@@ -1,0 +1,154 @@
+type Mutation {
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_orgMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_teamMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_issueMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_labelMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_commentMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_cycleMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_projectMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_initiativeMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_viewMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_searchMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_notificationMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_documentMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_templateMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_triageMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_overviewMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_webhookMutationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_importMutationReady: Boolean!
+}
+
+type Query {
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_orgReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_teamReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_issueReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_labelReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_commentReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_cycleReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_projectReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_initiativeReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_viewReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_searchReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_notificationReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_documentReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_templateReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_triageReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_overviewReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_webhookReady: Boolean!
+	"""
+	Platzhalter des Scaffolds.
+	"""
+	_importReady: Boolean!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}
