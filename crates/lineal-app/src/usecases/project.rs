@@ -124,7 +124,11 @@ pub(crate) fn require_manage(
         .copied()
         .filter(|t| snap.tree.get(*t).is_some_and(|t| t.retired_at.is_none()))
         .collect();
-    let to_check: &[TeamId] = if active.is_empty() { project_teams } else { &active };
+    let to_check: &[TeamId] = if active.is_empty() {
+        project_teams
+    } else {
+        &active
+    };
     // Unzugängliche Teams (auch stillgelegte) liefern zuerst `not_found`.
     let visible = snap.visible_team_ids();
     if project_teams.iter().any(|t| !visible.contains(t)) {
@@ -136,15 +140,19 @@ pub(crate) fn require_manage(
 
 fn writable(p: &Project) -> AppResult<()> {
     if p.archived_at.is_some() || p.trashed {
-        return Err(AppError::invalid_request("The project is archived or deleted and read-only.")
-            .with_details(json!({ "reason": "project_archived", "project": p.id.to_string() })));
+        return Err(
+            AppError::invalid_request("The project is archived or deleted and read-only.")
+                .with_details(json!({ "reason": "project_archived", "project": p.id.to_string() })),
+        );
     }
     Ok(())
 }
 
 /// Entfernt aktive Inhalte aus einfachem Text (Name, Kurzbeschreibung, Titel).
 pub(crate) fn clean_text(s: &str) -> String {
-    lineal_domain::rules::markdown::sanitize(s.trim()).trim().to_owned()
+    lineal_domain::rules::markdown::sanitize(s.trim())
+        .trim()
+        .to_owned()
 }
 
 /// Icon: Name oder Emoji-Code (`Rocket`, `:eagle:`) nach Allowlist.
@@ -158,8 +166,10 @@ pub(crate) fn validate_icon(i: &str) -> AppResult<Option<String>> {
     if ok {
         Ok(Some(i.to_owned()))
     } else {
-        Err(AppError::invalid_request("icon must be an icon name or emoji code")
-            .with_details(json!({ "field": "icon" })))
+        Err(
+            AppError::invalid_request("icon must be an icon name or emoji code")
+                .with_details(json!({ "field": "icon" })),
+        )
     }
 }
 
@@ -173,7 +183,14 @@ pub(crate) fn validate_link(url: &str, title: &str) -> AppResult<(String, String
             .with_details(json!({ "field": "links", "url": url })));
     }
     let t = clean_text(title);
-    Ok((url.trim().to_owned(), if t.is_empty() { url.trim().to_owned() } else { t }))
+    Ok((
+        url.trim().to_owned(),
+        if t.is_empty() {
+            url.trim().to_owned()
+        } else {
+            t
+        },
+    ))
 }
 
 fn validate_name(name: &str) -> AppResult<String> {
@@ -189,8 +206,10 @@ fn validate_name(name: &str) -> AppResult<String> {
 fn validate_summary(s: &str) -> AppResult<Option<String>> {
     let s = clean_text(s);
     if s.chars().count() > 255 {
-        return Err(AppError::invalid_request("summary must be at most 255 characters")
-            .with_details(json!({ "field": "summary" })));
+        return Err(
+            AppError::invalid_request("summary must be at most 255 characters")
+                .with_details(json!({ "field": "summary" })),
+        );
     }
     Ok((!s.is_empty()).then_some(s))
 }
@@ -200,7 +219,8 @@ fn validate_color(c: &str) -> AppResult<()> {
     if ok {
         Ok(())
     } else {
-        Err(AppError::invalid_request("color must be #RRGGBB").with_details(json!({ "field": "color" })))
+        Err(AppError::invalid_request("color must be #RRGGBB")
+            .with_details(json!({ "field": "color" })))
     }
 }
 
@@ -208,8 +228,10 @@ fn validate_priority(p: i32) -> AppResult<i32> {
     if (0..=4).contains(&p) {
         Ok(p)
     } else {
-        Err(AppError::invalid_request("priority must be between 0 and 4")
-            .with_details(json!({ "field": "priority" })))
+        Err(
+            AppError::invalid_request("priority must be between 0 and 4")
+                .with_details(json!({ "field": "priority" })),
+        )
     }
 }
 
@@ -313,10 +335,10 @@ async fn check_member_allowed(
     if teams.iter().any(|t| visible.contains(t)) {
         Ok(())
     } else {
-        Err(AppError::invalid_request(
-            "The user needs access to at least one team of the project.",
+        Err(
+            AppError::invalid_request("The user needs access to at least one team of the project.")
+                .with_details(json!({ "field": "lead", "user": user.id.to_string() })),
         )
-        .with_details(json!({ "field": "lead", "user": user.id.to_string() })))
     }
 }
 
@@ -331,7 +353,9 @@ fn status_type_changes(
 
 /// Löst ein Team (nur zugängliche) zu seiner ID auf; unzugänglich = `not_found`.
 async fn resolve_team_id(tx: &mut dyn Tx, snap: &PolicySnapshot, r: &str) -> AppResult<TeamId> {
-    Ok(resolve::team::resolve_in(tx, snap, r, Visibility::Content).await?.id)
+    Ok(resolve::team::resolve_in(tx, snap, r, Visibility::Content)
+        .await?
+        .id)
 }
 
 impl App {
@@ -388,7 +412,11 @@ impl App {
                     .collect();
                 if named.is_empty() {
                     match r.parse::<ProjectStatusType>() {
-                        Ok(k) => all.iter().filter(|x| x.status_type == k).map(|x| x.id).collect(),
+                        Ok(k) => all
+                            .iter()
+                            .filter(|x| x.status_type == k)
+                            .map(|x| x.id)
+                            .collect(),
                         Err(_) => Vec::new(),
                     }
                 } else {
@@ -396,15 +424,21 @@ impl App {
                 }
             };
             if ids.is_empty() {
-                return Err(AppError::not_found(format!("Could not find project status \"{r}\""))
-                    .with_details(json!({ "reference": r, "type": "ProjectStatus" })));
+                return Err(
+                    AppError::not_found(format!("Could not find project status \"{r}\""))
+                        .with_details(json!({ "reference": r, "type": "ProjectStatus" })),
+                );
             }
             filter.status_ids = Some(ids);
         }
         if let Some(l) = &input.label {
             let r = l.trim();
             let ids: Vec<Uuid> = if let Ok(id) = Uuid::parse_str(r) {
-                tx.projects().get_label(id).await?.map(|x| vec![x.id]).unwrap_or_default()
+                tx.projects()
+                    .get_label(id)
+                    .await?
+                    .map(|x| vec![x.id])
+                    .unwrap_or_default()
             } else {
                 tx.projects()
                     .find_labels_by_name(r)
@@ -414,8 +448,10 @@ impl App {
                     .collect()
             };
             if ids.is_empty() {
-                return Err(AppError::not_found(format!("Could not find project label \"{r}\""))
-                    .with_details(json!({ "reference": r, "type": "ProjectLabel" })));
+                return Err(
+                    AppError::not_found(format!("Could not find project label \"{r}\""))
+                        .with_details(json!({ "reference": r, "type": "ProjectLabel" })),
+                );
             }
             filter.label_ids = Some(ids);
         }
@@ -444,7 +480,8 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let r = resolve::project::resolve_in(&mut *tx, &snap, reference).await?;
-        let mut views = build_views(&mut *tx, &snap, vec![r.project], opts, self.clock.now()).await?;
+        let mut views =
+            build_views(&mut *tx, &snap, vec![r.project], opts, self.clock.now()).await?;
         views
             .pop()
             .ok_or_else(|| AppError::internal("project view missing"))
@@ -474,7 +511,8 @@ impl App {
         ctx: &RequestCtx,
         input: SaveProjectInput,
     ) -> AppResult<ProjectView> {
-        if input.set_teams.is_some() && (!input.add_teams.is_empty() || !input.remove_teams.is_empty())
+        if input.set_teams.is_some()
+            && (!input.add_teams.is_empty() || !input.remove_teams.is_empty())
         {
             return Err(AppError::invalid_request(
                 "`setTeams` cannot be combined with `addTeams`/`removeTeams`",
@@ -488,10 +526,10 @@ impl App {
             ));
         }
         if input.template.is_some() && input.id.is_none() {
-            return Err(AppError::invalid_request(
-                "Project templates are not available yet.",
-            )
-            .with_details(json!({ "field": "template", "reason": "template_unsupported" })));
+            return Err(
+                AppError::invalid_request("Project templates are not available yet.")
+                    .with_details(json!({ "field": "template", "reason": "template_unsupported" })),
+            );
         }
         if let Some(c) = &input.color {
             validate_color(c)?;
@@ -549,8 +587,10 @@ impl App {
         now: DateTime<Utc>,
     ) -> AppResult<ProjectId> {
         if input.patch.is_some() {
-            return Err(AppError::invalid_request("`patch` cannot be used when creating a project")
-                .with_details(json!({ "field": "patch" })));
+            return Err(AppError::invalid_request(
+                "`patch` cannot be used when creating a project",
+            )
+            .with_details(json!({ "field": "patch" })));
         }
         let name = validate_name(input.name.as_deref().unwrap_or(""))?;
         let mut team_refs: Vec<String> = input.set_teams.clone().unwrap_or_default();
@@ -624,7 +664,10 @@ impl App {
             snap.require_workspace(ctx, Action::ManageInitiatives)?;
             for r in &init_refs {
                 let i = resolve::initiative::resolve_in(tx, snap, r).await?;
-                if !initiatives.iter().any(|x: &crate::ports::repos::initiative::Initiative| x.id == i.id) {
+                if !initiatives
+                    .iter()
+                    .any(|x: &crate::ports::repos::initiative::Initiative| x.id == i.id)
+                {
                     initiatives.push(i);
                 }
             }
@@ -652,7 +695,12 @@ impl App {
                 description: summary.flatten(),
                 content,
                 color: input.color.clone(),
-                icon: input.icon.as_deref().map(validate_icon).transpose()?.flatten(),
+                icon: input
+                    .icon
+                    .as_deref()
+                    .map(validate_icon)
+                    .transpose()?
+                    .flatten(),
                 status_id: status.id,
                 priority: input.priority.unwrap_or(0),
                 sort_order: now.timestamp_millis() as f64,
@@ -680,11 +728,20 @@ impl App {
         }
         for i in &initiatives {
             tx.initiatives().link_project(i.id, id, now).await?;
-            emit(tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i.id }).await?;
+            emit(
+                tx,
+                ctx,
+                DomainEvent::InitiativeUpdated {
+                    initiative_id: i.id,
+                },
+            )
+            .await?;
         }
         for (url, title) in &input.links {
             let (url, title) = validate_link(url, title)?;
-            tx.projects().add_link(id, &url, &title, creator, now).await?;
+            tx.projects()
+                .add_link(id, &url, &title, creator, now)
+                .await?;
         }
         emit(tx, ctx, DomainEvent::ProjectCreated { project_id: id }).await?;
         Ok(id)
@@ -701,8 +758,10 @@ impl App {
         summary: Option<Option<String>>,
         now: DateTime<Utc>,
     ) -> AppResult<(ProjectId, Option<i64>)> {
-        let ResolvedProject { project, teams: current_teams } =
-            resolve::project::resolve_in(tx, snap, reference).await?;
+        let ResolvedProject {
+            project,
+            teams: current_teams,
+        } = resolve::project::resolve_in(tx, snap, reference).await?;
         require_manage(snap, ctx, Action::ManageProject, &current_teams)?;
         writable(&project)?;
         let mut patch = ProjectPatch::default();
@@ -765,8 +824,10 @@ impl App {
                 }
             }
             if final_teams.is_empty() {
-                return Err(AppError::invalid_request("The last team cannot be removed from a project.")
-                    .with_details(json!({ "reason": "last_team" })));
+                return Err(AppError::invalid_request(
+                    "The last team cannot be removed from a project.",
+                )
+                .with_details(json!({ "reason": "last_team" })));
             }
             if !final_teams.contains(&new_lead) {
                 return Err(AppError::invalid_request(
@@ -842,7 +903,11 @@ impl App {
         if new_lead != project.lead_team_id {
             let number = tx.teams().next_project_number(new_lead).await?;
             tx.projects()
-                .add_alias(project.id, &format!("P-{}-{}", old_key, project.number), &old_key)
+                .add_alias(
+                    project.id,
+                    &format!("P-{}-{}", old_key, project.number),
+                    &old_key,
+                )
                 .await?;
             patch.lead_team_id = Some(new_lead);
             patch.number = Some(number);
@@ -990,7 +1055,13 @@ impl App {
         for (url, title) in &input.links {
             let (url, title) = validate_link(url, title)?;
             tx.projects()
-                .add_link(project.id, &url, &title, resolve::user::actor_user_id(ctx), now)
+                .add_link(
+                    project.id,
+                    &url,
+                    &title,
+                    resolve::user::actor_user_id(ctx),
+                    now,
+                )
                 .await?;
             changed = true;
         }
@@ -1000,9 +1071,18 @@ impl App {
         if changed {
             if patch == ProjectPatch::default() {
                 // Nur Beziehungen geändert: `updated_at`/`version` trotzdem erhöhen.
-                tx.projects().update(project.id, &ProjectPatch::default(), now).await?;
+                tx.projects()
+                    .update(project.id, &ProjectPatch::default(), now)
+                    .await?;
             }
-            emit(tx, ctx, DomainEvent::ProjectUpdated { project_id: project.id }).await?;
+            emit(
+                tx,
+                ctx,
+                DomainEvent::ProjectUpdated {
+                    project_id: project.id,
+                },
+            )
+            .await?;
         }
         Ok((project.id, open_issue_count))
     }
@@ -1025,7 +1105,8 @@ impl App {
         }
         snap.require_workspace(ctx, Action::ManageInitiatives)?;
         let mut changed = false;
-        let current: Vec<InitiativeId> = tx.initiatives().initiative_ids_of_project(project).await?;
+        let current: Vec<InitiativeId> =
+            tx.initiatives().initiative_ids_of_project(project).await?;
         let (to_add, to_remove): (Vec<InitiativeId>, Vec<InitiativeId>) =
             if let Some(set) = &input.set_initiatives {
                 let mut target = Vec::new();
@@ -1034,8 +1115,16 @@ impl App {
                 }
                 let target = dedupe(target);
                 (
-                    target.iter().copied().filter(|t| !current.contains(t)).collect(),
-                    current.iter().copied().filter(|c| !target.contains(c)).collect(),
+                    target
+                        .iter()
+                        .copied()
+                        .filter(|t| !current.contains(t))
+                        .collect(),
+                    current
+                        .iter()
+                        .copied()
+                        .filter(|c| !target.contains(c))
+                        .collect(),
                 )
             } else {
                 let mut add = Vec::new();
@@ -1074,10 +1163,13 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let r = resolve::project::resolve_in(&mut *tx, &snap, reference).await?;
         require_manage(&snap, ctx, Action::ManageProject, &r.teams)?;
-        let is_lead = r.project.lead_id.is_some() && r.project.lead_id == resolve::user::actor_user_id(ctx);
+        let is_lead =
+            r.project.lead_id.is_some() && r.project.lead_id == resolve::user::actor_user_id(ctx);
         if !(snap.actor.is_admin() || snap.actor.is_system() || is_lead) {
-            return Err(AppError::forbidden("Only admins and the project lead can archive a project.")
-                .with_details(json!({ "reason": "role" })));
+            return Err(AppError::forbidden(
+                "Only admins and the project lead can archive a project.",
+            )
+            .with_details(json!({ "reason": "role" })));
         }
         let now = self.clock.now();
         tx.projects()
@@ -1090,15 +1182,25 @@ impl App {
                 now,
             )
             .await?;
-        emit(&mut *tx, ctx, DomainEvent::ProjectUpdated { project_id: r.project.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::ProjectUpdated {
+                project_id: r.project.id,
+            },
+        )
+        .await?;
         let project = tx
             .projects()
             .get(r.project.id)
             .await?
             .ok_or_else(|| AppError::internal("project missing"))?;
-        let mut views = build_views(&mut *tx, &snap, vec![project], ViewOpts::default(), now).await?;
+        let mut views =
+            build_views(&mut *tx, &snap, vec![project], ViewOpts::default(), now).await?;
         tx.commit().await?;
-        views.pop().ok_or_else(|| AppError::internal("project view missing"))
+        views
+            .pop()
+            .ok_or_else(|| AppError::internal("project view missing"))
     }
 
     /// Löscht ein Projekt (Papierkorb, 30 Tage) bzw. stellt es wieder her.
@@ -1114,9 +1216,8 @@ impl App {
             resolve::project::resolve_in(&mut *tx, &snap, reference).await?
         } else {
             // Wiederherstellen: das Projekt liegt im Papierkorb; nur per UUID auffindbar.
-            let id = Uuid::parse_str(reference.trim()).map_err(|_| {
-                AppError::not_found("Trashed projects can only be restored by id.")
-            })?;
+            let id = Uuid::parse_str(reference.trim())
+                .map_err(|_| AppError::not_found("Trashed projects can only be restored by id."))?;
             let p = tx
                 .projects()
                 .get(ProjectId(id))
@@ -1142,9 +1243,13 @@ impl App {
             )
             .await?;
         let ev = if trashed {
-            DomainEvent::ProjectRemoved { project_id: r.project.id }
+            DomainEvent::ProjectRemoved {
+                project_id: r.project.id,
+            }
         } else {
-            DomainEvent::ProjectUpdated { project_id: r.project.id }
+            DomainEvent::ProjectUpdated {
+                project_id: r.project.id,
+            }
         };
         emit(&mut *tx, ctx, ev).await?;
         tx.commit().await

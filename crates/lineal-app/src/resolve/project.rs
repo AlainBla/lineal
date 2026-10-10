@@ -43,7 +43,9 @@ fn parse_project_identifier(r: &str) -> Option<(String, i32)> {
 }
 
 fn is_slug_id(s: &str) -> bool {
-    s.len() == 12 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 12
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Teams des Projekts laden; `Some`, wenn mindestens eines davon sichtbar ist.
@@ -67,7 +69,11 @@ pub async fn resolve_in(
     let mut found: Option<Project> = None;
     // 1. UUID
     if let Ok(uuid) = Uuid::parse_str(r) {
-        found = tx.projects().get(ProjectId(uuid)).await?.filter(|p| !p.trashed);
+        found = tx
+            .projects()
+            .get(ProjectId(uuid))
+            .await?
+            .filter(|p| !p.trashed);
     } else if let Some((key, n)) = parse_project_identifier(r) {
         // 2. Kennung, auch frühere
         found = tx.projects().find_by_key_and_number(&key, n).await?;
@@ -124,7 +130,9 @@ pub async fn resolve_in(
             Err(AppError::ambiguous_reference(format!(
                 "Project name \"{reference}\" matches several projects."
             ))
-            .with_details(json!({ "reference": reference, "type": "Project", "candidates": cands })))
+            .with_details(
+                json!({ "reference": reference, "type": "Project", "candidates": cands }),
+            ))
         }
     }
 }
@@ -170,7 +178,10 @@ mod tests {
     #[test]
     fn identifier_shapes() {
         assert_eq!(parse_project_identifier("P-ENG-7"), Some(("ENG".into(), 7)));
-        assert_eq!(parse_project_identifier("p-web-12"), Some(("WEB".into(), 12)));
+        assert_eq!(
+            parse_project_identifier("p-web-12"),
+            Some(("WEB".into(), 12))
+        );
         assert_eq!(parse_project_identifier("ENG-7"), None);
         assert!(looks_like_issue_identifier("ENG-123"));
         assert!(!looks_like_issue_identifier("Checkout Relaunch"));

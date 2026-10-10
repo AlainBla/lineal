@@ -170,9 +170,7 @@ pub async fn auto_cycle_for_state(
         .max_by_key(|c| c.ends_at)
         .cloned();
     Ok(match new_type {
-        StateType::Started
-            if team.cycle_issue_auto_assign_started || team.cycle_lock_to_active =>
-        {
+        StateType::Started if team.cycle_issue_auto_assign_started || team.cycle_lock_to_active => {
             active.or(next)
         }
         StateType::Unstarted if team.cycle_lock_to_active => active.or(next),
@@ -183,7 +181,12 @@ pub async fn auto_cycle_for_state(
 
 impl App {
     async fn non_inheriting(&self, tx: &mut dyn Tx) -> AppResult<HashSet<TeamId>> {
-        Ok(tx.cycles().teams_not_inheriting().await?.into_iter().collect())
+        Ok(tx
+            .cycles()
+            .teams_not_inheriting()
+            .await?
+            .into_iter()
+            .collect())
     }
 
     /// `list_cycles`: Cycles eines Teams (aufsteigend nach Nummer). Ohne aktivierte Cycles leer.
@@ -195,7 +198,8 @@ impl App {
     ) -> AppResult<(Team, Vec<CycleView>)> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, team_ref, Visibility::Content).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, team_ref, Visibility::Content).await?;
         let now = self.clock.now();
         if !team.cycles_enabled {
             return Ok((team, Vec::new()));
@@ -236,7 +240,8 @@ impl App {
             .ok_or_else(crate::policy::team_not_found)?;
         let all = tx.cycles().list_for_team(team.id, false).await?;
         let mut v = build_views(&mut *tx, &team, &all, &[c], self.clock.now()).await?;
-        v.pop().ok_or_else(|| AppError::internal("cycle view missing"))
+        v.pop()
+            .ok_or_else(|| AppError::internal("cycle view missing"))
     }
 
     /// Ändert die Cycle-Einstellungen eines Teams: Aktivieren (Startdatum), Zeitplan ändern
@@ -249,7 +254,8 @@ impl App {
     ) -> AppResult<Team> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let team = resolve::team::resolve_in(&mut *tx, &snap, team_ref, Visibility::Content).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, team_ref, Visibility::Content).await?;
         snap.require_team(ctx, Action::ManageCycles, team.id)?;
         let non_inh = self.non_inheriting(&mut *tx).await?;
         let now = self.clock.now();
@@ -274,10 +280,9 @@ impl App {
         }
         let range = |field: &str, v: Option<i32>, lo: i32, hi: i32| -> AppResult<Option<i32>> {
             match v {
-                Some(x) if !(lo..=hi).contains(&x) => Err(invalid(
-                    field,
-                    &format!("must be between {lo} and {hi}"),
-                )),
+                Some(x) if !(lo..=hi).contains(&x) => {
+                    Err(invalid(field, &format!("must be between {lo} and {hi}")))
+                }
                 other => Ok(other),
             }
         };
@@ -374,7 +379,11 @@ impl App {
     }
 
     /// Benennt einen Cycle um bzw. verschiebt Beginn/Ende (docs/04 §1.4 „Einzelne Cycles verschieben“).
-    pub async fn update_cycle(&self, ctx: &RequestCtx, input: UpdateCycleInput) -> AppResult<CycleView> {
+    pub async fn update_cycle(
+        &self,
+        ctx: &RequestCtx,
+        input: UpdateCycleInput,
+    ) -> AppResult<CycleView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
@@ -388,10 +397,10 @@ impl App {
             ctx,
             ids: &*self.ids,
         };
-        if c.archived_at.is_some() || c.completed_at.is_some() {
-            if input.starts_at.is_some() || input.ends_at.is_some() {
-                return Err(invalid("endsAt", "Completed cycles cannot be rescheduled."));
-            }
+        if (c.archived_at.is_some() || c.completed_at.is_some())
+            && (input.starts_at.is_some() || input.ends_at.is_some())
+        {
+            return Err(invalid("endsAt", "Completed cycles cannot be rescheduled."));
         }
         if input.name.is_some() || input.description.is_some() {
             tx.cycles()
@@ -409,13 +418,19 @@ impl App {
             let new_start = input.starts_at.unwrap_or(c.starts_at);
             let new_end = input.ends_at.unwrap_or(c.ends_at);
             if input.starts_at.is_some() && !c.is_future(now) {
-                return Err(invalid("startsAt", "Only the start of an upcoming cycle can be changed."));
+                return Err(invalid(
+                    "startsAt",
+                    "Only the start of an upcoming cycle can be changed.",
+                ));
             }
             if new_start < now && input.starts_at.is_some() {
                 return Err(invalid("startsAt", "The start must not be in the past."));
             }
             if new_end <= now || new_end <= new_start {
-                return Err(invalid("endsAt", "The end must be after the start and not in the past."));
+                return Err(invalid(
+                    "endsAt",
+                    "The end must be after the start and not in the past.",
+                ));
             }
             let all = tx.cycles().list_for_team(c.team_id, true).await?;
             let following = all
@@ -428,7 +443,10 @@ impl App {
                 .filter(|x| x.starts_at < c.starts_at && x.id != c.id)
                 .max_by_key(|x| x.starts_at);
             if preceding.is_some_and(|p| p.ends_at > new_start) {
-                return Err(invalid("startsAt", "The cycle would overlap the previous cycle."));
+                return Err(invalid(
+                    "startsAt",
+                    "The cycle would overlap the previous cycle.",
+                ));
             }
             let mut moves = vec![];
             if let Some(f) = &following
@@ -467,7 +485,8 @@ impl App {
         engine::emit_cycle_updated(&mut *tx, &env, fresh.id, fresh.team_id).await?;
         let mut v = build_views(&mut *tx, &team, &all, &[fresh], now).await?;
         tx.commit().await?;
-        v.pop().ok_or_else(|| AppError::internal("cycle view missing"))
+        v.pop()
+            .ok_or_else(|| AppError::internal("cycle view missing"))
     }
 
     /// `cycleShiftAll`: verschiebt den angegebenen künftigen Cycle und alle späteren um `days`.
@@ -486,7 +505,10 @@ impl App {
             return Err(invalid("id", "Only an upcoming cycle can be shifted."));
         }
         if c.inherited_from_id.is_some() {
-            return Err(invalid("id", "Inherited cycles follow the parent team's cycles."));
+            return Err(invalid(
+                "id",
+                "Inherited cycles follow the parent team's cycles.",
+            ));
         }
         let team = snap
             .tree
@@ -510,14 +532,20 @@ impl App {
             .collect();
         let first_start = moves.first().map(|m| m.1).unwrap_or(c.starts_at);
         if first_start <= now {
-            return Err(invalid("daysToShift", "Cycles cannot be shifted into the past."));
+            return Err(invalid(
+                "daysToShift",
+                "Cycles cannot be shifted into the past.",
+            ));
         }
         let preceding = all
             .iter()
             .filter(|x| x.starts_at < c.starts_at)
             .max_by_key(|x| x.starts_at);
         if preceding.is_some_and(|p| p.ends_at > first_start) {
-            return Err(invalid("daysToShift", "The shift would overlap the previous cycle."));
+            return Err(invalid(
+                "daysToShift",
+                "The shift would overlap the previous cycle.",
+            ));
         }
         let non_inh = self.non_inheriting(&mut *tx).await?;
         let env = Env {
@@ -563,10 +591,16 @@ impl App {
             .filter(|x| x.is_future(now) && x.completed_at.is_none())
             .min_by_key(|x| x.starts_at);
         if next.map(|n| n.id) != Some(c.id) {
-            return Err(invalid("id", "Only the next upcoming cycle can be started today."));
+            return Err(invalid(
+                "id",
+                "Only the next upcoming cycle can be started today.",
+            ));
         }
         if c.inherited_from_id.is_some() {
-            return Err(invalid("id", "Inherited cycles follow the parent team's cycles."));
+            return Err(invalid(
+                "id",
+                "Inherited cycles follow the parent team's cycles.",
+            ));
         }
         let tz = team_tz(&team);
         let new_start = local_midnight_to_utc(utc_to_local_date(now, tz), tz);
@@ -591,7 +625,9 @@ impl App {
             }
             engine::close_cycles(&mut *tx, &env, active, new_start).await?;
         }
-        tx.cycles().update_times(c.id, new_start, c.ends_at, now).await?;
+        tx.cycles()
+            .update_times(c.id, new_start, c.ends_at, now)
+            .await?;
         let fresh = tx
             .cycles()
             .get(c.id)
@@ -612,7 +648,8 @@ impl App {
             .ok_or_else(|| AppError::internal("cycle missing"))?;
         let mut v = build_views(&mut *tx, &team, &all, &[fresh], now).await?;
         tx.commit().await?;
-        v.pop().ok_or_else(|| AppError::internal("cycle view missing"))
+        v.pop()
+            .ok_or_else(|| AppError::internal("cycle view missing"))
     }
 
     /// Archiviert einen abgeschlossenen oder künftigen Cycle; zugeordnete Issues verlieren ihn.
@@ -735,7 +772,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         for id in tx.projects().active_project_ids().await? {
-            let Some(p) = tx.projects().get(id).await? else { continue };
+            let Some(p) = tx.projects().get(id).await? else {
+                continue;
+            };
             let tz = snap
                 .tree
                 .get(p.lead_team_id)

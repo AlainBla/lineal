@@ -13,8 +13,14 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
     let args = if args.is_null() { json!({}) } else { args };
     match tool {
         "list_milestones" => {
-            let (p, list) = app.list_milestones(ctx, required(&args, "project")?).await?;
-            Ok(page("milestones", list.iter().map(|m| milestone_json(&p, m)).collect(), None))
+            let (p, list) = app
+                .list_milestones(ctx, required(&args, "project")?)
+                .await?;
+            Ok(page(
+                "milestones",
+                list.iter().map(|m| milestone_json(&p, m)).collect(),
+                None,
+            ))
         }
         "get_milestone" => {
             let (p, m) = app
@@ -48,6 +54,8 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 .await?;
             Ok(milestone_json(&p, &m))
         }
-        other => Err(AppError::internal(format!("tool `{other}` is not handled by milestones"))),
+        other => Err(AppError::internal(format!(
+            "tool `{other}` is not handled by milestones"
+        ))),
     }
 }

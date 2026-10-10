@@ -22,6 +22,9 @@ use lineal_domain::rules::cycle_calendar::{
 use lineal_domain::rules::progress::stats;
 use std::collections::HashSet;
 
+/// Issue eines gelöschten eigenen Cycles samt dessen Zeitfenster.
+type StrayIssue = (lineal_domain::ids::IssueId, (DateTime<Utc>, DateTime<Utc>));
+
 /// Umgebung eines Engine-Laufs.
 pub struct Env<'a> {
     pub tree: &'a TeamTree,
@@ -67,9 +70,7 @@ pub fn fingerprint(team: &Team) -> String {
 }
 
 async fn emit(tx: &mut dyn Tx, env: &Env<'_>, event: DomainEvent) -> AppResult<()> {
-    tx.outbox()
-        .push(NewEvent::from_ctx(event, env.ctx))
-        .await?;
+    tx.outbox().push(NewEvent::from_ctx(event, env.ctx)).await?;
     Ok(())
 }
 
@@ -103,7 +104,15 @@ pub async fn create_cycle(
             now: env.now,
         })
         .await?;
-    emit(tx, env, DomainEvent::CycleCreated { cycle_id: id, team_id: team }).await?;
+    emit(
+        tx,
+        env,
+        DomainEvent::CycleCreated {
+            cycle_id: id,
+            team_id: team,
+        },
+    )
+    .await?;
     tx.cycles()
         .get(id)
         .await?
@@ -219,7 +228,7 @@ fn overlap_secs(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<U
 }
 
 /// Cycle mit der größten zeitlichen Überschneidung (sonst der nächstfolgende).
-pub fn best_overlap<'a>(cycles: &'a [Cycle], window: (DateTime<Utc>, DateTime<Utc>)) -> Option<&'a Cycle> {
+pub fn best_overlap(cycles: &[Cycle], window: (DateTime<Utc>, DateTime<Utc>)) -> Option<&Cycle> {
     let best = cycles
         .iter()
         .map(|c| (overlap_secs((c.starts_at, c.ends_at), window), c))
@@ -253,7 +262,9 @@ pub async fn ensure_upcoming(
     }
     let tz = team_tz(team);
     let settings = settings_of(team)?;
-    let up = usize::try_from(team.upcoming_cycle_count).unwrap_or(2).max(1);
+    let up = usize::try_from(team.upcoming_cycle_count)
+        .unwrap_or(2)
+        .max(1);
     let cycles = tx.cycles().list_for_team(team.id, true).await?;
     let mut future: Vec<Cycle> = cycles
         .iter()
@@ -278,8 +289,18 @@ pub async fn ensure_upcoming(
             .filter(|c| c.starts_at <= env.now)
             .max_by_key(|c| c.starts_at);
         let windows = match base {
-            Some(b) => generate_following(&settings, tz, utc_to_local_date(b.ends_at, tz), future.len())?,
-            None => generate(&settings, tz, utc_to_local_date(future[0].starts_at, tz), future.len())?,
+            Some(b) => generate_following(
+                &settings,
+                tz,
+                utc_to_local_date(b.ends_at, tz),
+                future.len(),
+            )?,
+            None => generate(
+                &settings,
+                tz,
+                utc_to_local_date(future[0].starts_at, tz),
+                future.len(),
+            )?,
         };
         let moves: Vec<_> = future
             .iter()
@@ -311,7 +332,8 @@ pub async fn ensure_upcoming(
             }
         }
         .remove(0);
-        let created = create_cycle(tx, env, team.id, window.starts_at, window.ends_at, None).await?;
+        let created =
+            create_cycle(tx, env, team.id, window.starts_at, window.ends_at, None).await?;
         if created.starts_at > env.now {
             future_count += 1;
         }
@@ -340,10 +362,12 @@ pub async fn sync_inherited(tx: &mut dyn Tx, env: &Env<'_>, sub: &Team) -> AppRe
     // in den geerbten Cycle mit der größten Überschneidung.
     let strays: Vec<Cycle> = own
         .iter()
-        .filter(|c| c.inherited_from_id.is_none() && c.starts_at > env.now && c.completed_at.is_none())
+        .filter(|c| {
+            c.inherited_from_id.is_none() && c.starts_at > env.now && c.completed_at.is_none()
+        })
         .cloned()
         .collect();
-    let mut stray_issues: Vec<(lineal_domain::ids::IssueId, (DateTime<Utc>, DateTime<Utc>))> = Vec::new();
+    let mut stray_issues: Vec<StrayIssue> = Vec::new();
     for c in &strays {
         for issue in tx.cycles().all_issue_ids(c.id).await? {
             stray_issues.push((issue, (c.starts_at, c.ends_at)));
@@ -497,10 +521,23 @@ pub async fn close_cycles(
         }
         write_snapshot(tx, env, &c, close_time.min(c.ends_at)).await?;
         let rows = tx.cycles().issue_rows(c.id).await?;
-        let progress = stats(&rows.iter().map(IssueScopeRow::progress_input).collect::<Vec<_>>()).progress;
+        let progress = stats(
+            &rows
+                .iter()
+                .map(IssueScopeRow::progress_input)
+                .collect::<Vec<_>>(),
+        )
+        .progress;
         let open = tx.cycles().open_issue_ids(c.id).await?;
         tx.cycles()
-            .close(c.id, close_time, close_time.min(c.ends_at), &open, progress, env.now)
+            .close(
+                c.id,
+                close_time,
+                close_time.min(c.ends_at),
+                &open,
+                progress,
+                env.now,
+            )
             .await?;
         emit(
             tx,
@@ -601,10 +638,15 @@ pub async fn deactivate(tx: &mut dyn Tx, env: &Env<'_>, team: &Team) -> AppResul
     let cycles = tx.cycles().list_for_team(team.id, true).await?;
     for c in &cycles {
         for child in tx.cycles().list_inheriting(c.id).await? {
-            tx.cycles().set_inherited_from(child.id, None, env.now).await?;
+            tx.cycles()
+                .set_inherited_from(child.id, None, env.now)
+                .await?;
         }
     }
-    for c in cycles.iter().filter(|c| c.completed_at.is_none() && c.archived_at.is_none()) {
+    for c in cycles
+        .iter()
+        .filter(|c| c.completed_at.is_none() && c.archived_at.is_none())
+    {
         if c.starts_at <= env.now {
             if c.started_processed_at.is_none() {
                 tx.cycles().mark_started(c.id, env.now).await?;
@@ -622,7 +664,10 @@ pub async fn deactivate(tx: &mut dyn Tx, env: &Env<'_>, team: &Team) -> AppResul
                 if state.is_some_and(|(_, s)| {
                     matches!(
                         s,
-                        StateType::Triage | StateType::Backlog | StateType::Unstarted | StateType::Started
+                        StateType::Triage
+                            | StateType::Backlog
+                            | StateType::Unstarted
+                            | StateType::Started
                     )
                 }) {
                     let t = tx
@@ -648,7 +693,13 @@ async fn close_cycles_single(tx: &mut dyn Tx, env: &Env<'_>, c: &Cycle) -> AppRe
     let close_time = env.now.min(c.ends_at);
     write_snapshot(tx, env, c, close_time).await?;
     let rows = tx.cycles().issue_rows(c.id).await?;
-    let progress = stats(&rows.iter().map(IssueScopeRow::progress_input).collect::<Vec<_>>()).progress;
+    let progress = stats(
+        &rows
+            .iter()
+            .map(IssueScopeRow::progress_input)
+            .collect::<Vec<_>>(),
+    )
+    .progress;
     let open = tx.cycles().open_issue_ids(c.id).await?;
     tx.cycles()
         .close(c.id, close_time, close_time, &open, progress, env.now)

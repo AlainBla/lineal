@@ -18,7 +18,9 @@ use uuid::Uuid;
 
 /// Feste ID des Seed-Cycles Nummer `n` (1–4) von ENG.
 pub fn seed_cycle_id(n: u128) -> CycleId {
-    CycleId(Uuid::from_u128(0xC7C1_E000_0000_7000_8000_0000_0000_0000 + n))
+    CycleId(Uuid::from_u128(
+        0xC7C1_E000_0000_7000_8000_0000_0000_0000 + n,
+    ))
 }
 
 /// Das Seed-Projekt `P-ENG-1`.
@@ -43,7 +45,9 @@ fn t0() -> DateTime<Utc> {
 }
 
 fn at(y: i32, m: u32, d: u32, h: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(y, m, d, h, 0, 0).single().unwrap_or_default()
+    Utc.with_ymd_and_hms(y, m, d, h, 0, 0)
+        .single()
+        .unwrap_or_default()
 }
 
 /// Legt die Beispieldaten dieses Bereichs an.
@@ -161,6 +165,8 @@ pub async fn seed(tx: &mut dyn Tx, data: &SeedData) -> AppResult<()> {
             now,
         })
         .await?;
-    tx.initiatives().link_project(initiative, project, now).await?;
+    tx.initiatives()
+        .link_project(initiative, project, now)
+        .await?;
     Ok(())
 }

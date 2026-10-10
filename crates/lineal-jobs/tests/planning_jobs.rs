@@ -53,10 +53,12 @@ async fn reminders_are_sent_once_per_slot_and_stage(pool: PgPool) {
     job.run(&app, utc(2026, 10, 14, 14, 5)).await.unwrap();
     assert_eq!(prompts(&pool).await, 2);
     // Der Initiative-Modus (Workspace-Default: keine Frequenz) erzeugt nichts.
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM notification WHERE type = 'initiativeUpdatePrompt'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notification WHERE type = 'initiativeUpdatePrompt'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(n, 0);
 }
 
@@ -67,14 +69,20 @@ async fn paused_and_never_modes_suppress_reminders(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    UpdateRemindersJob.run(&app, utc(2026, 10, 9, 14, 5)).await.unwrap();
+    UpdateRemindersJob
+        .run(&app, utc(2026, 10, 9, 14, 5))
+        .await
+        .unwrap();
     assert_eq!(prompts(&pool).await, 0);
     sqlx::query("UPDATE project SET update_reminder_mode = 'followWorkspace', update_reminders_paused_until_at = $1")
         .bind(utc(2026, 11, 1, 0, 0))
         .execute(&pool)
         .await
         .unwrap();
-    UpdateRemindersJob.run(&app, utc(2026, 10, 9, 14, 5)).await.unwrap();
+    UpdateRemindersJob
+        .run(&app, utc(2026, 10, 9, 14, 5))
+        .await
+        .unwrap();
     assert_eq!(prompts(&pool).await, 0);
 }
 
@@ -100,11 +108,12 @@ async fn cycles_job_generates_and_rolls_over(pool: PgPool) {
     .await
     .unwrap();
     assert!(completed2.is_some() && started3.is_some());
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM cycle WHERE team_id = $1 AND starts_at > $2")
-        .bind(SeedData::acme().eng.0)
-        .bind(utc(2026, 11, 1, 23, 5))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM cycle WHERE team_id = $1 AND starts_at > $2")
+            .bind(SeedData::acme().eng.0)
+            .bind(utc(2026, 11, 1, 23, 5))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(n, 2, "upcomingCycleCount = 2 wird wieder aufgefüllt");
 }

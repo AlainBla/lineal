@@ -6,8 +6,8 @@
 pub mod graph;
 pub mod update;
 
-use super::project::pure::{self, HealthCounts, health_rollup, patch_error};
 use super::project::emit;
+use super::project::pure::{self, HealthCounts, health_rollup, patch_error};
 use crate::app::App;
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
@@ -148,10 +148,7 @@ async fn require_enabled(tx: &mut dyn Tx) -> AppResult<serde_json::Value> {
     }
 }
 
-fn graph_error(
-    e: graph::GraphError,
-    ident: impl Fn(InitiativeId) -> String,
-) -> AppError {
+fn graph_error(e: graph::GraphError, ident: impl Fn(InitiativeId) -> String) -> AppError {
     match e {
         graph::GraphError::Cycle(path) => AppError::invalid_request(format!(
             "Adding {} as parent of {} would create a cycle",
@@ -306,7 +303,9 @@ impl App {
             let mut projects = Vec::new();
             let mut health_inputs: Vec<Option<Health>> = Vec::new();
             for pid in &recursive {
-                let Some(p) = projects_by_id.get(pid) else { continue };
+                let Some(p) = projects_by_id.get(pid) else {
+                    continue;
+                };
                 if !project_visible(*pid) {
                     continue;
                 }
@@ -331,8 +330,8 @@ impl App {
             }
             let owner = match i.owner_id {
                 Some(id) => {
-                    if !users.contains_key(&id) {
-                        users.insert(id, tx.users().get(id).await?);
+                    if let std::collections::hash_map::Entry::Vacant(e) = users.entry(id) {
+                        e.insert(tx.users().get(id).await?);
                     }
                     users.get(&id).cloned().flatten()
                 }
@@ -340,8 +339,8 @@ impl App {
             };
             let creator = match i.creator_id {
                 Some(id) => {
-                    if !users.contains_key(&id) {
-                        users.insert(id, tx.users().get(id).await?);
+                    if let std::collections::hash_map::Entry::Vacant(e) = users.entry(id) {
+                        e.insert(tx.users().get(id).await?);
                     }
                     users.get(&id).cloned().flatten()
                 }
@@ -399,16 +398,27 @@ impl App {
             filter.owner = Some(resolve::user::resolve_in(&mut *tx, &snap, ctx, o).await?.id);
         }
         if let Some(t) = &input.lead_team {
-            filter.lead_team =
-                Some(resolve::team::resolve_in(&mut *tx, &snap, t, Visibility::Content).await?.id);
+            filter.lead_team = Some(
+                resolve::team::resolve_in(&mut *tx, &snap, t, Visibility::Content)
+                    .await?
+                    .id,
+            );
         }
         if let Some(p) = &input.parent_initiative {
-            filter.parent = Some(resolve::initiative::resolve_in(&mut *tx, &snap, p).await?.id);
+            filter.parent = Some(
+                resolve::initiative::resolve_in(&mut *tx, &snap, p)
+                    .await?
+                    .id,
+            );
         }
         if let Some(l) = &input.label {
             let r = l.trim();
             let ids: Vec<Uuid> = if let Ok(id) = Uuid::parse_str(r) {
-                tx.initiatives().get_label(id).await?.map(|x| vec![x.id]).unwrap_or_default()
+                tx.initiatives()
+                    .get_label(id)
+                    .await?
+                    .map(|x| vec![x.id])
+                    .unwrap_or_default()
             } else {
                 tx.initiatives()
                     .find_labels_by_name(r)
@@ -446,7 +456,8 @@ impl App {
         let mut v = self
             .initiative_views(&mut *tx, &snap, vec![i], self.clock.now())
             .await?;
-        v.pop().ok_or_else(|| AppError::internal("initiative view missing"))
+        v.pop()
+            .ok_or_else(|| AppError::internal("initiative view missing"))
     }
 
     /// `save_initiative`: Create ohne `id`, Update mit `id`. `parentInitiatives` fügt Eltern hinzu.
@@ -471,17 +482,23 @@ impl App {
         if let Some(s) = &input.summary
             && s.chars().count() > 255
         {
-            return Err(AppError::invalid_request("summary must be at most 255 characters")
-                .with_details(json!({ "field": "summary" })));
+            return Err(
+                AppError::invalid_request("summary must be at most 255 characters")
+                    .with_details(json!({ "field": "summary" })),
+            );
         }
         if let Some(p) = input.priority
             && !(0..=4).contains(&p)
         {
-            return Err(AppError::invalid_request("priority must be between 0 and 4")
-                .with_details(json!({ "field": "priority" })));
+            return Err(
+                AppError::invalid_request("priority must be between 0 and 4")
+                    .with_details(json!({ "field": "priority" })),
+            );
         }
         if let Some(c) = &input.color
-            && !(c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit()))
+            && !(c.len() == 7
+                && c.starts_with('#')
+                && c[1..].chars().all(|x| x.is_ascii_hexdigit()))
         {
             return Err(AppError::invalid_request("color must be #RRGGBB")
                 .with_details(json!({ "field": "color" })));
@@ -498,7 +515,9 @@ impl App {
             .transpose()?;
         let lead_team = match &input.lead_team {
             Some(Some(r)) => Some(Some(
-                resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content).await?.id,
+                resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content)
+                    .await?
+                    .id,
             )),
             Some(None) => Some(None),
             None => None,
@@ -507,8 +526,10 @@ impl App {
             Some(Some(r)) => {
                 let u = resolve::user::resolve_in(&mut *tx, &snap, ctx, r).await?;
                 if u.role == UserRole::Guest {
-                    return Err(AppError::invalid_request("A guest cannot own an initiative.")
-                        .with_details(json!({ "field": "owner" })));
+                    return Err(
+                        AppError::invalid_request("A guest cannot own an initiative.")
+                            .with_details(json!({ "field": "owner" })),
+                    );
                 }
                 Some(Some(u.id))
             }
@@ -564,7 +585,12 @@ impl App {
                         now,
                     })
                     .await?;
-                emit(&mut *tx, ctx, DomainEvent::InitiativeCreated { initiative_id: id }).await?;
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::InitiativeCreated { initiative_id: id },
+                )
+                .await?;
                 id
             }
             Some(reference) => {
@@ -627,7 +653,14 @@ impl App {
                     patch.target_date_resolution = Some(tr);
                 }
                 tx.initiatives().update(cur.id, &patch, now).await?;
-                emit(&mut *tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: cur.id }).await?;
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::InitiativeUpdated {
+                        initiative_id: cur.id,
+                    },
+                )
+                .await?;
                 cur.id
             }
         };
@@ -647,14 +680,20 @@ impl App {
             for r in &input.parent_initiatives {
                 let parent = resolve::initiative::resolve_in(&mut *tx, &snap, r).await?;
                 graph::check_add_parent(&edges, id, parent.id, limit)
-                    .map_err(|e| graph_error(e, &ident))?;
+                    .map_err(|e| graph_error(e, ident))?;
                 let sort = tx.initiatives().max_child_sort_order(parent.id).await? + 1.0;
-                if tx.initiatives().insert_edge(parent.id, id, sort, now).await? {
+                if tx
+                    .initiatives()
+                    .insert_edge(parent.id, id, sort, now)
+                    .await?
+                {
                     edges.push((parent.id, id));
                     emit(
                         &mut *tx,
                         ctx,
-                        DomainEvent::InitiativeUpdated { initiative_id: parent.id },
+                        DomainEvent::InitiativeUpdated {
+                            initiative_id: parent.id,
+                        },
                     )
                     .await?;
                 }
@@ -672,7 +711,8 @@ impl App {
             .ok_or_else(|| AppError::internal("initiative missing after save"))?;
         let mut v = self.initiative_views(&mut *tx, &snap, vec![i], now).await?;
         tx.commit().await?;
-        v.pop().ok_or_else(|| AppError::internal("initiative view missing"))
+        v.pop()
+            .ok_or_else(|| AppError::internal("initiative view missing"))
     }
 
     /// Entfernt eine Eltern-Beziehung (nicht über MCP erreichbar; Web-App/API).
@@ -691,8 +731,22 @@ impl App {
         tx.initiatives().lock_hierarchy().await?;
         let removed = tx.initiatives().delete_edge(p.id, child.id).await?;
         if removed {
-            emit(&mut *tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: p.id }).await?;
-            emit(&mut *tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: child.id }).await?;
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::InitiativeUpdated {
+                    initiative_id: p.id,
+                },
+            )
+            .await?;
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::InitiativeUpdated {
+                    initiative_id: child.id,
+                },
+            )
+            .await?;
         }
         tx.commit().await?;
         Ok(removed)
@@ -714,13 +768,29 @@ impl App {
         let p = resolve::project::resolve_in(&mut *tx, &snap, project).await?;
         let now = self.clock.now();
         let changed = if linked {
-            tx.initiatives().link_project(i.id, p.project.id, now).await?
+            tx.initiatives()
+                .link_project(i.id, p.project.id, now)
+                .await?
         } else {
             tx.initiatives().unlink_project(i.id, p.project.id).await?
         };
         if changed {
-            emit(&mut *tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i.id }).await?;
-            emit(&mut *tx, ctx, DomainEvent::ProjectUpdated { project_id: p.project.id }).await?;
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::InitiativeUpdated {
+                    initiative_id: i.id,
+                },
+            )
+            .await?;
+            emit(
+                &mut *tx,
+                ctx,
+                DomainEvent::ProjectUpdated {
+                    project_id: p.project.id,
+                },
+            )
+            .await?;
         }
         tx.commit().await
     }
@@ -747,7 +817,14 @@ impl App {
                 now,
             )
             .await?;
-        emit(&mut *tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::InitiativeUpdated {
+                initiative_id: i.id,
+            },
+        )
+        .await?;
         tx.commit().await
     }
 
@@ -768,7 +845,14 @@ impl App {
                 now,
             )
             .await?;
-        emit(&mut *tx, ctx, DomainEvent::InitiativeRemoved { initiative_id: i.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::InitiativeRemoved {
+                initiative_id: i.id,
+            },
+        )
+        .await?;
         tx.commit().await
     }
 }
@@ -779,12 +863,27 @@ mod tests {
 
     #[test]
     fn status_parsing_accepts_name_id_and_type() {
-        assert_eq!(parse_initiative_status("Active"), Some(InitiativeStatus::Active));
-        assert_eq!(parse_initiative_status("started"), Some(InitiativeStatus::Active));
-        assert_eq!(parse_initiative_status("backlog"), Some(InitiativeStatus::Proposed));
-        assert_eq!(parse_initiative_status("CANCELED"), Some(InitiativeStatus::Canceled));
+        assert_eq!(
+            parse_initiative_status("Active"),
+            Some(InitiativeStatus::Active)
+        );
+        assert_eq!(
+            parse_initiative_status("started"),
+            Some(InitiativeStatus::Active)
+        );
+        assert_eq!(
+            parse_initiative_status("backlog"),
+            Some(InitiativeStatus::Proposed)
+        );
+        assert_eq!(
+            parse_initiative_status("CANCELED"),
+            Some(InitiativeStatus::Canceled)
+        );
         assert_eq!(parse_initiative_status("nope"), None);
-        assert_eq!(initiative_status_ref(InitiativeStatus::Active), ("active", "Active", "started"));
+        assert_eq!(
+            initiative_status_ref(InitiativeStatus::Active),
+            ("active", "Active", "started")
+        );
     }
 
     #[test]
@@ -795,7 +894,11 @@ mod tests {
 
     #[test]
     fn cycle_error_lists_the_path() {
-        let (a, b, c) = (InitiativeId::new_v7(), InitiativeId::new_v7(), InitiativeId::new_v7());
+        let (a, b, c) = (
+            InitiativeId::new_v7(),
+            InitiativeId::new_v7(),
+            InitiativeId::new_v7(),
+        );
         let name = |i: InitiativeId| {
             if i == a {
                 "I-1".to_string()

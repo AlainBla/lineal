@@ -15,9 +15,7 @@ use lineal_app::ports::repos::project::{
 use lineal_app::ports::repos::user::{OrderBy, Page, PageCursor, PageRequest};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::{DateResolution, Health, ProjectStatusType};
-use lineal_domain::ids::{
-    IssueId, MilestoneId, OrgId, ProjectId, ProjectUpdateId, TeamId, UserId,
-};
+use lineal_domain::ids::{IssueId, MilestoneId, OrgId, ProjectId, ProjectUpdateId, TeamId, UserId};
 use serde_json::{Value, json};
 use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
@@ -79,7 +77,9 @@ pub(crate) mod sets {
 }
 
 pub(crate) fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 pub(crate) fn parse_res(s: Option<String>) -> AppResult<Option<DateResolution>> {
@@ -233,8 +233,7 @@ struct MilestoneRow {
     updated_at: DateTime<Utc>,
 }
 
-const MILESTONE_COLS: &str =
-    "id, project_id, name, description, target_date, sort_order, archived_at, version, created_at, updated_at";
+const MILESTONE_COLS: &str = "id, project_id, name, description, target_date, sort_order, archived_at, version, created_at, updated_at";
 
 impl From<MilestoneRow> for Milestone {
     fn from(r: MilestoneRow) -> Self {
@@ -458,7 +457,10 @@ impl ProjectRepo for PgTx {
             patch.health.map(|o| o.map(|h| h.as_str().to_owned())),
         );
         s.set_opt("health_updated_at", patch.health_updated_at);
-        s.set_opt("last_update_id", patch.last_update_id.map(|o| o.map(|u| u.0)));
+        s.set_opt(
+            "last_update_id",
+            patch.last_update_id.map(|o| o.map(|u| u.0)),
+        );
         s.set_some("update_reminder_mode", patch.update_reminder_mode.clone());
         s.set_opt(
             "update_reminder_frequency_in_weeks",
@@ -472,7 +474,11 @@ impl ProjectRepo for PgTx {
         );
         if let Some(t) = patch.trashed {
             s.set("trashed", t);
-            s.raw(if t { "trashed_at = now()" } else { "trashed_at = NULL" });
+            s.raw(if t {
+                "trashed_at = now()"
+            } else {
+                "trashed_at = NULL"
+            });
         }
         s.set_opt("archived_at", patch.archived_at);
         s.raw("version = version + 1");
@@ -482,10 +488,7 @@ impl ProjectRepo for PgTx {
         qb.push_bind(self.org.0);
         qb.push(" AND id = ");
         qb.push_bind(id.0);
-        qb.push(format!(
-            " RETURNING {}",
-            PROJECT_COLS.replace("p.", "")
-        ));
+        qb.push(format!(" RETURNING {}", PROJECT_COLS.replace("p.", "")));
         let row = qb
             .build_query_as::<ProjectRow>()
             .fetch_optional(&mut *self.tx)
@@ -554,11 +557,7 @@ impl ProjectRepo for PgTx {
         rows.into_iter().map(ProjectRow::into_project).collect()
     }
 
-    async fn list(
-        &mut self,
-        f: &ProjectFilter,
-        page: &PageRequest,
-    ) -> AppResult<Page<Project>> {
+    async fn list(&mut self, f: &ProjectFilter, page: &PageRequest) -> AppResult<Page<Project>> {
         let order_col = match page.order_by {
             OrderBy::CreatedAt => "p.created_at",
             OrderBy::UpdatedAt => "p.updated_at",
@@ -680,7 +679,12 @@ impl ProjectRepo for PgTx {
         .map_err(db_err)
     }
 
-    async fn add_alias(&mut self, id: ProjectId, identifier: &str, team_key: &str) -> AppResult<()> {
+    async fn add_alias(
+        &mut self,
+        id: ProjectId,
+        identifier: &str,
+        team_key: &str,
+    ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO issue_identifier_alias (organization_id, identifier, entity_type, project_id, team_key) \
              VALUES ($1, upper($2), 'project', $3, $4) ON CONFLICT (organization_id, identifier) DO NOTHING",
@@ -788,7 +792,12 @@ impl ProjectRepo for PgTx {
         Ok(rows.into_iter().map(UserId).collect())
     }
 
-    async fn add_member(&mut self, id: ProjectId, user: UserId, now: DateTime<Utc>) -> AppResult<()> {
+    async fn add_member(
+        &mut self,
+        id: ProjectId,
+        user: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO project_member (organization_id, project_id, user_id, created_at) \
              VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, user_id) DO NOTHING",
@@ -956,7 +965,12 @@ impl ProjectRepo for PgTx {
         .map_err(db_err)
     }
 
-    async fn subscribe(&mut self, id: ProjectId, user: UserId, now: DateTime<Utc>) -> AppResult<()> {
+    async fn subscribe(
+        &mut self,
+        id: ProjectId,
+        user: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO notification_subscription (organization_id, subscriber_id, target_type, project_id, \
              created_at, updated_at) VALUES ($1, $2, 'project', $3, $4, $4) ON CONFLICT DO NOTHING",
@@ -1075,7 +1089,10 @@ impl ProjectRepo for PgTx {
             let mut changes = serde_json::Map::new();
             changes.insert("projectId".into(), json!({ "from": id.0, "to": null }));
             if let Some(m) = milestone {
-                changes.insert("projectMilestoneId".into(), json!({ "from": m, "to": null }));
+                changes.insert(
+                    "projectMilestoneId".into(),
+                    json!({ "from": m, "to": null }),
+                );
             }
             sqlx::query(
                 "INSERT INTO issue_history (organization_id, issue_id, actor_id, source, changes, created_at) \
@@ -1554,12 +1571,11 @@ impl ProjectRepo for PgTx {
     }
 
     async fn orgs_with_planning(&mut self) -> AppResult<Vec<OrgId>> {
-        let rows: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM organization WHERE archived_at IS NULL ORDER BY id",
-        )
-        .fetch_all(&mut *self.tx)
-        .await
-        .map_err(db_err)?;
+        let rows: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM organization WHERE archived_at IS NULL ORDER BY id")
+                .fetch_all(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
         Ok(rows.into_iter().map(OrgId).collect())
     }
 
@@ -1643,7 +1659,11 @@ impl ProjectRepo for PgTx {
         };
         pad_set(&mut p.scope_history, idx, point.scope);
         pad_set(&mut p.completed_scope_history, idx, point.completed_scope);
-        pad_set(&mut p.in_progress_scope_history, idx, point.in_progress_scope);
+        pad_set(
+            &mut p.in_progress_scope_history,
+            idx,
+            point.in_progress_scope,
+        );
         pad_set(&mut p.issue_count_history, idx, point.issue_count);
         pad_set(
             &mut p.completed_issue_count_history,

@@ -254,11 +254,7 @@ pub trait CycleRepo: Send {
     async fn team_schedule_fp(&mut self, _team: TeamId) -> AppResult<Option<String>> {
         unimplemented_repo()
     }
-    async fn set_team_schedule_fp(
-        &mut self,
-        _team: TeamId,
-        _fp: Option<&str>,
-    ) -> AppResult<()> {
+    async fn set_team_schedule_fp(&mut self, _team: TeamId, _fp: Option<&str>) -> AppResult<()> {
         unimplemented_repo()
     }
     /// Teams **ohne** aktivierte Cycles, die noch offene (nicht abgeschlossene, nicht archivierte)

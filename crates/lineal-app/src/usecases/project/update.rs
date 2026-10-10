@@ -45,7 +45,11 @@ pub struct ListProjectUpdatesInput {
 }
 
 /// Länge des Erinnerungszyklus in Tagen (docs/04 §5.4): `never` = keine Erwartung.
-pub(crate) fn reminder_cycle_days(mode: &str, own_weeks: Option<i32>, org_weeks: Option<i32>) -> Option<i64> {
+pub(crate) fn reminder_cycle_days(
+    mode: &str,
+    own_weeks: Option<i32>,
+    org_weeks: Option<i32>,
+) -> Option<i64> {
     let weeks = match mode {
         "never" => None,
         "custom" => own_weeks.or(org_weeks),
@@ -98,7 +102,8 @@ async fn view_of(
     let status = statuses.iter().find(|s| s.id == project.status_id);
     let settings = tx.projects().reminder_settings().await?;
     let latest = tx.projects().latest_update(project.id, None).await?;
-    let expected = status.is_some_and(|s| s.status_type == ProjectStatusType::Started && !s.indefinite);
+    let expected =
+        status.is_some_and(|s| s.status_type == ProjectStatusType::Started && !s.indefinite);
     let days = reminder_cycle_days(
         &project.update_reminder_mode,
         project.update_reminder_frequency_in_weeks,
@@ -126,11 +131,7 @@ async fn view_of(
 
 /// Setzt `lastUpdate`, `health` und `healthUpdatedAt` des Projekts aus dem jüngsten nicht
 /// archivierten Update (oder leert sie).
-async fn refresh_parent(
-    tx: &mut dyn Tx,
-    project: ProjectId,
-    now: DateTime<Utc>,
-) -> AppResult<()> {
+async fn refresh_parent(tx: &mut dyn Tx, project: ProjectId, now: DateTime<Utc>) -> AppResult<()> {
     let latest = tx.projects().latest_update(project, None).await?;
     let patch = match latest {
         Some(l) => ProjectPatch {
@@ -191,7 +192,12 @@ impl App {
             ..Default::default()
         };
         if let Some(p) = &input.project {
-            filter.project = Some(resolve::project::resolve_in(&mut *tx, &snap, p).await?.project.id);
+            filter.project = Some(
+                resolve::project::resolve_in(&mut *tx, &snap, p)
+                    .await?
+                    .project
+                    .id,
+            );
         }
         if let Some(u) = &input.user {
             filter.user = Some(resolve::user::resolve_in(&mut *tx, &snap, ctx, u).await?.id);
@@ -310,8 +316,10 @@ impl App {
         let (u, teams) = resolve_update(&mut *tx, &snap, reference).await?;
         require_manage(&snap, ctx, Action::PostProjectUpdate, &teams)?;
         if resolve::user::actor_user_id(ctx) != Some(u.user_id) {
-            return Err(AppError::forbidden("Only the author can edit a status update.")
-                .with_details(json!({ "reason": "not_author" })));
+            return Err(
+                AppError::forbidden("Only the author can edit a status update.")
+                    .with_details(json!({ "reason": "not_author" })),
+            );
         }
         if u.archived_at.is_some() {
             return Err(AppError::invalid_request("The status update is archived.")
@@ -356,10 +364,10 @@ impl App {
         require_manage(&snap, ctx, Action::PostProjectUpdate, &teams)?;
         let is_author = resolve::user::actor_user_id(ctx) == Some(u.user_id);
         if !(is_author || snap.actor.is_admin() || snap.actor.is_system()) {
-            return Err(
-                AppError::forbidden("Only the author or an admin can delete a status update.")
-                    .with_details(json!({ "reason": "not_author" })),
-            );
+            return Err(AppError::forbidden(
+                "Only the author or an admin can delete a status update.",
+            )
+            .with_details(json!({ "reason": "not_author" })));
         }
         if u.archived_at.is_some() {
             return Err(AppError::not_found("Could not find status update.")
@@ -387,7 +395,10 @@ mod tests {
 
     #[test]
     fn cycle_days_follow_mode() {
-        assert_eq!(reminder_cycle_days("followWorkspace", Some(2), Some(1)), Some(7));
+        assert_eq!(
+            reminder_cycle_days("followWorkspace", Some(2), Some(1)),
+            Some(7)
+        );
         assert_eq!(reminder_cycle_days("custom", Some(2), Some(1)), Some(14));
         assert_eq!(reminder_cycle_days("custom", None, Some(1)), Some(7));
         assert_eq!(reminder_cycle_days("never", Some(2), Some(1)), None);

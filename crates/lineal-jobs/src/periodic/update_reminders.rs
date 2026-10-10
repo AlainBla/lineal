@@ -10,7 +10,9 @@
 
 use crate::{PeriodicJob, Schedule};
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Weekday};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Weekday,
+};
 use chrono_tz::Tz;
 use lineal_app::ports::repos::project::{ReminderSettings, ReminderTarget};
 use lineal_app::{App, AppResult, RequestCtx};
@@ -110,7 +112,11 @@ fn effective_config(t: &ReminderTarget, s: &ReminderSettings, initiative: bool) 
             s.initiative_hour,
         )
     } else {
-        (s.project_frequency_in_weeks, s.project_day.as_str(), s.project_hour)
+        (
+            s.project_frequency_in_weeks,
+            s.project_day.as_str(),
+            s.project_hour,
+        )
     };
     let (weeks, day, hour) = match t.mode.as_str() {
         "never" => return None,
@@ -158,7 +164,11 @@ async fn remind_org(app: &App, ctx: &RequestCtx, now: DateTime<Utc>) -> AppResul
     let Some(settings) = tx.projects().reminder_settings().await? else {
         return Ok(());
     };
-    let initiatives_enabled = tx.orgs().get().await?.is_some_and(|o| o.initiatives_enabled);
+    let initiatives_enabled = tx
+        .orgs()
+        .get()
+        .await?
+        .is_some_and(|o| o.initiatives_enabled);
     let mut work: Vec<(&'static str, ReminderTarget)> = tx
         .projects()
         .reminder_targets()
@@ -176,7 +186,9 @@ async fn remind_org(app: &App, ctx: &RequestCtx, now: DateTime<Utc>) -> AppResul
         );
     }
     for (kind, t) in work {
-        let Some(recipient) = t.recipient_id else { continue };
+        let Some(recipient) = t.recipient_id else {
+            continue;
+        };
         if t.paused_until.is_some_and(|p| p > now) {
             continue;
         }
@@ -202,7 +214,11 @@ async fn remind_org(app: &App, ctx: &RequestCtx, now: DateTime<Utc>) -> AppResul
                 continue;
             }
             let stage = stage as i32;
-            if tx.projects().reminder_sent(kind, t.target_id, due, stage).await? {
+            if tx
+                .projects()
+                .reminder_sent(kind, t.target_id, due, stage)
+                .await?
+            {
                 break;
             }
             tx.projects()
@@ -225,30 +241,77 @@ mod tests {
     #[test]
     fn weekly_slot_is_the_last_matching_friday() {
         // Samstag 2026-10-10: letzter Freitag 14:00 war der 9. (UTC)
-        let due = due_slot(utc(2026, 10, 10, 7), utc(2026, 1, 5, 9), Weekday::Fri, 14, 1, chrono_tz::UTC);
+        let due = due_slot(
+            utc(2026, 10, 10, 7),
+            utc(2026, 1, 5, 9),
+            Weekday::Fri,
+            14,
+            1,
+            chrono_tz::UTC,
+        );
         assert_eq!(due, Some(utc(2026, 10, 9, 14)));
         // Freitag vor 14:00 → Vorwoche
-        let due = due_slot(utc(2026, 10, 9, 10), utc(2026, 1, 5, 9), Weekday::Fri, 14, 1, chrono_tz::UTC);
+        let due = due_slot(
+            utc(2026, 10, 9, 10),
+            utc(2026, 1, 5, 9),
+            Weekday::Fri,
+            14,
+            1,
+            chrono_tz::UTC,
+        );
         assert_eq!(due, Some(utc(2026, 10, 2, 14)));
     }
 
     #[test]
     fn biweekly_aligns_to_the_first_slot_and_local_time_counts() {
         // erster Freitag nach 2026-01-05 ist der 9.1.; alle 2 Wochen → 9.10. liegt 39 Wochen später (ungerade) → 2.10.
-        let due = due_slot(utc(2026, 10, 10, 7), utc(2026, 1, 5, 9), Weekday::Fri, 14, 2, chrono_tz::UTC);
+        let due = due_slot(
+            utc(2026, 10, 10, 7),
+            utc(2026, 1, 5, 9),
+            Weekday::Fri,
+            14,
+            2,
+            chrono_tz::UTC,
+        );
         assert_eq!(due, Some(utc(2026, 10, 2, 14)));
         // Berlin (UTC+2 im Oktober): 14:00 lokal = 12:00 UTC
-        let due = due_slot(utc(2026, 10, 10, 7), utc(2026, 1, 5, 9), Weekday::Fri, 14, 1, chrono_tz::Europe::Berlin);
+        let due = due_slot(
+            utc(2026, 10, 10, 7),
+            utc(2026, 1, 5, 9),
+            Weekday::Fri,
+            14,
+            1,
+            chrono_tz::Europe::Berlin,
+        );
         assert_eq!(due, Some(utc(2026, 10, 9, 12)));
         // vor dem ersten Termin
-        assert_eq!(due_slot(utc(2026, 1, 6, 9), utc(2026, 1, 5, 9), Weekday::Fri, 14, 1, chrono_tz::UTC), None);
+        assert_eq!(
+            due_slot(
+                utc(2026, 1, 6, 9),
+                utc(2026, 1, 5, 9),
+                Weekday::Fri,
+                14,
+                1,
+                chrono_tz::UTC
+            ),
+            None
+        );
     }
 
     #[test]
     fn working_days_skip_weekends() {
         // Freitag + 1 Arbeitstag = Montag; + 3 = Mittwoch
-        assert_eq!(add_working_days(utc(2026, 10, 9, 14), 1), utc(2026, 10, 12, 14));
-        assert_eq!(add_working_days(utc(2026, 10, 9, 14), 3), utc(2026, 10, 14, 14));
-        assert_eq!(add_working_days(utc(2026, 10, 9, 14), 0), utc(2026, 10, 9, 14));
+        assert_eq!(
+            add_working_days(utc(2026, 10, 9, 14), 1),
+            utc(2026, 10, 12, 14)
+        );
+        assert_eq!(
+            add_working_days(utc(2026, 10, 9, 14), 3),
+            utc(2026, 10, 14, 14)
+        );
+        assert_eq!(
+            add_working_days(utc(2026, 10, 9, 14), 0),
+            utc(2026, 10, 9, 14)
+        );
     }
 }

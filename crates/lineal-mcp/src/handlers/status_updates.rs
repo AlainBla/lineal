@@ -12,6 +12,7 @@ use lineal_app::{App, AppError, AppResult, RequestCtx};
 use lineal_domain::enums::Health;
 use serde_json::{Value, json};
 
+#[allow(clippy::too_many_arguments)]
 fn common(
     kind: &str,
     id: &str,
@@ -89,14 +90,19 @@ fn initiative_update_json(ws: &str, v: &InitiativeUpdateView) -> Value {
 fn health(args: &Value) -> AppResult<Option<Health>> {
     arg_str(args, "health")
         .map(|h| {
-            h.parse::<Health>()
-                .map_err(|_| AppError::invalid_request("`health` must be onTrack, atRisk or offTrack"))
+            h.parse::<Health>().map_err(|_| {
+                AppError::invalid_request("`health` must be onTrack, atRisk or offTrack")
+            })
         })
         .transpose()
 }
 
 fn wrong_parent(kind: &str) -> AppError {
-    let other = if kind == "project" { "initiative" } else { "project" };
+    let other = if kind == "project" {
+        "initiative"
+    } else {
+        "project"
+    };
     AppError::invalid_request(format!("`{other}` cannot be used with type `{kind}`"))
         .with_details(json!({ "path": format!("/{other}") }))
 }
@@ -106,7 +112,9 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
     let args = if args.is_null() { json!({}) } else { args };
     let kind = required(&args, "type")?.to_owned();
     if kind != "project" && kind != "initiative" {
-        return Err(AppError::invalid_request("`type` must be project or initiative"));
+        return Err(AppError::invalid_request(
+            "`type` must be project or initiative",
+        ));
     }
     let ws = {
         let org = app.get_workspace(ctx).await?;
@@ -122,13 +130,23 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             }
             if let Some(id) = arg_str(&args, "id") {
                 return if kind == "project" {
-                    Ok(project_update_json(&ws, &app.get_project_update(ctx, id).await?))
+                    Ok(project_update_json(
+                        &ws,
+                        &app.get_project_update(ctx, id).await?,
+                    ))
                 } else {
-                    Ok(initiative_update_json(&ws, &app.get_initiative_update(ctx, id).await?))
+                    Ok(initiative_update_json(
+                        &ws,
+                        &app.get_initiative_update(ctx, id).await?,
+                    ))
                 };
             }
             let now = app.clock.now();
-            let time = |key: &str| arg_str(&args, key).map(|s| parse_time_filter(key, s, now)).transpose();
+            let time = |key: &str| {
+                arg_str(&args, key)
+                    .map(|s| parse_time_filter(key, s, now))
+                    .transpose()
+            };
             if kind == "project" {
                 let (page, views) = app
                     .list_project_updates(
@@ -143,7 +161,13 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                         },
                     )
                     .await?;
-                Ok(envelope("statusUpdates", tool, &args, &page, views.iter().map(|v| project_update_json(&ws, v)).collect()))
+                Ok(envelope(
+                    "statusUpdates",
+                    tool,
+                    &args,
+                    &page,
+                    views.iter().map(|v| project_update_json(&ws, v)).collect(),
+                ))
             } else {
                 let (page, views) = app
                     .list_initiative_updates(
@@ -158,7 +182,16 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                         },
                     )
                     .await?;
-                Ok(envelope("statusUpdates", tool, &args, &page, views.iter().map(|v| initiative_update_json(&ws, v)).collect()))
+                Ok(envelope(
+                    "statusUpdates",
+                    tool,
+                    &args,
+                    &page,
+                    views
+                        .iter()
+                        .map(|v| initiative_update_json(&ws, v))
+                        .collect(),
+                ))
             }
         }
         "save_status_update" => {
@@ -173,22 +206,35 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             match arg_str(&args, "id") {
                 Some(id) => {
                     if kind == "project" {
-                        Ok(project_update_json(&ws, &app.edit_project_update(ctx, id, body, h).await?))
+                        Ok(project_update_json(
+                            &ws,
+                            &app.edit_project_update(ctx, id, body, h).await?,
+                        ))
                     } else {
-                        Ok(initiative_update_json(&ws, &app.edit_initiative_update(ctx, id, body, h).await?))
+                        Ok(initiative_update_json(
+                            &ws,
+                            &app.edit_initiative_update(ctx, id, body, h).await?,
+                        ))
                     }
                 }
                 None => {
                     let body = body.filter(|b| !b.trim().is_empty()).ok_or_else(|| {
-                        AppError::invalid_request("`body` is required").with_details(json!({ "path": "/body" }))
+                        AppError::invalid_request("`body` is required")
+                            .with_details(json!({ "path": "/body" }))
                     })?;
                     let hidden = arg_bool(&args, "isDiffHidden");
                     if kind == "project" {
                         let p = required(&args, "project")?;
-                        Ok(project_update_json(&ws, &app.post_project_update(ctx, p, body, h, hidden).await?))
+                        Ok(project_update_json(
+                            &ws,
+                            &app.post_project_update(ctx, p, body, h, hidden).await?,
+                        ))
                     } else {
                         let i = required(&args, "initiative")?;
-                        Ok(initiative_update_json(&ws, &app.post_initiative_update(ctx, i, body, h, hidden).await?))
+                        Ok(initiative_update_json(
+                            &ws,
+                            &app.post_initiative_update(ctx, i, body, h, hidden).await?,
+                        ))
                     }
                 }
             }
@@ -196,12 +242,18 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
         "delete_status_update" => {
             let id = required(&args, "id")?;
             let (uuid, at) = if kind == "project" {
-                app.delete_project_update(ctx, id).await.map(|(u, t)| (u.to_string(), t))?
+                app.delete_project_update(ctx, id)
+                    .await
+                    .map(|(u, t)| (u.to_string(), t))?
             } else {
-                app.delete_initiative_update(ctx, id).await.map(|(u, t)| (u.to_string(), t))?
+                app.delete_initiative_update(ctx, id)
+                    .await
+                    .map(|(u, t)| (u.to_string(), t))?
             };
             Ok(json!({ "success": true, "id": uuid, "archivedAt": ts(at) }))
         }
-        other => Err(AppError::internal(format!("tool `{other}` is not handled by status_updates"))),
+        other => Err(AppError::internal(format!(
+            "tool `{other}` is not handled by status_updates"
+        ))),
     }
 }

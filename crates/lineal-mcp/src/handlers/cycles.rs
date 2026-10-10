@@ -34,11 +34,19 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 Some("current") => Some(CycleKind::Current),
                 Some("previous") => Some(CycleKind::Previous),
                 Some("next") => Some(CycleKind::Next),
-                Some(_) => return Err(AppError::invalid_request("`type` must be current, previous or next")),
+                Some(_) => {
+                    return Err(AppError::invalid_request(
+                        "`type` must be current, previous or next",
+                    ));
+                }
             };
-            let (_, views) = app.list_cycles(ctx, required(&args, "teamId")?, kind).await?;
+            let (_, views) = app
+                .list_cycles(ctx, required(&args, "teamId")?, kind)
+                .await?;
             Ok(page("cycles", views.iter().map(cycle_json).collect(), None))
         }
-        other => Err(AppError::internal(format!("tool `{other}` is not handled by cycles"))),
+        other => Err(AppError::internal(format!(
+            "tool `{other}` is not handled by cycles"
+        ))),
     }
 }

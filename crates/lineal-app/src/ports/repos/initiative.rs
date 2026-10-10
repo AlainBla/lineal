@@ -3,7 +3,7 @@
 //! Alle Methoden haben Default-Implementierungen (`not implemented`), damit Fakes ohne Datenbank
 //! kompilieren.
 
-use super::project::{ReminderTarget, ReminderSettings};
+use super::project::{ReminderSettings, ReminderTarget};
 use super::user::{Page, PageRequest};
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
@@ -251,7 +251,11 @@ pub trait InitiativeRepo: Send {
         unimplemented_repo()
     }
     /// Entfernt eine Kante; `true`, wenn sie existierte.
-    async fn delete_edge(&mut self, _parent: InitiativeId, _child: InitiativeId) -> AppResult<bool> {
+    async fn delete_edge(
+        &mut self,
+        _parent: InitiativeId,
+        _child: InitiativeId,
+    ) -> AppResult<bool> {
         unimplemented_repo()
     }
     /// Größtes `sort_order` der Kinder von `parent` (0 ohne Kinder).
@@ -265,7 +269,10 @@ pub trait InitiativeRepo: Send {
         unimplemented_repo()
     }
     /// Initiativen, denen ein Projekt direkt zugeordnet ist.
-    async fn initiative_ids_of_project(&mut self, _project: ProjectId) -> AppResult<Vec<InitiativeId>> {
+    async fn initiative_ids_of_project(
+        &mut self,
+        _project: ProjectId,
+    ) -> AppResult<Vec<InitiativeId>> {
         unimplemented_repo()
     }
     /// Zuordnung Initiative ↔ Projekt; `true`, wenn neu.

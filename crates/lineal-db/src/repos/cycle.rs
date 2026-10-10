@@ -5,9 +5,7 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::CycleRepo;
-use lineal_app::ports::repos::cycle::{
-    Cycle, CycleTeamRef, HistoryPoint, IssueScopeRow, NewCycle,
-};
+use lineal_app::ports::repos::cycle::{Cycle, CycleTeamRef, HistoryPoint, IssueScopeRow, NewCycle};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::{EstimationType, StateType};
 use lineal_domain::ids::{CycleId, IssueId, OrgId, StateId, TeamId};
@@ -166,7 +164,11 @@ impl CycleRepo for PgTx {
         Ok(row.map(Cycle::from))
     }
 
-    async fn list_for_team(&mut self, team: TeamId, include_archived: bool) -> AppResult<Vec<Cycle>> {
+    async fn list_for_team(
+        &mut self,
+        team: TeamId,
+        include_archived: bool,
+    ) -> AppResult<Vec<Cycle>> {
         let rows = sqlx::query_as::<_, CycleRow>(&format!(
             "SELECT {CYCLE_COLS} FROM cycle WHERE organization_id = $1 AND team_id = $2 \
              AND ($3 OR archived_at IS NULL) ORDER BY starts_at, id"
@@ -399,7 +401,11 @@ impl CycleRepo for PgTx {
         }
         pad_set(&mut c.scope_history, idx, point.scope);
         pad_set(&mut c.completed_scope_history, idx, point.completed_scope);
-        pad_set(&mut c.in_progress_scope_history, idx, point.in_progress_scope);
+        pad_set(
+            &mut c.in_progress_scope_history,
+            idx,
+            point.in_progress_scope,
+        );
         pad_set(&mut c.issue_count_history, idx, point.issue_count);
         pad_set(
             &mut c.completed_issue_count_history,
@@ -507,23 +513,27 @@ impl CycleRepo for PgTx {
     }
 
     async fn team_schedule_fp(&mut self, team: TeamId) -> AppResult<Option<String>> {
-        sqlx::query_scalar("SELECT cycle_schedule_fp FROM team WHERE organization_id = $1 AND id = $2")
-            .bind(self.org.0)
-            .bind(team.0)
-            .fetch_optional(&mut *self.tx)
-            .await
-            .map_err(db_err)
-            .map(Option::flatten)
+        sqlx::query_scalar(
+            "SELECT cycle_schedule_fp FROM team WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+        .map(Option::flatten)
     }
 
     async fn set_team_schedule_fp(&mut self, team: TeamId, fp: Option<&str>) -> AppResult<()> {
-        sqlx::query("UPDATE team SET cycle_schedule_fp = $3 WHERE organization_id = $1 AND id = $2")
-            .bind(self.org.0)
-            .bind(team.0)
-            .bind(fp)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE team SET cycle_schedule_fp = $3 WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .bind(fp)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 

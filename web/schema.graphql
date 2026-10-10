@@ -1,3 +1,172 @@
+"""
+`Cycle` (Berechnete Flags: `isActive`, `isPast`, `isFuture`, `isNext`, `isPrevious`).
+"""
+type Cycle {
+	id: String!
+	teamId: String!
+	number: Int!
+	name: String
+	description: String
+	startsAt: String!
+	endsAt: String!
+	completedAt: String
+	inheritedFromId: String
+	progress: Float!
+	scope: Float!
+	completedScope: Float!
+	issueCount: Int!
+	completedIssueCount: Int!
+	scopeHistory: [Float!]!
+	completedScopeHistory: [Float!]!
+	inProgressScopeHistory: [Float!]!
+	issueCountHistory: [Float!]!
+	completedIssueCountHistory: [Float!]!
+	isActive: Boolean!
+	isPast: Boolean!
+	isFuture: Boolean!
+	isNext: Boolean!
+	isPrevious: Boolean!
+	createdAt: String!
+	updatedAt: String!
+}
+
+type CyclePayload {
+	success: Boolean!
+	cycle: Cycle
+}
+
+type CycleSuccessPayload {
+	success: Boolean!
+}
+
+input CycleUpdateInput {
+	name: String
+	description: String
+	startsAt: String
+	endsAt: String
+}
+
+type CyclesPayload {
+	success: Boolean!
+	cycles: [Cycle!]!
+}
+
+type Initiative {
+	id: String!
+	identifier: String!
+	slugId: String!
+	name: String!
+	summary: String
+	description: String
+	color: String
+	icon: String
+	"""
+	`Proposed` | `Planned` | `Active` | `Completed` | `Canceled`.
+	"""
+	status: String!
+	statusType: String!
+	priority: Int!
+	health: String
+	targetDate: String
+	targetDateResolution: String
+	startedAt: String
+	completedAt: String
+	owner: PlanningRef
+	leadTeam: PlanningRef
+	"""
+	`public` | `restricted` | `private`.
+	"""
+	visibility: String!
+	parentInitiatives: [PlanningRef!]!
+	subInitiatives: [PlanningRef!]!
+	labels: [PlanningRef!]!
+	projects: [InitiativeProject!]!
+	healthRollup: InitiativeHealthRollup!
+	archivedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+type InitiativeHealthRollup {
+	"""
+	`onTrack` | `atRisk` | `offTrack`; `null` = grau.
+	"""
+	color: String
+	onTrack: Int!
+	atRisk: Int!
+	offTrack: Int!
+	none: Int!
+}
+
+input InitiativeInput {
+	name: String
+	summary: String
+	description: String
+	icon: String
+	color: String
+	priority: Int
+	status: String
+	owner: String
+	leadTeam: String
+	"""
+	Fügt Eltern hinzu (DAG; Zyklus → `invalid_request` mit `details.reason = "cycle"`).
+	"""
+	parentInitiatives: [String!]
+	labels: [String!]
+	targetDate: String
+	targetDateResolution: String
+}
+
+type InitiativePayload {
+	success: Boolean!
+	initiative: Initiative
+}
+
+type InitiativeProject {
+	id: String!
+	identifier: String!
+	name: String!
+	status: String!
+	statusType: String!
+	health: String
+}
+
+type InitiativeSuccessPayload {
+	success: Boolean!
+}
+
+type InitiativeUpdate {
+	id: String!
+	initiative: PlanningRef!
+	user: PlanningRef
+	body: String!
+	health: String!
+	diffMarkdown: String
+	isDiffHidden: Boolean!
+	isStale: Boolean!
+	commentCount: Int!
+	editedAt: String
+	archivedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+type InitiativeUpdatePayload {
+	success: Boolean!
+	initiativeUpdate: InitiativeUpdate
+}
+
+input LinkInput {
+	url: String!
+	title: String!
+}
+
+input MilestoneInput {
+	name: String
+	description: String
+	targetDate: String
+}
+
 type Mutation {
 	"""
 	Platzhalter des Scaffolds.
@@ -42,13 +211,80 @@ type Mutation {
 	"""
 	_cycleMutationReady: Boolean!
 	"""
+	Cycle-Einstellungen eines Teams ändern (aktivieren, Zeitplan, „Active issues“, deaktivieren).
+	"""
+	teamCyclesUpdate(teamId: String!, input: TeamCyclesInput!): CycleSuccessPayload!
+	"""
+	Cycle umbenennen bzw. Beginn/Ende verschieben (nur künftige Cycles und das Ende des aktiven).
+	"""
+	cycleUpdate(id: String!, input: CycleUpdateInput!): CyclePayload!
+	"""
+	Verschiebt den angegebenen künftigen Cycle und alle späteren um `daysToShift` Tage.
+	"""
+	cycleShiftAll(id: String!, daysToShift: Int!): CyclesPayload!
+	"""
+	Startet den nächsten Cycle heute (laufender Cycle wird abgeschlossen, unfertige Issues rollen über).
+	"""
+	cycleStartUpcomingCycleToday(id: String!): CyclePayload!
+	"""
+	Archiviert einen abgeschlossenen oder künftigen Cycle (Issues verlieren die Zuordnung).
+	"""
+	cycleArchive(id: String!): CycleSuccessPayload!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_projectMutationReady: Boolean!
+	projectCreate(input: ProjectInput!): ProjectPayload!
+	projectUpdate(id: String!, input: ProjectInput!): ProjectPayload!
+	"""
+	Archiviert bzw. stellt ein Projekt wieder her (nur Admins und Lead).
+	"""
+	projectArchive(id: String!, archived: Boolean): ProjectPayload!
+	"""
+	Papierkorb (30 Tage) bzw. Wiederherstellen (nur per UUID).
+	"""
+	projectDelete(id: String!, restore: Boolean): ProjectSuccessPayload!
+	projectMilestoneCreate(projectId: String!, input: MilestoneInput!): ProjectMilestonePayload!
+	projectMilestoneUpdate(projectId: String!, id: String!, input: MilestoneInput!): ProjectMilestonePayload!
+	"""
+	Löscht den Meilenstein; seine Issues bleiben im Projekt.
+	"""
+	projectMilestoneDelete(projectId: String!, id: String!): ProjectSuccessPayload!
+	"""
+	Veröffentlicht ein Status-Update (`health`: onTrack | atRisk | offTrack).
+	"""
+	projectUpdateCreate(projectId: String!, body: String!, health: String, isDiffHidden: Boolean): ProjectUpdatePayload!
+	projectUpdateEdit(id: String!, body: String, health: String): ProjectUpdatePayload!
+	"""
+	Löscht (archiviert) ein Status-Update.
+	"""
+	projectUpdateDelete(id: String!): ProjectSuccessPayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
 	_initiativeMutationReady: Boolean!
+	initiativeCreate(input: InitiativeInput!): InitiativePayload!
+	initiativeUpdate(id: String!, input: InitiativeInput!): InitiativePayload!
+	"""
+	Entfernt eine Eltern-Beziehung.
+	"""
+	initiativeParentRemove(initiativeId: String!, parentId: String!): InitiativeSuccessPayload!
+	"""
+	Ordnet ein Projekt der Initiative zu.
+	"""
+	initiativeToProjectCreate(initiativeId: String!, projectId: String!): InitiativeSuccessPayload!
+	"""
+	Löst die Zuordnung eines Projekts.
+	"""
+	initiativeToProjectDelete(initiativeId: String!, projectId: String!): InitiativeSuccessPayload!
+	initiativeArchive(id: String!, archived: Boolean): InitiativeSuccessPayload!
+	"""
+	Papierkorb (30 Tage).
+	"""
+	initiativeDelete(id: String!): InitiativeSuccessPayload!
+	initiativeUpdateCreate(initiativeId: String!, body: String!, health: String, isDiffHidden: Boolean): InitiativeUpdatePayload!
+	initiativeUpdateEdit(id: String!, body: String, health: String): InitiativeUpdatePayload!
+	initiativeUpdateDelete(id: String!): InitiativeSuccessPayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -109,6 +345,167 @@ type Organization {
 	updatedAt: String!
 }
 
+type PlanningRef {
+	id: String!
+	name: String!
+	key: String
+}
+
+type Project {
+	id: String!
+	identifier: String!
+	previousIdentifiers: [String!]!
+	slugId: String!
+	name: String!
+	summary: String
+	description: String
+	icon: String
+	color: String!
+	priority: Int!
+	status: ProjectStatusInfo!
+	health: String
+	"""
+	0..1.
+	"""
+	progress: Float!
+	scope: Float!
+	completedScope: Float!
+	issueCount: Int!
+	completedIssueCount: Int!
+	startDate: String
+	startDateResolution: String
+	targetDate: String
+	targetDateResolution: String
+	startedAt: String
+	completedAt: String
+	canceledAt: String
+	archivedAt: String
+	"""
+	`null`, wenn das Lead-Team für den Betrachter nicht zugänglich ist.
+	"""
+	leadTeam: PlanningRef
+	"""
+	Nur für den Betrachter zugängliche Teams (Projekt-Hülle).
+	"""
+	teams: [PlanningRef!]!
+	lead: PlanningRef
+	members: [PlanningRef!]!
+	labels: [PlanningRef!]!
+	initiatives: [PlanningRef!]!
+	milestones: [ProjectMilestone!]!
+	"""
+	Gesetzt, wenn der Status in `completed`/`canceled` wechselt: Anzahl offener Issues.
+	"""
+	openIssueCount: Int
+	createdAt: String!
+	updatedAt: String!
+}
+
+"""
+Eingabe für `projectCreate`/`projectUpdate`. Nicht gesetzte Felder bleiben unverändert;
+`null` leert (wo erlaubt).
+"""
+input ProjectInput {
+	name: String
+	summary: String
+	description: String
+	icon: String
+	color: String
+	priority: Int
+	"""
+	Projektstatus (UUID, Name oder Kategorie) – gegen den Satz des Lead-Teams aufgelöst.
+	"""
+	state: String
+	lead: String
+	leadTeam: String
+	setTeams: [String!]
+	addTeams: [String!]
+	removeTeams: [String!]
+	"""
+	Beim Entfernen eines Teams dessen Issues vom Projekt lösen (sonst `invalid_request`).
+	"""
+	detachIssuesOfRemovedTeams: Boolean
+	labels: [String!]
+	setInitiatives: [String!]
+	addInitiatives: [String!]
+	removeInitiatives: [String!]
+	startDate: String
+	startDateResolution: String
+	targetDate: String
+	targetDateResolution: String
+	links: [LinkInput!]
+}
+
+type ProjectMilestone {
+	id: String!
+	project: ProjectReference!
+	name: String!
+	description: String
+	targetDate: String
+	sortOrder: Float!
+	"""
+	`unstarted` | `next` | `overdue` | `done`.
+	"""
+	status: String!
+	"""
+	0..1.
+	"""
+	progress: Float!
+	issueCount: Int!
+	completedIssueCount: Int!
+	createdAt: String!
+	updatedAt: String!
+}
+
+type ProjectMilestonePayload {
+	success: Boolean!
+	projectMilestone: ProjectMilestone
+}
+
+type ProjectPayload {
+	success: Boolean!
+	project: Project
+}
+
+type ProjectReference {
+	id: String!
+	identifier: String!
+	name: String!
+}
+
+type ProjectStatusInfo {
+	id: String!
+	name: String!
+	type: String!
+	color: String!
+}
+
+type ProjectSuccessPayload {
+	success: Boolean!
+}
+
+type ProjectUpdate {
+	id: String!
+	project: ProjectReference!
+	user: PlanningRef
+	body: String!
+	health: String!
+	diff: String
+	diffMarkdown: String
+	isDiffHidden: Boolean!
+	isStale: Boolean!
+	commentCount: Int!
+	editedAt: String
+	archivedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+type ProjectUpdatePayload {
+	success: Boolean!
+	projectUpdate: ProjectUpdate
+}
+
 type Query {
 	"""
 	Platzhalter des Scaffolds.
@@ -151,13 +548,47 @@ type Query {
 	"""
 	_cycleReady: Boolean!
 	"""
+	Cycles eines Teams (Key, Name oder UUID), aufsteigend nach Nummer; `type`:
+	`current` | `previous` | `next`. Ohne aktivierte Cycles leer.
+	"""
+	cycles(teamId: String!, type: String): [Cycle!]!
+	"""
+	Ein Cycle per UUID; Cycles privater Teams sind für Nicht-Mitglieder `not_found`.
+	"""
+	cycle(id: String!): Cycle!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_projectReady: Boolean!
 	"""
+	Sichtbare Projekte (mindestens ein zugängliches Team).
+	"""
+	projects(team: String, includeSubTeams: Boolean, initiative: String, member: String, state: String, label: String, query: String, includeArchived: Boolean, first: Int): [Project!]!
+	"""
+	Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.
+	"""
+	project(id: String!): Project!
+	"""
+	Meilensteine eines Projekts in `sortOrder`-Reihenfolge.
+	"""
+	projectMilestones(projectId: String!): [ProjectMilestone!]!
+	"""
+	Status-Updates eines Projekts (neueste zuerst).
+	"""
+	projectUpdates(projectId: String, includeArchived: Boolean, first: Int): [ProjectUpdate!]!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_initiativeReady: Boolean!
+	initiatives(status: String, owner: String, leadTeam: String, parentInitiative: String, label: String, query: String, includeArchived: Boolean, first: Int): [Initiative!]!
+	"""
+	Eine Initiative per UUID, Kennung (`I-4`), Slug oder Name.
+	"""
+	initiative(id: String!): Initiative!
+	"""
+	Status-Updates von Initiativen (neueste zuerst).
+	"""
+	initiativeUpdates(initiativeId: String, includeArchived: Boolean, first: Int): [InitiativeUpdate!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -234,6 +665,29 @@ input TeamCreateInput {
 	timezone: String
 	triageEnabled: Boolean
 	copySettingsFromTeamId: String
+}
+
+"""
+Cycle-Einstellungen eines Teams (alle Felder optional).
+"""
+input TeamCyclesInput {
+	cyclesEnabled: Boolean
+	cycleDuration: Int
+	cycleCooldownTime: Int
+	cycleStartDay: Int
+	upcomingCycleCount: Int
+	cycleIssueAutoAssignStarted: Boolean
+	cycleIssueAutoAssignCompleted: Boolean
+	cycleLockToActive: Boolean
+	timezone: String
+	"""
+	Startdatum des ersten Cycles (`YYYY-MM-DD`, Team-Zeitzone) beim Einschalten.
+	"""
+	firstCycleStartDate: String
+	"""
+	`moveToBacklog` | `addToCycle` beim Einschalten von „Active issues“.
+	"""
+	existingActiveIssues: String
 }
 
 type TeamPayload {

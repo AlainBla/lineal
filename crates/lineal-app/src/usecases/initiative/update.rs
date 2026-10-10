@@ -70,8 +70,7 @@ async fn view_of(
         .ok_or_else(|| AppError::internal("initiative of update missing"))?;
     let settings = tx.initiatives().reminder_settings().await?;
     let latest = tx.initiatives().latest_update(initiative.id, None).await?;
-    let expected =
-        initiative.status == InitiativeStatus::Active && initiative.owner_id.is_some();
+    let expected = initiative.status == InitiativeStatus::Active && initiative.owner_id.is_some();
     let days = reminder_cycle_days(
         &initiative.update_reminder_mode,
         initiative.update_reminder_frequency_in_weeks,
@@ -164,8 +163,11 @@ impl App {
             ..Default::default()
         };
         if let Some(i) = &input.initiative {
-            filter.initiative =
-                Some(resolve::initiative::resolve_in(&mut *tx, &snap, i).await?.id);
+            filter.initiative = Some(
+                resolve::initiative::resolve_in(&mut *tx, &snap, i)
+                    .await?
+                    .id,
+            );
         }
         if let Some(u) = &input.user {
             filter.user = Some(resolve::user::resolve_in(&mut *tx, &snap, ctx, u).await?.id);
@@ -207,8 +209,10 @@ impl App {
         let now = self.clock.now();
         let i = resolve::initiative::resolve_in(&mut *tx, &snap, initiative).await?;
         if i.archived_at.is_some() || i.trashed {
-            return Err(AppError::invalid_request("The initiative is archived or deleted.")
-                .with_details(json!({ "reason": "initiative_archived" })));
+            return Err(
+                AppError::invalid_request("The initiative is archived or deleted.")
+                    .with_details(json!({ "reason": "initiative_archived" })),
+            );
         }
         let body = lineal_domain::rules::markdown::sanitize(body.trim());
         if body.is_empty() {
@@ -288,8 +292,10 @@ impl App {
         let now = self.clock.now();
         let (u, _) = resolve_update(&mut *tx, &snap, reference).await?;
         if resolve::user::actor_user_id(ctx) != Some(u.user_id) {
-            return Err(AppError::forbidden("Only the author can edit a status update.")
-                .with_details(json!({ "reason": "not_author" })));
+            return Err(
+                AppError::forbidden("Only the author can edit a status update.")
+                    .with_details(json!({ "reason": "not_author" })),
+            );
         }
         if u.archived_at.is_some() {
             return Err(AppError::invalid_request("The status update is archived.")
@@ -334,10 +340,10 @@ impl App {
         let (u, _) = resolve_update(&mut *tx, &snap, reference).await?;
         let is_author = resolve::user::actor_user_id(ctx) == Some(u.user_id);
         if !(is_author || snap.actor.is_admin() || snap.actor.is_system()) {
-            return Err(
-                AppError::forbidden("Only the author or an admin can delete a status update.")
-                    .with_details(json!({ "reason": "not_author" })),
-            );
+            return Err(AppError::forbidden(
+                "Only the author or an admin can delete a status update.",
+            )
+            .with_details(json!({ "reason": "not_author" })));
         }
         if u.archived_at.is_some() {
             return Err(AppError::not_found("Could not find status update.")

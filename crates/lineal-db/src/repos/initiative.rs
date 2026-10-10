@@ -14,9 +14,7 @@ use lineal_app::ports::repos::project::{ReminderSettings, ReminderTarget};
 use lineal_app::ports::repos::user::{OrderBy, Page, PageCursor, PageRequest};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::{Health, InitiativeStatus};
-use lineal_domain::ids::{
-    InitiativeId, InitiativeUpdateId, OrgId, ProjectId, TeamId, UserId,
-};
+use lineal_domain::ids::{InitiativeId, InitiativeUpdateId, OrgId, ProjectId, TeamId, UserId};
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
@@ -304,7 +302,11 @@ impl InitiativeRepo for PgTx {
         );
         if let Some(t) = p.trashed {
             s.set("trashed", t);
-            s.raw(if t { "trashed_at = now()" } else { "trashed_at = NULL" });
+            s.raw(if t {
+                "trashed_at = now()"
+            } else {
+                "trashed_at = NULL"
+            });
         }
         s.set_opt("archived_at", p.archived_at);
         s.raw("version = version + 1");
@@ -370,7 +372,9 @@ impl InitiativeRepo for PgTx {
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        rows.into_iter().map(InitiativeRow::into_initiative).collect()
+        rows.into_iter()
+            .map(InitiativeRow::into_initiative)
+            .collect()
     }
 
     async fn list(
@@ -478,7 +482,9 @@ impl InitiativeRepo for PgTx {
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        rows.into_iter().map(InitiativeRow::into_initiative).collect()
+        rows.into_iter()
+            .map(InitiativeRow::into_initiative)
+            .collect()
     }
 
     async fn list_edges(&mut self) -> AppResult<Vec<(InitiativeId, InitiativeId)>> {
@@ -556,7 +562,10 @@ impl InitiativeRepo for PgTx {
         Ok(rows.into_iter().map(ProjectId).collect())
     }
 
-    async fn initiative_ids_of_project(&mut self, project: ProjectId) -> AppResult<Vec<InitiativeId>> {
+    async fn initiative_ids_of_project(
+        &mut self,
+        project: ProjectId,
+    ) -> AppResult<Vec<InitiativeId>> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
             "SELECT initiative_id FROM initiative_to_project WHERE organization_id = $1 AND project_id = $2 \
              ORDER BY created_at, initiative_id",
@@ -590,7 +599,11 @@ impl InitiativeRepo for PgTx {
         Ok(res.rows_affected() > 0)
     }
 
-    async fn unlink_project(&mut self, initiative: InitiativeId, project: ProjectId) -> AppResult<bool> {
+    async fn unlink_project(
+        &mut self,
+        initiative: InitiativeId,
+        project: ProjectId,
+    ) -> AppResult<bool> {
         let res = sqlx::query(
             "DELETE FROM initiative_to_project WHERE organization_id = $1 AND initiative_id = $2 AND project_id = $3",
         )
@@ -669,12 +682,14 @@ impl InitiativeRepo for PgTx {
         labels: &[InitiativeLabelRow],
         now: DateTime<Utc>,
     ) -> AppResult<()> {
-        sqlx::query("DELETE FROM initiative_to_label WHERE organization_id = $1 AND initiative_id = $2")
-            .bind(self.org.0)
-            .bind(id.0)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        sqlx::query(
+            "DELETE FROM initiative_to_label WHERE organization_id = $1 AND initiative_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         for l in labels {
             sqlx::query(
                 "INSERT INTO initiative_to_label (organization_id, initiative_id, label_id, group_id, created_at) \
@@ -846,7 +861,11 @@ impl InitiativeRepo for PgTx {
             .ok_or_else(|| AppError::not_found("Could not find referenced status update."))
     }
 
-    async fn archive_update(&mut self, id: InitiativeUpdateId, now: DateTime<Utc>) -> AppResult<()> {
+    async fn archive_update(
+        &mut self,
+        id: InitiativeUpdateId,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
         sqlx::query(
             "UPDATE initiative_update SET archived_at = $3, version = version + 1, updated_at = $3 \
              WHERE organization_id = $1 AND id = $2",

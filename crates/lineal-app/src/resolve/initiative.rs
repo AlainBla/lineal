@@ -33,7 +33,9 @@ fn parse_identifier(r: &str) -> Option<i32> {
 }
 
 fn is_slug_id(s: &str) -> bool {
-    s.len() == 12 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 12
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// Löst eine Initiative-Referenz mit einem bereits geladenen Snapshot auf.
@@ -45,7 +47,11 @@ pub async fn resolve_in(
     let r = reference.trim();
     let mut found: Option<Initiative> = None;
     if let Ok(uuid) = Uuid::parse_str(r) {
-        found = tx.initiatives().get(InitiativeId(uuid)).await?.filter(|i| !i.trashed);
+        found = tx
+            .initiatives()
+            .get(InitiativeId(uuid))
+            .await?
+            .filter(|i| !i.trashed);
     } else if let Some(n) = parse_identifier(r) {
         found = tx.initiatives().find_by_number(n).await?;
     } else {

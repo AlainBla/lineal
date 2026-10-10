@@ -84,12 +84,22 @@ fn longest(
 
 /// Länge des längsten Pfads von `node` zu einer Wurzel (Wurzel = 1).
 pub fn longest_path_to_root(edges: &Edges, node: InitiativeId) -> usize {
-    longest(node, &parents_map(edges), &mut HashMap::new(), &mut HashSet::new())
+    longest(
+        node,
+        &parents_map(edges),
+        &mut HashMap::new(),
+        &mut HashSet::new(),
+    )
 }
 
 /// Länge des längsten Pfads von `node` zu einem Blatt (Blatt = 1).
 pub fn longest_path_to_leaf(edges: &Edges, node: InitiativeId) -> usize {
-    longest(node, &children_map(edges), &mut HashMap::new(), &mut HashSet::new())
+    longest(
+        node,
+        &children_map(edges),
+        &mut HashMap::new(),
+        &mut HashSet::new(),
+    )
 }
 
 /// Findet einen Pfad `from → … → to` entlang der Kind-Kanten.

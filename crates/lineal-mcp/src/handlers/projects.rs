@@ -8,7 +8,9 @@ use lineal_app::ports::repos::project::{ExternalLink, ProjectLabelRow};
 use lineal_app::ports::repos::user::User;
 use lineal_app::usecases::project::milestone::ProjectRef;
 use lineal_app::usecases::project::pure::parse_date;
-use lineal_app::usecases::project::{ListProjectsInput, MilestoneView, ProjectView, SaveProjectInput, ViewOpts};
+use lineal_app::usecases::project::{
+    ListProjectsInput, MilestoneView, ProjectView, SaveProjectInput, ViewOpts,
+};
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 use lineal_domain::enums::{DateResolution, Priority};
 use lineal_domain::rules::patch::PatchOp;
@@ -45,7 +47,10 @@ pub(crate) fn user_ref(u: &User) -> Value {
 }
 
 pub(crate) fn priority_json(p: i32) -> Value {
-    let v = u8::try_from(p).ok().and_then(|v| Priority::try_from(v).ok()).unwrap_or(Priority::NoPriority);
+    let v = u8::try_from(p)
+        .ok()
+        .and_then(|v| Priority::try_from(v).ok())
+        .unwrap_or(Priority::NoPriority);
     json!({ "value": v.value(), "name": v.name() })
 }
 
@@ -60,19 +65,28 @@ pub(crate) fn arg_bool(args: &Value, key: &str) -> bool {
 pub(crate) fn arg_list(args: &Value, key: &str) -> Vec<String> {
     args.get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 pub(crate) fn required<'a>(args: &'a Value, key: &str) -> AppResult<&'a str> {
-    arg_str(args, key).filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-        AppError::invalid_request(format!("`{key}` is required")).with_details(json!({ "path": format!("/{key}") }))
-    })
+    arg_str(args, key)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::invalid_request(format!("`{key}` is required"))
+                .with_details(json!({ "path": format!("/{key}") }))
+        })
 }
 
 pub(crate) fn parse_resolution(field: &str, s: &str) -> AppResult<DateResolution> {
     s.parse::<DateResolution>().map_err(|_| {
-        AppError::invalid_request(format!("`{field}` is not a valid resolution")).with_details(json!({ "field": field }))
+        AppError::invalid_request(format!("`{field}` is not a valid resolution"))
+            .with_details(json!({ "field": field }))
     })
 }
 
@@ -80,7 +94,8 @@ pub(crate) fn parse_patch(args: &Value) -> AppResult<Option<Vec<PatchOp>>> {
     match args.get("patch") {
         None | Some(Value::Null) => Ok(None),
         Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| {
-            AppError::invalid_request(format!("invalid `patch`: {e}")).with_details(json!({ "path": "/patch" }))
+            AppError::invalid_request(format!("invalid `patch`: {e}"))
+                .with_details(json!({ "path": "/patch" }))
         }),
     }
 }
@@ -105,7 +120,12 @@ pub(crate) fn milestone_json(p: &ProjectRef, m: &MilestoneView) -> Value {
 }
 
 /// Vollständiges Projektobjekt; `fields` und Kürzung wenden die Aufrufer an.
-pub(crate) fn project_json(ws_url: &str, v: &ProjectView, with_members: bool, with_milestones: bool) -> Map<String, Value> {
+pub(crate) fn project_json(
+    ws_url: &str,
+    v: &ProjectView,
+    with_members: bool,
+    with_milestones: bool,
+) -> Map<String, Value> {
     let p = &v.project;
     let pref = ProjectRef {
         id: p.id,
@@ -120,17 +140,32 @@ pub(crate) fn project_json(ws_url: &str, v: &ProjectView, with_members: bool, wi
     m.insert("description".into(), json!(p.content));
     m.insert("icon".into(), json!(p.icon));
     m.insert("color".into(), json!(p.color));
-    m.insert("url".into(), json!(url_of(ws_url, "project", &p.name, &p.slug_id)));
+    m.insert(
+        "url".into(),
+        json!(url_of(ws_url, "project", &p.name, &p.slug_id)),
+    );
     m.insert("trashed".into(), json!(p.trashed));
     m.insert("createdAt".into(), json!(ts(p.created_at)));
     m.insert("updatedAt".into(), json!(ts(p.updated_at)));
     m.insert("startedAt".into(), json!(p.started_at.map(ts)));
     m.insert("completedAt".into(), json!(p.completed_at.map(ts)));
     m.insert("canceledAt".into(), json!(p.canceled_at.map(ts)));
-    m.insert("startDate".into(), json!(p.start_date.map(|d| d.to_string())));
-    m.insert("startDateResolution".into(), json!(p.start_date_resolution.map(|r| r.as_str())));
-    m.insert("targetDate".into(), json!(p.target_date.map(|d| d.to_string())));
-    m.insert("targetDateResolution".into(), json!(p.target_date_resolution.map(|r| r.as_str())));
+    m.insert(
+        "startDate".into(),
+        json!(p.start_date.map(|d| d.to_string())),
+    );
+    m.insert(
+        "startDateResolution".into(),
+        json!(p.start_date_resolution.map(|r| r.as_str())),
+    );
+    m.insert(
+        "targetDate".into(),
+        json!(p.target_date.map(|d| d.to_string())),
+    );
+    m.insert(
+        "targetDateResolution".into(),
+        json!(p.target_date_resolution.map(|r| r.as_str())),
+    );
     m.insert("priority".into(), priority_json(p.priority));
     m.insert("sortOrder".into(), json!(p.sort_order));
     m.insert(
@@ -139,7 +174,10 @@ pub(crate) fn project_json(ws_url: &str, v: &ProjectView, with_members: bool, wi
     );
     m.insert("health".into(), json!(p.health.map(|h| h.as_str())));
     m.insert("progress".into(), json!(pct(v.scope.progress)));
-    m.insert("labels".into(), Value::Array(v.labels.iter().map(label_ref).collect()));
+    m.insert(
+        "labels".into(),
+        Value::Array(v.labels.iter().map(label_ref).collect()),
+    );
     m.insert(
         "initiatives".into(),
         Value::Array(
@@ -150,8 +188,14 @@ pub(crate) fn project_json(ws_url: &str, v: &ProjectView, with_members: bool, wi
         ),
     );
     m.insert("lead".into(), v.lead.as_ref().map_or(Value::Null, user_ref));
-    m.insert("leadTeam".into(), v.lead_team.as_ref().map_or(Value::Null, team_ref));
-    m.insert("teams".into(), Value::Array(v.teams.iter().map(team_ref).collect()));
+    m.insert(
+        "leadTeam".into(),
+        v.lead_team.as_ref().map_or(Value::Null, team_ref),
+    );
+    m.insert(
+        "teams".into(),
+        Value::Array(v.teams.iter().map(team_ref).collect()),
+    );
     if with_members {
         m.insert(
             "members".into(),
@@ -170,7 +214,12 @@ pub(crate) fn project_json(ws_url: &str, v: &ProjectView, with_members: bool, wi
     if with_milestones {
         m.insert(
             "milestones".into(),
-            Value::Array(v.milestones.iter().map(|x| milestone_json(&pref, x)).collect()),
+            Value::Array(
+                v.milestones
+                    .iter()
+                    .map(|x| milestone_json(&pref, x))
+                    .collect(),
+            ),
         );
     }
     m
@@ -183,17 +232,26 @@ async fn ws_url(app: &App, ctx: &RequestCtx) -> AppResult<String> {
 
 fn save_input(args: &Value) -> AppResult<SaveProjectInput> {
     let date = |key: &str| -> AppResult<Option<Option<chrono::NaiveDate>>> {
-        arg_str(args, key).map(|s| parse_date(key, s).map(Some)).transpose()
+        arg_str(args, key)
+            .map(|s| parse_date(key, s).map(Some))
+            .transpose()
     };
     let res = |key: &str| -> AppResult<Option<Option<DateResolution>>> {
-        arg_str(args, key).map(|s| parse_resolution(key, s).map(Some)).transpose()
+        arg_str(args, key)
+            .map(|s| parse_resolution(key, s).map(Some))
+            .transpose()
     };
     let links = args
         .get("links")
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter_map(|l| Some((l.get("url")?.as_str()?.to_owned(), l.get("title")?.as_str()?.to_owned())))
+                .filter_map(|l| {
+                    Some((
+                        l.get("url")?.as_str()?.to_owned(),
+                        l.get("title")?.as_str()?.to_owned(),
+                    ))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -205,7 +263,10 @@ fn save_input(args: &Value) -> AppResult<SaveProjectInput> {
         patch: parse_patch(args)?,
         icon: arg_str(args, "icon").map(str::to_owned),
         color: arg_str(args, "color").map(str::to_owned),
-        priority: args.get("priority").and_then(Value::as_i64).map(|p| p as i32),
+        priority: args
+            .get("priority")
+            .and_then(Value::as_i64)
+            .map(|p| p as i32),
         state: arg_str(args, "state").map(str::to_owned),
         lead: match args.get("lead") {
             None => None,
@@ -217,7 +278,9 @@ fn save_input(args: &Value) -> AppResult<SaveProjectInput> {
         add_teams: arg_list(args, "addTeams"),
         remove_teams: arg_list(args, "removeTeams"),
         labels: args.get("labels").map(|_| arg_list(args, "labels")),
-        set_initiatives: args.get("setInitiatives").map(|_| arg_list(args, "setInitiatives")),
+        set_initiatives: args
+            .get("setInitiatives")
+            .map(|_| arg_list(args, "setInitiatives")),
         add_initiatives: arg_list(args, "addInitiatives"),
         remove_initiatives: arg_list(args, "removeInitiatives"),
         links,
@@ -237,14 +300,24 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
     match tool {
         "list_projects" => {
             if arg_str(&args, "customView").is_some() {
-                return Err(AppError::invalid_request("`customView` filters are not available yet.")
-                    .with_details(json!({ "path": "/customView", "reason": "custom_view_unsupported" })));
+                return Err(AppError::invalid_request(
+                    "`customView` filters are not available yet.",
+                )
+                .with_details(
+                    json!({ "path": "/customView", "reason": "custom_view_unsupported" }),
+                ));
             }
             let now = app.clock.now();
-            let time = |key: &str| arg_str(&args, key).map(|s| parse_time_filter(key, s, now)).transpose();
+            let time = |key: &str| {
+                arg_str(&args, key)
+                    .map(|s| parse_time_filter(key, s, now))
+                    .transpose()
+            };
             let fields = parse_fields(&args);
-            let include_members = arg_bool(&args, "includeMembers") || fields.iter().any(|f| f == "members");
-            let include_milestones = arg_bool(&args, "includeMilestones") || fields.iter().any(|f| f == "milestones");
+            let include_members =
+                arg_bool(&args, "includeMembers") || fields.iter().any(|f| f == "members");
+            let include_milestones =
+                arg_bool(&args, "includeMilestones") || fields.iter().any(|f| f == "milestones");
             let input = ListProjectsInput {
                 team: arg_str(&args, "team").map(str::to_owned),
                 include_sub_teams: arg_bool(&args, "includeSubTeams"),
@@ -267,9 +340,16 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 .map(|v| {
                     let mut full = project_json(&ws, v, include_members, include_milestones);
                     if let Some(Value::String(d)) = full.get("description").cloned() {
-                        full.insert("description".into(), json!(truncate_description(&d, "get_project")));
+                        full.insert(
+                            "description".into(),
+                            json!(truncate_description(&d, "get_project")),
+                        );
                     }
-                    select_fields(&full, &fields, &["labels", "initiatives", "teams", "members", "milestones"])
+                    select_fields(
+                        &full,
+                        &fields,
+                        &["labels", "initiatives", "teams", "members", "milestones"],
+                    )
                 })
                 .collect();
             Ok(envelope("projects", tool, &args, &page, items))
@@ -308,7 +388,9 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             }
             Ok(Value::Object(j))
         }
-        other => Err(AppError::internal(format!("tool `{other}` is not handled by projects"))),
+        other => Err(AppError::internal(format!(
+            "tool `{other}` is not handled by projects"
+        ))),
     }
 }
 

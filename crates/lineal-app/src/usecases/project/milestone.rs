@@ -120,7 +120,7 @@ impl App {
         let description = input
             .description
             .as_deref()
-            .map(|d| lineal_domain::rules::markdown::sanitize(d))
+            .map(lineal_domain::rules::markdown::sanitize)
             .map(|d| (!d.is_empty()).then_some(d));
         let id = match &input.id {
             None => {

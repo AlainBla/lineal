@@ -30,7 +30,11 @@ pub fn patch_error(e: PatchError) -> AppError {
 }
 
 fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
-    let (y, m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (y, m) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     NaiveDate::from_ymd_opt(y, m, 1)
         .and_then(|d| d.pred_opt())
         .unwrap_or_default()
@@ -185,7 +189,9 @@ pub fn remap_status<'a>(
     {
         return Some(s);
     }
-    new_set.iter().find(|s| s.status_type == current.status_type)
+    new_set
+        .iter()
+        .find(|s| s.status_type == current.status_type)
 }
 
 /// Berechneter Status eines Meilensteins (docs/04 §3.1).
@@ -219,7 +225,10 @@ pub struct MilestoneStatusInput {
 }
 
 /// Status aller Meilensteine eines Projekts (docs/04 §3.1 `milestoneStatuses`).
-pub fn milestone_statuses(items: &[MilestoneStatusInput], today: NaiveDate) -> Vec<MilestoneStatus> {
+pub fn milestone_statuses(
+    items: &[MilestoneStatusInput],
+    today: NaiveDate,
+) -> Vec<MilestoneStatus> {
     let mut next_assigned = false;
     items
         .iter()
@@ -367,8 +376,14 @@ pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(V
         ));
     }
 
-    let (pd, pr) = (date_of(prev, "targetDate"), res_of(prev, "targetDateResolution"));
-    let (cd, cr) = (date_of(cur, "targetDate"), res_of(cur, "targetDateResolution"));
+    let (pd, pr) = (
+        date_of(prev, "targetDate"),
+        res_of(prev, "targetDateResolution"),
+    );
+    let (cd, cr) = (
+        date_of(cur, "targetDate"),
+        res_of(cur, "targetDateResolution"),
+    );
     if (pd, pr) != (cd, cr) {
         diff.insert(
             "targetDate".into(),
@@ -378,7 +393,8 @@ pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(V
             }),
         );
         let show = |d: Option<NaiveDate>, r| {
-            d.map(|d| display_date(d, r)).unwrap_or_else(|| "none".into())
+            d.map(|d| display_date(d, r))
+                .unwrap_or_else(|| "none".into())
         };
         lines.push(format!(
             "- Target date moved from **{}** to **{}**",
@@ -387,11 +403,19 @@ pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(V
         ));
     }
 
-    let lead_key = if cur.get("leadId").is_some() { "leadId" } else { "ownerId" };
+    let lead_key = if cur.get("leadId").is_some() {
+        "leadId"
+    } else {
+        "ownerId"
+    };
     let (pl, cl) = (prev.get(lead_key).cloned(), cur.get(lead_key).cloned());
     if pl != cl && !(pl.is_none() && cl.is_none()) {
         diff.insert("lead".into(), json!({ "from": pl, "to": cl }));
-        let label = if lead_key == "leadId" { "Lead" } else { "Owner" };
+        let label = if lead_key == "leadId" {
+            "Lead"
+        } else {
+            "Owner"
+        };
         let who = |v: &Value, id_key: &str, name_key: &str| {
             v.get(name_key)
                 .and_then(Value::as_str)
@@ -399,7 +423,11 @@ pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(V
                 .or_else(|| v.get(id_key).and_then(Value::as_str).map(str::to_owned))
                 .unwrap_or_else(|| "none".into())
         };
-        let name_key = if lead_key == "leadId" { "leadName" } else { "ownerName" };
+        let name_key = if lead_key == "leadId" {
+            "leadName"
+        } else {
+            "ownerName"
+        };
         lines.push(format!(
             "- {label} changed from **{}** to **{}**",
             who(prev, lead_key, name_key),
@@ -476,7 +504,10 @@ mod tests {
         assert_eq!(normalize_start(x, Some(Quarter)), d(2026, 10, 1));
         assert_eq!(normalize_target(x, Some(Quarter)), d(2026, 12, 31));
         assert_eq!(normalize_start(x, Some(HalfYear)), d(2026, 7, 1));
-        assert_eq!(normalize_target(d(2026, 3, 3), Some(HalfYear)), d(2026, 6, 30));
+        assert_eq!(
+            normalize_target(d(2026, 3, 3), Some(HalfYear)),
+            d(2026, 6, 30)
+        );
         assert_eq!(normalize_start(x, Some(Year)), d(2026, 1, 1));
         assert_eq!(normalize_target(x, Some(Year)), d(2026, 12, 31));
         assert_eq!(normalize_target(d(2028, 2, 3), Some(Month)), d(2028, 2, 29));
@@ -484,11 +515,23 @@ mod tests {
 
     #[test]
     fn display_follows_resolution() {
-        assert_eq!(display_date(d(2026, 12, 31), Some(DateResolution::Quarter)), "Q4 2026");
-        assert_eq!(display_date(d(2027, 1, 31), Some(DateResolution::Month)), "Jan 2027");
+        assert_eq!(
+            display_date(d(2026, 12, 31), Some(DateResolution::Quarter)),
+            "Q4 2026"
+        );
+        assert_eq!(
+            display_date(d(2027, 1, 31), Some(DateResolution::Month)),
+            "Jan 2027"
+        );
         assert_eq!(display_date(d(2026, 11, 14), None), "Nov 14, 2026");
-        assert_eq!(display_date(d(2026, 12, 31), Some(DateResolution::HalfYear)), "H2 2026");
-        assert_eq!(display_date(d(2026, 12, 31), Some(DateResolution::Year)), "2026");
+        assert_eq!(
+            display_date(d(2026, 12, 31), Some(DateResolution::HalfYear)),
+            "H2 2026"
+        );
+        assert_eq!(
+            display_date(d(2026, 12, 31), Some(DateResolution::Year)),
+            "2026"
+        );
     }
 
     #[test]
@@ -511,18 +554,43 @@ mod tests {
     fn milestone_status_rules() {
         let today = d(2026, 10, 10);
         let items = [
-            MilestoneStatusInput { target_date: None, has_relevant_issues: true, all_completed: true },
-            MilestoneStatusInput { target_date: Some(d(2026, 10, 1)), has_relevant_issues: true, all_completed: false },
-            MilestoneStatusInput { target_date: None, has_relevant_issues: false, all_completed: false },
-            MilestoneStatusInput { target_date: None, has_relevant_issues: true, all_completed: false },
+            MilestoneStatusInput {
+                target_date: None,
+                has_relevant_issues: true,
+                all_completed: true,
+            },
+            MilestoneStatusInput {
+                target_date: Some(d(2026, 10, 1)),
+                has_relevant_issues: true,
+                all_completed: false,
+            },
+            MilestoneStatusInput {
+                target_date: None,
+                has_relevant_issues: false,
+                all_completed: false,
+            },
+            MilestoneStatusInput {
+                target_date: None,
+                has_relevant_issues: true,
+                all_completed: false,
+            },
         ];
         let s = milestone_statuses(&items, today);
         assert_eq!(
             s,
-            [MilestoneStatus::Done, MilestoneStatus::Overdue, MilestoneStatus::Next, MilestoneStatus::Unstarted]
+            [
+                MilestoneStatus::Done,
+                MilestoneStatus::Overdue,
+                MilestoneStatus::Next,
+                MilestoneStatus::Unstarted
+            ]
         );
         // Ein Meilenstein ohne Issues ist nie done.
-        let only = [MilestoneStatusInput { target_date: None, has_relevant_issues: false, all_completed: true }];
+        let only = [MilestoneStatusInput {
+            target_date: None,
+            has_relevant_issues: false,
+            all_completed: true,
+        }];
         assert_eq!(milestone_statuses(&only, today), [MilestoneStatus::Next]);
     }
 
@@ -547,9 +615,18 @@ mod tests {
             st("Backlog", ProjectStatusType::Backlog, None),
             st("In Progress", ProjectStatusType::Started, None),
         ];
-        assert_eq!(resolve_status_ref(&ws, "in progress").map(|s| s.name.as_str()), Some("In Progress"));
-        assert_eq!(resolve_status_ref(&ws, "started").map(|s| s.name.as_str()), Some("In Progress"));
-        assert_eq!(resolve_status_ref(&ws, &ws[0].id.to_string()).map(|s| s.name.as_str()), Some("Backlog"));
+        assert_eq!(
+            resolve_status_ref(&ws, "in progress").map(|s| s.name.as_str()),
+            Some("In Progress")
+        );
+        assert_eq!(
+            resolve_status_ref(&ws, "started").map(|s| s.name.as_str()),
+            Some("In Progress")
+        );
+        assert_eq!(
+            resolve_status_ref(&ws, &ws[0].id.to_string()).map(|s| s.name.as_str()),
+            Some("Backlog")
+        );
         assert!(resolve_status_ref(&ws, "nope").is_none());
         let team = TeamId::new_v7();
         let own = [
@@ -557,10 +634,16 @@ mod tests {
             st("In Progress", ProjectStatusType::Started, Some(team)),
         ];
         // gleicher Name und gleiche Kategorie gewinnt vor erster Status der Kategorie
-        assert_eq!(remap_status(&ws[1], &own).map(|s| s.name.as_str()), Some("In Progress"));
+        assert_eq!(
+            remap_status(&ws[1], &own).map(|s| s.name.as_str()),
+            Some("In Progress")
+        );
         // sonst erster der Kategorie
         let own2 = [st("Doing", ProjectStatusType::Started, Some(team))];
-        assert_eq!(remap_status(&ws[1], &own2).map(|s| s.name.as_str()), Some("Doing"));
+        assert_eq!(
+            remap_status(&ws[1], &own2).map(|s| s.name.as_str()),
+            Some("Doing")
+        );
         assert!(remap_status(&ws[0], &own2).is_none());
     }
 
@@ -596,12 +679,30 @@ mod tests {
         let now = Utc::now();
         let day = |n: i64| now - Duration::days(n);
         // Zyklus 7 Tage: ab 10 Tagen "missing" (nur bei onTrack), ab 17 Tagen grau
-        assert_eq!(staleness(true, Some(7), Some((day(5), Health::OnTrack)), now), Staleness::Fresh);
-        assert_eq!(staleness(true, Some(7), Some((day(11), Health::OnTrack)), now), Staleness::Missing);
-        assert_eq!(staleness(true, Some(7), Some((day(11), Health::AtRisk)), now), Staleness::Fresh);
-        assert_eq!(staleness(true, Some(7), Some((day(18), Health::AtRisk)), now), Staleness::Grey);
-        assert_eq!(staleness(false, Some(7), None, now), Staleness::NoUpdateExpected);
-        assert_eq!(staleness(true, None, None, now), Staleness::NoUpdateExpected);
+        assert_eq!(
+            staleness(true, Some(7), Some((day(5), Health::OnTrack)), now),
+            Staleness::Fresh
+        );
+        assert_eq!(
+            staleness(true, Some(7), Some((day(11), Health::OnTrack)), now),
+            Staleness::Missing
+        );
+        assert_eq!(
+            staleness(true, Some(7), Some((day(11), Health::AtRisk)), now),
+            Staleness::Fresh
+        );
+        assert_eq!(
+            staleness(true, Some(7), Some((day(18), Health::AtRisk)), now),
+            Staleness::Grey
+        );
+        assert_eq!(
+            staleness(false, Some(7), None, now),
+            Staleness::NoUpdateExpected
+        );
+        assert_eq!(
+            staleness(true, None, None, now),
+            Staleness::NoUpdateExpected
+        );
     }
 
     #[test]
