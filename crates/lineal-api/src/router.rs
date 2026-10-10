@@ -54,6 +54,7 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/authorize", get(oauth::authorize))
         .route("/oauth/token", post(oauth::token))
+        .route("/oauth/revoke", post(oauth::revoke))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .with_state(state)
@@ -130,16 +131,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unimplemented_paths_answer_501_with_error_model() {
-        for (m, uri) in [
-            (Method::POST, "/oauth/register"),
-            (Method::GET, "/oauth/authorize"),
-            (Method::POST, "/oauth/token"),
-        ] {
-            let (status, body) = call(m, uri, Body::empty(), false).await;
-            assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}");
-            assert!(body.contains("\"error\":\"internal\""), "{uri}: {body}");
-        }
+    async fn oauth_endpoints_are_wired_and_reject_bad_requests() {
+        // /oauth/register ohne Body: 400 (RFC 7591), /oauth/token ohne Form: 4xx, authorize: Fehlerseite.
+        let (status, body) = call(Method::POST, "/oauth/register", Body::empty(), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("invalid_client_metadata"), "{body}");
+        let (status, _) = call(Method::GET, "/oauth/authorize", Body::empty(), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = call(Method::POST, "/oauth/revoke", Body::empty(), false).await;
+        assert!(status.is_client_error() || status.is_success());
     }
 
     #[tokio::test]

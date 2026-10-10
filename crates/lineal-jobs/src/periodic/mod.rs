@@ -9,5 +9,6 @@ pub mod notification_cap;
 pub mod purge;
 pub mod sla;
 pub mod snooze;
+pub mod team_purge;
 pub mod triage_rotation;
 pub mod update_reminders;

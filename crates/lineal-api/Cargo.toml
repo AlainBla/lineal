@@ -30,9 +30,11 @@ hmac = "0.12"
 sha2 = "0.10"
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["io"] }
+url = "2"
 
 [dev-dependencies]
 lineal-testkit.workspace = true
+lineal-mcp.workspace = true
 tokio.workspace = true
 lineal-db.workspace = true
 sqlx.workspace = true

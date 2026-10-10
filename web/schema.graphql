@@ -1,3 +1,11 @@
+type AcceptInvitationPayload {
+	success: Boolean!
+	"""
+	`urlKey` des Workspace, dem der User beigetreten ist.
+	"""
+	urlKey: String!
+}
+
 type ActiveCycle {
 	teamId: String!
 	teamKey: String!
@@ -135,6 +143,16 @@ type CommentUser {
 	id: String!
 	name: String!
 	displayName: String!
+}
+
+input CreateWorkspaceInput {
+	name: String!
+	urlKey: String
+}
+
+type CreateWorkspacePayload {
+	success: Boolean!
+	workspace: Organization
 }
 
 """
@@ -555,6 +573,44 @@ type InitiativeUpdate {
 type InitiativeUpdatePayload {
 	success: Boolean!
 	initiativeUpdate: InitiativeUpdate
+}
+
+"""
+`Invitation`.
+"""
+type Invitation {
+	id: String!
+	email: String!
+	role: String!
+	teamIds: [String!]!
+	inviterId: String!
+	status: String!
+	expiresAt: String!
+	lastSentAt: String!
+	acceptedAt: String
+	createdAt: String!
+}
+
+type InvitationBatchPayload {
+	success: Boolean!
+	invitations: [Invitation!]!
+}
+
+type InvitationPayload {
+	success: Boolean!
+	invitation: Invitation
+}
+
+input InviteUsersGqlInput {
+	emails: [String!]!
+	"""
+	`admin`, `user` (Default) oder `guest`.
+	"""
+	role: String
+	"""
+	Team-Referenzen; Gäste brauchen mindestens eines.
+	"""
+	teamIds: [String!]
 }
 
 """
@@ -998,10 +1054,42 @@ type Mutation {
 	Platzhalter des Scaffolds (der Mutation-Root darf nicht leer sein).
 	"""
 	_overviewMutationReady: Boolean!
+	webhookCreate(input: WebhookCreateInput!): WebhookSecretPayload!
+	webhookUpdate(id: String!, input: WebhookUpdateInput!): WebhookPayload!
+	webhookDelete(id: String!): WebhookSuccessPayload!
 	"""
-	Platzhalter des Scaffolds.
+	Neues Signing-Secret; das alte gilt 24 h zusätzlich (`Lineal-Signature-Previous`).
 	"""
-	_webhookMutationReady: Boolean!
+	webhookRotateSecret(id: String!): WebhookSecretPayload!
+	"""
+	„Erneut senden“ einer Zustellung.
+	"""
+	webhookDeliveryRetry(webhookId: String!, deliveryId: String!): WebhookSuccessPayload!
+	inviteUsers(input: InviteUsersGqlInput!): InvitationBatchPayload!
+	invitationResend(id: String!): InvitationPayload!
+	invitationRevoke(id: String!): InvitationPayload!
+	"""
+	Nimmt eine Einladung mit der Konto-Session an: die E-Mail des angemeldeten Users muss zur
+	Einladung passen (sonst `not_found`). Ungültiges, abgelaufenes oder fremdes Token ebenso.
+	"""
+	acceptInvitation(token: String!): AcceptInvitationPayload!
+	"""
+	Legt mit der Konto-Session einen weiteren Workspace an (Owner = der Aufrufer).
+	"""
+	createWorkspace(input: CreateWorkspaceInput!): CreateWorkspacePayload!
+	"""
+	Legt das Team still. `handleSubTeamsOnRetirement`: `retire` oder `unnest`.
+	"""
+	teamRetire(id: String!, handleSubTeamsOnRetirement: String): TeamLifecyclePayload!
+	teamUnretire(id: String!): TeamLifecyclePayload!
+	"""
+	Löscht das Team (30 Tage Papierkorb). `handleSubTeams`: `delete` oder `unnest`.
+	"""
+	teamDelete(id: String!, handleSubTeams: String): TeamLifecyclePayload!
+	"""
+	Stellt ein gelöschtes Team wieder her (Admin/Owner, innerhalb der Frist).
+	"""
+	teamUnarchive(id: String!): TeamLifecyclePayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -1517,9 +1605,18 @@ type Query {
 	"""
 	activeCycles(teamIds: [String!]): [ActiveCycle!]!
 	"""
-	Platzhalter des Scaffolds.
+	Die für den Aufrufer verwaltbaren Webhooks (Admins; Team-Owner für ihre Teams).
 	"""
-	_webhookReady: Boolean!
+	webhooks: [Webhook!]!
+	webhook(id: String!): Webhook!
+	"""
+	Die letzten 100 Zustellungen eines Webhooks.
+	"""
+	webhookDeliveries(webhookId: String!): [WebhookDelivery!]!
+	"""
+	Einladungen des Workspace (Recht `invitationsRole`).
+	"""
+	invitations(pendingOnly: Boolean! = false): [Invitation!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -1638,6 +1735,11 @@ input TeamCyclesInput {
 	`moveToBacklog` | `addToCycle` beim Einschalten von „Active issues“.
 	"""
 	existingActiveIssues: String
+}
+
+type TeamLifecyclePayload {
+	success: Boolean!
+	team: Team
 }
 
 type TeamMetrics {
@@ -1884,6 +1986,78 @@ type ViewPreferencesValues {
 	values: JSON!
 	hasPersonal: Boolean!
 	hasDefault: Boolean!
+}
+
+"""
+`Webhook` (ohne Secret).
+"""
+type Webhook {
+	id: String!
+	label: String
+	url: String!
+	enabled: Boolean!
+	teamId: String
+	allPublicTeams: Boolean!
+	resourceTypes: [String!]!
+	creatorId: String!
+	consecutiveFailures: Int!
+	disabledReason: String
+	lastSuccessAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+input WebhookCreateInput {
+	label: String
+	url: String!
+	"""
+	Team-Referenz (UUID, Key oder Name); genau eines von `teamId`/`allPublicTeams`.
+	"""
+	teamId: String
+	allPublicTeams: Boolean! = false
+	resourceTypes: [String!]!
+}
+
+"""
+`WebhookDelivery` (Zustellprotokoll, ohne Payload).
+"""
+type WebhookDelivery {
+	id: String!
+	webhookId: String!
+	eventId: String!
+	resourceType: String!
+	action: String!
+	attempt: Int!
+	status: String!
+	responseCode: Int
+	durationMs: Int
+	nextAttemptAt: String
+	createdAt: String!
+}
+
+type WebhookPayload {
+	success: Boolean!
+	webhook: Webhook
+}
+
+"""
+Antwort mit dem Klartext-Secret (nur bei Anlage und Rotation, genau einmal).
+"""
+type WebhookSecretPayload {
+	success: Boolean!
+	webhook: Webhook
+	secret: String
+}
+
+type WebhookSuccessPayload {
+	success: Boolean!
+}
+
+input WebhookUpdateInput {
+	label: String
+	url: String
+	enabled: Boolean
+	resourceTypes: [String!]
 }
 
 """
