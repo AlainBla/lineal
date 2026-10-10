@@ -83,19 +83,19 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
-    // Brute-Force-Schutz: je IP und je Ziel-Account, unabhängig vom normalen Request-Limit.
+    // Brute-Force-Schutz: Zähler je IP, je Paar (Account, IP) und je Account werden VOR der
+    // Passwortprüfung atomar reserviert und bei Erfolg zurückgegeben.
     let now_ms = app.clock.now().timestamp_millis();
     let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
-    let account = body.email.clone();
-    if let Some(Extension(f)) = &fails {
-        let wait = ip_key
-            .as_deref()
-            .and_then(|ip| f.ip_blocked(ip, now_ms))
-            .or_else(|| f.account_blocked(&account, now_ms));
-        if let Some(wait) = wait {
-            return crate::middleware::auth::blocked_response("/auth/login", wait);
-        }
-    }
+    let reservation = match &fails {
+        Some(Extension(f)) => match f.reserve_login(&body.email, ip_key.as_deref(), now_ms) {
+            Ok(r) => Some(r),
+            Err(wait) => {
+                return crate::middleware::auth::blocked_response("/auth/login", wait);
+            }
+        },
+        None => None,
+    };
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -111,6 +111,9 @@ pub async fn login(
         .await;
     match result {
         Ok(login) => {
+            if let (Some(r), Some(Extension(f))) = (reservation, &fails) {
+                r.release(f);
+            }
             let mut res = (
                 StatusCode::OK,
                 Json(json!({
@@ -127,13 +130,11 @@ pub async fn login(
             res
         }
         Err(e) => {
-            if e.kind == lineal_app::ErrorKind::Unauthenticated
-                && let Some(Extension(f)) = &fails
+            // Falsche Zugangsdaten zählen (Reservierung bleibt); andere Fehler nicht.
+            if e.kind != lineal_app::ErrorKind::Unauthenticated
+                && let (Some(r), Some(Extension(f))) = (reservation, &fails)
             {
-                if let Some(ip) = &ip_key {
-                    f.record_ip(ip, now_ms);
-                }
-                f.record_account(&account, now_ms);
+                r.release(f);
             }
             error_response(e)
         }
