@@ -22,11 +22,13 @@ fn actor_for(user: UserId, role: UserRole) -> Actor {
     }
 }
 
-fn scopes_from(list: &[String]) -> Scopes {
+/// Scopes aus der DB, begrenzt durch die aktuelle Rolle: Gäste und Apps nie `admin`.
+fn scopes_from(list: &[String], role: UserRole) -> Scopes {
     Scopes {
         read: list.iter().any(|s| s == "read"),
         write: list.iter().any(|s| s == "write"),
-        admin: list.iter().any(|s| s == "admin"),
+        admin: list.iter().any(|s| s == "admin")
+            && !matches!(role, UserRole::Guest | UserRole::App),
     }
 }
 
@@ -70,18 +72,24 @@ impl AuthRepo for PgTx {
         let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
             "SELECT s.organization_id, u.id, u.role FROM user_session s \
              JOIN \"user\" u ON u.organization_id = s.organization_id AND u.id = s.user_id \
+             JOIN organization o ON o.id = s.organization_id AND o.archived_at IS NULL \
              WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.archived_at IS NULL \
-               AND s.expires_at > now() AND u.active AND u.archived_at IS NULL",
+               AND s.expires_at > now() AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
         if let Some((org, user, role)) = row {
+            let role = parse_role(&role)?;
+            let mut scopes = Scopes::all();
+            if matches!(role, UserRole::Guest | UserRole::App) {
+                scopes.admin = false;
+            }
             return Ok(Some(Principal {
                 org_id: OrgId(org),
-                actor: actor_for(UserId(user), parse_role(&role)?),
-                scopes: Scopes::all(),
+                actor: actor_for(UserId(user), role),
+                scopes,
             }));
         }
 
@@ -89,18 +97,20 @@ impl AuthRepo for PgTx {
         let row: Option<(Uuid, Uuid, String, Vec<String>)> = sqlx::query_as(
             "SELECT k.organization_id, u.id, u.role, k.scopes FROM api_key k \
              JOIN \"user\" u ON u.organization_id = k.organization_id AND u.id = k.user_id \
+             JOIN organization o ON o.id = k.organization_id AND o.archived_at IS NULL \
              WHERE k.key_hash = $1 AND k.revoked_at IS NULL AND k.archived_at IS NULL \
-               AND (k.expires_at IS NULL OR k.expires_at > now()) AND u.active AND u.archived_at IS NULL",
+               AND (k.expires_at IS NULL OR k.expires_at > now()) AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
         if let Some((org, user, role, scopes)) = row {
+            let role = parse_role(&role)?;
             return Ok(Some(Principal {
                 org_id: OrgId(org),
-                actor: actor_for(UserId(user), parse_role(&role)?),
-                scopes: scopes_from(&scopes),
+                actor: actor_for(UserId(user), role),
+                scopes: scopes_from(&scopes, role),
             }));
         }
 
@@ -108,8 +118,9 @@ impl AuthRepo for PgTx {
         let row: Option<(Uuid, Uuid, String, String, Vec<String>)> = sqlx::query_as(
             "SELECT t.organization_id, u.id, u.role, t.actor, t.scopes FROM oauth_token t \
              JOIN \"user\" u ON u.organization_id = t.organization_id AND u.id = t.user_id \
+             JOIN organization o ON o.id = t.organization_id AND o.archived_at IS NULL \
              WHERE t.access_token_hash = $1 AND t.revoked_at IS NULL AND t.archived_at IS NULL \
-               AND t.access_expires_at > now() AND u.active AND u.archived_at IS NULL",
+               AND t.access_expires_at > now() AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
         .fetch_optional(&mut *self.tx)
@@ -125,7 +136,7 @@ impl AuthRepo for PgTx {
             return Ok(Some(Principal {
                 org_id: OrgId(org),
                 actor,
-                scopes: scopes_from(&scopes),
+                scopes: scopes_from(&scopes, role),
             }));
         }
         Ok(None)
@@ -139,7 +150,7 @@ impl AuthRepo for PgTx {
         let rows: Vec<(Uuid, String, Uuid, String, bool, Option<String>)> = sqlx::query_as(
             "SELECT u.organization_id, o.url_key, u.id, u.role, u.active, u.password_hash \
              FROM \"user\" u JOIN organization o ON o.id = u.organization_id \
-             WHERE lower(u.email) = lower($1) AND u.archived_at IS NULL AND o.archived_at IS NULL \
+             WHERE lower(u.email) = lower($1) AND u.status = 'active' AND u.archived_at IS NULL AND o.archived_at IS NULL \
                AND ($2::text IS NULL OR o.url_key = $2) \
              ORDER BY o.created_at, u.id",
         )
