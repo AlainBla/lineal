@@ -64,7 +64,7 @@ fn overview_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "includeSubTeams": {
-                "default": false,
+                "default": true,
                 "description": "Include sub-teams in each team's figures",
                 "type": "boolean"
             },

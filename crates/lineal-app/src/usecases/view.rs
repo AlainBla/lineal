@@ -47,6 +47,30 @@ pub struct ViewInfo {
     pub view: CustomView,
     /// Darf der Betrachter bearbeiten/löschen (docs/05 §4.2)?
     pub can_edit: bool,
+    /// `(key, name)` des Teams (nur sichtbare Teams).
+    pub team: Option<(String, String)>,
+    /// Anzeigename des Owners.
+    pub owner_name: Option<String>,
+}
+
+async fn info(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    can_edit: bool,
+    view: CustomView,
+) -> AppResult<ViewInfo> {
+    let team = view
+        .team_id
+        .filter(|t| snap.visible_team_ids().contains(t))
+        .and_then(|t| snap.tree.get(t))
+        .map(|t| (t.key.clone(), t.name.clone()));
+    let owner_name = tx.users().get(view.owner_id).await?.map(|u| u.name);
+    Ok(ViewInfo {
+        view,
+        can_edit,
+        team,
+        owner_name,
+    })
 }
 
 /// Eingabe für `create_view`.
@@ -589,11 +613,9 @@ impl App {
                 .await?;
         }
         emit(&mut *tx, ctx, DomainEvent::CustomViewCreated { view_id: view.id }).await?;
+        let out = info(&mut *tx, &snap, true, view).await?;
         tx.commit().await?;
-        Ok(ViewInfo {
-            can_edit: true,
-            view,
-        })
+        Ok(out)
     }
 
     /// Liest eine sichtbare View.
@@ -602,10 +624,8 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let access = view_access(&snap, ctx)?;
         let view = resolve_view_in(&mut *tx, &access, reference).await?;
-        Ok(ViewInfo {
-            can_edit: can_edit(&snap, access.user_id, &view),
-            view,
-        })
+        let can = can_edit(&snap, access.user_id, &view);
+        info(&mut *tx, &snap, can, view).await
     }
 
     /// Sichtbare, nicht archivierte Views (Metadaten); keine an Projekte/Initiativen gebundenen.
@@ -644,15 +664,13 @@ impl App {
             )
             .await?;
         let me = access.user_id;
+        let mut items = Vec::new();
+        for view in res.items {
+            let can = can_edit(&snap, me, &view);
+            items.push(info(&mut *tx, &snap, can, view).await?);
+        }
         Ok(Page {
-            items: res
-                .items
-                .into_iter()
-                .map(|view| ViewInfo {
-                    can_edit: can_edit(&snap, me, &view),
-                    view,
-                })
-                .collect(),
+            items,
             next: res.next,
         })
     }
@@ -775,11 +793,9 @@ impl App {
         let saved = tx.views().save_view(&view, access.user_id, now).await?;
         emit(&mut *tx, ctx, DomainEvent::CustomViewUpdated { view_id: saved.id }).await?;
         let can = can_edit(&snap, access.user_id, &saved);
+        let out = info(&mut *tx, &snap, can, saved).await?;
         tx.commit().await?;
-        Ok(ViewInfo {
-            view: saved,
-            can_edit: can,
-        })
+        Ok(out)
     }
 
     /// Löscht eine View endgültig (inkl. Preferences und Favoriten).
@@ -846,11 +862,9 @@ impl App {
                 .await?;
         }
         emit(&mut *tx, ctx, DomainEvent::CustomViewCreated { view_id: view.id }).await?;
+        let out = info(&mut *tx, &snap, true, view).await?;
         tx.commit().await?;
-        Ok(ViewInfo {
-            can_edit: true,
-            view,
-        })
+        Ok(out)
     }
 }
 
