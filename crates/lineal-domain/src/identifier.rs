@@ -16,7 +16,9 @@ impl TeamKey {
     /// Validiert und erzeugt einen Key (exakt, keine Normalisierung).
     pub fn parse(s: &str) -> Result<Self, DomainError> {
         let bytes = s.as_bytes();
-        let ok = !bytes.is_empty()
+        // `P` und `I` sind reserviert (docs/01 §6.1): sonst wären `P-ENG-7`/`I-4` mehrdeutig.
+        let ok = !matches!(s, "P" | "I")
+            && !bytes.is_empty()
             && bytes.len() <= Self::MAX_LEN
             && bytes[0].is_ascii_uppercase()
             && bytes[1..]
@@ -224,6 +226,12 @@ mod tests {
         ] {
             assert!(TeamKey::parse(k).is_err(), "{k}");
         }
+    }
+
+    #[test]
+    fn reserved_keys_p_and_i_are_rejected() {
+        assert!(TeamKey::parse("P").is_err() && TeamKey::parse("I").is_err());
+        assert!(TeamKey::parse("PI").is_ok() && TeamKey::parse("IP").is_ok());
     }
 
     #[test]
