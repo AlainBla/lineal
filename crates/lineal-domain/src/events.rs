@@ -133,6 +133,11 @@ domain_events! {
     CustomViewRemoved { view_id: ViewId },
     /// Triage-Aktion (accept/decline/duplicate/snooze/move) auf einem Issue (WP12).
     IssueTriaged { issue_id: IssueId, team_id: TeamId, action: String },
+    // --- vom Orchestrator vor Welle 4 ergänzt (Sync des Inbox-Zustands, WP15) ---
+    /// Gelesen/ungelesen/gesnoozt geändert; nur an `user_id` zu synchronisieren.
+    NotificationUpdated { notification_id: NotificationId, user_id: UserId },
+    /// Archiviert (einzeln oder per „archive all“); nur an `user_id` zu synchronisieren.
+    NotificationArchived { notification_id: NotificationId, user_id: UserId },
 }
 
 #[cfg(test)]
