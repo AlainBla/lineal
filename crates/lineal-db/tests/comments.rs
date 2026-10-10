@@ -124,7 +124,7 @@ async fn make_project(env: &Env, teams: &[lineal_domain::ids::TeamId], number: i
     .bind(id)
     .bind(env.data.org.0)
     .bind(teams[0].0)
-    .bind(number)
+    .bind(number + 100) // Seed (WP07) belegt bereits P-ENG-1
     .bind(status)
     .execute(&env.pool)
     .await
