@@ -4,6 +4,7 @@
 //! seine eigene Datei (`identity` WP02, `issues` WP06, `planning` WP07, `content` WP10).
 
 pub mod content;
+pub mod demo;
 pub mod identity;
 pub mod issues;
 pub mod planning;

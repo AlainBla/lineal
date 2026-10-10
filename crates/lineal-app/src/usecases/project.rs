@@ -525,11 +525,25 @@ impl App {
                 "`setInitiatives` cannot be combined with `addInitiatives`/`removeInitiatives`",
             ));
         }
-        if input.template.is_some() && input.id.is_none() {
-            return Err(
-                AppError::invalid_request("Project templates are not available yet.")
-                    .with_details(json!({ "field": "template", "reason": "template_unsupported" })),
-            );
+        // WP10: Templates gelten nur beim Anlegen (docs/06 §2.5).
+        if input.template.is_some() && input.id.is_some() {
+            return Err(AppError::invalid_request(
+                "`template` is only valid when creating a project.",
+            )
+            .with_details(json!({ "field": "template", "reason": "template_on_update" })));
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let now = self.clock.now();
+        // WP10: Template-Merge (Mengenfelder: Vereinigung, Skalare: Input gewinnt); Meilensteine,
+        // Issues und Dokumente entstehen nach dem Projekt in derselben Transaktion.
+        let mut input = input;
+        let mut applied = None;
+        if let Some(t) = input.template.clone() {
+            let (merged, ap) =
+                super::template::merge_project(self, &mut *tx, &snap, ctx, &t, input).await?;
+            input = merged;
+            applied = Some(ap);
         }
         if let Some(c) = &input.color {
             validate_color(c)?;
@@ -538,15 +552,17 @@ impl App {
             validate_priority(p)?;
         }
         let summary = input.summary.as_deref().map(validate_summary).transpose()?;
-        let mut tx = self.store.begin(ctx.org_id).await?;
-        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let now = self.clock.now();
         let (project_id, open_issue_count) = match input.id.clone() {
-            None => (
-                self.create_project_in(&mut *tx, &snap, ctx, &input, summary, now)
-                    .await?,
-                None,
-            ),
+            None => {
+                let id = self
+                    .create_project_in(&mut *tx, &snap, ctx, &input, summary, now)
+                    .await?;
+                if let Some(ap) = applied {
+                    super::template::apply_project_children(self, &mut *tx, &snap, ctx, id, ap)
+                        .await?;
+                }
+                (id, None)
+            }
             Some(reference) => {
                 self.update_project_in(&mut *tx, &snap, ctx, &reference, &input, summary, now)
                     .await?
