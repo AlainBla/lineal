@@ -9,6 +9,7 @@ use crate::fields::{parse_fields, select_fields, truncate_description};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
+use lineal_app::usecases::attachment::LinkAttachmentInput;
 use lineal_app::usecases::issue::{
     CreateIssueInput, DescriptionEdit, IssueDetail, IssueView, ListIssuesInput, RelationChanges,
     RelationsView, UpdateIssueInput,
@@ -334,22 +335,46 @@ fn sla_at_arg(v: &Value) -> AppResult<Option<DateTime<Utc>>> {
     }
 }
 
-fn reject_unsupported(args: &Value) -> AppResult<()> {
-    if args.get("template").is_some_and(|v| !v.is_null()) {
-        return Err(bad("template", "`template` is not supported yet"));
+/// `links` (`[{url, title}]`): geprüft, bevor etwas angelegt wird (append-only, docs/07 §3.2).
+fn links_arg(args: &Value) -> AppResult<Vec<(String, Option<String>)>> {
+    let Some(raw) = args.get("links").filter(|v| !v.is_null()) else {
+        return Ok(vec![]);
+    };
+    let items = raw
+        .as_array()
+        .ok_or_else(|| bad("links", "`links` must be an array"))?;
+    let mut out = Vec::new();
+    for (i, l) in items.iter().enumerate() {
+        let url = l
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad(&format!("links/{i}/url"), "each link needs a `url`"))?;
+        lineal_app::usecases::attachment::normalize_url(url)?;
+        let title = l.get("title").and_then(Value::as_str).map(str::to_owned);
+        out.push((url.to_owned(), title));
     }
-    if args
-        .get("links")
-        .and_then(Value::as_array)
-        .is_some_and(|l| !l.is_empty())
-    {
-        return Err(bad("links", "`links` is not supported yet (attachments)"));
-    }
-    Ok(())
+    Ok(out)
+}
+
+/// Felder, die ausdrücklich als `null` übergeben wurden (überschreiben Template-Werte, docs/06 §2.5).
+fn explicit_nulls(args: &Value) -> Vec<String> {
+    [
+        "state",
+        "priority",
+        "estimate",
+        "assignee",
+        "dueDate",
+        "project",
+        "milestone",
+        "cycle",
+    ]
+    .into_iter()
+    .filter(|k| matches!(args.get(*k), Some(Value::Null)))
+    .map(str::to_owned)
+    .collect()
 }
 
 fn create_input(args: &Value) -> AppResult<CreateIssueInput> {
-    reject_unsupported(args)?;
     if args.get("patch").is_some() {
         return Err(bad("patch", "`patch` is only valid when updating an issue"));
     }
@@ -400,7 +425,12 @@ fn create_input(args: &Value) -> AppResult<CreateIssueInput> {
 }
 
 fn update_input(id: &str, args: &Value) -> AppResult<UpdateIssueInput> {
-    reject_unsupported(args)?;
+    if args.get("template").is_some_and(|v| !v.is_null()) {
+        return Err(bad(
+            "template",
+            "`template` is only valid when creating an issue",
+        ));
+    }
     let description = match (args.get("description"), args.get("patch")) {
         (Some(_), Some(_)) => {
             return Err(bad(
@@ -596,13 +626,43 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             ]
             .iter()
             .any(|k| args.get(*k).is_some());
+            let links = links_arg(&args)?;
+            let template = arg_str(&args, "template")?.filter(|t| !t.trim().is_empty());
+            let mut sub_issues: Option<(Vec<IssueView>, Vec<String>)> = None;
             let view = match arg_str(&args, "id")? {
                 Some(id) => {
                     let input = update_input(id, &args)?;
                     app.update_issue(ctx, input).await?
                 }
-                None => app.create_issue(ctx, create_input(&args)?).await?,
+                None => match template {
+                    Some(t) => {
+                        let outcome = app
+                            .create_issue_from_template(
+                                ctx,
+                                t,
+                                create_input(&args)?,
+                                &explicit_nulls(&args),
+                            )
+                            .await?;
+                        sub_issues = Some((outcome.children, outcome.warnings));
+                        outcome.root
+                    }
+                    None => app.create_issue(ctx, create_input(&args)?).await?,
+                },
             };
+            // `links` (append-only): je Link eine eigene Transaktion nach dem Speichern.
+            for (url, title) in links {
+                app.link_attachment(
+                    ctx,
+                    LinkAttachmentInput {
+                        issue: view.issue.id.to_string(),
+                        url,
+                        title,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            }
             let base = base_url(app, ctx).await?;
             let handle = caller_handle(app, ctx).await;
             let relations = if relation_params {
@@ -625,6 +685,20 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                         "previousIdentifiers".into(),
                         json!(detail.view.previous_identifiers),
                     );
+                }
+                if let Some((children, warnings)) = &sub_issues {
+                    o.insert(
+                        "subIssues".into(),
+                        Value::Array(
+                            children
+                                .iter()
+                                .map(
+                                    |c| json!({ "id": c.issue.identifier, "title": c.issue.title }),
+                                )
+                                .collect(),
+                        ),
+                    );
+                    o.insert("warnings".into(), json!(warnings));
                 }
             }
             Ok(out)
