@@ -15,8 +15,10 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> AppResult<Option<&'a str>> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(_) => Err(AppError::invalid_request(format!("`{key}` must be a string"))
-            .with_details(json!({ "path": format!("/{key}") }))),
+        Some(_) => Err(
+            AppError::invalid_request(format!("`{key}` must be a string"))
+                .with_details(json!({ "path": format!("/{key}") })),
+        ),
     }
 }
 

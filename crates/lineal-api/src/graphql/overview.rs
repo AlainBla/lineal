@@ -315,8 +315,7 @@ impl OverviewQuery {
             None | Some("current") => false,
             Some("next") => true,
             Some(_) => {
-                return Err(AppError::invalid_request("cycle must be current or next"))
-                    .gql(ctx);
+                return Err(AppError::invalid_request("cycle must be current or next")).gql(ctx);
             }
         };
         Ok(app(ctx)?

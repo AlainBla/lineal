@@ -102,7 +102,7 @@ async fn projects_contract(pool: sqlx::PgPool) {
         f["projects"][0]["members"][0]["email"],
         "alice@acme.example"
     );
-    // Filter mit unbekannter Referenz: not_found; customView: invalid_request.
+    // Filter mit unbekannter Referenz: not_found; unbekannte customView: not_found (WP11).
     assert_eq!(
         err_kind(
             call(
@@ -125,7 +125,7 @@ async fn projects_contract(pool: sqlx::PgPool) {
             )
             .await
         ),
-        ErrorKind::InvalidRequest
+        ErrorKind::NotFound
     );
 
     // get_project mit Meilensteinen und Ressourcen.

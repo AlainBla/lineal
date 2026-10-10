@@ -687,7 +687,8 @@ impl ViewRepo for PgTx {
         qb.push(", ").push_bind(f.folder_name.clone());
         qb.push(", ").push_bind(f.sort_order);
         qb.push(", ").push_bind(f.predefined_view_type.clone());
-        qb.push(", ").push_bind(f.predefined_view_team_id.map(|t| t.0));
+        qb.push(", ")
+            .push_bind(f.predefined_view_team_id.map(|t| t.0));
         qb.push(", ").push_bind(f.now);
         qb.push(", ").push_bind(f.now);
         if col.is_some() {

@@ -10,7 +10,7 @@ use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::ports::repos::view::ViewModel;
 use lineal_app::usecases::issue::ListIssuesInput;
 use lineal_app::usecases::view::{
-    CreateFavoriteInput, CreateViewInput, ListViewsInput, UpdateViewInput, ViewKeyInput, ViewInfo,
+    CreateFavoriteInput, CreateViewInput, ListViewsInput, UpdateViewInput, ViewInfo, ViewKeyInput,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -86,8 +86,15 @@ async fn a_personal_view_of_someone_else_is_not_found_everywhere(pool: PgPool) {
     let v = create(&fx, &bob(), cv("Bobs private", json!({}))).await;
     let id = v.view.id.to_string();
     assert_eq!(names(&fx, &bob()).await, vec!["Bobs private".to_owned()]);
-    assert!(names(&fx, &alice()).await.is_empty(), "list does not show it");
-    for reference in [id.clone(), v.view.slug_id.clone(), "Bobs private".to_owned()] {
+    assert!(
+        names(&fx, &alice()).await.is_empty(),
+        "list does not show it"
+    );
+    for reference in [
+        id.clone(),
+        v.view.slug_id.clone(),
+        "Bobs private".to_owned(),
+    ] {
         assert_eq!(
             kind(fx.app.get_view(&alice(), &reference).await),
             ErrorKind::NotFound
@@ -133,7 +140,13 @@ async fn a_personal_view_of_someone_else_is_not_found_everywhere(pool: PgPool) {
         ErrorKind::NotFound
     );
     // Der Owner sieht sie weiterhin.
-    assert!(fx.app.get_view(&bob(), &v.view.slug_id).await.unwrap().can_edit);
+    assert!(
+        fx.app
+            .get_view(&bob(), &v.view.slug_id)
+            .await
+            .unwrap()
+            .can_edit
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -229,7 +242,11 @@ async fn workspace_team_and_guest_views_follow_the_rights_table(pool: PgPool) {
         "a view of a private team is invisible to non-members"
     );
     assert_eq!(
-        kind(fx.app.get_view(&alice(), &des_view.view.id.to_string()).await),
+        kind(
+            fx.app
+                .get_view(&alice(), &des_view.view.id.to_string())
+                .await
+        ),
         ErrorKind::NotFound
     );
 
@@ -272,24 +289,24 @@ async fn view_plus_extra_filter_is_and_and_team_scope_is_implicit(pool: PgPool) 
     let fx = setup(pool).await;
     let d = fx.data;
     let a = fx.issue(d.eng, 101, "Eng bob prio1", 1).await;
-    fx.set(a, &format!("assignee_id = '{}', priority = 1", d.bob.0)).await;
+    fx.set(a, &format!("assignee_id = '{}', priority = 1", d.bob.0))
+        .await;
     let b = fx.issue(d.eng, 102, "Eng bob prio2", 1).await;
-    fx.set(b, &format!("assignee_id = '{}', priority = 2", d.bob.0)).await;
+    fx.set(b, &format!("assignee_id = '{}', priority = 2", d.bob.0))
+        .await;
     let c = fx.issue(d.eng, 103, "Eng alice prio1", 1).await;
-    fx.set(c, &format!("assignee_id = '{}', priority = 1", d.alice.0)).await;
+    fx.set(c, &format!("assignee_id = '{}', priority = 1", d.alice.0))
+        .await;
     let w = fx.issue(d.web, 101, "Web bob prio1", 1).await;
-    fx.set(w, &format!("assignee_id = '{}', priority = 1", d.bob.0)).await;
+    fx.set(w, &format!("assignee_id = '{}', priority = 1", d.bob.0))
+        .await;
 
     let bob_id = d.bob.to_string();
-    let view = create(
-        &fx,
-        &alice(),
-        {
-            let mut v = cv("Bob's work", json!({"assignee": {"id": {"in": [bob_id]}}}));
-            v.shared = true;
-            v
-        },
-    )
+    let view = create(&fx, &alice(), {
+        let mut v = cv("Bob's work", json!({"assignee": {"id": {"in": [bob_id]}}}));
+        v.shared = true;
+        v
+    })
     .await;
     let r = |extra: ListIssuesInput| ListIssuesInput {
         custom_view: Some(view.view.slug_id.clone()),
@@ -302,7 +319,15 @@ async fn view_plus_extra_filter_is_and_and_team_scope_is_implicit(pool: PgPool) 
     );
     // View UND flacher Parameter.
     assert_eq!(
-        view_titles(&fx, &alice(), r(ListIssuesInput { priority: Some(1), ..Default::default() })).await,
+        view_titles(
+            &fx,
+            &alice(),
+            r(ListIssuesInput {
+                priority: Some(1),
+                ..Default::default()
+            })
+        )
+        .await,
         set(&["Eng bob prio1", "Web bob prio1"])
     );
     // View UND Zusatzfilter (AST) UND flacher Parameter: nur Verengung.
@@ -433,7 +458,10 @@ async fn custom_view_parameter_validation(pool: PgPool) {
         ErrorKind::NotFound
     );
     // Referenz per URL (letztes Segment: Slug).
-    let url = format!("https://app.example/acme/view/issues-{}", issue_view.view.slug_id);
+    let url = format!(
+        "https://app.example/acme/view/issues-{}",
+        issue_view.view.slug_id
+    );
     assert!(
         fx.app
             .list_issues(
@@ -469,7 +497,10 @@ async fn saving_validates_normalizes_and_checks_references(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(v.view.filter["assignee"]["id"]["in"], json!([d.bob.to_string()]));
+    assert_eq!(
+        v.view.filter["assignee"]["id"]["in"],
+        json!([d.bob.to_string()])
+    );
     assert!(v.view.filter["assignee"]["id"].get("eq").is_none());
     // Schemaverstoß → invalid_request mit details.path
     let e = fx
@@ -491,10 +522,22 @@ async fn saving_validates_normalizes_and_checks_references(pool: PgPool) {
     }
     // Name/Icon/Farbe
     for bad in [
-        CreateViewInput { name: " ".into(), ..cv("x", json!({})) },
-        CreateViewInput { name: "n".repeat(81), ..cv("x", json!({})) },
-        CreateViewInput { color: Some("red".into()), ..cv("x", json!({})) },
-        CreateViewInput { icon: Some("<script>".into()), ..cv("x", json!({})) },
+        CreateViewInput {
+            name: " ".into(),
+            ..cv("x", json!({}))
+        },
+        CreateViewInput {
+            name: "n".repeat(81),
+            ..cv("x", json!({}))
+        },
+        CreateViewInput {
+            color: Some("red".into()),
+            ..cv("x", json!({}))
+        },
+        CreateViewInput {
+            icon: Some("<script>".into()),
+            ..cv("x", json!({}))
+        },
     ] {
         assert_eq!(
             kind(fx.app.create_view(&bob(), bad).await),
@@ -508,7 +551,11 @@ async fn saving_validates_normalizes_and_checks_references(pool: PgPool) {
         name: Some("Renamed".into()),
         ..Default::default()
     };
-    let ok = fx.app.update_view(&bob(), upd(v.view.version)).await.unwrap();
+    let ok = fx
+        .app
+        .update_view(&bob(), upd(v.view.version))
+        .await
+        .unwrap();
     assert_eq!(ok.view.name, "Renamed");
     assert_eq!(
         kind(fx.app.update_view(&bob(), upd(v.view.version)).await),
@@ -544,7 +591,10 @@ async fn mutations_write_outbox_events(pool: PgPool) {
         )
         .await
         .unwrap();
-    fx.app.delete_view(&bob(), &v.view.id.to_string()).await.unwrap();
+    fx.app
+        .delete_view(&bob(), &v.view.id.to_string())
+        .await
+        .unwrap();
     let types: Vec<String> = sqlx::query_scalar(
         "SELECT type FROM outbox_event WHERE type LIKE 'CustomView%' ORDER BY sync_id",
     )
@@ -553,7 +603,11 @@ async fn mutations_write_outbox_events(pool: PgPool) {
     .unwrap();
     assert_eq!(
         types,
-        vec!["CustomViewCreated", "CustomViewUpdated", "CustomViewRemoved"]
+        vec![
+            "CustomViewCreated",
+            "CustomViewUpdated",
+            "CustomViewRemoved"
+        ]
     );
 }
 
@@ -574,12 +628,20 @@ async fn display_options_layers_defaults_and_permissions(pool: PgPool) {
     // Jede Änderung ist persönlich: Bob ändert, Alice bleibt unberührt.
     let eff = fx
         .app
-        .update_view_preferences(&bob(), key.clone(), json!({"grouping": "assignee", "layout": "board"}))
+        .update_view_preferences(
+            &bob(),
+            key.clone(),
+            json!({"grouping": "assignee", "layout": "board"}),
+        )
         .await
         .unwrap();
     assert_eq!(eff.effective["grouping"], "assignee");
     assert!(eff.has_personal);
-    let alices = fx.app.view_preferences(&alice(), key.clone()).await.unwrap();
+    let alices = fx
+        .app
+        .view_preferences(&alice(), key.clone())
+        .await
+        .unwrap();
     assert_eq!(alices.effective["grouping"], "status");
     // Ungültige Werte werden abgelehnt.
     assert_eq!(
@@ -592,21 +654,40 @@ async fn display_options_layers_defaults_and_permissions(pool: PgPool) {
     );
     // „Set default for everyone“: Bob darf nicht (kein Owner/Admin), Alice schon.
     assert_eq!(
-        kind(fx.app.set_view_preferences_default(&bob(), key.clone()).await),
+        kind(
+            fx.app
+                .set_view_preferences_default(&bob(), key.clone())
+                .await
+        ),
         ErrorKind::Forbidden
     );
     fx.app
-        .update_view_preferences(&alice(), key.clone(), json!({"ordering": "updatedAt", "orderDirection": "asc"}))
+        .update_view_preferences(
+            &alice(),
+            key.clone(),
+            json!({"ordering": "updatedAt", "orderDirection": "asc"}),
+        )
         .await
         .unwrap();
-    let after = fx.app.set_view_preferences_default(&alice(), key.clone()).await.unwrap();
-    assert!(after.has_default && !after.has_personal, "personal row is dropped");
+    let after = fx
+        .app
+        .set_view_preferences_default(&alice(), key.clone())
+        .await
+        .unwrap();
+    assert!(
+        after.has_default && !after.has_personal,
+        "personal row is dropped"
+    );
     // Bob behält seinen Override, übernimmt aber den neuen Default für alles andere.
     let bobs = fx.app.view_preferences(&bob(), key.clone()).await.unwrap();
     assert_eq!(bobs.effective["grouping"], "assignee");
     assert_eq!(bobs.effective["ordering"], "updatedAt");
     // Reset löscht nur die persönliche Zeile.
-    let reset = fx.app.reset_view_preferences(&bob(), key.clone()).await.unwrap();
+    let reset = fx
+        .app
+        .reset_view_preferences(&bob(), key.clone())
+        .await
+        .unwrap();
     assert_eq!(reset.effective["grouping"], "status");
     assert_eq!(reset.effective["ordering"], "updatedAt");
     // Vordefinierte Ansicht: Board-Default und My-Issues-Default.
@@ -677,7 +758,10 @@ async fn favorites_are_personal_and_hide_invisible_targets(pool: PgPool) {
         .unwrap();
     assert_eq!(again.id, fav.id);
     assert_eq!(fx.app.list_favorites(&bob()).await.unwrap().len(), 1);
-    assert!(fx.app.list_favorites(&alice()).await.unwrap().is_empty(), "favorites are personal");
+    assert!(
+        fx.app.list_favorites(&alice()).await.unwrap().is_empty(),
+        "favorites are personal"
+    );
     // Fremder Favorit → not_found
     assert_eq!(
         kind(fx.app.delete_favorite(&alice(), fav.id).await),
@@ -710,7 +794,10 @@ async fn favorites_are_personal_and_hide_invisible_targets(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(team_fav.parent_id, Some(folder.id));
-    assert!(folder.sort_order > fav.sort_order, "new favorites go to the end of their level");
+    assert!(
+        folder.sort_order > fav.sort_order,
+        "new favorites go to the end of their level"
+    );
     // Privates Team: Alice kann DES nicht favorisieren (not_found), Bob schon.
     assert_eq!(
         kind(
@@ -751,5 +838,140 @@ async fn favorites_are_personal_and_hide_invisible_targets(pool: PgPool) {
     // Ordner löschen: Kinder wandern auf die oberste Ebene.
     fx.app.delete_favorite(&bob(), folder.id).await.unwrap();
     let rest = fx.app.list_favorites(&bob()).await.unwrap();
-    assert!(rest.iter().any(|f| f.id == team_fav.id && f.parent_id.is_none()));
+    assert!(
+        rest.iter()
+            .any(|f| f.id == team_fav.id && f.parent_id.is_none())
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn custom_views_filter_projects_and_initiatives(pool: PgPool) {
+    use lineal_app::usecases::initiative::ListInitiativesInput;
+    use lineal_app::usecases::project::ListProjectsInput;
+    use lineal_testkit::seed::planning::seed_initiative_id;
+    let fx = setup(pool).await;
+    let mk = |name: &str, model: ViewModel, filter: Value| CreateViewInput {
+        model,
+        ..cv(name, filter)
+    };
+    create(
+        &fx,
+        &alice(),
+        mk("P2", ViewModel::Project, json!({"priority": {"in": [2]}})),
+    )
+    .await;
+    create(
+        &fx,
+        &alice(),
+        mk("P1", ViewModel::Project, json!({"priority": {"in": [1]}})),
+    )
+    .await;
+    create(
+        &fx,
+        &alice(),
+        mk(
+            "InI1",
+            ViewModel::Project,
+            json!({"initiatives": {"some": {"id": {"in": [seed_initiative_id().to_string()]}}}}),
+        ),
+    )
+    .await;
+    create(
+        &fx,
+        &alice(),
+        mk(
+            "Active",
+            ViewModel::Initiative,
+            json!({"status": {"eq": "Active"}}),
+        ),
+    )
+    .await;
+    create(
+        &fx,
+        &alice(),
+        mk(
+            "Done",
+            ViewModel::Initiative,
+            json!({"status": {"eq": "Completed"}}),
+        ),
+    )
+    .await;
+    let projects = |view: &str| {
+        let fx = &fx;
+        let view = view.to_owned();
+        async move {
+            fx.app
+                .list_projects(
+                    &alice(),
+                    ListProjectsInput {
+                        custom_view: Some(view),
+                        page: PageRequest {
+                            limit: 50,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .await
+        }
+    };
+    assert_eq!(projects("P2").await.unwrap().0.items.len(), 1);
+    assert_eq!(projects("P1").await.unwrap().0.items.len(), 0);
+    assert_eq!(projects("InI1").await.unwrap().0.items.len(), 1);
+    // Falscher Typ → invalid_request.
+    assert_eq!(kind(projects("Active").await), ErrorKind::InvalidRequest);
+    let initiatives = |view: &str| {
+        let fx = &fx;
+        let view = view.to_owned();
+        async move {
+            fx.app
+                .list_initiatives(
+                    &alice(),
+                    ListInitiativesInput {
+                        custom_view: Some(view),
+                        page: PageRequest {
+                            limit: 50,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .await
+        }
+    };
+    assert_eq!(initiatives("Active").await.unwrap().0.items.len(), 1);
+    assert_eq!(initiatives("Done").await.unwrap().0.items.len(), 0);
+    assert_eq!(kind(initiatives("P2").await), ErrorKind::InvalidRequest);
+    // query + customView → invalid_request; fremde persönliche View → not_found.
+    let e = fx
+        .app
+        .list_projects(
+            &alice(),
+            ListProjectsInput {
+                custom_view: Some("P2".into()),
+                query: Some("x".into()),
+                page: PageRequest {
+                    limit: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await;
+    assert_eq!(kind(e), ErrorKind::InvalidRequest);
+    let e = fx
+        .app
+        .list_projects(
+            &bob(),
+            ListProjectsInput {
+                custom_view: Some("P2".into()),
+                page: PageRequest {
+                    limit: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await;
+    assert_eq!(kind(e), ErrorKind::NotFound);
 }

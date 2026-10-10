@@ -78,6 +78,9 @@ pub struct SaveProjectInput {
 /// Filter von `list_projects` (Referenzen als Strings, werden aufgelöst).
 #[derive(Debug, Clone, Default)]
 pub struct ListProjectsInput {
+    /// Gespeicherte View (UUID, Slug, URL oder Name): Filter und Scope der View UND alle
+    /// weiteren Parameter (WP11); nicht mit `query` kombinierbar.
+    pub custom_view: Option<String>,
     pub team: Option<String>,
     pub include_sub_teams: bool,
     pub initiative: Option<String>,
@@ -454,6 +457,33 @@ impl App {
                 );
             }
             filter.label_ids = Some(ids);
+        }
+        if let Some(r) = &input.custom_view {
+            if input.query.as_deref().is_some_and(|q| !q.trim().is_empty()) {
+                return Err(
+                    AppError::invalid_request("query cannot be combined with customView")
+                        .with_details(
+                            json!({ "field": "query", "reason": "conflicts_with_customView" }),
+                        ),
+                );
+            }
+            let v = super::view::view_for_list(
+                &mut *tx,
+                &snap,
+                ctx,
+                r,
+                crate::ports::repos::view::ViewModel::Project,
+            )
+            .await?;
+            let eval = super::view::build_eval(&mut *tx, &snap, ctx, now, false, true).await?;
+            let ast: lineal_domain::rules::filter::ProjectFilter =
+                lineal_domain::rules::filter::from_json_value(&super::view::combined_filter(
+                    &v,
+                    Vec::new(),
+                ))
+                .map_err(|e| AppError::invalid_request(format!("Invalid filter: {}", e.reason)))?;
+            filter.ast = Some(Box::new(ast));
+            filter.eval = Some(eval);
         }
         let page = tx.projects().list(&filter, &input.page).await?;
         let views = build_views(

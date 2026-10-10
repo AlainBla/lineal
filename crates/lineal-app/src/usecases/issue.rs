@@ -24,10 +24,10 @@ use crate::ports::repos::label::LabelKind;
 use crate::ports::repos::team::Team;
 use crate::ports::repos::user::{OrderBy, PageCursor, PageRequest};
 use crate::ports::repos::view::ViewModel;
-use crate::usecases::view;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use crate::resolve::user::actor_user_id;
+use crate::usecases::view;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use fields::{
     LabelPlan, PlanningChange, apply_planning, change_state, convert_estimate, default_state,
@@ -1248,10 +1248,11 @@ impl App {
             .map(str::trim)
             .filter(|q| !q.is_empty());
         if input.custom_view.is_some() && query.is_some() {
-            return Err(AppError::invalid_request(
-                "query cannot be combined with customView",
-            )
-            .with_details(json!({ "field": "query", "reason": "conflicts_with_customView" })));
+            return Err(
+                AppError::invalid_request("query cannot be combined with customView").with_details(
+                    json!({ "field": "query", "reason": "conflicts_with_customView" }),
+                ),
+            );
         }
         let mut parts: Vec<Value> = Vec::new();
         if let Some(r) = &input.custom_view {

@@ -786,12 +786,7 @@ fn date_cmp<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, col: &str, c: &DateComparator) -> 
     Ok(())
 }
 
-fn timeless_cmp<'q>(
-    qb: &mut Qb<'q>,
-    cx: &Cx<'_>,
-    col: &str,
-    c: &TimelessDateComparator,
-) -> R {
+fn timeless_cmp<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, col: &str, c: &TimelessDateComparator) -> R {
     qb.push("(");
     let mut g = Sep::and();
     if let Some(v) = &c.eq {
@@ -917,7 +912,8 @@ fn collection<'q, T>(
         g.next(qb);
         qb.push(format!(
             "EXISTS (SELECT 1 FROM {} WHERE {} AND ",
-            spec.from, spec.cond_org()
+            spec.from,
+            spec.cond_org()
         ));
         elem(qb, cx, &spec.elem, t)?;
         qb.push(")");
@@ -926,7 +922,8 @@ fn collection<'q, T>(
         g.next(qb);
         qb.push(format!(
             "NOT EXISTS (SELECT 1 FROM {} WHERE {} AND NOT ",
-            spec.from, spec.cond_org()
+            spec.from,
+            spec.cond_org()
         ));
         elem(qb, cx, &spec.elem, t)?;
         qb.push(")");
@@ -935,7 +932,8 @@ fn collection<'q, T>(
         g.next(qb);
         let sub = format!(
             "(SELECT count(*) FROM {} WHERE {})",
-            spec.from, spec.cond_org()
+            spec.from,
+            spec.cond_org()
         );
         number_cmp(qb, &sub, n)?;
     }
@@ -1053,7 +1051,11 @@ fn user_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &UserFilter) -> R {
     }
     if let Some(c) = &f.admin {
         g.next(qb);
-        bool_cmp(qb, &format!("{} IN ('owner','admin')", e.col(cx, "role")), c)?;
+        bool_cmp(
+            qb,
+            &format!("{} IN ('owner','admin')", e.col(cx, "role")),
+            c,
+        )?;
     }
     if let Some(c) = &f.app {
         g.next(qb);
@@ -1131,10 +1133,8 @@ fn ancestors_some<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, t: &TeamFilter) -> 
         || t.ancestors.is_some();
     let id_ok = |c: &IdComparator| c.neq.is_none() && c.nin.is_none();
     if unsupported || t.id.as_ref().is_some_and(|c| !id_ok(c)) {
-        return Err(
-            bad("`ancestors.some` supports only `id` with `eq` or `in`")
-                .with_details(json!({ "field": "ancestors" })),
-        );
+        return Err(bad("`ancestors.some` supports only `id` with `eq` or `in`")
+            .with_details(json!({ "field": "ancestors" })));
     }
     qb.push("(");
     let mut g = Sep::and();
@@ -1190,7 +1190,11 @@ fn state_filter<'q>(
     }
     if let Some(c) = &f.type_ {
         g.next(qb);
-        enum_cmp(qb, &type_col.clone().unwrap_or_else(|| e.col(cx, "type")), c)?;
+        enum_cmp(
+            qb,
+            &type_col.clone().unwrap_or_else(|| e.col(cx, "type")),
+            c,
+        )?;
     }
     if let Some(c) = &f.name {
         g.next(qb);
@@ -1298,7 +1302,9 @@ fn cycle_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &CycleFilter) -> R
         (
             &f.is_active,
             cycle_pred(cx, e, &|c| {
-                format!("{c}.starts_at <= {NOW} AND {NOW} < {c}.ends_at AND {c}.completed_at IS NULL")
+                format!(
+                    "{c}.starts_at <= {NOW} AND {NOW} < {c}.ends_at AND {c}.completed_at IS NULL"
+                )
             }),
         ),
         (
@@ -1730,17 +1736,19 @@ fn attachment_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &AttachmentFi
 // Projekt und Initiative
 // ---------------------------------------------------------------------------------------------
 
-fn project_status_filter<'q>(
-    qb: &mut Qb<'q>,
-    cx: &Cx<'_>,
-    e: &Ent,
-    f: &ProjectStatusFilter,
-) -> R {
+fn project_status_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &ProjectStatusFilter) -> R {
     qb.push("(");
     let mut g = Sep::and();
     if let Some(c) = &f.id {
         g.next(qb);
-        id_cmp(qb, cx, &e.id_col(cx), c, Some(RefKind::ProjectStatus), false)?;
+        id_cmp(
+            qb,
+            cx,
+            &e.id_col(cx),
+            c,
+            Some(RefKind::ProjectStatus),
+            false,
+        )?;
     }
     if let Some(c) = &f.name {
         g.next(qb);
@@ -1880,7 +1888,10 @@ fn project_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &ProjectFilter) 
             milestone_filter(qb, cx, row, mf)
         })?;
     }
-    for (c, col) in [(&f.start_date, "start_date"), (&f.target_date, "target_date")] {
+    for (c, col) in [
+        (&f.start_date, "start_date"),
+        (&f.target_date, "target_date"),
+    ] {
         if let Some(c) = c {
             g.next(qb);
             timeless_cmp(qb, cx, &e.col(cx, col), c)?;
@@ -2122,7 +2133,9 @@ pub fn collect_initiative_refs(ev: &FilterEval, f: &InitiativeFilter) -> AppResu
 pub fn mentions_triage_type(f: &IssueFilter) -> bool {
     let hit = |c: &EnumComparator| {
         c.eq.as_deref() == Some("triage")
-            || c.in_.as_ref().is_some_and(|v| v.iter().any(|s| s == "triage"))
+            || c.in_
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|s| s == "triage"))
     };
     f.state
         .as_ref()
@@ -2216,10 +2229,8 @@ mod tests {
 
     #[test]
     fn ancestors_with_other_fields_is_rejected() {
-        let f = parse_issue_filter(
-            r#"{"team":{"ancestors":{"some":{"key":{"eq":"ENG"}}}}}"#,
-        )
-        .unwrap();
+        let f =
+            parse_issue_filter(r#"{"team":{"ancestors":{"some":{"key":{"eq":"ENG"}}}}}"#).unwrap();
         let e = ev();
         let cx = Cx::new(&e);
         let mut qb: Qb<'_> = QueryBuilder::new("");

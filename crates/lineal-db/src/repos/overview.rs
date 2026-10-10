@@ -20,8 +20,7 @@ fn ids(teams: &[TeamId]) -> Vec<Uuid> {
 }
 
 /// Punkte eines Issues nach den Einstellungen seines Teams (docs/01 §6.3).
-const POINTS: &str =
-    "(CASE WHEN t.issue_estimation_type = 'notUsed' THEN 1 ELSE COALESCE(i.estimate, t.default_issue_estimate) END)::float8";
+const POINTS: &str = "(CASE WHEN t.issue_estimation_type = 'notUsed' THEN 1 ELSE COALESCE(i.estimate, t.default_issue_estimate) END)::float8";
 const OPEN: &str = "i.state_type IN ('triage','backlog','unstarted','started')";
 
 #[async_trait]
@@ -130,7 +129,11 @@ impl OverviewRepo for PgTx {
             .collect())
     }
 
-    async fn initiatives(&mut self, visible: &[TeamId], limit: i64) -> AppResult<Vec<InitiativeRow>> {
+    async fn initiatives(
+        &mut self,
+        visible: &[TeamId],
+        limit: i64,
+    ) -> AppResult<Vec<InitiativeRow>> {
         let rows: Vec<(Uuid, i32, String, String, Option<String>, i64, i64)> = sqlx::query_as(
             "SELECT n.id, n.number, n.name, n.status, n.health, \
                (SELECT count(*) FROM initiative_to_project ip JOIN project p ON p.id = ip.project_id \
@@ -226,7 +229,11 @@ impl OverviewRepo for PgTx {
             .collect())
     }
 
-    async fn workload(&mut self, q: &OverviewQuery, cycle: WorkloadCycle) -> AppResult<Vec<WorkloadRow>> {
+    async fn workload(
+        &mut self,
+        q: &OverviewQuery,
+        cycle: WorkloadCycle,
+    ) -> AppResult<Vec<WorkloadRow>> {
         let cycle_cond = match cycle {
             WorkloadCycle::Current => {
                 "c.starts_at <= $3 AND $3 < c.ends_at AND c.completed_at IS NULL"
@@ -266,21 +273,28 @@ impl OverviewRepo for PgTx {
     }
 
     async fn active_cycles(&mut self, q: &OverviewQuery) -> AppResult<Vec<ActiveCycleRow>> {
-        let rows: Vec<(Uuid, Uuid, i32, Option<String>, DateTime<Utc>, DateTime<Utc>, i64)> =
-            sqlx::query_as(
-                "SELECT c.team_id, c.id, c.number, c.name, c.starts_at, c.ends_at, \
+        let rows: Vec<(
+            Uuid,
+            Uuid,
+            i32,
+            Option<String>,
+            DateTime<Utc>,
+            DateTime<Utc>,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT c.team_id, c.id, c.number, c.name, c.starts_at, c.ends_at, \
                    (SELECT count(*) FROM issue i WHERE i.cycle_id = c.id AND NOT i.trashed \
                       AND i.added_to_cycle_at > c.starts_at) \
                  FROM cycle c WHERE c.organization_id = $1 AND c.team_id = ANY($2) \
                    AND c.archived_at IS NULL AND c.completed_at IS NULL \
                    AND c.starts_at <= $3 AND $3 < c.ends_at ORDER BY c.team_id",
-            )
-            .bind(self.org.0)
-            .bind(ids(&q.teams))
-            .bind(q.now)
-            .fetch_all(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
+        )
+        .bind(self.org.0)
+        .bind(ids(&q.teams))
+        .bind(q.now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(rows
             .into_iter()
             .map(|r| ActiveCycleRow {

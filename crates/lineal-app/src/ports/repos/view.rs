@@ -282,7 +282,11 @@ pub trait ViewRepo: Send {
         unimplemented_repo()
     }
     /// Sichtbare Ansicht per UUID (auch archivierte, damit Wiederherstellen/Löschen möglich ist).
-    async fn get_view(&mut self, _access: &ViewAccess, _id: ViewId) -> AppResult<Option<CustomView>> {
+    async fn get_view(
+        &mut self,
+        _access: &ViewAccess,
+        _id: ViewId,
+    ) -> AppResult<Option<CustomView>> {
         unimplemented_repo()
     }
     /// Sichtbare, nicht archivierte Ansichten zu einer Referenz: UUID, `slugId`, dann exakter

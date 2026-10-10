@@ -4,9 +4,9 @@
 //! 0015/1100); es gibt keinen separaten Index, den der Outbox-Konsument pflegen müsste, und die
 //! Berechtigung wird zur Abfragezeit als UND angehängt (docs/10 §5.3).
 
-use lineal_domain::identifier::{ParsedIdentifier, parse_identifier};
 use lineal_app::ports::repos::view::{SearchHitRow, SearchKind, SearchOrder, SearchQuery};
 use lineal_app::{AppError, AppResult};
+use lineal_domain::identifier::{ParsedIdentifier, parse_identifier};
 use sqlx::{PgConnection, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
@@ -118,7 +118,9 @@ pub fn push_issue_search<'q>(qb: &mut QueryBuilder<'q, Postgres>, alias: &str, t
     }
     match tsquery(text) {
         Some(q) => {
-            qb.push(format!(" AND {alias}.search_vector @@ to_tsquery('simple', "));
+            qb.push(format!(
+                " AND {alias}.search_vector @@ to_tsquery('simple', "
+            ));
             qb.push_bind(q);
             qb.push(")");
         }
@@ -161,9 +163,7 @@ fn push_document_visible<'q>(
     vis: &[Uuid],
     guest: bool,
 ) {
-    qb.push(format!(
-        "(NOT {alias}.trashed AND ({alias}.team_id = ANY("
-    ));
+    qb.push(format!("(NOT {alias}.trashed AND ({alias}.team_id = ANY("));
     qb.push_bind(vis.to_vec());
     qb.push(format!(
         ") OR EXISTS (SELECT 1 FROM issue di WHERE di.id = {alias}.issue_id AND NOT di.trashed AND di.team_id = ANY("
@@ -355,12 +355,9 @@ pub(crate) async fn search_all(
                     crate::filter_sql::push_issue_filter(&mut qb, &cx, "i", ast)?;
                 }
                 qb.push(" AND (");
-                match &ident {
-                    Some(ParsedIdentifier::Issue(id)) => {
-                        push_issue_exact(&mut qb, "i", id);
-                        qb.push(" OR ");
-                    }
-                    _ => {}
+                if let Some(ParsedIdentifier::Issue(id)) = &ident {
+                    push_issue_exact(&mut qb, "i", id);
+                    qb.push(" OR ");
                 }
                 qb.push("i.search_vector @@ sq.q");
                 if q.include_comments {
@@ -526,11 +523,15 @@ async fn add_highlights(
     let Some(tsq) = tsq else {
         return Ok(());
     };
-    let specs: [(SearchKind, &str, &[(&str, &str)]); 4] = [
+    type Fields<'a> = &'a [(&'a str, &'a str)];
+    let specs: [(SearchKind, &str, Fields<'_>); 4] = [
         (
             SearchKind::Issue,
             "issue",
-            &[("title", "title"), ("description", "left(description, 20000)")],
+            &[
+                ("title", "title"),
+                ("description", "left(description, 20000)"),
+            ],
         ),
         (
             SearchKind::Project,
@@ -657,7 +658,9 @@ mod tests {
             );
         }
         assert_eq!(
-            search_identifier("p-eng-7").map(|p| p.to_string()).as_deref(),
+            search_identifier("p-eng-7")
+                .map(|p| p.to_string())
+                .as_deref(),
             Some("P-ENG-7")
         );
         assert_eq!(

@@ -144,7 +144,11 @@ pub trait OverviewRepo: Send {
         unimplemented_repo()
     }
     /// Überfällige/SLA-gefährdete offene Issues, dringendste zuerst.
-    async fn at_risk_issues(&mut self, _q: &OverviewQuery, _limit: i64) -> AppResult<Vec<AtRiskRow>> {
+    async fn at_risk_issues(
+        &mut self,
+        _q: &OverviewQuery,
+        _limit: i64,
+    ) -> AppResult<Vec<AtRiskRow>> {
         unimplemented_repo()
     }
     /// Auslastung je (User, Team) im aktuellen oder nächsten Cycle.

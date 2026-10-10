@@ -238,9 +238,8 @@ pub(crate) fn encode_cursor(c: &PageCursor) -> String {
 }
 
 fn model(s: &str) -> AppResult<ViewModel> {
-    ViewModel::parse(s).ok_or_else(|| {
-        AppError::invalid_request("modelName must be Issue, Project or Initiative")
-    })
+    ViewModel::parse(s)
+        .ok_or_else(|| AppError::invalid_request("modelName must be Issue, Project or Initiative"))
 }
 
 fn key(
@@ -261,6 +260,7 @@ pub struct ViewQuery;
 #[Object]
 impl ViewQuery {
     /// Sichtbare Custom Views (ohne archivierte und ohne Projekt-/Initiativ-Tabs).
+    #[allow(clippy::too_many_arguments)]
     async fn custom_views(
         &self,
         ctx: &Context<'_>,

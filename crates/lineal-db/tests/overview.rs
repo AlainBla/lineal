@@ -52,7 +52,11 @@ async fn fixture(fx: &Fx) {
     .await
     .unwrap();
     let t = fx.issue(d.web, 102, "Web triage", 0).await;
-    fx.set(t, &format!("state_id = '{triage}', created_at = '2026-10-02T00:00:00Z'")).await;
+    fx.set(
+        t,
+        &format!("state_id = '{triage}', created_at = '2026-10-02T00:00:00Z'"),
+    )
+    .await;
     for n in 0..4 {
         let i = fx.issue(d.des, 101 + n, &format!("Secret {n}"), 1).await;
         if n == 0 {
@@ -79,13 +83,15 @@ async fn fixture(fx: &Fx) {
         .execute(&fx.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)")
-        .bind(d.org.0)
-        .bind(p)
-        .bind(d.des.0)
-        .execute(&fx.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+    )
+    .bind(d.org.0)
+    .bind(p)
+    .bind(d.des.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
 }
 
 fn row<'a>(
@@ -100,18 +106,37 @@ async fn private_teams_are_absent_from_rows_and_sums(pool: PgPool) {
     let fx = setup(pool).await;
     fixture(&fx).await;
     // Kriterium 1: Alice (nicht in DES) sieht DES weder als Zeile noch in Summen.
-    let o = fx.app.workspace_overview(&alice(), OverviewInput::default()).await.unwrap();
+    let o = fx
+        .app
+        .workspace_overview(&alice(), OverviewInput::default())
+        .await
+        .unwrap();
     assert!(row(&o, "DES").is_none());
-    assert_eq!(o.teams.iter().map(|t| t.key.as_str()).collect::<Vec<_>>(), ["ENG", "WEB"]);
+    assert_eq!(
+        o.teams.iter().map(|t| t.key.as_str()).collect::<Vec<_>>(),
+        ["ENG", "WEB"]
+    );
     // 3 (ENG) + 2 (WEB) offen; erledigtes Issue zählt nicht als offen.
     assert_eq!(o.totals.open_issues, 5);
     assert_eq!(o.totals.overdue, 1);
     assert_eq!(o.totals.sla_breached, 0);
-    assert_eq!(o.projects.total(), 1, "only the seed project P-ENG-1; the private one is not counted");
+    assert_eq!(
+        o.projects.total(),
+        1,
+        "only the seed project P-ENG-1; the private one is not counted"
+    );
     assert_eq!(o.projects.off_track, 0);
-    assert!(o.at_risk.iter().all(|i| !i.identifier.starts_with("DES-")), "{:?}", o.at_risk);
+    assert!(
+        o.at_risk.iter().all(|i| !i.identifier.starts_with("DES-")),
+        "{:?}",
+        o.at_risk
+    );
     // Bob (Mitglied von DES) sieht alles.
-    let b = fx.app.workspace_overview(&bob(), OverviewInput::default()).await.unwrap();
+    let b = fx
+        .app
+        .workspace_overview(&bob(), OverviewInput::default())
+        .await
+        .unwrap();
     assert!(row(&b, "DES").is_some());
     assert_eq!(b.totals.open_issues, 9);
     assert_eq!(b.totals.sla_breached, 1);
@@ -142,17 +167,33 @@ async fn rollup_over_sub_teams_with_and_without(pool: PgPool) {
     // Kriterium 2: mit „inkl. Sub-Teams“ enthält die ENG-Kachel die Zahlen von WEB, ohne nicht.
     let with = fx
         .app
-        .workspace_overview(&alice(), OverviewInput { include_sub_teams: true, ..Default::default() })
+        .workspace_overview(
+            &alice(),
+            OverviewInput {
+                include_sub_teams: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let without = fx
         .app
-        .workspace_overview(&alice(), OverviewInput { include_sub_teams: false, ..Default::default() })
+        .workspace_overview(
+            &alice(),
+            OverviewInput {
+                include_sub_teams: false,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(row(&with, "ENG").unwrap().counts.open_issues, 5);
     assert_eq!(row(&without, "ENG").unwrap().counts.open_issues, 3);
-    assert_eq!(row(&with, "WEB").unwrap().counts.open_issues, 2, "children keep their own rows");
+    assert_eq!(
+        row(&with, "WEB").unwrap().counts.open_issues,
+        2,
+        "children keep their own rows"
+    );
     assert_eq!(row(&without, "WEB").unwrap().counts.open_issues, 2);
     assert_eq!(row(&with, "ENG").unwrap().counts.triage, 1);
     assert_eq!(row(&without, "ENG").unwrap().counts.triage, 0);
@@ -164,7 +205,13 @@ async fn rollup_over_sub_teams_with_and_without(pool: PgPool) {
     assert_eq!(row(&without, "ENG").unwrap().counts.completed, 1);
     let d30 = fx
         .app
-        .workspace_overview(&alice(), OverviewInput { period: OverviewPeriod::Days30, ..Default::default() })
+        .workspace_overview(
+            &alice(),
+            OverviewInput {
+                period: OverviewPeriod::Days30,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(d30.totals.completed, 1);
@@ -178,7 +225,13 @@ async fn rollup_over_sub_teams_with_and_without(pool: PgPool) {
     // Teamauswahl.
     let only = fx
         .app
-        .workspace_overview(&alice(), OverviewInput { teams: vec!["WEB".into()], ..Default::default() })
+        .workspace_overview(
+            &alice(),
+            OverviewInput {
+                teams: vec!["WEB".into()],
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(only.teams.len(), 1);
@@ -191,7 +244,11 @@ async fn guests_are_forbidden_everywhere(pool: PgPool) {
     fixture(&fx).await;
     // Kriterium 3.
     assert_eq!(
-        kind(fx.app.workspace_overview(&carol(), OverviewInput::default()).await),
+        kind(
+            fx.app
+                .workspace_overview(&carol(), OverviewInput::default())
+                .await
+        ),
         ErrorKind::Forbidden
     );
     assert_eq!(
@@ -212,18 +269,30 @@ async fn workload_and_active_cycles(pool: PgPool) {
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].display_name, "bob");
     assert_eq!(w[0].per_team.len(), 1);
-    assert_eq!((w[0].per_team[0].open_issues, w[0].per_team[0].points), (2, 2.0));
+    assert_eq!(
+        (w[0].per_team[0].open_issues, w[0].per_team[0].points),
+        (2, 2.0)
+    );
     // Estimation notUsed (Seed-Team) -> jeder Punkt = 1.
     // (Das Seed-Team ENG hat `notUsed`; Punkte = Anzahl.)
     assert!(w[0].total_open_issues == 2);
     // Nächster Cycle: leer.
-    assert!(fx.app.workload(&alice(), Vec::new(), true).await.unwrap().is_empty());
+    assert!(
+        fx.app
+            .workload(&alice(), Vec::new(), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // Bobs private Team-Issues erscheinen nicht in Alices Matrix, aber auch nicht ohne Cycle.
     let cycles = fx.app.active_cycles(&alice(), Vec::new()).await.unwrap();
     assert_eq!(cycles.len(), 1);
     assert_eq!(cycles[0].team_key, "ENG");
     assert_eq!(cycles[0].number, 2);
-    assert_eq!(cycles[0].scope_change, 1, "one issue was added after the cycle started");
+    assert_eq!(
+        cycles[0].scope_change, 1,
+        "one issue was added after the cycle started"
+    );
     assert!(cycles[0].remaining_days >= 8 && cycles[0].remaining_days <= 9);
     assert_eq!(
         kind(fx.app.active_cycles(&alice(), vec!["DES".into()]).await),

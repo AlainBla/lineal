@@ -19,13 +19,14 @@ use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
 use crate::ports::repos::user::{Page, PageRequest};
 use crate::ports::repos::view::{
-    AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel, SearchHitRow,
-    SearchKind, SearchOrder, SearchQuery, ViewAccess, ViewKey, ViewListFilter, ViewModel,
+    AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel,
+    SearchHitRow, SearchKind, SearchOrder, SearchQuery, ViewAccess, ViewKey, ViewListFilter,
+    ViewModel,
 };
-use crate::usecases::issue::IssueView;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use crate::resolve::user::actor_user_id;
+use crate::usecases::issue::IssueView;
 use chrono::{DateTime, Utc};
 use lineal_domain::enums::UserRole;
 use lineal_domain::events::DomainEvent;
@@ -196,7 +197,10 @@ fn clean_name(name: &str) -> AppResult<String> {
 fn clean_description(d: &str) -> AppResult<Option<String>> {
     let d = d.trim();
     if d.chars().count() > MAX_DESCRIPTION_CHARS {
-        return Err(invalid("description", "description must be at most 255 characters"));
+        return Err(invalid(
+            "description",
+            "description must be at most 255 characters",
+        ));
     }
     Ok((!d.is_empty()).then(|| d.to_owned()))
 }
@@ -221,9 +225,7 @@ fn clean_color(c: &str) -> AppResult<Option<String>> {
     if c.is_empty() {
         return Ok(None);
     }
-    let ok = c.len() == 7
-        && c.starts_with('#')
-        && c[1..].chars().all(|x| x.is_ascii_hexdigit());
+    let ok = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit());
     if ok {
         Ok(Some(c.to_owned()))
     } else {
@@ -425,9 +427,7 @@ pub fn scope_conditions(v: &CustomView) -> Vec<Value> {
         }
         ViewModel::Project => {
             if let Some(t) = v.team_id {
-                out.push(
-                    json!({ "teams": { "some": { "id": { "in": [t.to_string()] } } } }),
-                );
+                out.push(json!({ "teams": { "some": { "id": { "in": [t.to_string()] } } } }));
             }
         }
         ViewModel::Initiative => {
@@ -540,7 +540,10 @@ impl App {
             }
             let rp = resolve::project::resolve_in(&mut *tx, &snap, p).await?;
             if input.model != ViewModel::Issue {
-                return Err(invalid("project", "only issue views can be scoped to a project"));
+                return Err(invalid(
+                    "project",
+                    "only issue views can be scoped to a project",
+                ));
             }
             project_id = Some(rp.project.id);
         }
@@ -563,7 +566,9 @@ impl App {
                         return Err(AppError::forbidden(
                             "Only team members can share a view with the team.",
                         )
-                        .with_details(json!({ "action": "ManageTeamSharedViews", "reason": "membership" })));
+                        .with_details(
+                            json!({ "action": "ManageTeamSharedViews", "reason": "membership" }),
+                        ));
                     }
                 }
                 None if project_id.is_none() && initiative_id.is_none() => {
@@ -573,11 +578,7 @@ impl App {
             }
         }
         let preferences = match &input.preferences {
-            Some(p) => Some(prefs::validate_patch(
-                p,
-                kind_of_model(input.model),
-                None,
-            )?),
+            Some(p) => Some(prefs::validate_patch(p, kind_of_model(input.model), None)?),
             None => None,
         };
         let sort_order = 0.0;
@@ -612,7 +613,12 @@ impl App {
                 .put_preferences(&key, PrefLevel::Organization, None, &Value::Object(p), now)
                 .await?;
         }
-        emit(&mut *tx, ctx, DomainEvent::CustomViewCreated { view_id: view.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::CustomViewCreated { view_id: view.id },
+        )
+        .await?;
         let out = info(&mut *tx, &snap, true, view).await?;
         tx.commit().await?;
         Ok(out)
@@ -691,8 +697,10 @@ impl App {
         if let Some(v) = input.expected_version
             && v != view.version
         {
-            return Err(AppError::conflict("The custom view was changed by someone else.")
-                .with_details(json!({ "expectedVersion": v, "currentVersion": view.version })));
+            return Err(
+                AppError::conflict("The custom view was changed by someone else.")
+                    .with_details(json!({ "expectedVersion": v, "currentVersion": view.version })),
+            );
         }
         if let Some(n) = &input.name {
             view.name = clean_name(n)?;
@@ -730,7 +738,10 @@ impl App {
         // Scope („Save to“: Personal, Workspace, Team).
         if input.shared.is_some() || input.team.is_some() {
             if view.project_id.is_some() || view.initiative_id.is_some() {
-                return Err(invalid("shared", "the scope of a project or initiative tab cannot be changed"));
+                return Err(invalid(
+                    "shared",
+                    "the scope of a project or initiative tab cannot be changed",
+                ));
             }
             let shared = input.shared.unwrap_or(view.shared);
             let team = match &input.team {
@@ -744,8 +755,10 @@ impl App {
             };
             // Ziel prüfen wie beim Anlegen; nur der Owner verschiebt den Scope.
             if view.owner_id != access.user_id && !snap.actor.is_admin() {
-                return Err(AppError::forbidden("Only the owner can change the scope of a view.")
-                    .with_details(json!({ "action": "UpdateCustomView", "reason": "owner" })));
+                return Err(
+                    AppError::forbidden("Only the owner can change the scope of a view.")
+                        .with_details(json!({ "action": "UpdateCustomView", "reason": "owner" })),
+                );
             }
             if shared {
                 if access.is_guest {
@@ -783,7 +796,10 @@ impl App {
                 None => !guest,
             };
             if !sees {
-                return Err(invalid("owner", "the new owner must be able to see the view"));
+                return Err(invalid(
+                    "owner",
+                    "the new owner must be able to see the view",
+                ));
             }
             view.owner_id = new_owner.id;
         }
@@ -791,7 +807,12 @@ impl App {
             view.archived_at = if a { Some(now) } else { None };
         }
         let saved = tx.views().save_view(&view, access.user_id, now).await?;
-        emit(&mut *tx, ctx, DomainEvent::CustomViewUpdated { view_id: saved.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::CustomViewUpdated { view_id: saved.id },
+        )
+        .await?;
         let can = can_edit(&snap, access.user_id, &saved);
         let out = info(&mut *tx, &snap, can, saved).await?;
         tx.commit().await?;
@@ -807,7 +828,12 @@ impl App {
         let view = resolve_view_in(&mut *tx, &access, reference).await?;
         require_edit(&snap, access.user_id, &view)?;
         tx.views().delete_view(view.id).await?;
-        emit(&mut *tx, ctx, DomainEvent::CustomViewRemoved { view_id: view.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::CustomViewRemoved { view_id: view.id },
+        )
+        .await?;
         tx.commit().await?;
         Ok(view.id)
     }
@@ -861,7 +887,12 @@ impl App {
                 .put_preferences(&key, PrefLevel::Organization, None, &p, now)
                 .await?;
         }
-        emit(&mut *tx, ctx, DomainEvent::CustomViewCreated { view_id: view.id }).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::CustomViewCreated { view_id: view.id },
+        )
+        .await?;
         let out = info(&mut *tx, &snap, true, view).await?;
         tx.commit().await?;
         Ok(out)
@@ -917,9 +948,8 @@ async fn resolve_key(
             })
         }
         (None, Some(t)) => {
-            let kind = prefs::kind_of_view_type(t).ok_or_else(|| {
-                invalid("viewType", format!("unknown view type `{t}`"))
-            })?;
+            let kind = prefs::kind_of_view_type(t)
+                .ok_or_else(|| invalid("viewType", format!("unknown view type `{t}`")))?;
             let team = match &input.team {
                 Some(r) => Some(
                     resolve::team::resolve_in(tx, snap, r, Visibility::Content)
@@ -1030,13 +1060,17 @@ impl App {
         let now = self.clock.now();
         let rk = resolve_key(&mut *tx, &snap, ctx, &access, &input).await?;
         let allowed = match (&rk.view, rk.team) {
-            (Some(v), _) => can_edit(&snap, access.user_id, v) && (v.shared || v.owner_id == access.user_id),
+            (Some(v), _) => {
+                can_edit(&snap, access.user_id, v) && (v.shared || v.owner_id == access.user_id)
+            }
             (None, Some(t)) => snap.view(t).is_ok_and(|p| p.is_team_owner) || snap.actor.is_admin(),
             (None, None) => snap.actor.is_admin(),
         };
         if !allowed {
-            return Err(AppError::forbidden("You cannot set the default for everyone.")
-                .with_details(json!({ "action": "SetViewDefault", "reason": "role" })));
+            return Err(
+                AppError::forbidden("You cannot set the default for everyone.")
+                    .with_details(json!({ "action": "SetViewDefault", "reason": "role" })),
+            );
         }
         let current = load_effective(&mut *tx, &rk, access.user_id).await?;
         tx.views()
@@ -1109,11 +1143,9 @@ impl App {
                 ("predefinedView", _) => f
                     .predefined_view_team_id
                     .is_none_or(|t| access.visible_teams.contains(&t)),
-                ("customView", Some(id)) => tx
-                    .views()
-                    .get_view(&access, ViewId(id))
-                    .await?
-                    .is_some(),
+                ("customView", Some(id)) => {
+                    tx.views().get_view(&access, ViewId(id)).await?.is_some()
+                }
                 (k, Some(id)) => tx.views().favorite_target_visible(k, id, &access).await?,
                 _ => false,
             };
@@ -1211,7 +1243,11 @@ impl App {
                 let id = Uuid::parse_str(r.trim()).map_err(|_| {
                     invalid("target", "target must be an ID for this favorite type")
                 })?;
-                if !tx.views().favorite_target_visible(other, id, &access).await? {
+                if !tx
+                    .views()
+                    .favorite_target_visible(other, id, &access)
+                    .await?
+                {
                     return Err(AppError::not_found(format!("Could not find {other}."))
                         .with_details(json!({ "reference": r, "type": other })));
                 }
@@ -1366,7 +1402,11 @@ impl App {
             .await?;
         let end = (offset + limit) as usize;
         let more = rows.len() > end && (end as i64) < MAX_SEARCH_HITS;
-        let hits: Vec<SearchHitRow> = rows.into_iter().skip(offset as usize).take(limit as usize).collect();
+        let hits: Vec<SearchHitRow> = rows
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
         let issue_ids: Vec<IssueId> = hits
             .iter()
             .filter(|h| h.kind == SearchKind::Issue)

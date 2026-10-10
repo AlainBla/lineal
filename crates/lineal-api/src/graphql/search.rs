@@ -233,7 +233,9 @@ impl SearchQuery {
                 "Project" => Ok(SearchKind::Project),
                 "Initiative" => Ok(SearchKind::Initiative),
                 "Document" => Ok(SearchKind::Document),
-                other => Err(AppError::invalid_request(format!("unknown search type `{other}`"))),
+                other => Err(AppError::invalid_request(format!(
+                    "unknown search type `{other}`"
+                ))),
             })
             .collect::<Result<Vec<_>, _>>()
             .gql(ctx)?;

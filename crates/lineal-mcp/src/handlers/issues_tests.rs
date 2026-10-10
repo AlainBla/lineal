@@ -412,11 +412,22 @@ async fn list_issues_pagination_and_filters(pool: sqlx::PgPool) {
             ErrorKind::NotFound
         );
     }
+    // `query` und `customView` (WP11): Suche ohne Treffer ist leer, eine unbekannte View not_found,
+    // beide zusammen invalid_request.
+    let r = call(
+        &app,
+        SeedUser::Alice,
+        "list_issues",
+        json!({ "query": "zzzz-nothing" }),
+    )
+    .await
+    .unwrap();
+    assert!(r["issues"].as_array().unwrap().is_empty());
     let e = call(
         &app,
         SeedUser::Alice,
         "list_issues",
-        json!({ "query": "x" }),
+        json!({ "query": "x", "customView": "y" }),
     )
     .await
     .unwrap_err();

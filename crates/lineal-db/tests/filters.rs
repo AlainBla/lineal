@@ -89,11 +89,8 @@ async fn fixture(pool: PgPool) -> Data {
     add("Cache bug", cache);
 
     let dark = fx.issue(d.eng, 103, "Dark mode", 0).await;
-    fx.set(
-        dark,
-        &format!("cycle_id = '{}'", seed_cycle_id(3).0),
-    )
-    .await;
+    fx.set(dark, &format!("cycle_id = '{}'", seed_cycle_id(3).0))
+        .await;
     add("Dark mode", dark);
 
     let muller = fx.issue(d.eng, 104, "Müller report", 3).await;
@@ -115,7 +112,10 @@ async fn fixture(pool: PgPool) -> Data {
     let redirect = fx.issue(d.eng, 105, "Fix redirect", 1).await;
     fx.set(
         redirect,
-        &format!("priority = 3, assignee_id = '{}', parent_id = '{login}'", d.alice.0),
+        &format!(
+            "priority = 3, assignee_id = '{}', parent_id = '{login}'",
+            d.alice.0
+        ),
     )
     .await;
     add("Fix redirect", redirect);
@@ -134,7 +134,8 @@ async fn fixture(pool: PgPool) -> Data {
     add("Logo refresh", logo);
 
     let triage = fx.issue(d.eng, 106, "Triage me", 0).await;
-    fx.set(triage, &format!("state_id = '{triage_state}'")).await;
+    fx.set(triage, &format!("state_id = '{triage_state}'"))
+        .await;
     add("Triage me", triage);
 
     let old = fx.issue(d.eng, 107, "Old idea", 4).await;
@@ -204,14 +205,17 @@ async fn fixture(pool: PgPool) -> Data {
     .execute(&fx.pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)")
-        .bind(d.org.0)
-        .bind(web_project)
-        .bind(d.web.0)
-        .execute(&fx.pool)
-        .await
-        .unwrap();
-    fx.set(navbar, &format!("project_id = '{web_project}'")).await;
+    sqlx::query(
+        "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+    )
+    .bind(d.org.0)
+    .bind(web_project)
+    .bind(d.web.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    fx.set(navbar, &format!("project_id = '{web_project}'"))
+        .await;
     let sub_initiative = Uuid::now_v7();
     sqlx::query("INSERT INTO initiative (id, organization_id, number, name, status) VALUES ($1,$2,2,'Web','Active')")
         .bind(sub_initiative)
@@ -219,13 +223,15 @@ async fn fixture(pool: PgPool) -> Data {
         .execute(&fx.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO initiative_parent (organization_id, parent_id, child_id) VALUES ($1,$2,$3)")
-        .bind(d.org.0)
-        .bind(seed_initiative_id().0)
-        .bind(sub_initiative)
-        .execute(&fx.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO initiative_parent (organization_id, parent_id, child_id) VALUES ($1,$2,$3)",
+    )
+    .bind(d.org.0)
+    .bind(seed_initiative_id().0)
+    .bind(sub_initiative)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO initiative_to_project (organization_id, initiative_id, project_id) VALUES ($1,$2,$3)",
     )
@@ -244,7 +250,11 @@ async fn fixture(pool: PgPool) -> Data {
     }
 }
 
-async fn titles(fx: &Fx, ctx: &RequestCtx, filter: Value) -> Result<Vec<String>, lineal_app::AppError> {
+async fn titles(
+    fx: &Fx,
+    ctx: &RequestCtx,
+    filter: Value,
+) -> Result<Vec<String>, lineal_app::AppError> {
     let page = fx
         .app
         .list_issues(
@@ -292,7 +302,8 @@ fn all_except(names: &[&str]) -> Vec<String> {
 async fn docs_05_examples_as_table(pool: PgPool) {
     let dx = fixture(pool).await;
     let d = dx.fx.data;
-    let (bob_id, alice_id, carol_id) = (d.bob.to_string(), d.alice.to_string(), d.carol.to_string());
+    let (bob_id, alice_id, carol_id) =
+        (d.bob.to_string(), d.alice.to_string(), d.carol.to_string());
     let (bug, feature) = (label(0).to_string(), label(1).to_string());
     let eng = d.eng.to_string();
     let project = seed_project_id().to_string();
@@ -302,7 +313,11 @@ async fn docs_05_examples_as_table(pool: PgPool) {
 
     // (Name, Filter, erwartete Titel) – als Alice (sieht DES nicht).
     let cases: Vec<(&str, Value, Vec<String>)> = vec![
-        ("empty filter = all visible, triage hidden", json!({}), set(&ALL_VISIBLE)),
+        (
+            "empty filter = all visible, triage hidden",
+            json!({}),
+            set(&ALL_VISIBLE),
+        ),
         // --- §1.6 Skalare und To-One ---
         (
             "assignee is Bob",
@@ -317,7 +332,13 @@ async fn docs_05_examples_as_table(pool: PgPool) {
         (
             "assignee is any of Bob, Alice",
             json!({"assignee": {"id": {"in": [bob_id, alice_id]}}}),
-            set(&["Login fails", "Müller report", "Navbar", "Cache bug", "Fix redirect"]),
+            set(&[
+                "Login fails",
+                "Müller report",
+                "Navbar",
+                "Cache bug",
+                "Fix redirect",
+            ]),
         ),
         (
             "assignee is none of Bob, Carol",
@@ -327,20 +348,38 @@ async fn docs_05_examples_as_table(pool: PgPool) {
         (
             "assignee is No assignee",
             json!({"assignee": {"null": true}}),
-            set(&["Dark mode", "Old idea", "Blocked task", "Same as cache", "Late SLA"]),
+            set(&[
+                "Dark mode",
+                "Old idea",
+                "Blocked task",
+                "Same as cache",
+                "Late SLA",
+            ]),
         ),
         (
             "assignee is any of No assignee, Bob",
             json!({"assignee": {"or": [{"null": true}, {"id": {"in": [bob_id]}}]}}),
             set(&[
-                "Dark mode", "Old idea", "Blocked task", "Same as cache", "Late SLA", "Login fails",
-                "Müller report", "Navbar",
+                "Dark mode",
+                "Old idea",
+                "Blocked task",
+                "Same as cache",
+                "Late SLA",
+                "Login fails",
+                "Müller report",
+                "Navbar",
             ]),
         ),
         (
             "assignee is not No assignee",
             json!({"assignee": {"null": false}}),
-            set(&["Login fails", "Cache bug", "Müller report", "Fix redirect", "Navbar"]),
+            set(&[
+                "Login fails",
+                "Cache bug",
+                "Müller report",
+                "Fix redirect",
+                "Navbar",
+            ]),
         ),
         (
             "assignee is me (Alice)",
@@ -387,7 +426,14 @@ async fn docs_05_examples_as_table(pool: PgPool) {
         (
             "No labels (length eq 0)",
             json!({"labels": {"length": {"eq": 0}}}),
-            set(&["Dark mode", "Fix redirect", "Old idea", "Blocked task", "Same as cache", "Late SLA"]),
+            set(&[
+                "Dark mode",
+                "Fix redirect",
+                "Old idea",
+                "Blocked task",
+                "Same as cache",
+                "Late SLA",
+            ]),
         ),
         (
             "label group via parent alternative",
@@ -493,13 +539,32 @@ async fn docs_05_examples_as_table(pool: PgPool) {
             set(&["Login fails"]),
         ),
         // --- Cycle ---
-        ("current cycle", json!({"cycle": {"isActive": {"eq": true}}}), set(&["Login fails", "Cache bug"])),
-        ("upcoming cycle", json!({"cycle": {"isNext": {"eq": true}}}), set(&["Dark mode"])),
-        ("previous cycle", json!({"cycle": {"isPrevious": {"eq": true}}}), set(&["Müller report"])),
+        (
+            "current cycle",
+            json!({"cycle": {"isActive": {"eq": true}}}),
+            set(&["Login fails", "Cache bug"]),
+        ),
+        (
+            "upcoming cycle",
+            json!({"cycle": {"isNext": {"eq": true}}}),
+            set(&["Dark mode"]),
+        ),
+        (
+            "previous cycle",
+            json!({"cycle": {"isPrevious": {"eq": true}}}),
+            set(&["Müller report"]),
+        ),
         (
             "no cycle",
             json!({"cycle": {"null": true}}),
-            set(&["Fix redirect", "Navbar", "Old idea", "Blocked task", "Same as cache", "Late SLA"]),
+            set(&[
+                "Fix redirect",
+                "Navbar",
+                "Old idea",
+                "Blocked task",
+                "Same as cache",
+                "Late SLA",
+            ]),
         ),
         (
             "added to cycle after its start (during)",
@@ -507,8 +572,16 @@ async fn docs_05_examples_as_table(pool: PgPool) {
             set(&["Login fails", "Cache bug"]),
         ),
         // --- Projekt, Initiative ---
-        ("project is P-ENG-1", json!({"project": {"id": {"in": [project]}}}), set(&["Cache bug", "Müller report"])),
-        ("no project", json!({"project": {"null": true}}), all_except(&["Cache bug", "Müller report", "Navbar"])),
+        (
+            "project is P-ENG-1",
+            json!({"project": {"id": {"in": [project]}}}),
+            set(&["Cache bug", "Müller report"]),
+        ),
+        (
+            "no project",
+            json!({"project": {"null": true}}),
+            all_except(&["Cache bug", "Müller report", "Navbar"]),
+        ),
         (
             "project status type",
             json!({"project": {"status": {"type": {"eq": "started"}}}}),
@@ -525,23 +598,47 @@ async fn docs_05_examples_as_table(pool: PgPool) {
             set(&["Navbar"]),
         ),
         // --- Hierarchie, Relationen ---
-        ("parent issues (children length > 0)", json!({"children": {"length": {"gt": 0}}}), set(&["Login fails"])),
-        ("sub-issues (parent not null)", json!({"parent": {"null": false}}), set(&["Fix redirect"])),
+        (
+            "parent issues (children length > 0)",
+            json!({"children": {"length": {"gt": 0}}}),
+            set(&["Login fails"]),
+        ),
+        (
+            "sub-issues (parent not null)",
+            json!({"parent": {"null": false}}),
+            set(&["Fix redirect"]),
+        ),
         (
             "parent title (nested relation)",
             json!({"parent": {"title": {"contains": "Login"}}}),
             set(&["Fix redirect"]),
         ),
-        ("blocked issues", json!({"hasBlockedByRelations": {"eq": true}}), set(&["Blocked task"])),
-        ("blocking issues", json!({"hasBlockingRelations": {"eq": true}}), set(&["Login fails"])),
+        (
+            "blocked issues",
+            json!({"hasBlockedByRelations": {"eq": true}}),
+            set(&["Blocked task"]),
+        ),
+        (
+            "blocking issues",
+            json!({"hasBlockingRelations": {"eq": true}}),
+            set(&["Login fails"]),
+        ),
         (
             "issues with duplicate relations",
             json!({"hasDuplicateRelations": {"eq": true}}),
             set(&["Cache bug", "Same as cache"]),
         ),
-        ("duplicates (state type)", json!({"state": {"type": {"eq": "duplicate"}}}), set(&["Same as cache"])),
+        (
+            "duplicates (state type)",
+            json!({"state": {"type": {"eq": "duplicate"}}}),
+            set(&["Same as cache"]),
+        ),
         // --- Triage, SLA, Links, Kommentare, Abonnenten ---
-        ("triage lifts the implicit hiding", json!({"state": {"type": {"eq": "triage"}}}), set(&["Triage me"])),
+        (
+            "triage lifts the implicit hiding",
+            json!({"state": {"type": {"eq": "triage"}}}),
+            set(&["Triage me"]),
+        ),
         (
             "status is the triage state (by id)",
             json!({"state": {"id": {"in": [triage_state]}}}),
@@ -552,14 +649,26 @@ async fn docs_05_examples_as_table(pool: PgPool) {
             json!({"state": {"type": {"in": ["triage", "started"]}}}),
             set(&["Triage me", "Cache bug"]),
         ),
-        ("sla breached", json!({"slaStatus": {"eq": "breached"}}), set(&["Late SLA"])),
-        ("sla low risk", json!({"slaStatus": {"in": ["lowRisk"]}}), Vec::new()),
+        (
+            "sla breached",
+            json!({"slaStatus": {"eq": "breached"}}),
+            set(&["Late SLA"]),
+        ),
+        (
+            "sla low risk",
+            json!({"slaStatus": {"in": ["lowRisk"]}}),
+            Vec::new(),
+        ),
         (
             "links include",
             json!({"attachments": {"some": {"url": {"containsIgnoreCase": "example.com"}}}}),
             set(&["Cache bug"]),
         ),
-        ("links is empty", json!({"attachments": {"length": {"eq": 0}}}), all_except(&["Cache bug"])),
+        (
+            "links is empty",
+            json!({"attachments": {"length": {"eq": 0}}}),
+            all_except(&["Cache bug"]),
+        ),
         (
             "comments contain",
             json!({"comments": {"some": {"body": {"containsIgnoreCase": "design"}}}}),
@@ -617,7 +726,10 @@ async fn bob_sees_the_private_team_and_isme_follows_the_caller(pool: PgPool) {
     let got = titles(&dx.fx, &bob(), json!({"assignee": {"isMe": {"eq": true}}}))
         .await
         .unwrap();
-    assert_eq!(got, set(&["Login fails", "Müller report", "Navbar", "Logo refresh"]));
+    assert_eq!(
+        got,
+        set(&["Login fails", "Müller report", "Navbar", "Logo refresh"])
+    );
     let des = d.des.to_string();
     let got = titles(&dx.fx, &bob(), json!({"team": {"id": {"in": [des]}}}))
         .await
@@ -680,9 +792,13 @@ async fn values_are_parameterized_not_interpolated(pool: PgPool) {
     let dx = fixture(pool).await;
     // Ein Wert mit SQL-Syntax ist nur ein Textwert: kein Fehler, kein Treffer, Tabelle intakt.
     let evil = "x'); DELETE FROM issue; --";
-    let got = titles(&dx.fx, &alice(), json!({"title": {"containsIgnoreCase": evil}}))
-        .await
-        .unwrap();
+    let got = titles(
+        &dx.fx,
+        &alice(),
+        json!({"title": {"containsIgnoreCase": evil}}),
+    )
+    .await
+    .unwrap();
     assert!(got.is_empty());
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM issue")
         .fetch_one(&dx.fx.pool)
@@ -700,14 +816,22 @@ async fn sub_issue_of_an_invisible_parent_does_not_leak_through_nested_filters(p
     let redirect = dx.ids["Fix redirect"];
     dx.fx.set(redirect, &format!("parent_id = '{logo}'")).await;
     // Alice sieht den Parent nicht: weder dessen Titel noch dessen Team ist filterbar.
-    let got = titles(&dx.fx, &alice(), json!({"parent": {"title": {"contains": "Logo"}}}))
-        .await
-        .unwrap();
+    let got = titles(
+        &dx.fx,
+        &alice(),
+        json!({"parent": {"title": {"contains": "Logo"}}}),
+    )
+    .await
+    .unwrap();
     assert!(got.is_empty(), "{got:?}");
     // Bob (Mitglied von DES) sieht ihn.
-    let got = titles(&dx.fx, &bob(), json!({"parent": {"title": {"contains": "Logo"}}}))
-        .await
-        .unwrap();
+    let got = titles(
+        &dx.fx,
+        &bob(),
+        json!({"parent": {"title": {"contains": "Logo"}}}),
+    )
+    .await
+    .unwrap();
     assert_eq!(got, set(&["Fix redirect"]));
     // `children.length` zählt nur sichtbare Kinder: Alice sieht das DES-Elternteil nicht.
     let got = titles(&dx.fx, &alice(), json!({"children": {"length": {"gt": 0}}}))
@@ -730,7 +854,10 @@ async fn filters_cannot_probe_content_of_invisible_linked_issues(pool: PgPool) {
     let blocked = dx.ids["Blocked task"];
     // „Fix redirect“ (ENG) hängt unter dem DES-Issue, das DES-Issue blockiert „Blocked task“.
     dx.fx.set(redirect, &format!("parent_id = '{logo}'")).await;
-    sqlx::query("DELETE FROM issue_relation WHERE type = 'blocks'").execute(&dx.fx.pool).await.unwrap();
+    sqlx::query("DELETE FROM issue_relation WHERE type = 'blocks'")
+        .execute(&dx.fx.pool)
+        .await
+        .unwrap();
     dx.fx.relate(logo, blocked, "blocks").await;
     sqlx::query("INSERT INTO comment (organization_id, body, user_id, issue_id) VALUES ($1,'secret roadmap',$2,$3)")
         .bind(d.org.0)

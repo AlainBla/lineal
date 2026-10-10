@@ -107,7 +107,9 @@ fn grouping_ok(kind: Kind, v: &str, allow_focus: bool) -> bool {
         return kind == Kind::Issues && uuid::Uuid::parse_str(id).is_ok();
     }
     match kind {
-        Kind::Issues => ISSUE_GROUPING.contains(&v) && v != "labelGroup" && (allow_focus || v != "focus"),
+        Kind::Issues => {
+            ISSUE_GROUPING.contains(&v) && v != "labelGroup" && (allow_focus || v != "focus")
+        }
         _ => PROJECT_GROUPING.contains(&v),
     }
 }
@@ -126,7 +128,11 @@ pub fn system_defaults(view_type: Option<&str>, kind: Kind) -> Map<String, Value
     m.insert("layout".into(), json!(if board { "board" } else { "list" }));
     m.insert(
         "grouping".into(),
-        json!(if kind == Kind::Issues { "status" } else { "none" }),
+        json!(if kind == Kind::Issues {
+            "status"
+        } else {
+            "none"
+        }),
     );
     m.insert("groupOrdering".into(), json!("default"));
     m.insert("subGrouping".into(), json!("none"));
@@ -179,9 +185,7 @@ pub fn validate_patch(
             "subGrouping" => v.as_str().is_some_and(|s| grouping_ok(kind, s, false)),
             "groupOrdering" => matches!(v.as_str(), Some("default" | "reverse")),
             "ordering" => v.as_str().is_some_and(|s| match kind {
-                Kind::Issues => {
-                    ISSUE_ORDERING.contains(&s) && (s != "importance" || my_issues)
-                }
+                Kind::Issues => ISSUE_ORDERING.contains(&s) && (s != "importance" || my_issues),
                 _ => PROJECT_ORDERING.contains(&s),
             }),
             "orderDirection" => matches!(v.as_str(), Some("asc" | "desc")),
@@ -195,8 +199,11 @@ pub fn validate_patch(
                 Some("all" | "pastWeek" | "pastMonth" | "pastYear" | "none")
             ),
             "groupCountMode" => matches!(v.as_str(), Some("count" | "estimateSum")),
-            "orderCompletedByRecency" | "showSubIssues" | "showEmptyGroups"
-            | "showEmptySubGroups" | "showTriageIssues" => v.is_boolean(),
+            "orderCompletedByRecency"
+            | "showSubIssues"
+            | "showEmptyGroups"
+            | "showEmptySubGroups"
+            | "showTriageIssues" => v.is_boolean(),
             _ => return Err(bad(k, "unknown option")),
         };
         if !ok {
@@ -248,7 +255,10 @@ mod tests {
         assert_eq!(issues["showCompletedIssues"], "all");
         assert_eq!(issues["showSubIssues"], true);
         let board = system_defaults(Some("teamActive"), Kind::Issues);
-        assert_eq!((board["layout"].as_str(), board["ordering"].as_str()), (Some("board"), Some("manual")));
+        assert_eq!(
+            (board["layout"].as_str(), board["ordering"].as_str()),
+            (Some("board"), Some("manual"))
+        );
         let my = system_defaults(Some("myIssuesAssigned"), Kind::Issues);
         assert_eq!(my["ordering"], "importance");
         assert_eq!(my["showCompletedIssues"], "pastDay");
@@ -258,22 +268,38 @@ mod tests {
     #[test]
     fn validation_rejects_unknown_keys_and_values() {
         let ok = |p: Value, k: Kind, vt: Option<&str>| validate_patch(&p, k, vt).is_ok();
-        assert!(ok(json!({"layout": "board", "grouping": "assignee"}), Kind::Issues, None));
+        assert!(ok(
+            json!({"layout": "board", "grouping": "assignee"}),
+            Kind::Issues,
+            None
+        ));
         assert!(!ok(json!({"layout": "timeline"}), Kind::Issues, None));
         assert!(ok(json!({"layout": "timeline"}), Kind::Projects, None));
         assert!(!ok(json!({"bogus": 1}), Kind::Issues, None));
         assert!(!ok(json!({"showSubIssues": "yes"}), Kind::Issues, None));
         // `focus` und `importance` nur in My Issues.
         assert!(!ok(json!({"grouping": "focus"}), Kind::Issues, None));
-        assert!(ok(json!({"grouping": "focus"}), Kind::Issues, Some("myIssuesAssigned")));
-        assert!(!ok(json!({"ordering": "importance"}), Kind::Issues, Some("teamAll")));
+        assert!(ok(
+            json!({"grouping": "focus"}),
+            Kind::Issues,
+            Some("myIssuesAssigned")
+        ));
+        assert!(!ok(
+            json!({"ordering": "importance"}),
+            Kind::Issues,
+            Some("teamAll")
+        ));
         // Label-Gruppe braucht eine UUID.
         assert!(ok(
             json!({"grouping": "labelGroup:5d0a5d0a-0000-4000-8000-000000000001"}),
             Kind::Issues,
             None
         ));
-        assert!(!ok(json!({"grouping": "labelGroup:abc"}), Kind::Issues, None));
+        assert!(!ok(
+            json!({"grouping": "labelGroup:abc"}),
+            Kind::Issues,
+            None
+        ));
         // Projekt-Gruppierungen gelten nicht für Issues.
         assert!(!ok(json!({"grouping": "health"}), Kind::Issues, None));
         assert!(ok(json!({"grouping": "health"}), Kind::Projects, None));
