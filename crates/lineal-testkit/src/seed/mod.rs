@@ -71,6 +71,7 @@ pub fn ctx_for(user: SeedUser) -> RequestCtx {
         actor: Actor::User { id, role },
         request_id: format!("req_test_{user:?}").to_lowercase(),
         scopes: Scopes::all(),
+        team_scope: None,
     }
 }
 

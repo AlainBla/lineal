@@ -50,7 +50,12 @@ export async function gqlRequest<
   const res = await doFetch(GRAPHQL_ENDPOINT, {
     method: "POST",
     credentials: "same-origin",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      // CSRF-Schutz für Cookie-Sessions (Backend verlangt Header + erlaubten Origin).
+      "x-lineal-csrf": "1",
+    },
     body: JSON.stringify({ query, variables }),
     signal: opts.signal,
   });

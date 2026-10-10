@@ -358,12 +358,24 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
-        let n = tx
+        let ids = tx
             .notifications()
             .mark_all_read(user, &visible, filter, self.clock.now())
             .await?;
+        // Jede geänderte Notification geht als Sync-Aktion an die Clients des Users.
+        for id in &ids {
+            push_notification_event(
+                &mut *tx,
+                ctx,
+                DomainEvent::NotificationUpdated {
+                    notification_id: *id,
+                    user_id: user,
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
-        Ok(n)
+        Ok(ids.len() as u64)
     }
 
     /// Archiviert die Gruppe der Notification (UI „Delete“); `archive = false` ist „Undo“.
@@ -409,12 +421,23 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
-        let n = tx
+        let ids = tx
             .notifications()
             .archive_all(user, &visible, filter, self.clock.now())
             .await?;
+        for id in &ids {
+            push_notification_event(
+                &mut *tx,
+                ctx,
+                DomainEvent::NotificationArchived {
+                    notification_id: *id,
+                    user_id: user,
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
-        Ok(n)
+        Ok(ids.len() as u64)
     }
 
     // --- Issue-Abos ---

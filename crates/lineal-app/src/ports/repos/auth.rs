@@ -13,11 +13,13 @@ fn unimplemented_repo<T>() -> AppResult<T> {
 }
 
 /// Aufgelöster Aufrufer eines Tokens (Session, API-Key oder OAuth-Token).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
     pub org_id: OrgId,
     pub actor: Actor,
     pub scopes: Scopes,
+    /// Team-Beschränkung eines API-Keys (`api_key.team_ids`); `None` = unbeschränkt.
+    pub team_scope: Option<Vec<TeamId>>,
 }
 
 /// Kandidat für den Passwort-Login (ein User in einem Workspace).

@@ -1,5 +1,8 @@
 //! Token-Bucket-Rate-Limit (docs/09 §3): pro Identität zwei Buckets (Requests, Komplexität),
 //! kontinuierliche Nachfüllung, `X-RateLimit-*`-Header und 429 mit `Retry-After`.
+//! Design: Stufe 1 (`ip_middleware`, vor dem Token-Lookup) begrenzt je Client-IP, Stufe 2
+//! (`middleware`, nach dem Lookup) je User/Token. Die Bucket-Map ist begrenzt; bei voller Map
+//! teilen sich neue Schlüssel einen Überlauf-Bucket, aktive Buckets werden nie verdrängt.
 //! Zustand liegt im Prozessspeicher (eine Instanz); die Zeit kommt aus der `Clock` der `App`.
 
 use crate::error::{ApiError, graphql_error_response};
@@ -12,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use lineal_app::AppError;
 use serde_json::json;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 /// Limits einer Identitätsklasse pro Periode.
@@ -31,6 +34,9 @@ pub struct RateLimits {
     /// Web-App über Session-Cookie: 10x OAuth.
     pub session: ClassLimits,
     pub anonymous: ClassLimits,
+    /// Requests je Client-IP (/64 bei IPv6) und Periode für Anfragen MIT Zugangsdaten, gezählt
+    /// vor dem Token-Lookup (jeder Request mit erfundenem Token kostet IP-Kontingent).
+    pub ip_credentialed: f64,
     /// Einzelquery über diesem Wert wird abgelehnt.
     pub max_query_complexity: u64,
 }
@@ -55,6 +61,7 @@ impl Default for RateLimits {
                 requests: 600.0,
                 complexity: 100_000.0,
             },
+            ip_credentialed: 10_000.0,
             max_query_complexity: 10_000,
         }
     }
@@ -89,15 +96,75 @@ pub struct Decision {
     pub retry_after_secs: u64,
 }
 
-const GC_THRESHOLD: usize = 10_000;
+/// Harte Obergrenze der Bucket-Anzahl (Speicherschutz gegen viele erfundene Identitäten).
+pub const MAX_BUCKETS: usize = 200_000;
+
+/// Gemeinsamer Bucket je Klasse für Schlüssel, die nicht mehr in die volle Map passen.
+const OVERFLOW_PREFIX: &str = "\0overflow:";
+/// Mindestabstand der Bereinigung voller Buckets (sonst O(n) pro Request unter Angriff).
+const GC_INTERVAL_MS: i64 = 1_000;
+
+#[derive(Default)]
+struct State {
+    buckets: HashMap<String, Bucket>,
+    last_gc_ms: i64,
+    last_overflow_warn_ms: i64,
+}
 
 /// Prozessweiter Bucket-Speicher.
-#[derive(Default)]
+///
+/// Die Map ist hart begrenzt. Verdrängt wird **nie** ein Bucket mit Verbrauch (das würde dem
+/// Besitzer volle Tokens zurückgeben, und ein Angreifer könnte seinen Bucket durch viele
+/// Fake-Schlüssel "zurücksetzen"). Stattdessen werden nur Buckets entfernt, die ohnehin wieder
+/// voll wären; ist danach immer noch kein Platz, teilen sich alle neuen Schlüssel einen
+/// gemeinsamen Overflow-Bucket, bestehende Schlüssel behalten ihren Stand.
 pub struct RateLimiter {
-    buckets: Mutex<HashMap<String, Bucket>>,
+    state: Mutex<State>,
+    max_buckets: usize,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::with_max_buckets(MAX_BUCKETS)
+    }
+}
+
+/// Bucket-Schlüssel einer Client-IP: IPv4 pro Adresse (/32), IPv6 pro /64 (sonst umgeht ein
+/// Client das Limit durch Adresswechsel innerhalb seines Präfixes); IPv4-mapped IPv6 wie IPv4.
+pub fn ip_bucket(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => format!("v4:{v4}"),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => format!("v4:{v4}"),
+            None => {
+                let s = v6.segments();
+                format!("v6:{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+    }
 }
 
 impl RateLimiter {
+    pub fn with_max_buckets(max_buckets: usize) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            max_buckets: max_buckets.max(10),
+        }
+    }
+
+    /// Anzahl gehaltener Buckets (Tests, Metriken).
+    pub fn len(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .buckets
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Entnimmt `cost` Tokens aus dem Bucket `key` (atomar unter dem Mutex).
     pub fn take(
         &self,
@@ -108,16 +175,30 @@ impl RateLimiter {
         now_ms: i64,
     ) -> Decision {
         let rate = capacity / period_secs;
-        let mut map = self
-            .buckets
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if map.len() > GC_THRESHOLD {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = &mut *state;
+        let map = &mut state.buckets;
+        if map.len() >= self.max_buckets && now_ms - state.last_gc_ms >= GC_INTERVAL_MS {
+            state.last_gc_ms = now_ms;
             // Volle Buckets sind von neuen nicht zu unterscheiden: verwerfen.
             map.retain(|_, b| {
                 b.tokens + (now_ms - b.updated_ms).max(0) as f64 / 1000.0 * rate < capacity
             });
         }
+        // Map voll und Schlüssel unbekannt: kein eigener Bucket, sondern der gemeinsame
+        // Überlauf-Bucket der Klasse (Präfix vor dem ersten ':') mit einem Zehntel des Limits.
+        let overflow_key;
+        let (key, capacity, rate) = if map.len() >= self.max_buckets && !map.contains_key(key) {
+            if now_ms - state.last_overflow_warn_ms >= 60_000 {
+                state.last_overflow_warn_ms = now_ms;
+                tracing::warn!("rate limit table full; new keys share the overflow bucket");
+            }
+            overflow_key = format!("{OVERFLOW_PREFIX}{}", key.split(':').next().unwrap_or(""));
+            let capacity = (capacity / 10.0).max(1.0);
+            (overflow_key.as_str(), capacity, capacity / period_secs)
+        } else {
+            (key, capacity, rate)
+        };
         let b = map.entry(key.to_owned()).or_insert(Bucket {
             tokens: capacity,
             updated_ms: now_ms,
@@ -195,17 +276,79 @@ pub fn denied_error(d: &Decision, what: &str) -> AppError {
         .with_details(json!({ "retryAfter": d.retry_after_secs, "limit": d.limit }))
 }
 
-fn client_ip(req: &Request) -> String {
+/// 429-Antwort passend zum Pfad (GraphQL-Fehlerformat bzw. REST-Fehlermodell).
+fn rejection(req: &Request, d: &Decision, what: &str) -> Response {
+    let err = denied_error(d, what);
+    let mut res = if req.uri().path() == "/graphql" {
+        graphql_error_response(&err)
+    } else {
+        ApiError(err).into_response()
+    };
+    requests_headers(res.headers_mut(), d);
+    res
+}
+
+/// Bucket-Schlüssel der Client-IP (IPv6 pro /64); `None`, wenn die Peer-Adresse unbekannt ist
+/// (kein gemeinsamer "unknown"-Bucket für alle).
+pub(crate) fn client_ip(req: &Request) -> Option<String> {
     req.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(|| "unknown".to_owned(), |c| c.0.ip().to_string())
+        .get::<crate::client_ip::ClientIp>()
+        .map(|c| c.0)
+        .or_else(|| {
+            req.extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|c| c.0.ip())
+        })
+        .map(ip_bucket)
 }
 
 fn exempt(path: &str) -> bool {
     matches!(path, "/healthz" | "/readyz")
 }
 
-/// Middleware: belastet den Request-Bucket, setzt Header, antwortet bei Überschreitung mit 429.
+/// Stufe 1 (vor der Authentifizierung): jeder Request kostet IP-Kontingent, bevor die
+/// Datenbank nach dem Token gefragt wird. Anfragen ohne Zugangsdaten nutzen das (kleine)
+/// Anonym-Limit, Anfragen mit Zugangsdaten ein eigenes, höheres IP-Limit (`ip_credentialed`).
+/// Ein Tokenwechsel umgeht das nicht: der Schlüssel hängt nur an der IP.
+pub async fn ip_middleware(
+    axum::extract::State(p): axum::extract::State<Platform>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if exempt(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let Some(ip) = client_ip(&req) else {
+        if p.cfg.require_peer {
+            // Produktiv liefert `serve` immer die Peer-Adresse; fehlt sie, ist die Verdrahtung
+            // kaputt. Ablehnen statt alle in einen gemeinsamen Bucket zu werfen.
+            return ApiError(AppError::internal("Peer address unavailable.")).into_response();
+        }
+        // Nur Router-Tests (`oneshot`) haben keinen Peer: dort wird nicht nach IP begrenzt.
+        return next.run(req).await;
+    };
+    let (key, capacity) = if crate::middleware::auth::extract_token(req.headers()).is_some() {
+        (format!("ipc:{ip}"), p.cfg.rate.ip_credentialed)
+    } else {
+        (format!("ip:{ip}"), p.cfg.rate.anonymous.requests)
+    };
+    let now_ms = p.app.clock.now().timestamp_millis();
+    let decision = p
+        .limiter
+        .take(&key, capacity, p.cfg.rate.period_secs, 1.0, now_ms);
+    if !decision.allowed {
+        return rejection(&req, &decision, "requests per IP");
+    }
+    let mut res = next.run(req).await;
+    // Authentifizierte Anfragen tragen die Header ihres Token-Buckets (Stufe 2).
+    if !res.headers().contains_key("x-ratelimit-requests-limit") {
+        requests_headers(res.headers_mut(), &decision);
+    }
+    res
+}
+
+/// Stufe 2 (nach der Authentifizierung): Token-/User-Bucket (Requests) und `RateHandle` für die
+/// GraphQL-Komplexität. Der `AuthState` ist nach dem Lookup unveränderlich.
 pub async fn middleware(
     axum::extract::State(p): axum::extract::State<Platform>,
     mut req: Request,
@@ -224,10 +367,8 @@ pub async fn middleware(
             };
             (*class, format!("user:{id}"))
         }
-        _ => (
-            CredentialClass::Anonymous,
-            format!("ip:{}", client_ip(&req)),
-        ),
+        // Anonym/ungültig: bereits von Stufe 1 (IP) begrenzt.
+        _ => return next.run(req).await,
     };
     let limits = p.cfg.rate.for_class(class);
     let now_ms = p.app.clock.now().timestamp_millis();
@@ -281,6 +422,75 @@ mod tests {
         assert!(l.take("k", 2.0, 10.0, 1.0, 5_000).allowed);
         // andere Schlüssel sind unabhängig
         assert!(l.take("other", 2.0, 10.0, 1.0, 0).allowed);
+    }
+
+    #[test]
+    fn ipv6_clients_share_a_bucket_per_64_prefix() {
+        let ip = |s: &str| ip_bucket(s.parse().unwrap());
+        assert_eq!(
+            ip("2001:db8:1:2::1"),
+            ip("2001:db8:1:2:ffff:ffff:ffff:ffff")
+        );
+        assert_ne!(ip("2001:db8:1:2::1"), ip("2001:db8:1:3::1"));
+        assert_ne!(ip("192.0.2.1"), ip("192.0.2.2"));
+        assert_eq!(ip("::ffff:192.0.2.1"), ip("192.0.2.1"));
+    }
+
+    #[test]
+    fn bucket_map_is_bounded_and_eviction_never_refills_a_drained_bucket() {
+        let l = RateLimiter::with_max_buckets(100);
+        let t = 1_000;
+        // Der Angreifer verbraucht sein Kontingent (Kapazität 3 pro Stunde).
+        for _ in 0..3 {
+            assert!(l.take("ip:attacker", 3.0, 3600.0, 1.0, t).allowed);
+        }
+        assert!(!l.take("ip:attacker", 3.0, 3600.0, 1.0, t).allowed);
+        // Er flutet die Map mit erfundenen Schlüsseln (z. B. gefälschte Client-IPs).
+        for i in 0..1_000 {
+            l.take(&format!("ip:fake{i}"), 3.0, 3600.0, 1.0, t + i64::from(i));
+            assert!(l.len() <= 101, "len {} bei {i}", l.len());
+        }
+        // Sein eigener Bucket wurde nicht verdrängt: weiterhin gedrosselt.
+        let d = l.take("ip:attacker", 3.0, 3600.0, 1.0, t + 2_000);
+        assert!(
+            !d.allowed,
+            "Verdrängung darf keine vollen Tokens zurückgeben"
+        );
+        // Neue Schlüssel teilen sich bei voller Map den Overflow-Bucket und werden dort begrenzt.
+        let late = (0..10)
+            .filter(|i| {
+                l.take(&format!("ip:late{i}"), 3.0, 3600.0, 1.0, t + 3_000)
+                    .allowed
+            })
+            .count();
+        assert_eq!(
+            late, 0,
+            "Überlauf-Bucket (1/10 des Limits, geteilt) ist erschöpft"
+        );
+        // Nach der natürlichen Auffüllzeit ist der Angreifer wieder frei.
+        assert!(
+            l.take("ip:attacker", 3.0, 3600.0, 1.0, t + 3_700_000)
+                .allowed
+        );
+    }
+
+    #[test]
+    fn concurrent_requests_never_exceed_the_capacity() {
+        let l = Arc::new(RateLimiter::default());
+        let allowed: usize = (0..50)
+            .map(|_| {
+                let l = l.clone();
+                std::thread::spawn(move || {
+                    (0..20)
+                        .filter(|_| l.take("ip:shared", 10.0, 3600.0, 1.0, 1_000).allowed)
+                        .count()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .sum();
+        assert_eq!(allowed, 10, "Prüfen und Abziehen sind atomar");
     }
 
     #[test]

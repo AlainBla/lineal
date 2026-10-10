@@ -49,6 +49,7 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/auth/login", post(rest::auth::login))
         .route("/auth/logout", post(rest::auth::logout))
         .route("/auth/me", get(rest::auth::me))
+        .route("/invite/accept", post(rest::auth::accept_invite))
         .route("/uploads/{token}", put(blob::upload))
         .route("/files/{token}", get(blob::download))
         .route("/oauth/register", post(oauth::register))
@@ -169,6 +170,7 @@ mod tests {
                 id: lineal_domain::ids::UserId::new_v7(),
             },
             scopes: lineal_app::Scopes::read_only(),
+            team_scope: None,
         };
         let store = lineal_testkit::FakeStore::new().with_principal(
             crate::middleware::auth::hash_token("lin_api_test"),

@@ -4,3 +4,5 @@ package-lock.json
 schema.graphql
 src/routeTree.gen.ts
 src/gql
+test-results
+playwright-report

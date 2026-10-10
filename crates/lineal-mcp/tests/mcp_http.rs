@@ -27,6 +27,7 @@ fn principal(scopes: Scopes) -> Principal {
             role: UserRole::Owner,
         },
         scopes,
+        team_scope: None,
     }
 }
 

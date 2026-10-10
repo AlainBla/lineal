@@ -1032,6 +1032,9 @@ function applyCustomView(principal, viewRef, extraFilter, params):
 
 ### 4.4 Lebenszyklus
 
+> **Umsetzung:** Workspace-Views (`shared = true`, `teamId = null`) verlangt die Aktion `ManageWorkspaceViews` (Admin/Owner); Team-geteilte Views `ManageTeamSharedViews` und Mitgliedschaft im Team. Gäste dürfen nur persönliche Views anlegen. Bearbeiten/Löschen: Owner der View, bei geteilten Views Workspace-Admins bzw. Team-Owner.
+
+
 | Aktion | Wer | Wirkung |
 |---|---|---|
 | Erstellen | jeder Nicht-Gast; Gäste nur persönliche Views in ihren Teams | Validierung 1.8, `slugId` erzeugen, `organization`-Preferences aus aktueller Anzeige |

@@ -88,12 +88,13 @@ impl AuthRepo for PgTx {
                 org_id: OrgId(org),
                 actor: actor_for(UserId(user), role),
                 scopes,
+                team_scope: None,
             }));
         }
 
         // 2. Persönlicher API-Key
-        let row: Option<(Uuid, Uuid, String, Vec<String>)> = sqlx::query_as(
-            "SELECT k.organization_id, u.id, u.role, k.scopes FROM api_key k \
+        let row: Option<(Uuid, Uuid, String, Vec<String>, Option<Vec<Uuid>>)> = sqlx::query_as(
+            "SELECT k.organization_id, u.id, u.role, k.scopes, k.team_ids FROM api_key k \
              JOIN \"user\" u ON u.organization_id = k.organization_id AND u.id = k.user_id \
              JOIN organization o ON o.id = k.organization_id AND o.archived_at IS NULL \
              WHERE k.key_hash = $1 AND k.revoked_at IS NULL AND k.archived_at IS NULL \
@@ -103,12 +104,14 @@ impl AuthRepo for PgTx {
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        if let Some((org, user, role, scopes)) = row {
+        if let Some((org, user, role, scopes, team_ids)) = row {
             let role = parse_role(&role)?;
             return Ok(Some(Principal {
                 org_id: OrgId(org),
                 actor: actor_for(UserId(user), role),
                 scopes: scopes_from(&scopes, role),
+                // `NULL` = alle sichtbaren Teams; eine Liste beschränkt den Key auf diese Teams.
+                team_scope: team_ids.map(|ids| ids.into_iter().map(TeamId).collect()),
             }));
         }
 
@@ -135,6 +138,7 @@ impl AuthRepo for PgTx {
                 org_id: OrgId(org),
                 actor,
                 scopes: scopes_from(&scopes, role),
+                team_scope: None,
             }));
         }
         Ok(None)

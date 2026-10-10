@@ -192,6 +192,20 @@ impl BlobStore for LocalBlobStore {
         }
     }
 
+    async fn delete(&self, key: &str) -> AppResult<()> {
+        check_key(key)?;
+        let (data_path, meta_path) = self.paths(key);
+        // Metadaten zuerst: ohne sie gilt das Objekt für `head` schon als nicht vorhanden.
+        for path in [meta_path, data_path] {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io_err(e)),
+            }
+        }
+        Ok(())
+    }
+
     async fn signed_put_url(
         &self,
         key: &str,

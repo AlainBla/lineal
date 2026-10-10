@@ -34,6 +34,7 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <a href="#ch-12-arbeitspakete">12 Arbeitspakete</a>
 <a href="#ch-13-import-linear">13 Import aus Linear</a>
 <a href="#ch-14-firmenweite-sicht">14 Firmenweite Sicht</a>
+<a href="#ch-15-umsetzungsstand">15 Umsetzungsstand</a>
 <a href="mcp-tools.snapshot.json">MCP-Tool-Snapshot (JSON)</a></nav>
 <main>
 <section id="diagramme" class="chapter"><h1>Diagramm-Übersicht</h1>
@@ -53,7 +54,8 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <li><a href="#ch-11-implementierungsarchitektur">11 Implementierungsarchitektur</a>: 3 Diagramme</li>
 <li><a href="#ch-12-arbeitspakete">12 Arbeitspakete</a>: 1 Diagramme</li>
 <li><a href="#ch-13-import-linear">13 Import aus Linear</a>: 2 Diagramme</li>
-<li><a href="#ch-14-firmenweite-sicht">14 Firmenweite Sicht</a>: 1 Diagramme</li></ul></section>
+<li><a href="#ch-14-firmenweite-sicht">14 Firmenweite Sicht</a>: 1 Diagramme</li>
+<li><a href="#ch-15-umsetzungsstand">15 Umsetzungsstand</a>: 0 Diagramme</li></ul></section>
 <section id="ch-readme" class="chapter"><div class="src">Quelle: <a href="README.md">README.md</a></div><h1 id="ch-readme-lineal-implementationsdokumentation-f-r-einen-linear-nachbau">Lineal – Implementationsdokumentation für einen Linear-Nachbau</h1>
 <p>Diese Dokumentation beschreibt einen funktionalen Nachbau der Kernfunktionen von <a href="https://linear.app">Linear</a> mit <strong>mehreren Teams</strong> und einem <strong>eigenen MCP-Server</strong>. Sie ist so geschrieben, dass ein Team das System in einer beliebigen Programmiersprache und mit beliebigem Stack umsetzen kann: Datenmodelle, Regeln, Schnittstellen und Abläufe sind sprachneutral spezifiziert (Tabellen, JSON Schema, Mermaid-Diagramme, Pseudocode).</p>
 <p>Grundlage (Stand 2026-10-10):
@@ -145,6 +147,11 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <td>14</td>
 <td><a href="#ch-14-firmenweite-sicht">Firmenweite Sicht</a></td>
 <td>Teamübergreifende Issues, Dashboard, Roadmap, Auslastung</td>
+</tr>
+<tr>
+<td>15</td>
+<td><a href="#ch-15-umsetzungsstand">Umsetzungsstand</a></td>
+<td>Was implementiert ist, bekannte Lücken, Betrieb (Env, Jobs, Ports), Sicherheitsmaßnahmen, Entscheidungen bei Widersprüchen</td>
 </tr>
 </tbody>
 </table>
@@ -2098,6 +2105,9 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <li>Ein geerbter Status (<code>inheritedFromId ≠ null</code>) gehört zu einem Sub-Team, dessen <code>inheritWorkflowStatuses = true</code> ist, und <code>inheritedFrom.teamId</code> ist der Parent dieses Teams.</li>
 </ol>
 <h3 id="ch-01-domaenenmodell-2-6-triageresponsibility">2.6 TriageResponsibility</h3>
+<blockquote>
+<p><strong>Umsetzung:</strong> <code>currentUserId</code> ist <strong>gespeichert</strong> (Spalte <code>triage_responsibility.current_user_id</code>), nicht bei jeder Abfrage abgeleitet. Der periodische Job <code>triage_rotation</code> (60 s) berechnet die Schicht neu und schreibt nur bei Änderung; <code>assignmentIndex</code> bleibt für Round-Robin bei <code>manualUserIds</code>.</p>
+</blockquote>
 <p>Legt fest, wer für die Triage eines Teams verantwortlich ist und was beim Eingang eines Issues passiert. Höchstens eine pro Team.</p>
 <table>
 <thead>
@@ -11110,6 +11120,9 @@ function createIssue(input, user):
 <h3 id="ch-03-issues-workflow-6-2-inline-kommentare">6.2 Inline-Kommentare</h3>
 <p>Ein Inline-Kommentar referenziert eine markierte Textstelle der Issue-Beschreibung über <code>quotedText</code> (der zitierte Text) und einen Anker im strukturierten Inhalt der Beschreibung (gemeinsamer <code>DocumentContent</code>, <a href="#ch-06-dokumente-templates">06-dokumente-templates.md</a> §1.3; Inline-Kommentare wie in 06 §1.8). Wird die Textstelle später gelöscht, bleibt der Kommentar mit <code>quotedText</code> erhalten und wird als „Textstelle entfernt“ dargestellt. Der <strong>Wurzelkommentar eines Inline-Threads ist nicht löschbar</strong> (nur bearbeitbar bzw. der Thread auflösbar); Antworten sind löschbar.</p>
 <h3 id="ch-03-issues-workflow-6-3-bearbeiten-und-l-schen">6.3 Bearbeiten und Löschen</h3>
+<blockquote>
+<p><strong>Umsetzung (WP17-Abgleich 03 ↔ 07):</strong> Ein Top-Level-Kommentar mit Antworten wird nicht entfernt, sondern behält seine Zeile mit <code>deleted_at</code> und einem Platzhalter-Body; die Antworten bleiben. Die Wurzel eines Inline-Threads ist nicht löschbar: <code>invalid_request</code> mit <code>details.reason = "inline_root"</code>. Gilt auch für das MCP-Tool <code>delete_comment</code> (<a href="#ch-07-mcp-server">07</a>).</p>
+</blockquote>
 <table>
 <thead>
 <tr>
@@ -11201,6 +11214,9 @@ function createIssue(input, user):
 <li><strong>finalize</strong> (<code>create_attachment_from_upload(issue, assetUrl, title?, subtitle?)</code>): Server prüft, dass das Objekt existiert und die Größe zur Ankündigung passt, und legt den <code>Attachment</code> mit <code>url = assetUrl</code>, <code>sourceType = "upload"</code> an.</li>
 </ol>
 <p><strong>Größenlimit:</strong> konfigurierbares Workspace-Limit, Default <strong>2 GB</strong> (Obergrenze des Original-MCP) → bei Überschreitung <code>limit_exceeded</code>. Nicht finalisierte Objekte werden nach 24 h vom Aufräumjob gelöscht.</p>
+<blockquote>
+<p><strong>Umsetzung (WP17-Abgleich 03 ↔ 07):</strong> Das Limit ist fest 2 GiB und <strong>exklusiv</strong> (<code>size &gt;= 2 GiB</code>); die Überschreitung meldet schon <code>prepare</code> als <code>limit_exceeded</code> (<code>details.limit = "maxUploadBytes"</code>) – nicht <code>invalid_request</code>, wie 07 es für <code>prepare_attachment_upload</code> nennt. <code>finalize</code> meldet <code>invalid_request</code> mit <code>details.reason</code> <code>upload_missing</code> bzw. <code>upload_size_mismatch</code>. Reservierungen gelten 1 h; nie finalisierte Objekte räumt der Job <code>purge</code> 1 Tag nach Ablauf der Reservierung samt Blob ab.</p>
+</blockquote>
 <p><strong>Download:</strong> <code>assetUrl</code> ist nicht öffentlich. Beim Lesen (Kommentare, <code>get_attachment</code>, Bilder in Markdown) liefert der Server <strong>signierte Download-URLs mit 5 Minuten Gültigkeit</strong>; die Signatur wird erst nach Zugriffsprüfung auf das Issue erzeugt.</p>
 <pre class="mermaid">sequenceDiagram
     autonumber
@@ -14077,7 +14093,7 @@ function longestPathToLeaf(n):
 <td>A10</td>
 <td>Projekt-Identifier bei Lead-Team-Wechsel bzw. Key-Änderung</td>
 <td>Lead-Team-Wechsel: unverändert; Key-Änderung: neuer Key, alte Kennung in <code>previousIdentifiers</code></td>
-<td>Original undokumentiert; stabile Links, konsistent mit README-Entscheidung zu Issue-Kennungen.</td>
+<td>Original undokumentiert; stabile Links, konsistent mit README-Entscheidung zu Issue-Kennungen. <strong>Umsetzung:</strong> Ein Lead-Team-Wechsel vergibt eine <strong>neue Projektnummer</strong> des neuen Lead-Teams (<code>P-&lt;neuer Key&gt;-&lt;n&gt;</code>); die alte Kennung bleibt als Alias auflösbar (<code>previousIdentifiers</code>). Die Entscheidung „unverändert“ ist damit überstimmt; die Key-Änderung bleibt wie beschrieben.</td>
 </tr>
 <tr>
 <td>A11</td>
@@ -16225,6 +16241,9 @@ function compileVirtual(alias, key, v, ctx):
 <li><code>list_custom_views</code> liefert nur Metadaten (keine Treffer und keinen Filter), lässt archivierte sowie an Projekte/Initiativen gebundene Views weg.</li>
 </ul>
 <h3 id="ch-05-views-suche-inbox-4-4-lebenszyklus">4.4 Lebenszyklus</h3>
+<blockquote>
+<p><strong>Umsetzung:</strong> Workspace-Views (<code>shared = true</code>, <code>teamId = null</code>) verlangt die Aktion <code>ManageWorkspaceViews</code> (Admin/Owner); Team-geteilte Views <code>ManageTeamSharedViews</code> und Mitgliedschaft im Team. Gäste dürfen nur persönliche Views anlegen. Bearbeiten/Löschen: Owner der View, bei geteilten Views Workspace-Admins bzw. Team-Owner.</p>
+</blockquote>
 <table>
 <thead>
 <tr>
@@ -17577,6 +17596,9 @@ function compileVirtual(alias, key, v, ctx):
 </table>
 <p>Nach außen (API, MCP, Webhooks) wird immer nur Markdown geliefert (<a href="#ch-00-konventionen">00 §6</a>). Ein internes strukturiertes Format (z. B. ein Baum aus Absätzen, Listen, Code-Blöcken) ist zulässig, muss aber verlustfrei nach Markdown serialisierbar sein.</p>
 <h3 id="ch-06-dokumente-templates-1-4-elternobjekt-genau-eines">1.4 Elternobjekt (genau eines)</h3>
+<blockquote>
+<p><strong>Umsetzung:</strong> Es gilt die empfohlene Variante mit fünf Fremdschlüsseln. Ein Cycle-Dokument trägt zusätzlich <code>teamId</code> (= Team des Cycles); Project-, Issue- und Initiative-Dokumente haben <code>teamId = null</code>. Die Check-Bedingung der Migration erzwingt genau ein Elternobjekt.</p>
+</blockquote>
 <p>Ein Dokument hat <strong>genau ein</strong> Elternobjekt aus der Menge Project, Issue, Initiative, Cycle oder Team (siehe „Getroffene Entscheidungen“ in <a href="#ch-readme">README.md</a>). Ein Dokument ohne Elternobjekt existiert nicht.</p>
 <p><strong>Persistenz:</strong> fünf nullable Fremdschlüssel (<code>projectId</code>, <code>issueId</code>, <code>initiativeId</code>, <code>cycleId</code>, <code>teamId</code>) mit einer Check-Bedingung „genau einer ist nicht null“. Alternativ ist ein Paar <code>(parentType, parentId)</code> zulässig; dann muss die referentielle Integrität in der Anwendung sichergestellt werden. Die erste Variante wird empfohlen, weil die Datenbank Integrität und Kaskaden direkt erzwingen kann.</p>
 <table>
@@ -18035,6 +18057,9 @@ function compileVirtual(alias, key, v, ctx):
 <p><code>inheritedFrom</code> wird nur gesetzt, wenn ein Sub-Team ein geerbtes Template <strong>anpasst</strong>: Dann entsteht eine Kopie im Sub-Team mit <code>inheritedFrom = Original</code>, die das Original in der Auswahl dieses Sub-Teams (und seiner eigenen Sub-Teams) verdeckt.</p>
 <p><strong>Auflösungsreihenfolge</strong> in <code>list_templates(team=X)</code>: eigene Templates von X, dann geerbte der Vorfahren (nächstgelegener zuerst, ohne durch Kopien verdeckte), dann Workspace-Templates. Namensgleiche Templates aus verschiedenen Ebenen sind erlaubt; <code>get_template</code> per Name liefert bei Mehrdeutigkeit <code>ambiguous_reference</code> mit Kandidatenliste.</p>
 <h3 id="ch-06-dokumente-templates-2-4-struktur-von-templatedata-json-schema">2.4 Struktur von <code>templateData</code> (JSON Schema)</h3>
+<blockquote>
+<p><strong>Umsetzung:</strong> Übersprungene Referenzen meldet die Anwendung als Liste der betroffenen Feldnamen in <code>warnings</code> der Antwort (kein Fehler); das Anlegen läuft weiter.</p>
+</blockquote>
 <p>Das Original speichert <code>templateData</code> als nicht weiter spezifiziertes JSON. Lineal legt die Struktur verbindlich fest. Gemeinsame Regeln:</p>
 <ul>
 <li>Alle Felder sind optional; ein fehlendes Feld bedeutet „nicht vorbelegt“.</li>
@@ -21290,6 +21315,7 @@ function findUnique(buf, needle, from):
 <p><strong>Fehler:</strong> <code>invalid_request</code> (kein/mehrere Parents, leerer <code>body</code>, <code>parentId</code> + <code>id</code>); <code>not_found</code>; <code>forbidden</code> (fremden Kommentar editieren). <strong>Core:</strong> <code>CreateComment</code>, <code>ReplyToComment</code>, <code>UpdateComment</code> – <a href="#ch-03-issues-workflow">03-issues-workflow.md</a>.</p>
 <h4 id="ch-07-mcp-server-delete-comment"><code>delete_comment</code></h4>
 <blockquote>
+<p><strong>Umsetzung:</strong> Gilt die Löschregel aus <a href="#ch-03-issues-workflow">03 §6.3</a>: Platzhalter für Top-Level-Kommentare mit Antworten, Inline-Wurzel nicht löschbar (<code>invalid_request</code>, <code>reason = "inline_root"</code>).</p>
 <p>Delete a Lineal comment. Inline description comments (those with non-null <code>quotedText</code>) anchor a mark in the editor, so their root cannot be deleted — delete the replies individually or resolve the thread instead.</p>
 </blockquote>
 <pre><code class="language-json">{
@@ -21407,6 +21433,9 @@ curl -X PUT --data-binary @file.png \
 </code></pre>
 <p>Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung werden nach 1 h verworfen.</p>
 <p><strong>Fehler:</strong> <code>not_found</code> (Issue); <code>invalid_request</code> (<code>size</code> ≥ 2 GB, leerer Dateiname, ungültiger MIME-Typ); <code>limit_exceeded</code> (Speicherkontingent, offene Uploads). <strong>Core:</strong> <code>ReserveUpload</code> – <a href="#ch-03-issues-workflow">03-issues-workflow.md</a> (Anhänge), Objektspeicher in <a href="#ch-10-architektur-umsetzung">10</a>.</p>
+<blockquote>
+<p><strong>Umsetzung:</strong> <code>size</code> ≥ 2 GiB liefert <code>limit_exceeded</code> (siehe <a href="#ch-03-issues-workflow">03 §7.2</a>); alle anderen genannten Eingabefehler <code>invalid_request</code>.</p>
+</blockquote>
 <h4 id="ch-07-mcp-server-create-attachment-from-upload"><code>create_attachment_from_upload</code></h4>
 <blockquote>
 <p>Link an already-uploaded Lineal assetUrl to an existing issue as an attachment.</p>
@@ -23083,6 +23112,9 @@ If the direct upload failed or the signed URL expired, rerun prepare_attachment_
 <p><strong>Antwort:</strong> die aktualisierte Benachrichtigung. <strong>Core:</strong> <code>MarkNotificationRead</code>, <code>SnoozeNotification</code> – <a href="#ch-05-views-suche-inbox">05-views-suche-inbox.md</a>.</p>
 <hr />
 <h3 id="ch-07-mcp-server-3-14-triage">3.14 Triage</h3>
+<blockquote>
+<p><strong>Umsetzung:</strong> „Person on triage now“ ist der gespeicherte <code>currentUserId</code> (Job <code>triage_rotation</code>, höchstens 60 s Verzögerung nach Schichtwechsel); die kommenden Schichten kommen aus <code>TimeScheduleEntry</code> ab jetzt, begrenzt durch <code>limit</code>.</p>
+</blockquote>
 <h4 id="ch-07-mcp-server-get-triage-responsibility"><code>get_triage_responsibility</code></h4>
 <blockquote>
 <p>Retrieve who is responsible for a team's triage: the person on triage now, what happens when an issue enters triage, and the upcoming shifts of the team's triage rotation. Pass <code>user</code> to get only that person's shifts, for example to find when their next triage duty starts, even when it is weeks away.</p>
@@ -29694,8 +29726,11 @@ _metadata_={&quot;lastSyncId&quot;:184467,&quot;subscribedSyncGroups&quot;:[&quo
 <p>Server-Regeln:
 1. Nach Verbindungsaufbau liefert der Server alle SyncActions mit <code>id &gt; lastSyncId</code> aus dem Sync-Log (gefiltert nach Gruppen), danach live.
 2. Jede Action wird nur an Verbindungen geschickt, deren Gruppenmenge sich mit <code>syncGroups</code> überschneidet.
-3. Aufbewahrung des Sync-Logs: Default 14 Tage. Ist <code>lastSyncId</code> älter als der älteste Log-Eintrag, antwortet der Server mit <code>{"type":"resetRequired"}</code> → Client bootstrapt neu.
+3. Aufbewahrung des Sync-Logs: Default 14 Tage. Ist <code>lastSyncId</code> älter als der älteste Log-Eintrag, antwortet der Server mit <code>{"type":"resetRequired"}</code> → Client bootstrapt neu.</p>
+<blockquote>
+<p><strong>Umsetzung:</strong> Der Stream läuft unter <code>GET /sync?since=&lt;lastSyncId&gt;</code> (WebSocket; nach <code>{"type":"resetRequired"}</code> Close-Code 4001, bei nicht mehr gültigem Token Close-Code 4401). <code>/sync/bootstrap</code> ist <strong>nicht</strong> implementiert: der Client lädt den Stand über GraphQL und setzt danach <code>since</code> auf den <code>lastSyncId</code> des Servers. Aufbewahrung 14 Tage (Job <code>sync_purge</code>).
 4. Pro Workspace ein geordneter Strom (Fan-out-Knoten abonnieren z. B. einen Pub/Sub-Kanal <code>sync:&lt;orgId&gt;</code>); Lücken in <code>id</code> (durch Gruppenfilter) sind normal, Clients prüfen nur Monotonie.</p>
+</blockquote>
 <h3 id="ch-09-api-events-5-4-optimistische-mutationen">5.4 Optimistische Mutationen</h3>
 <pre><code class="language-text">client.update(model, changes):
   tx = Transaction(id = uuid(), model, changes, previous = snapshot(model, keys(changes)))
@@ -32218,6 +32253,20 @@ RUST_LOG=info,lineal=debug
 <li>Jede öffentliche Use-Case-Methode hat mindestens einen <code>#[sqlx::test]</code>.</li>
 <li>TypeScript: <code>strict</code>, kein <code>any</code>, ESLint + Prettier.</li>
 <li>Commits: Conventional Commits (<code>feat(issues): …</code>), ein Arbeitspaket = ein Branch <code>wp/&lt;nr&gt;-&lt;name&gt;</code>.</li>
+</ul>
+<h2 id="ch-11-implementierungsarchitektur-8-abweichungen-aus-dem-scaffold-s1-s2-verbindlich-f-r-alle-wps">8. Abweichungen aus dem Scaffold (S1/S2, verbindlich für alle WPs)</h2>
+<ul>
+<li>
+<p><strong><code>lineal-sync</code> kennt <code>sqlx</code></strong> (Ausnahme von der Adapter-Regel in §2): <code>LISTEN/NOTIFY</code> auf dem Kanal <code>lineal_sync</code> braucht einen <code>PgListener</code>/<code>PgPool</code>; alles andere (Auth, Sichtbarkeit, <code>sync_log</code>) läuft über die Ports <code>Store</code>/<code>Tx</code>.</p>
+</li>
+<li>
+<p><code>Tx</code> hat zusätzlich <code>org_id()</code>, <code>last_sync_id()</code>, <code>overview()</code> und <code>imports()</code>; <code>Store::begin_system()</code> für Worker ohne Benutzerkontext. <code>OutboxRepo</code> hat <code>claim_undelivered</code>, <code>mark_delivered</code>, <code>mark_processed</code>; <code>PeriodicJob</code> hat <code>name()</code>.</p>
+</li>
+<li><code>/mcp</code> und <code>/.well-known/*</code> liefert <code>lineal_mcp::router</code>, <code>/sync</code> liefert <code>lineal_sync::router</code>; <code>lineal_server::build_router</code> setzt sie mit dem API-Router zusammen.</li>
+<li>GraphQL-Platzhalter sind sichtbare Felder <code>_&lt;bereich&gt;Ready</code> / <code>_&lt;bereich&gt;MutationReady</code>; das zuständige WP entfernt seinen Platzhalter, sobald es echte Felder hat.</li>
+<li>Server-Adresse über <code>LINEAL_BIND</code> (Default <code>127.0.0.1:8080</code>), Vite-Proxy-Ziel über <code>LINEAL_BACKEND</code>.</li>
+<li><code>lineal-testkit</code> ist optionale Laufzeit-Abhängigkeit von <code>lineal-server</code> (Feature <code>seed</code>) für das Subcommand <code>seed</code>.</li>
+<li>Schema-Eigenheiten: Tabelle <code>"user"</code> immer in Anführungszeichen; <code>issue.identifier</code> und <code>issue.state_type</code> pflegen Trigger; <code>updated_at</code>/<code>version</code> setzt der Core; ein Issue mit <code>project_id</code> braucht eine <code>project_team</code>-Zeile für sein Team.</li>
 </ul></section>
 <section id="ch-12-arbeitspakete" class="chapter"><div class="src">Quelle: <a href="12-arbeitspakete.md">12-arbeitspakete.md</a></div><h1 id="ch-12-arbeitspakete-12-arbeitspakete-und-umsetzungsplan">12 – Arbeitspakete und Umsetzungsplan</h1>
 <blockquote>
@@ -32504,28 +32553,28 @@ RUST_LOG=info,lineal=debug
 <h2 id="ch-12-arbeitspakete-welle-3">Welle 3</h2>
 <h3 id="ch-12-arbeitspakete-wp10-dokumente-und-templates">WP10 – Dokumente und Templates</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-06-dokumente-templates">06</a>, <a href="#ch-07-mcp-server">07</a> Gruppen <code>documents</code>, <code>templates</code>.
-<strong>Eigentum:</strong> <code>usecases/{document,template}.rs</code>, <code>ports/repos/{document,template}.rs</code>, <code>lineal-db/src/repos/{document,template}.rs</code>, Migrationen <code>1000</code>–<code>1099</code>, <code>graphql/{document,template}.rs</code>, <code>mcp/handlers/{documents,templates}.rs</code>, <code>testkit/src/seed/content.rs</code>.
+<strong>Eigentum:</strong> <code>usecases/{document,template}.rs</code>, <code>ports/repos/{document,template}.rs</code>, <code>lineal-db/src/repos/{document,template}.rs</code>, Migrationen <code>1000</code>–<code>1099</code>, <code>graphql/{document,template}.rs</code>, <code>mcp/handlers/{documents,templates}.rs</code>, <code>testkit/src/seed/{content,issues}.rs</code> und neues <code>seed::demo</code> (Demo-Workspace für die Web-UI, Aufruf <code>lineal seed --demo</code>; <code>seed::run</code> bleibt unverändert). In <code>handlers/issues.rs</code>/<code>handlers/projects.rs</code> bzw. den Use-Cases nur die Zweige <code>template</code> und <code>links</code> von <code>save_issue</code>/<code>save_project</code> (<code>links</code> → <code>App::link_attachment</code> aus WP09).
 <strong>Liefert:</strong> Dokumente mit genau einem Parent, Reparent, Snapshot-Historie, Patch; Templates (issue/project/document, Workspace/Team, Vererbung), <code>applyTemplate</code> inkl. Sub-Issues in einer Transaktion; Integration in <code>create_issue</code>/<code>create_project</code> über <code>template</code>-Parameter.
 <strong>Tests:</strong> Dokument mit zwei Parents → <code>invalid_request</code>; Template mit 3 Sub-Issues → lückenlose Nummern; Merge-Regeln der Beschreibung.</p>
 <h3 id="ch-12-arbeitspakete-wp11-views-filter-suche">WP11 – Views, Filter, Suche</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-05-views-suche-inbox">05 §1–5</a>, <a href="#ch-14-firmenweite-sicht">14</a> (Backend), <a href="#ch-10-architektur-umsetzung">10 §5</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>views</code>, <code>list_issues</code> (<code>query</code>, <code>customView</code>).
-<strong>Eigentum:</strong> <code>usecases/view.rs</code>, <code>ports/repos/view.rs</code>, <code>lineal-db/src/repos/view.rs</code>, <code>lineal-db/src/{filter_sql.rs,search.rs}</code>, Migrationen <code>1100</code>–<code>1199</code>, <code>graphql/{view,search,overview}.rs</code>, <code>mcp/handlers/{views,workspace}.rs</code>, <code>lineal-app/src/usecases/overview.rs</code>, <code>lineal-db/src/repos/overview.rs</code>, <code>lineal-jobs/src/consumers/search_index.rs</code>. Darf in <code>repos/issue.rs</code> und <code>handlers/issues.rs</code> ausschließlich die Listen-/Suchfunktion erweitern.
+<strong>Eigentum:</strong> <code>usecases/view.rs</code>, <code>ports/repos/view.rs</code>, <code>lineal-db/src/repos/view.rs</code>, <code>lineal-db/src/{filter_sql.rs,search.rs}</code>, Migrationen <code>1100</code>–<code>1199</code>, <code>graphql/{view,search,overview}.rs</code>, <code>mcp/handlers/{views,workspace}.rs</code>, <code>lineal-app/src/usecases/overview.rs</code>, <code>lineal-db/src/repos/overview.rs</code>, <code>lineal-jobs/src/consumers/search_index.rs</code>. Darf in <code>repos/issue.rs</code>, <code>usecases/issue*</code> und <code>handlers/issues.rs</code> ausschließlich die Listen-/Suchfunktion erweitern (<code>query</code>, <code>customView</code> in <code>list_issues</code>; <code>customView</code> in <code>list_projects</code>/<code>list_initiatives</code>). Hinweis: <code>issue.search_vector</code> ist eine generierte Spalte – vor dem Index-Design die Migrationen lesen; Projekte/Dokumente brauchen ggf. eigene Suchspalten/-tabellen.
 <strong>Liefert:</strong> Filter-AST → SQL (alle Comparators, to-many, relative Daten, <code>me</code>), immer AND mit Sichtbarkeitsfilter; Custom Views (personal/team/workspace), Favoriten; Volltextsuche (Issues inkl. <code>previousIdentifiers</code>, Projekte, Dokumente) mit Ranking; Anzeigeoptionen-Persistenz; firmenweite Sicht: <code>workspaceOverview</code>, <code>workload</code>, <code>activeCycles</code>, MCP <code>get_workspace_overview</code>, Rollups über Sub-Teams.
 <strong>Tests:</strong> Filter-Beispiele aus 05 als Tabellentests; Suche findet kein Issue aus privatem Team (Review-Fokus 2); View + Zusatzfilter = AND; Abnahmekriterien 1–4 aus <a href="#ch-14-firmenweite-sicht">14 §6</a>.</p>
 <h3 id="ch-12-arbeitspakete-wp12-triage-und-automationen">WP12 – Triage und Automationen</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-03-issues-workflow">03 §9–11</a>, <a href="#ch-10-architektur-umsetzung">10 §3</a>, <a href="#ch-07-mcp-server">07</a> Gruppe <code>triage</code>.
-<strong>Eigentum:</strong> <code>usecases/triage.rs</code>, <code>ports/repos/triage.rs</code>, <code>lineal-db/src/repos/triage.rs</code>, Migrationen <code>1200</code>–<code>1299</code>, <code>graphql/triage.rs</code>, <code>mcp/handlers/triage.rs</code>, <code>lineal-jobs/src/periodic/{auto_close,auto_archive,purge,sla,triage_rotation}.rs</code>.
+<strong>Eigentum:</strong> <code>usecases/triage.rs</code>, <code>ports/repos/triage.rs</code>, <code>lineal-db/src/repos/triage.rs</code>, Migrationen <code>1200</code>–<code>1299</code>, <code>graphql/triage.rs</code>, <code>mcp/handlers/triage.rs</code>, <code>lineal-jobs/src/periodic/{auto_close,auto_archive,purge,sla,triage_rotation}.rs</code>. Zusätzlich (einziger Bearbeiter in Welle 3): <code>usecases/issue/fields.rs</code> für Parent/Child-Auto-Close (03 §3.4) und das Einhängen von <code>usecases::cycle::auto_cycle_for_state</code> in <code>change_state</code>.
 <strong>Liefert:</strong> Triage accept/decline/duplicate/snooze/move, Triage-Verantwortung und Rotation, Auto-Close mit Ausnahmen, Auto-Archive, Papierkorb-Purge (30 Tage), SLA-Regeln und Risikostufen, Parent/Child-Auto-Close-Automation.
 <strong>Tests:</strong> Auto-Close-Ausnahmen (aktiver Cycle, unfertiges Projekt, künftiges Due-Date), Decline setzt canceled + Kommentar, Rotation wechselt Schicht.</p>
 <h3 id="ch-12-arbeitspakete-wp13-web-issues">WP13 – Web: Issues</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-08-userflows">08</a> F3–F8, Screens Issue-Liste/Board/Detail/Create-Modal.
-<strong>Eigentum:</strong> <code>web/src/features/issues/**</code>, <code>web/src/routes/{team,issue,my-issues}/**</code>.
+<strong>Eigentum:</strong> <code>web/src/features/issues/**</code>, <code>web/src/routes/$ws/{team,issue,my-issues}/**</code>.
 <strong>Liefert:</strong> Liste und Board (Gruppierung nach Status, Drag &amp; Drop mit <code>dnd-kit</code>), Issue-Detail mit Property-Sidebar, Activity, Sub-Issues, Relationen, Kommentaren (TipTap-Editor mit Mentions), Create-Modal (Template, „Create more“), Shortcuts S/A/P/L/E/C, Teamwechsel-Dialog, My Issues.
 <strong>Tests:</strong> Komponententests für Modal, Property-Picker, Board-Spaltenlogik.</p>
 <h3 id="ch-12-arbeitspakete-wp14-web-planung-inbox-views-suche-settings">WP14 – Web: Planung, Inbox, Views, Suche, Settings</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-08-userflows">08</a> F1, F2, F9–F16, <a href="#ch-14-firmenweite-sicht">14</a> (UI), <a href="#ch-13-import-linear">13 §6–7</a> (Import-Assistent in den Settings).
-<strong>Eigentum:</strong> <code>web/src/features/{planning,inbox,views,search,docs,settings,overview,import}/**</code>, <code>web/src/routes/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document,overview,issues,workload}/**</code>.
-<strong>Liefert:</strong> Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys); firmenweite Sicht (Overview-Dashboard, Workspace-Issues gruppiert nach Team, Roadmap-Timeline, Workload, Cycle-Übersicht); Import-Assistent (Token, Plan, Fortschritt, Bericht) gegen die in <a href="#ch-13-import-linear">13 §6</a> definierten Operationen.
+<strong>Eigentum:</strong> <code>web/src/features/{planning,inbox,views,search,docs,settings,overview}/**</code>, <code>web/src/routes/$ws/{projects,project,initiatives,initiative,cycles,inbox,views,view,search,settings,document,overview,issues,workload}/**</code> (ohne <code>settings/import</code>). Start erst nach Merge von WP11.
+<strong>Liefert:</strong> Cycles-Ansicht, Projektliste/-seite (Overview, Issues, Updates, Milestones), Initiativen, Inbox (Liste + Detail, Aktionen, Shortcuts), Filter-Bar + View-Builder + Favoriten, Suche, Dokument-Editor, Team- und Workspace-Settings (Workflow-Editor, Labels, Cycles, Triage, Mitglieder, API-Keys); firmenweite Sicht (Overview-Dashboard, Workspace-Issues gruppiert nach Team, Roadmap-Timeline, Workload, Cycle-Übersicht). Der Import-Assistent gehört zu WP18.
 <strong>Tests:</strong> Filter-Bar erzeugt korrektes Filter-JSON; Inbox-Aktionen.</p>
 <hr />
 <h2 id="ch-12-arbeitspakete-welle-4">Welle 4</h2>
@@ -32541,7 +32590,7 @@ RUST_LOG=info,lineal=debug
 <strong>Tests:</strong> Signatur prüfbar, Retry-Plan, PKCE-Fehlerfälle, MCP-Call mit OAuth-Token.</p>
 <h3 id="ch-12-arbeitspakete-wp18-import-aus-linear">WP18 – Import aus Linear</h3>
 <p><strong>Spezifikation:</strong> <a href="#ch-13-import-linear">13</a> komplett.
-<strong>Eigentum:</strong> neues Crate <code>crates/lineal-import/**</code> (Orchestrator trägt es beim Merge in den Workspace ein; das WP darf das Workspace-<code>Cargo.toml</code> dafür ausnahmsweise ergänzen), <code>usecases/import.rs</code>, <code>ports/repos/import.rs</code>, <code>lineal-db/src/repos/import.rs</code>, Migrationen <code>1800</code>–<code>1899</code>, <code>graphql/import.rs</code> (Orchestrator ergänzt Root), <code>lineal-server/src/cli/import.rs</code>, <code>lineal-jobs/src/periodic/import_runner.rs</code>.
+<strong>Eigentum:</strong> neues Crate <code>crates/lineal-import/**</code> (Orchestrator trägt es beim Merge in den Workspace ein; das WP darf das Workspace-<code>Cargo.toml</code> dafür ausnahmsweise ergänzen), <code>usecases/import.rs</code>, <code>ports/repos/import.rs</code>, <code>lineal-db/src/repos/import.rs</code>, Migrationen <code>1800</code>–<code>1899</code>, <code>graphql/import.rs</code>, <code>lineal-server/src/cli/import.rs</code>, <code>lineal-jobs/src/periodic/import_runner.rs</code>, Web: <code>web/src/features/import/**</code> und <code>web/src/routes/$ws/settings/import/**</code> (Import-Assistent: Token, Plan, Fortschritt, Bericht).
 <strong>Liefert:</strong> <code>ImportSource</code>-Port mit Linear-GraphQL-Adapter (Paginierung, Rate-Limit-Steuerung über Header) und CSV-Adapter, Fake-Quelle aus JSON-Fixtures, Phasen 1–8 mit Checkpoints, <code>import_mapping</code>-Upserts, Nummernübernahme und Zähler-Setzen, Markdown-Umschreibung, Datei-Download in den Blob-Store, Dry-Run, Delta-Import mit Konflikterkennung, <code>origin = import</code> für alle Events, verschlüsselte Token-Ablage, GraphQL-Operationen und CLI.
 <strong>Tests:</strong> Abnahmekriterien 1–6 aus <a href="#ch-13-import-linear">13 §9</a> gegen die Fake-Quelle. <strong>Kein Test darf gegen das echte Linear laufen.</strong></p>
 <h2 id="ch-12-arbeitspakete-welle-5">Welle 5</h2>
@@ -32927,7 +32976,7 @@ RUST_LOG=info,lineal=debug
 </tr>
 <tr>
 <td><code>importStart(input: { runId, teams, userMapping, keyMapping, dryRun })</code></td>
-<td>Lauf starten (asynchron als Job)</td>
+<td>Lauf starten (asynchron als Job) <strong>Umsetzung:</strong> <code>importScan</code> legt den Lauf mit Status <code>scanning</code> an und kehrt sofort zurück; der Job <code>import_runner</code> (10 s) führt den Scan asynchron aus. Zusätzlicher Status <code>canceled</code> (Abbruch durch Admin, Migration 1800). Projekt- und Initiativnummern vergibt der Import über die Team-/Workspace-Zähler (<code>next_import_number</code>) statt die Linear-Nummern zu übernehmen; die Zuordnung steht in <code>import_mapping</code>.</td>
 </tr>
 <tr>
 <td><code>importPause(runId)</code>, <code>importResume(runId)</code>, <code>importCancel(runId)</code></td>
@@ -33109,7 +33158,7 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 </tr>
 <tr>
 <td><code>workspaceOverview(input: { teamIds?, includeSubTeams = true, period })</code> → <code>{ teams: [TeamMetrics], projects: ProjectHealthSummary, initiatives: [InitiativeSummary], atRisk: [IssueRef] }</code></td>
-<td>Dashboard</td>
+<td>Dashboard <strong>Umsetzung:</strong> <code>workspaceOverview</code> und <code>get_workspace_overview</code> verwenden den Default <code>includeSubTeams = true</code>; Team-Views (<a href="#ch-05-views-suche-inbox">05 §3</a>) behalten <code>false</code>.</td>
 </tr>
 <tr>
 <td><code>workload(input: { teamIds?, cycle: current \| next })</code> → <code>[{ user, perTeam: [{ team, openIssues, points }] }]</code></td>
@@ -33136,6 +33185,223 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <li>Gäste erhalten für <code>workspaceOverview</code> <code>forbidden</code>.</li>
 <li><code>get_workspace_overview</code> liefert dieselben Zahlen wie die GraphQL-Abfrage.</li>
 </ol></section>
+<section id="ch-15-umsetzungsstand" class="chapter"><div class="src">Quelle: <a href="15-umsetzungsstand.md">15-umsetzungsstand.md</a></div><h1 id="ch-15-umsetzungsstand-15-umsetzungsstand">15 – Umsetzungsstand</h1>
+<p>Dieses Kapitel beschreibt, was in der Implementierung (Rust-Workspace + <code>web/</code>) tatsächlich vorhanden ist, welche Lücken bekannt sind, wie der Server betrieben wird und welche Sicherheitsmaßnahmen gelten. Die Fachkapitel 00–14 bleiben die Spezifikation; wo die Implementierung bewusst abweicht, steht an der Stelle ein Blockzitat „Umsetzung“. Dieses Kapitel ersetzt <code>docs/dev/offene-punkte.md</code> nicht (das ist die Arbeitsliste der Pakete), fasst den bereinigten Stand aber zusammen.</p>
+<h2 id="ch-15-umsetzungsstand-1-was-implementiert-ist">1. Was implementiert ist</h2>
+<table>
+<thead>
+<tr>
+<th>Bereich</th>
+<th>Stand</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Domäne und Regeln (<code>lineal-domain</code>)</td>
+<td>IDs, Enums, Status-/Estimate-/Label-/Cycle-/SLA-Regeln, Filter, Markdown-Sanitizer, Domain-Events</td>
+</tr>
+<tr>
+<td>Use-Cases (<code>lineal-app</code>)</td>
+<td>Workspace, Teams (Sub-Teams, Vererbung, Lebenszyklus), Issues (Workflow, Relationen, Sub-Issues, Historie, Teamwechsel), Kommentare, Reaktionen, Anhänge (Upload-Flow), Labels, Cycles, Projekte, Meilensteine, Initiativen, Status-Updates, Views, Favoriten, Suche, Inbox/Notifications, Dokumente, Templates, Triage, Webhooks, Einladungen, Import, firmenweite Übersicht</td>
+</tr>
+<tr>
+<td>Persistenz (<code>lineal-db</code>)</td>
+<td>PostgreSQL ≥ 15, Migrationen <code>0001</code>–<code>1800</code>, <code>PgStore</code>/<code>PgTx</code> mit allen Repos</td>
+</tr>
+<tr>
+<td>API (<code>lineal-api</code>)</td>
+<td>GraphQL, REST (<code>/auth/*</code>, <code>/oauth/*</code>, Blob-Endpunkte), Fehlermodell, Rate-Limit, Security-Header, CSRF-Schutz</td>
+</tr>
+<tr>
+<td>MCP (<code>lineal-mcp</code>)</td>
+<td>55 kompatible Tools plus <code>get_workspace_overview</code>, Streamable HTTP, OAuth</td>
+</tr>
+<tr>
+<td>Sync (<code>lineal-sync</code>)</td>
+<td>WebSocket-Delta-Strom <code>GET /sync?since=</code>, Gruppenfilter, Token-Re-Validierung</td>
+</tr>
+<tr>
+<td>Jobs (<code>lineal-jobs</code>)</td>
+<td>Outbox-Konsumenten und periodische Jobs (siehe 3.3)</td>
+</tr>
+<tr>
+<td>Import (<code>lineal-import</code>)</td>
+<td>Linear-API-Import (Scan, Lauf, Delta), CLI</td>
+</tr>
+<tr>
+<td>Web (<code>web/</code>)</td>
+<td>Shell, Team-Issues (Liste/Board), Issue-Detail, Create-Modal, Views/Favoriten, Inbox, Suche, Planung, Dokumente, Einstellungen, Import</td>
+</tr>
+<tr>
+<td>Tests</td>
+<td>Rust-Unit-/Integrationstests mit echter Datenbank (<code>#[sqlx::test]</code>), Vitest, Playwright-E2E (<code>scripts/e2e.sh</code>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="ch-15-umsetzungsstand-2-bekannte-l-cken">2. Bekannte Lücken</h2>
+<p>Bereinigt gegenüber <code>docs/dev/offene-punkte.md</code> (erledigte Punkte entfernt):</p>
+<ul>
+<li><strong>Sync:</strong> <code>/sync/bootstrap</code> fehlt (Clients laden per GraphQL); Bulk-Inbox-Aktionen und Issue-Sharing erzeugen jetzt Events (<code>NotificationUpdated</code>/<code>NotificationArchived</code> je Notification, <code>IssueUpdated</code> mit <code>changed = ["sharedWith"]</code>); die Zustellung geteilter Issues an den Empfänger über den Sync-Strom (Gruppe <code>user:&lt;id&gt;</code>) fehlt noch; Gäste haben keine org-Gruppe (Caches für User/Labels nicht live); Tab-Leader-Wahl im Web fehlt.</li>
+<li><strong>Issues:</strong> <code>moveSubIssues</code>, Bulk-Move, <code>issueBatchUpdate</code>, Label-Merge/-Delete, Erwähnung <code>ENG-123</code> → <code>related</code>-Relation, Duplicate-Subscriber-Übernahme; der Abo-Zustand eines Issues als GraphQL-Feld. (<code>Issue.children</code>, <code>relations</code> und <code>history</code> gibt es für die Detailansicht; sie laden beim Zugriff nach und gehören nicht in Listenabfragen.)</li>
+<li><strong>Teams/Nesting:</strong> Label-Merge, Cycle-Instanzen und Projektstatus-Neuauflösung beim Nesting; <code>update_team</code> stößt die Cycle-Generierung nicht sofort an (Job holt innerhalb 1 min nach).</li>
+<li><strong>Notifications:</strong> Kommentare an Initiativen/Dokumenten/Meilensteinen/Berichten, Dokument- und View-Abos, 1-Minuten-Bündelung, <code>issueUnassignedFromYou</code>/<code>issueReopened</code>/<code>issueUnblocked</code> (Events ohne alte Werte).</li>
+<li><strong>Planung/Automationen:</strong> Snooze-Wiedervorlage bei Aktivität, Auto-Archive-Benachrichtigung, Cycles/Projekte auto-archivieren, Kapazität, <code>cycleNumberBase</code>.</li>
+<li><strong>Dokumente/Templates:</strong> Dokument-Kaskade bei Issue-/Projekt-/Team-Löschen nur teilweise, Snapshot-Bündelung, Dokument-Mentions, CRDT, Form-Templates, <code>useDefaultTemplate</code>.</li>
+<li><strong>Views/Suche:</strong> Favoriten umsortieren, View-Abos, Eigentümerwechsel, Stemming (Volltext-Konfiguration <code>simple</code>).</li>
+<li><strong>Web:</strong> Filter-Chips aus <code>filterData</code> zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (Templates/SLA/Hierarchie/Webhooks/Access/Recurring), Workspace-Settings (Members/Teams/Security/API/Limits), Account-Settings.</li>
+<li><strong>Webhooks/Auth:</strong> <code>client_credentials</code>, App-User und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (<code>UrlPolicy</code>) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.</li>
+<li><strong>Import:</strong> Linear-Feldnamen nur gegen Mock getestet; Views/Favoriten/Issue-Reaktionen/Update-Kommentare werden nicht importiert; Dry-Run ohne Downloads.</li>
+<li><strong>Rate-Limit:</strong> In-Process-Verteidigung in der Tiefe (siehe 4.4); weitere Feinheiten (u. a. Fehlversuchs-Zähler der Token-Prüfung ohne Reservierung, geteilter Überlauf-Bucket) sind als offene Punkte notiert.</li>
+</ul>
+<h2 id="ch-15-umsetzungsstand-3-betrieb">3. Betrieb</h2>
+<h3 id="ch-15-umsetzungsstand-3-1-umgebungsvariablen">3.1 Umgebungsvariablen</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td><code>postgres://lineal:lineal@localhost:5440/lineal</code></td>
+<td>PostgreSQL ≥ 15</td>
+</tr>
+<tr>
+<td><code>LINEAL_BASE_URL</code></td>
+<td><code>http://localhost:8080</code></td>
+<td>öffentliche URL (Links, Cookie-<code>Secure</code> bei <code>https://</code>, Standard-Origin für CSRF)</td>
+</tr>
+<tr>
+<td><code>LINEAL_SESSION_SECRET</code></td>
+<td>– (Pflicht, ≥ 32 Byte)</td>
+<td>signiert Blob-URLs, Consent-Nonces, verschlüsselt Import-Tokens; ohne <code>LINEAL_DEV=1</code> Pflicht, der Beispielwert wird abgelehnt</td>
+</tr>
+<tr>
+<td><code>LINEAL_DEV</code></td>
+<td>aus</td>
+<td>Entwicklungsmodus: GraphiQL, zufälliges Secret, CORS/Origin für <code>localhost</code>/<code>127.0.0.1</code></td>
+</tr>
+<tr>
+<td><code>LINEAL_BIND</code></td>
+<td><code>127.0.0.1:8080</code></td>
+<td>Adresse des HTTP-Servers</td>
+</tr>
+<tr>
+<td><code>LINEAL_BLOB_DIR</code></td>
+<td><code>./var/blobs</code></td>
+<td>Verzeichnis des lokalen Objektspeichers</td>
+</tr>
+<tr>
+<td><code>LINEAL_DB_MAX_CONNECTIONS</code></td>
+<td><code>10</code></td>
+<td>Größe des Verbindungspools</td>
+</tr>
+<tr>
+<td><code>LINEAL_ALLOWED_ORIGINS</code></td>
+<td>Origin von <code>LINEAL_BASE_URL</code></td>
+<td>Komma-Liste erlaubter Origins für Cookie-Sessions (CSRF)</td>
+</tr>
+<tr>
+<td><code>LINEAL_TRUSTED_PROXIES</code></td>
+<td>leer</td>
+<td>Komma-Liste von CIDR-Bereichen; nur von dort wird <code>X-Forwarded-For</code> ausgewertet</td>
+</tr>
+<tr>
+<td><code>LINEAL_BACKEND</code></td>
+<td><code>http://localhost:8080</code></td>
+<td>nur Web (Vite-Proxy/Preview): Adresse des Servers</td>
+</tr>
+<tr>
+<td><code>RUST_LOG</code></td>
+<td><code>info</code></td>
+<td>Log-Filter</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ch-15-umsetzungsstand-3-2-prozesse-und-ports">3.2 Prozesse und Ports</h3>
+<ul>
+<li><code>lineal migrate</code>, <code>lineal seed [--demo]</code>, <code>lineal serve</code>, <code>lineal worker</code>, <code>lineal import</code>, <code>lineal schema-export</code>.</li>
+<li><code>serve</code> und <code>worker</code> sind getrennte Prozesse und teilen sich die Datenbank; der Worker braucht keinen Port. Der Server muss mit <code>ConnectInfo</code> laufen (Client-IP für Rate-Limit); <code>lineal serve</code> tut das.</li>
+<li>Entwicklung: PostgreSQL im Container auf <code>127.0.0.1:5440</code>, Server <code>:8080</code>, Vite-Dev <code>:5173</code>. Belegte Ports über <code>LINEAL_BIND</code>/<code>LINEAL_BACKEND</code> umstellen. E2E (<code>scripts/e2e.sh</code>) nutzt die Datenbank <code>lineal_e2e</code> und freie Ports (ab 18741 bzw. 4173).</li>
+<li>Hinter einem Reverse-Proxy: <code>LINEAL_BASE_URL</code> auf die öffentliche URL, <code>LINEAL_TRUSTED_PROXIES</code> auf die Proxy-Adressen, WebSocket-Upgrade für <code>/sync</code> durchreichen.</li>
+</ul>
+<h3 id="ch-15-umsetzungsstand-3-2a-end-to-end-tests">3.2a End-to-End-Tests</h3>
+<p><code>scripts/e2e.sh</code> (nicht Teil von <code>check.sh</code>; Laufzeit ca. 1–2 Minuten) legt die Datenbank <code>lineal_e2e</code> im Container neu an, migriert, seedet (<code>lineal seed --demo</code>), legt zwei API-Keys für Bob an (frei und auf ENG beschränkt), baut das Web und startet über Playwright <code>lineal serve</code> (mit <code>LINEAL_DEV=1</code>), <code>lineal worker</code> und <code>vite preview</code> (Proxy auf den Server) auf freien Ports; Chromium läuft headless mit <code>chromiumSandbox: false</code>. Flows (<code>web/e2e/*.e2e.ts</code>): F3 Issue anlegen (Taste <code>c</code>, „Create more“, lückenlose Kennung), F5 Status-Picker <code>S</code> durch den Workflow, F12 Filter → View → Favorit, F13 Erwähnung → Inbox eines zweiten Users, F7 Teamwechsel (<code>Strg+Umschalt+M</code>, alte Kennung bleibt auflösbar), F17 MCP-Agent per HTTP (<code>list_issues</code>, <code>save_issue</code>, team-beschränkter Key), Sichtbarkeit des privaten Teams DES. Einzelne Flows: <code>scripts/e2e.sh -g F3</code>.</p>
+<h3 id="ch-15-umsetzungsstand-3-3-hintergrundjobs">3.3 Hintergrundjobs</h3>
+<p>Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in <code>outbox_delivery.attempts</code>/<code>last_error</code> und überleben Neustarts; nach <code>max_event_attempts</code> (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit <code>last_error</code>, abfragbar über <code>OutboxRepo::list_dead_letters</code>). Periodische Jobs: <code>cycles</code> (60 s), <code>update_reminders</code> (1 h), <code>snooze</code> (60 s), <code>sync_purge</code> (1 h, Sync-Log 14 Tage), <code>notification_cap</code> (5 min), <code>due_reminders</code> (5 min), <code>email_digest</code> (60 s), <code>auto_close</code>, <code>auto_archive</code> (je 5 min), <code>purge</code> (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), <code>sla</code> (60 s), <code>triage_rotation</code> (60 s), <code>import_runner</code> (10 s), Webhook-Zustellung, <code>team_purge</code> (1 h).</p>
+<h2 id="ch-15-umsetzungsstand-4-sicherheitsma-nahmen">4. Sicherheitsmaßnahmen</h2>
+<h3 id="ch-15-umsetzungsstand-4-1-authentifizierung-und-csrf">4.1 Authentifizierung und CSRF</h3>
+<ul>
+<li>Session-Cookie <code>lineal_session</code> (<code>HttpOnly</code>, <code>SameSite=Lax</code>, <code>Secure</code> bei https); API-Keys und OAuth-Tokens per <code>Authorization</code>. Tokens liegen nur als SHA-256-Hash in der Datenbank.</li>
+<li>CSRF für Cookie-Sessions: <code>POST /graphql</code> und <code>POST /auth/logout</code> verlangen einen erlaubten <code>Origin</code> (ersatzweise <code>Referer</code>) <strong>und</strong> den Header <code>X-Lineal-CSRF: 1</code>; <code>/auth/login</code>, <code>/oauth/authorize</code> (der session-gebundene Nonce ist das Token) und signierte Uploads prüfen nur den Origin. Anfragen mit <code>Authorization</code>-Header sowie <code>/mcp</code> und <code>/sync</code> (eigene Origin-Prüfung) sind ausgenommen.</li>
+<li>Einladungen: <code>POST /invite/accept</code> (JSON <code>token</code>, <code>email</code>, <code>name?</code>, <code>password</code>) nimmt eine Einladung ohne Session an, legt den User an bzw. verknüpft den Platzhalter und setzt das Session-Cookie; ungültige Tokens oder fremde E-Mails antworten einheitlich <code>404</code>; CSRF wie beim Login (nur Origin). Die Web-Seite <code>/invite/&lt;token&gt;</code> ist noch nicht gebaut.</li>
+<li>OAuth-Zustimmung nur per <code>POST</code> mit session-gebundenem Nonce, Zielhost und Warnhinweis; CSP <code>form-action 'self'</code>.</li>
+<li>Brute-Force-Schutz: fehlgeschlagene Authentifizierungen zählen je IP (20/min), beim Login zusätzlich je Paar (Account, IP) (10/15 min) und je Account gesamt (100/15 min); Zähler werden vor der Passwortprüfung atomar reserviert.</li>
+</ul>
+<h3 id="ch-15-umsetzungsstand-4-2-sync-verbindungen">4.2 Sync-Verbindungen</h3>
+<p>Das Token einer WebSocket-Verbindung wird alle 60 s und nach jeder Zustellung von User-/Team-/Organisations-Änderungen neu geprüft; widerrufene oder abgelaufene Tokens und suspendierte User beenden die Verbindung mit Close-Code 4401. Sichtbarkeit wird bei jeder Zustellung neu berechnet.</p>
+<h3 id="ch-15-umsetzungsstand-4-3-zugriff-auf-daten">4.3 Zugriff auf Daten</h3>
+<p>Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Policy (<code>visible_team_ids</code>, <code>require_*</code>, Scope); Namensauflösung, Fehlermeldungen und Aggregate verraten nichts über unsichtbare Objekte. Rich Text wird beim Speichern bereinigt, URLs nur über die Allowlist akzeptiert. API-Keys mit <code>team_ids</code> sind auf diese Teams beschränkt (<code>RequestCtx.team_scope</code>, Schnitt in <code>visible_team_ids</code>; Teams außerhalb verhalten sich wie unsichtbare: <code>not_found</code>); eine leere Liste bedeutet „kein Team“, <code>NULL</code> keine Beschränkung. Workspace-weite Admin-Aktionen schränkt der Team-Scope nicht ein. Die Issue-Historie (<code>App::issue_history</code>, auch für GraphQL <code>Issue.history</code>) entfernt Relationsänderungen zu unsichtbaren Issues und setzt Verweise (<code>teamId</code>, <code>parentId</code>, <code>projectId</code>, <code>cycleId</code>, <code>projectMilestoneId</code>) auf unsichtbare Ziele auf <code>null</code>. Die Nachladefelder <code>Issue.children/relations/history</code> sind pro Request auf 10 Aufrufe begrenzt (sonst <code>invalid_request</code>, „only available in the detail view“) und in der Komplexität hoch gewichtet (<code>history</code> Faktor 100, <code>children</code> als Liste mit 50).</p>
+<h3 id="ch-15-umsetzungsstand-4-4-rate-limit-und-client-ip">4.4 Rate-Limit und Client-IP</h3>
+<ul>
+<li>Design: Stufe 1 begrenzt je Client-IP (IPv4 je Adresse, IPv6 je /64) <strong>vor</strong> dem Token-Lookup (Anfragen ohne Zugangsdaten niedrig, mit Zugangsdaten höher), Stufe 2 je User/Token nach dem Lookup (Requests und GraphQL-Komplexität). Bucket-Maps sind begrenzt (200 000 Schlüssel); bei voller Map teilen sich neue Schlüssel einen Überlauf-Bucket mit einem Zehntel des Limits, aktive Buckets werden nie verdrängt.</li>
+<li><code>X-Forwarded-For</code> zählt nur, wenn die Peer-IP in <code>LINEAL_TRUSTED_PROXIES</code> liegt: alle Header werden zu einer Liste zusammengeführt, jeder Eintrag muss eine reine IP sein (sonst 400), von rechts werden vertrauenswürdige Proxys abgezogen. <code>Forwarded</code> (RFC 7239) wird nicht ausgewertet.</li>
+<li><strong>Einordnung:</strong> Das In-Process-Rate-Limit ist Verteidigung in der Tiefe. Produktiv gehört ein Edge-Rate-Limit (Reverse-Proxy/WAF) davor. Das Restrisiko „geteilter Überlauf unter Massen-Spoofing“ ist bewusst akzeptiert.</li>
+</ul>
+<h3 id="ch-15-umsetzungsstand-4-5-dateien-und-l-schen">4.5 Dateien und Löschen</h3>
+<p>Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; <code>BlobStore::delete</code> entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).</p>
+<h3 id="ch-15-umsetzungsstand-4-6-lieferkette">4.6 Lieferkette</h3>
+<p><code>scripts/check.sh</code> führt (wenn installiert) <code>cargo deny check advisories bans licenses</code> aus (<code>deny.toml</code>: nur permissive Lizenzen, keine unbekannten Registries) und <code>npm audit --omit=dev --audit-level=high</code> für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). <strong>Begründete Ausnahme:</strong> <code>npm audit</code> meldet für Dev-Werkzeuge hohe Funde in der Kette <code>@graphql-codegen/cli</code> → <code>graphql-tools</code> → <code>globby</code>/<code>micromatch</code> → <code>braces</code> (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte <code>braces</code>-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn <code>@graphql-codegen/cli</code> oder <code>braces</code> aktualisiert werden.</p>
+<h2 id="ch-15-umsetzungsstand-5-entscheidungen-bei-widerspr-chen-zwischen-kapiteln">5. Entscheidungen bei Widersprüchen zwischen Kapiteln</h2>
+<table>
+<thead>
+<tr>
+<th>Stelle</th>
+<th>Entscheidung</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#ch-04-planung">04</a> A10</td>
+<td>Lead-Team-Wechsel vergibt neue Projektnummer, alte Kennung als Alias</td>
+</tr>
+<tr>
+<td><a href="#ch-03-issues-workflow">03</a> §6.3/§7.2 vs. <a href="#ch-07-mcp-server">07</a></td>
+<td>Kommentar-Löschregeln wie 03; Größenlimit 2 GiB exklusiv → <code>limit_exceeded</code>; <code>finalize</code>-Fehler <code>invalid_request</code> mit <code>reason</code></td>
+</tr>
+<tr>
+<td><a href="#ch-05-views-suche-inbox">05</a> §4.4</td>
+<td>Workspace-Views nur mit <code>ManageWorkspaceViews</code>, Gäste nur persönliche Views</td>
+</tr>
+<tr>
+<td><a href="#ch-14-firmenweite-sicht">14</a> §4</td>
+<td><code>includeSubTeams</code>-Default <code>true</code> für Übersicht, <code>false</code> für Team-Views</td>
+</tr>
+<tr>
+<td><a href="#ch-06-dokumente-templates">06</a> §1.4/§2.4</td>
+<td>fünf Fremdschlüssel (Cycle-Dokument mit <code>teamId</code>); übersprungene Template-Referenzen als <code>warnings</code></td>
+</tr>
+<tr>
+<td><a href="#ch-01-domaenenmodell">01</a> §2.6, <a href="#ch-07-mcp-server">07</a> §3.14</td>
+<td><code>currentUserId</code> gespeichert, vom Job <code>triage_rotation</code> gepflegt</td>
+</tr>
+<tr>
+<td><a href="#ch-09-api-events">09</a></td>
+<td>Sync-Pfad <code>GET /sync?since=</code>, <code>resetRequired</code> → Close 4001, kein <code>/sync/bootstrap</code></td>
+</tr>
+<tr>
+<td><a href="#ch-13-import-linear">13</a></td>
+<td>Scan asynchron über Job, Status <code>canceled</code>, Nummern über Import-Zähler</td>
+</tr>
+<tr>
+<td><a href="#ch-01-domaenenmodell">01</a>/<a href="#ch-11-implementierungsarchitektur">11</a></td>
+<td><code>lineal-sync</code> nutzt <code>sqlx</code> für <code>LISTEN/NOTIFY</code></td>
+</tr>
+</tbody>
+</table></section>
 </main>
 <script src="assets/mermaid.min.js"></script>
 <script>mermaid.initialize({startOnLoad:true,securityLevel:'strict',theme:'neutral',er:{useMaxWidth:true},flowchart:{useMaxWidth:true}});</script>

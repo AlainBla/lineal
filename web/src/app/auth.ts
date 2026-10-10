@@ -140,7 +140,11 @@ export async function login(
     res = await fetchImpl("/auth/login", {
       method: "POST",
       credentials: "same-origin",
-      headers: { "content-type": "application/json", accept: "application/json" },
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "x-lineal-csrf": "1",
+      },
       body: JSON.stringify({ email, password }),
     });
   } catch {
@@ -155,7 +159,11 @@ export async function login(
 
 export async function logout(fetchImpl: typeof fetch = fetch): Promise<void> {
   try {
-    await fetchImpl("/auth/logout", { method: "POST", credentials: "same-origin" });
+    await fetchImpl("/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "x-lineal-csrf": "1" },
+    });
   } catch {
     /* Cookie läuft ohnehin ab; Client-Zustand wird trotzdem verworfen. */
   }

@@ -12,3 +12,5 @@ var/
 .claude/
 web/node_modules/
 .env.local
+web/test-results/
+web/playwright-report/

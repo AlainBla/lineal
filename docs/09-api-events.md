@@ -843,6 +843,8 @@ Server-Regeln:
 1. Nach Verbindungsaufbau liefert der Server alle SyncActions mit `id > lastSyncId` aus dem Sync-Log (gefiltert nach Gruppen), danach live.
 2. Jede Action wird nur an Verbindungen geschickt, deren Gruppenmenge sich mit `syncGroups` überschneidet.
 3. Aufbewahrung des Sync-Logs: Default 14 Tage. Ist `lastSyncId` älter als der älteste Log-Eintrag, antwortet der Server mit `{"type":"resetRequired"}` → Client bootstrapt neu.
+
+> **Umsetzung:** Der Stream läuft unter `GET /sync?since=<lastSyncId>` (WebSocket; nach `{"type":"resetRequired"}` Close-Code 4001, bei nicht mehr gültigem Token Close-Code 4401). `/sync/bootstrap` ist **nicht** implementiert: der Client lädt den Stand über GraphQL und setzt danach `since` auf den `lastSyncId` des Servers. Aufbewahrung 14 Tage (Job `sync_purge`).
 4. Pro Workspace ein geordneter Strom (Fan-out-Knoten abonnieren z. B. einen Pub/Sub-Kanal `sync:<orgId>`); Lücken in `id` (durch Gruppenfilter) sind normal, Clients prüfen nur Monotonie.
 
 ### 5.4 Optimistische Mutationen

@@ -4,7 +4,9 @@ use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use lineal_app::ports::repos::outbox::{NewSyncAction, SyncActionRow, SyncHead, SyncModelState};
+use lineal_app::ports::repos::outbox::{
+    DeadLetter, NewSyncAction, SyncActionRow, SyncHead, SyncModelState,
+};
 use lineal_app::ports::repos::{NewEvent, OutboxRepo, StoredEvent};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::events::DomainEvent;
@@ -68,7 +70,8 @@ impl OutboxRepo for PgTx {
              FROM outbox_event e \
              WHERE e.processed_at IS NULL \
                AND NOT EXISTS (SELECT 1 FROM outbox_delivery d \
-                               WHERE d.event_id = e.event_id AND d.consumer = $1) \
+                               WHERE d.event_id = e.event_id AND d.consumer = $1 \
+                                 AND d.delivered_at IS NOT NULL) \
              ORDER BY e.sync_id \
              LIMIT $2 \
              FOR UPDATE OF e SKIP LOCKED",
@@ -88,7 +91,10 @@ impl OutboxRepo for PgTx {
         let uuids: Vec<Uuid> = ids.iter().map(|i| i.0).collect();
         sqlx::query(
             "INSERT INTO outbox_delivery (consumer, event_id) \
-             SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING",
+             SELECT $1, unnest($2::uuid[]) \
+             ON CONFLICT (consumer, event_id) DO UPDATE \
+               SET delivered_at = now(), last_error = NULL \
+               WHERE outbox_delivery.delivered_at IS NULL",
         )
         .bind(consumer)
         .bind(uuids)
@@ -96,6 +102,64 @@ impl OutboxRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn record_failure(
+        &mut self,
+        consumer: &str,
+        event: EventId,
+        error: &str,
+    ) -> AppResult<i32> {
+        let error: String = error.chars().take(1000).collect();
+        let attempts: Option<i32> = sqlx::query_scalar(
+            "INSERT INTO outbox_delivery (consumer, event_id, delivered_at, attempts, last_error) \
+             VALUES ($1, $2, NULL, 1, $3) \
+             ON CONFLICT (consumer, event_id) DO UPDATE \
+               SET attempts = outbox_delivery.attempts + 1, last_error = $3 \
+               WHERE outbox_delivery.delivered_at IS NULL \
+             RETURNING attempts",
+        )
+        .bind(consumer)
+        .bind(event.0)
+        .bind(error)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(attempts.unwrap_or(0))
+    }
+
+    async fn mark_dead_letter(&mut self, consumer: &str, event: EventId) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE outbox_delivery SET delivered_at = now() \
+             WHERE consumer = $1 AND event_id = $2 AND delivered_at IS NULL",
+        )
+        .bind(consumer)
+        .bind(event.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_dead_letters(&mut self, limit: i64) -> AppResult<Vec<DeadLetter>> {
+        let rows: Vec<(String, Uuid, i32, String)> = sqlx::query_as(
+            "SELECT consumer, event_id, attempts, last_error FROM outbox_delivery \
+             WHERE delivered_at IS NOT NULL AND last_error IS NOT NULL \
+             ORDER BY delivered_at DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(consumer, id, attempts, last_error)| DeadLetter {
+                consumer,
+                event_id: EventId(id),
+                attempts,
+                last_error,
+            })
+            .collect())
     }
 
     async fn mark_processed(&mut self, consumers: &[String]) -> AppResult<u64> {
@@ -109,7 +173,8 @@ impl OutboxRepo for PgTx {
             "UPDATE outbox_event e SET processed_at = now() \
              WHERE e.processed_at IS NULL \
                AND (SELECT count(*) FROM outbox_delivery d \
-                    WHERE d.event_id = e.event_id AND d.consumer = ANY($1)) = $2",
+                    WHERE d.event_id = e.event_id AND d.consumer = ANY($1) \
+                      AND d.delivered_at IS NOT NULL) = $2",
         )
         .bind(&names)
         .bind(names.len() as i64)

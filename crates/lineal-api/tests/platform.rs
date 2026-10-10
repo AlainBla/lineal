@@ -36,6 +36,7 @@ fn principal(scopes: Scopes) -> Principal {
             id: UserId::new_v7(),
         },
         scopes,
+        team_scope: None,
     }
 }
 
@@ -81,6 +82,15 @@ fn gql(auth: Option<(&str, &str)>, query: &str) -> Request<Body> {
     }
     b.body(Body::from(json!({ "query": query }).to_string()))
         .unwrap()
+}
+
+/// Browser-typische Header einer Same-Origin-Anfrage der Web-App (CSRF-Schutz, Basis-URL
+/// `http://localhost:8080` ist der Default der Test-App).
+fn same_origin(mut req: Request<Body>) -> Request<Body> {
+    let h = req.headers_mut();
+    h.insert("origin", "http://localhost:8080".parse().unwrap());
+    h.insert("x-lineal-csrf", "1".parse().unwrap());
+    req
 }
 
 fn api(app: Arc<App>) -> Router {
@@ -169,7 +179,7 @@ async fn unauthenticated_graphql_is_401_with_code() {
         Some(("authorization", "lin_api_unknown")),
         Some(("cookie", "lineal_session=bogus")),
     ] {
-        let r = send(&router, gql(auth, "{ __typename }")).await;
+        let r = send(&router, same_origin(gql(auth, "{ __typename }"))).await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{auth:?}");
         let v = r.json();
         assert_eq!(v["errors"][0]["extensions"]["code"], "unauthenticated");
@@ -183,6 +193,64 @@ async fn unauthenticated_graphql_is_401_with_code() {
 }
 
 #[tokio::test]
+async fn csrf_protects_cookie_sessions_but_not_api_keys() {
+    let router = api(app_with_keys());
+    let cookie = Some(("cookie", "lineal_session=session-token"));
+    let q = "{ __typename }";
+    // gleiche Origin + Header: ok
+    let r = send(&router, same_origin(gql(cookie, q))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    // fremde Origin: 403
+    let mut cross = same_origin(gql(cookie, q));
+    cross
+        .headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    let r = send(&router, cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+    assert_eq!(r.json()["error"], "forbidden");
+    // Origin ok, aber ohne CSRF-Header: 403
+    let mut no_header = same_origin(gql(cookie, q));
+    no_header.headers_mut().remove("x-lineal-csrf");
+    assert_eq!(send(&router, no_header).await.status, StatusCode::FORBIDDEN);
+    // Header, aber ohne Origin/Referer: 403
+    let mut no_origin = same_origin(gql(cookie, q));
+    no_origin.headers_mut().remove("origin");
+    assert_eq!(send(&router, no_origin).await.status, StatusCode::FORBIDDEN);
+    // Referer ersetzt Origin
+    let mut referer = same_origin(gql(cookie, q));
+    referer.headers_mut().remove("origin");
+    referer.headers_mut().insert(
+        "referer",
+        "http://localhost:8080/acme/inbox".parse().unwrap(),
+    );
+    assert_eq!(send(&router, referer).await.status, StatusCode::OK);
+    // API-Key ohne Header und ohne Origin: ok
+    let r = send(&router, gql(Some(("authorization", KEY_RW)), q)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    // Logout per Cookie braucht ebenfalls Origin + Header
+    let logout = |same: bool| {
+        let mut r = Request::builder()
+            .method(Method::POST)
+            .uri("/auth/logout")
+            .header("cookie", "lineal_session=session-token")
+            .body(Body::empty())
+            .unwrap();
+        if same {
+            r = same_origin(r);
+        }
+        r
+    };
+    assert_eq!(
+        send(&router, logout(false)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        send(&router, logout(true)).await.status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn token_sources_all_authenticate() {
     let router = api(app_with_keys());
     for auth in [
@@ -193,7 +261,8 @@ async fn token_sources_all_authenticate() {
             "theme=dark; lineal_session=session-token".to_owned(),
         ),
     ] {
-        let r = send(&router, gql(Some((auth.0, &auth.1)), "{ __typename }")).await;
+        let req = same_origin(gql(Some((auth.0, &auth.1)), "{ __typename }"));
+        let r = send(&router, req).await;
         assert_eq!(r.status, StatusCode::OK, "{auth:?}: {}", r.body);
         assert_eq!(r.json()["data"]["__typename"], "Query");
         assert!(r.headers.contains_key("x-ratelimit-requests-limit"));
@@ -294,10 +363,198 @@ fn limited_router(app: Arc<App>, requests: f64, complexity: f64) -> Router {
     )
 }
 
+fn from_peer(peer: &str, forwarded: &str) -> Request<Body> {
+    let mut req = Request::get("/ping")
+        .header("x-forwarded-for", forwarded)
+        .body(Body::empty())
+        .unwrap();
+    let addr: std::net::SocketAddr = format!("{peer}:4000").parse().unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(addr));
+    req
+}
+
+#[tokio::test]
+async fn forged_forwarded_for_from_untrusted_peer_does_not_evade_the_rate_limit() {
+    let router = limited_router(app_with_keys(), 2.0, 100.0);
+    // Jeder Request behauptet eine andere Client-IP, kommt aber vom selben Peer.
+    for (i, expected) in [
+        StatusCode::OK,
+        StatusCode::OK,
+        StatusCode::TOO_MANY_REQUESTS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = send(&router, from_peer("203.0.113.9", &format!("1.2.3.{i}"))).await;
+        assert_eq!(r.status, expected, "request {i}");
+    }
+}
+
+#[tokio::test]
+async fn forwarded_for_is_honoured_only_behind_a_trusted_proxy() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous = ClassLimits {
+        requests: 1.0,
+        complexity: 100.0,
+    };
+    cfg.trusted_proxies = lineal_api::client_ip::parse_list(&["10.0.0.0/8".to_owned()]);
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    // Zwei verschiedene Clients hinter dem Proxy haben getrennte Buckets ...
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "198.51.100.1"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "198.51.100.2"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // ... derselbe Client wird begrenzt, auch wenn er vorn einen gefälschten Eintrag anhängt.
+    assert_eq!(
+        send(&router, from_peer("10.0.0.5", "6.6.6.6, 198.51.100.1"))
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
+async fn invalid_forwarded_for_behind_a_trusted_proxy_is_rejected_not_pooled() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.trusted_proxies = lineal_api::client_ip::parse_list(&["10.0.0.0/8".to_owned()]);
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    // Der kaputte Header kostet nur diesen Request (400); er belastet keinen Bucket anderer.
+    for _ in 0..3 {
+        let r = send(&router, from_peer("10.0.0.5", "6.6.6.6, unknown")).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    }
+    let ok = send(&router, from_peer("10.0.0.5", "198.51.100.1")).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    assert_eq!(ok.headers["x-ratelimit-requests-remaining"], "599");
+}
+
+#[tokio::test]
+async fn requests_without_peer_address_never_share_a_global_bucket() {
+    let ping = || Request::get("/ping").body(Body::empty()).unwrap();
+    let make = |require_peer: bool| {
+        let app = app_with_keys();
+        let mut cfg = PlatformConfig::new(&app, false);
+        cfg.require_peer = require_peer;
+        cfg.rate.anonymous = ClassLimits {
+            requests: 1.0,
+            complexity: 100.0,
+        };
+        apply_with(
+            Router::new().route("/ping", get(|| async { "pong" })),
+            app,
+            cfg,
+        )
+    };
+    // Produktiv (require_peer): ohne Peer abgelehnt statt in einem "unknown"-Bucket gedrosselt.
+    let strict = make(true);
+    for _ in 0..2 {
+        assert_eq!(
+            send(&strict, ping()).await.status,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+    // Tests: ohne Peer wird nicht anonym begrenzt (kein gemeinsamer Bucket).
+    let lax = make(false);
+    for _ in 0..3 {
+        assert_eq!(send(&lax, ping()).await.status, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn ipv6_privacy_addresses_of_one_prefix_share_the_rate_limit() {
+    let router = limited_router(app_with_keys(), 2.0, 100.0);
+    let from6 = |ip: &str| {
+        let mut req = Request::get("/ping").body(Body::empty()).unwrap();
+        let addr: std::net::SocketAddr = format!("[{ip}]:4000").parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+        req
+    };
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2::1")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2::2")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&router, from6("2001:db8:1:2:aaaa::3")).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Anderes /64: eigener Bucket.
+    assert_eq!(
+        send(&router, from6("2001:db8:1:9::1")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn switching_tokens_does_not_evade_the_ip_limit() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.ip_credentialed = 3.0;
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let guess = |peer: &str, n: usize| {
+        let mut req = from_peer(peer, "");
+        req.headers_mut().insert(
+            "authorization",
+            format!("lin_api_guess{n}").parse().unwrap(),
+        );
+        req
+    };
+    // Jeder Versuch mit einem anderen erfundenen Token kostet IP-Kontingent, bevor die
+    // Datenbank gefragt wird; nach drei Versuchen ist Schluss.
+    for n in 0..3 {
+        assert_eq!(
+            send(&router, guess("203.0.113.5", n)).await.status,
+            StatusCode::OK
+        );
+    }
+    let r = send(&router, guess("203.0.113.5", 3)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    // Auch ein gültiges Token von dieser IP wird jetzt gedrosselt, eine andere IP nicht.
+    let mut valid = from_peer("203.0.113.5", "");
+    valid
+        .headers_mut()
+        .insert("authorization", KEY_RW.parse().unwrap());
+    assert_eq!(
+        send(&router, valid).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        send(&router, guess("203.0.113.6", 0)).await.status,
+        StatusCode::OK
+    );
+}
+
 #[tokio::test]
 async fn request_rate_limit_returns_429_with_headers() {
     let router = limited_router(app_with_keys(), 3.0, 100.0);
-    let ping = || Request::get("/ping").body(Body::empty()).unwrap();
+    let ping = || from_peer("203.0.113.5", "");
     for remaining in [2, 1, 0] {
         let r = send(&router, ping()).await;
         assert_eq!(r.status, StatusCode::OK);
@@ -612,4 +869,44 @@ async fn upload_checks_content_type_and_size() {
     let r = send(&router, put(&path_of(&url), "text/html", vec![0])).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json()["error"], "invalid_request");
+}
+
+// ---------------------------------------------------------------- Brute-Force
+
+#[tokio::test]
+async fn failed_token_attempts_block_the_ip_independent_of_the_request_bucket() {
+    let router = api(app_with_keys());
+    let bad = |peer: &str, n: usize| {
+        let mut req = from_peer(peer, "");
+        *req.uri_mut() = "/graphql".parse().unwrap();
+        *req.method_mut() = Method::POST;
+        req.headers_mut()
+            .insert("content-type", "application/json".parse().unwrap());
+        req.headers_mut().insert(
+            "authorization",
+            format!("lin_api_guess{n}").parse().unwrap(),
+        );
+        *req.body_mut() = Body::from(r#"{"query":"{ __typename }"}"#);
+        req
+    };
+    // 20 Fehlversuche mit jeweils anderem Token: 401, danach 429 (auch für ein gültiges Token).
+    for n in 0..20 {
+        let r = send(&router, bad("203.0.113.50", n)).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "versuch {n}");
+    }
+    let r = send(&router, bad("203.0.113.50", 99)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    let mut valid = bad("203.0.113.50", 0);
+    valid
+        .headers_mut()
+        .insert("authorization", KEY_RW.parse().unwrap());
+    assert_eq!(
+        send(&router, valid).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Eine andere IP ist nicht betroffen.
+    assert_eq!(
+        send(&router, bad("203.0.113.51", 0)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
 }

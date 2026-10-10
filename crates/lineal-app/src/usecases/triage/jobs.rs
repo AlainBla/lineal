@@ -413,6 +413,7 @@ impl App {
                 return Ok(total);
             }
             let full = ids.len() as i64 == BATCH;
+            let mut keys = Vec::new();
             for id in ids {
                 let Some(issue) = tx.issues().get(id, true).await? else {
                     continue;
@@ -420,11 +421,15 @@ impl App {
                 if !issue.trashed || issue.trashed_at.is_none_or(|t| t > cutoff) {
                     continue;
                 }
+                keys.extend(tx.attachments().storage_keys_for_issue(id).await?);
                 tx.triage().delete_issue_leftovers(id).await?;
                 tx.issues().delete(id).await?;
                 total += 1;
             }
+            // Blobs erst nach dem Commit löschen und nur, wenn nichts mehr auf sie verweist.
+            let orphans = tx.attachments().unreferenced_storage_keys(&keys).await?;
             tx.commit().await?;
+            self.delete_blobs(&orphans).await;
             if !full {
                 return Ok(total);
             }

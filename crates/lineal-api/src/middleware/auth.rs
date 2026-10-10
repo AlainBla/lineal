@@ -117,29 +117,57 @@ pub fn clear_session_cookie(secure: bool) -> String {
     session_cookie("", 0, secure)
 }
 
+/// 429 für gesperrte Fehlversuchs-Zähler (im Format passend zum Pfad).
+pub(crate) fn blocked_response(path: &str, retry_after_secs: u64) -> Response {
+    let err = AppError::rate_limited("Too many failed authentication attempts.")
+        .with_details(serde_json::json!({ "retryAfter": retry_after_secs }));
+    if path == "/graphql" {
+        crate::error::graphql_error_response(&err)
+    } else {
+        ApiError(err).into_response()
+    }
+}
+
 pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next) -> Response {
+    let now_ms = p.app.clock.now().timestamp_millis();
+    let ip_key = crate::rate_limit::client_ip(&req);
     let state = match extract_token(req.headers()) {
         None => AuthState::Anonymous,
-        Some((token, class)) => match lookup_principal(&p.app, &token).await {
-            Ok(Some(principal)) => {
-                let request_id = req
-                    .extensions()
-                    .get::<RequestId>()
-                    .map(|r| r.0.clone())
-                    .unwrap_or_default();
-                AuthState::Authenticated {
-                    ctx: RequestCtx {
-                        org_id: principal.org_id,
-                        actor: principal.actor,
-                        request_id,
-                        scopes: principal.scopes,
-                    },
-                    class,
-                }
+        Some((token, class)) => {
+            // Brute-Force-Schutz: zu viele Fehlversuche dieser IP sperren schon den Lookup.
+            if let Some(wait) = ip_key
+                .as_deref()
+                .and_then(|ip| p.fails.ip_blocked(ip, now_ms))
+            {
+                return blocked_response(req.uri().path(), wait);
             }
-            Ok(None) => AuthState::Invalid,
-            Err(e) => return ApiError(e).into_response(),
-        },
+            match lookup_principal(&p.app, &token).await {
+                Ok(Some(principal)) => {
+                    let request_id = req
+                        .extensions()
+                        .get::<RequestId>()
+                        .map(|r| r.0.clone())
+                        .unwrap_or_default();
+                    AuthState::Authenticated {
+                        ctx: RequestCtx {
+                            org_id: principal.org_id,
+                            actor: principal.actor,
+                            request_id,
+                            scopes: principal.scopes,
+                            team_scope: principal.team_scope,
+                        },
+                        class,
+                    }
+                }
+                Ok(None) => {
+                    if let Some(ip) = &ip_key {
+                        p.fails.record_ip(ip, now_ms);
+                    }
+                    AuthState::Invalid
+                }
+                Err(e) => return ApiError(e).into_response(),
+            }
+        }
     };
     req.extensions_mut().insert(state);
     next.run(req).await

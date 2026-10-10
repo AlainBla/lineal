@@ -2,6 +2,7 @@
 //! CORS (nur dev), Auth zu `RequestCtx`, Rate-Limit. Reihenfolge von außen nach innen.
 
 pub mod auth;
+pub mod csrf;
 pub mod gql;
 pub mod request_id;
 
@@ -20,6 +21,13 @@ pub struct PlatformConfig {
     pub security: SecurityConfig,
     /// Dev: erlaubte Ursprünge des Vite-Dev-Servers. Leer = kein CORS.
     pub cors_origins: Vec<String>,
+    /// Erlaubte Origins für Cookie-Sessions (CSRF, [`csrf`]).
+    pub allowed_origins: Vec<String>,
+    /// Vertrauenswürdige Proxys für `X-Forwarded-For` ([`crate::client_ip`]).
+    pub trusted_proxies: Vec<crate::client_ip::Cidr>,
+    /// Anonyme Requests ohne Peer-Adresse (`ConnectInfo`) ablehnen statt sie unbegrenzt
+    /// durchzulassen. Der Server schaltet das ein; Router-Tests (`oneshot`) haben keinen Peer.
+    pub require_peer: bool,
 }
 
 impl PlatformConfig {
@@ -31,6 +39,12 @@ impl PlatformConfig {
                 hsts: app.config.base_url.starts_with("https://"),
                 dev,
             },
+            allowed_origins: csrf::effective_origins(
+                &app.config.allowed_origins,
+                &app.config.base_url,
+            ),
+            require_peer: false,
+            trusted_proxies: crate::client_ip::parse_list(&app.config.trusted_proxies),
             cors_origins: if dev {
                 vec![
                     "http://localhost:5173".into(),
@@ -49,6 +63,8 @@ pub struct Platform {
     pub app: Arc<App>,
     pub limiter: Arc<RateLimiter>,
     pub cfg: Arc<PlatformConfig>,
+    /// Brute-Force-Zähler für fehlgeschlagene Authentifizierungen.
+    pub fails: Arc<crate::auth_failures::AuthFailures>,
 }
 
 fn cors(origins: &[String]) -> CorsLayer {
@@ -83,6 +99,7 @@ fn cors(origins: &[String]) -> CorsLayer {
             header::CONTENT_TYPE,
             header::ACCEPT,
             HeaderName::from_static("x-request-id"),
+            HeaderName::from_static(csrf::CSRF_HEADER),
         ])
         .expose_headers(exposed)
 }
@@ -99,18 +116,29 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
         app: app.clone(),
         limiter: Arc::new(RateLimiter::default()),
         cfg: Arc::new(cfg),
+        fails: Arc::new(crate::auth_failures::AuthFailures::default()),
     };
+    let fails = platform.fails.clone();
     let security = platform.cfg.security;
     let cors_origins = platform.cfg.cors_origins.clone();
+    let trusted = Arc::new(platform.cfg.trusted_proxies.clone());
     // `layer` umhüllt: zuletzt hinzugefügt = äußerste Schicht.
     let mut router = router
         .layer(Extension(app))
+        .layer(Extension(fails))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
-        .layer(from_fn_with_state(platform, auth::middleware));
+        .layer(from_fn_with_state(platform.clone(), auth::middleware))
+        // IP-Limit vor dem Token-Lookup (jeder Request kostet erst IP-Kontingent).
+        .layer(from_fn_with_state(
+            platform.clone(),
+            rate_limit::ip_middleware,
+        ))
+        .layer(from_fn_with_state(platform, csrf::middleware));
     if !cors_origins.is_empty() {
         router = router.layer(cors(&cors_origins));
     }
     router
         .layer(from_fn_with_state(security, security_headers::middleware))
         .layer(from_fn(request_id::middleware))
+        .layer(from_fn_with_state(trusted, crate::client_ip::middleware))
 }

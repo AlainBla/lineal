@@ -6,6 +6,15 @@ use lineal_server::build_router;
 use lineal_testkit::fake_app;
 use tower::ServiceExt;
 
+/// `lineal serve` liefert die Peer-Adresse (`ConnectInfo`); der Router verlangt sie.
+#[allow(clippy::unwrap_used)]
+fn with_peer(mut req: Request<Body>) -> Request<Body> {
+    let peer: std::net::SocketAddr = "203.0.113.7:4000".parse().unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(peer));
+    req
+}
+
 #[tokio::test]
 async fn every_documented_path_is_routed() {
     let cases = [
@@ -50,11 +59,13 @@ async fn every_documented_path_is_routed() {
         (Method::GET, "/readyz", StatusCode::OK),
     ];
     for (method, uri, expected) in cases {
-        let req = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
+        let req = with_peer(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        );
         let res = build_router(fake_app(), false).oneshot(req).await.unwrap();
         assert_eq!(res.status(), expected, "{uri}");
     }
@@ -63,11 +74,13 @@ async fn every_documented_path_is_routed() {
 #[tokio::test]
 async fn platform_middleware_covers_mcp_and_sync() {
     for uri in ["/mcp", "/sync"] {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
+        let req = with_peer(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        );
         let res = build_router(fake_app(), false).oneshot(req).await.unwrap();
         let h = res.headers();
         assert!(
@@ -81,4 +94,14 @@ async fn platform_middleware_covers_mcp_and_sync() {
             "{uri}: Rate-Limit-Header fehlen"
         );
     }
+}
+
+#[tokio::test]
+async fn requests_without_peer_address_are_refused() {
+    let req = Request::builder()
+        .uri("/auth/me")
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(fake_app(), false).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

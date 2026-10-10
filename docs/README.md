@@ -27,6 +27,7 @@ Grundlage (Stand 2026-10-10):
 | 12 | [Arbeitspakete](12-arbeitspakete.md) | Wellen, Abhängigkeiten, Datei-Eigentum, DoD je Paket |
 | 13 | [Import aus Linear](13-import-linear.md) | Migration eines Linear-Workspaces: Mapping, Phasen, Delta-Import, Sicherheit |
 | 14 | [Firmenweite Sicht](14-firmenweite-sicht.md) | Teamübergreifende Issues, Dashboard, Roadmap, Auslastung |
+| 15 | [Umsetzungsstand](15-umsetzungsstand.md) | Was implementiert ist, bekannte Lücken, Betrieb (Env, Jobs, Ports), Sicherheitsmaßnahmen, Entscheidungen bei Widersprüchen |
 
 Eine gerenderte Übersicht mit allen Diagrammen liegt in [index.html](index.html).
 

@@ -27,6 +27,7 @@ CHAPTERS = [
     ("12-arbeitspakete.md", "12 Arbeitspakete"),
     ("13-import-linear.md", "13 Import aus Linear"),
     ("14-firmenweite-sicht.md", "14 Firmenweite Sicht"),
+    ("15-umsetzungsstand.md", "15 Umsetzungsstand"),
 ]
 MERMAID = re.compile(r"```mermaid\n(.*?)```", re.S)
 

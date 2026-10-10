@@ -2,7 +2,7 @@
 //! `issueUpdate`, `issueArchive`, `issueUnarchive`, `issueDelete`, `issueRelationCreate`.
 
 use super::org::gql_err;
-use crate::context::{app, request_ctx};
+use crate::context::{app, charge_detail_field, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::issue::HistorySource;
@@ -14,9 +14,10 @@ use lineal_app::usecases::issue::{
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::RelationType;
 
-/// `Issue`.
+/// `Issue`. `children`, `relations` und `history` sind eigene Felder (Detailansicht); sie laden
+/// beim Zugriff mit den Rechten des Aufrufers nach, in Listen also bitte nicht anfordern.
 #[derive(SimpleObject)]
-#[graphql(name = "Issue")]
+#[graphql(name = "Issue", complex)]
 pub struct IssueGql {
     pub id: String,
     pub identifier: String,
@@ -80,6 +81,123 @@ impl From<IssueView> for IssueGql {
             created_at: i.created_at.to_rfc3339(),
             updated_at: i.updated_at.to_rfc3339(),
         }
+    }
+}
+
+/// Verwandtes Issue (Kennung und Titel).
+#[derive(SimpleObject)]
+pub struct RelatedIssue {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+}
+
+impl From<lineal_app::usecases::issue::RelatedIssue> for RelatedIssue {
+    fn from(r: lineal_app::usecases::issue::RelatedIssue) -> Self {
+        Self {
+            id: r.uuid.to_string(),
+            identifier: r.identifier,
+            title: r.title,
+        }
+    }
+}
+
+/// Relationen eines Issues aus dessen Sicht (nur für den Aufrufer sichtbare Gegenstücke).
+#[derive(SimpleObject)]
+pub struct IssueRelations {
+    pub blocks: Vec<RelatedIssue>,
+    pub blocked_by: Vec<RelatedIssue>,
+    pub related_to: Vec<RelatedIssue>,
+    pub duplicate_of: Option<RelatedIssue>,
+    pub duplicates: Vec<RelatedIssue>,
+}
+
+/// Ein Eintrag der Aktivitätshistorie.
+#[derive(SimpleObject)]
+pub struct IssueHistoryEntry {
+    pub id: String,
+    pub actor_id: Option<String>,
+    pub source: String,
+    /// `{ "<feld>": { "from": …, "to": … } }` (camelCase-Feldnamen).
+    pub changes: async_graphql::types::Json<serde_json::Value>,
+    pub added_label_ids: Vec<String>,
+    pub removed_label_ids: Vec<String>,
+    pub relation_changes: Option<async_graphql::types::Json<serde_json::Value>>,
+    pub flags: Vec<String>,
+    pub created_at: String,
+}
+
+#[async_graphql::ComplexObject]
+impl IssueGql {
+    /// Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
+    async fn children(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<IssueGql>> {
+        charge_detail_field(ctx)?;
+        let page = app(ctx)?
+            .list_issues(
+                request_ctx(ctx)?,
+                ListIssuesInput {
+                    parent: Some(self.id.clone()),
+                    include_archived: false,
+                    order_by: OrderBy::UpdatedAt,
+                    limit: i64::from(first.unwrap_or(50).clamp(1, 100)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(page.items.into_iter().map(Into::into).collect())
+    }
+
+    /// Relationen dieses Issues.
+    async fn relations(&self, ctx: &Context<'_>) -> async_graphql::Result<IssueRelations> {
+        charge_detail_field(ctx)?;
+        let r = app(ctx)?
+            .issue_relations(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)?;
+        let list = |v: Vec<lineal_app::usecases::issue::RelatedIssue>| {
+            v.into_iter().map(Into::into).collect::<Vec<_>>()
+        };
+        Ok(IssueRelations {
+            blocks: list(r.blocks),
+            blocked_by: list(r.blocked_by),
+            related_to: list(r.related_to),
+            duplicate_of: r.duplicate_of.map(Into::into),
+            duplicates: list(r.duplicates),
+        })
+    }
+
+    /// Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
+    async fn history(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<IssueHistoryEntry>> {
+        charge_detail_field(ctx)?;
+        let entries = app(ctx)?
+            .issue_history(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)?;
+        let ids = |v: Option<Vec<lineal_domain::ids::LabelId>>| {
+            v.unwrap_or_default()
+                .into_iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+        };
+        Ok(entries
+            .into_iter()
+            .map(|e| IssueHistoryEntry {
+                id: e.id.to_string(),
+                actor_id: e.actor_id.map(|u| u.to_string()),
+                source: e.source.as_str().to_owned(),
+                changes: async_graphql::types::Json(e.changes),
+                added_label_ids: ids(e.added_label_ids),
+                removed_label_ids: ids(e.removed_label_ids),
+                relation_changes: e.relation_changes.map(async_graphql::types::Json),
+                flags: e.flags,
+                created_at: e.created_at.to_rfc3339(),
+            })
+            .collect())
     }
 }
 

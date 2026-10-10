@@ -439,10 +439,13 @@ impl App {
         }
         // Sub-Teams, die noch am Team hängen, würden den Parent-FK verletzen: erst lösen
         // (gelöschte Sub-Teams folgen im selben Lauf).
+        let keys = tx.attachments().storage_keys_for_team(team).await?;
         tx.webhooks().purge_team(team).await?;
+        let orphans = tx.attachments().unreferenced_storage_keys(&keys).await?;
         let ctx = RequestCtx::system(org, "req_team_purge");
         emit(&mut *tx, &ctx, DomainEvent::TeamRemoved { team_id: team }).await?;
         tx.commit().await?;
+        self.delete_blobs(&orphans).await;
         Ok(true)
     }
 }

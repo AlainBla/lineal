@@ -398,6 +398,9 @@ Default-Workflow eines neuen Teams: `Backlog` (backlog), `Todo` (unstarted), `In
 
 ### 2.6 TriageResponsibility
 
+> **Umsetzung:** `currentUserId` ist **gespeichert** (Spalte `triage_responsibility.current_user_id`), nicht bei jeder Abfrage abgeleitet. Der periodische Job `triage_rotation` (60 s) berechnet die Schicht neu und schreibt nur bei Änderung; `assignmentIndex` bleibt für Round-Robin bei `manualUserIds`.
+
+
 Legt fest, wer für die Triage eines Teams verantwortlich ist und was beim Eingang eines Issues passiert. Höchstens eine pro Team.
 
 | Feld | Typ | Pflicht | Default | Bedeutung | Constraints/Index |

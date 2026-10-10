@@ -57,6 +57,9 @@ Nach außen (API, MCP, Webhooks) wird immer nur Markdown geliefert ([00 §6](00-
 
 ### 1.4 Elternobjekt (genau eines)
 
+> **Umsetzung:** Es gilt die empfohlene Variante mit fünf Fremdschlüsseln. Ein Cycle-Dokument trägt zusätzlich `teamId` (= Team des Cycles); Project-, Issue- und Initiative-Dokumente haben `teamId = null`. Die Check-Bedingung der Migration erzwingt genau ein Elternobjekt.
+
+
 Ein Dokument hat **genau ein** Elternobjekt aus der Menge Project, Issue, Initiative, Cycle oder Team (siehe „Getroffene Entscheidungen“ in [README.md](README.md)). Ein Dokument ohne Elternobjekt existiert nicht.
 
 **Persistenz:** fünf nullable Fremdschlüssel (`projectId`, `issueId`, `initiativeId`, `cycleId`, `teamId`) mit einer Check-Bedingung „genau einer ist nicht null“. Alternativ ist ein Paar `(parentType, parentId)` zulässig; dann muss die referentielle Integrität in der Anwendung sichergestellt werden. Die erste Variante wird empfohlen, weil die Datenbank Integrität und Kaskaden direkt erzwingen kann.
@@ -301,6 +304,9 @@ Objekte, die aus einem Template entstanden sind, merken sich dieses in `lastAppl
 **Auflösungsreihenfolge** in `list_templates(team=X)`: eigene Templates von X, dann geerbte der Vorfahren (nächstgelegener zuerst, ohne durch Kopien verdeckte), dann Workspace-Templates. Namensgleiche Templates aus verschiedenen Ebenen sind erlaubt; `get_template` per Name liefert bei Mehrdeutigkeit `ambiguous_reference` mit Kandidatenliste.
 
 ### 2.4 Struktur von `templateData` (JSON Schema)
+
+> **Umsetzung:** Übersprungene Referenzen meldet die Anwendung als Liste der betroffenen Feldnamen in `warnings` der Antwort (kein Fehler); das Anlegen läuft weiter.
+
 
 Das Original speichert `templateData` als nicht weiter spezifiziertes JSON. Lineal legt die Struktur verbindlich fest. Gemeinsame Regeln:
 

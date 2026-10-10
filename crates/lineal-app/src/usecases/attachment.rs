@@ -743,6 +743,52 @@ impl App {
     }
 }
 
+/// Frist nach Ablauf einer Reservierung, bis ihr ungenutztes Objekt gelöscht wird.
+pub const RESERVATION_GRACE: ChronoDuration = ChronoDuration::days(1);
+
+impl App {
+    /// Löscht Blobs best effort (Fehler werden geloggt, nicht weitergereicht: die Datenbankzeilen
+    /// sind dann schon weg und ein Rest-Blob ist nur Speicherplatz). Liefert die Anzahl gelöschter.
+    pub async fn delete_blobs(&self, keys: &[String]) -> u64 {
+        let mut deleted = 0;
+        for key in keys {
+            match self.blobs.delete(key).await {
+                Ok(()) => deleted += 1,
+                Err(e) => tracing::warn!(error = %e, "blob delete failed"),
+            }
+        }
+        deleted
+    }
+
+    /// Periodisch: räumt abgelaufene, nie finalisierte Upload-Reservierungen samt Blob ab.
+    pub async fn run_upload_purge(&self, now: DateTime<Utc>) -> AppResult<u64> {
+        let cutoff = now - RESERVATION_GRACE;
+        let mut sys = self.store.begin_system().await?;
+        let expired = sys
+            .attachments()
+            .list_expired_reservations(cutoff, 500)
+            .await?;
+        drop(sys);
+        let mut by_org: std::collections::BTreeMap<uuid::Uuid, Vec<Reservation>> =
+            Default::default();
+        for (org, r) in expired {
+            by_org.entry(org.0).or_default().push(r);
+        }
+        let mut total = 0;
+        for (org, list) in by_org {
+            let ids: Vec<_> = list.iter().map(|r| r.id).collect();
+            let keys: Vec<String> = list.into_iter().map(|r| r.storage_key).collect();
+            let mut tx = self.store.begin(OrgId(org)).await?;
+            tx.attachments().delete_reservations(&ids).await?;
+            let orphans = tx.attachments().unreferenced_storage_keys(&keys).await?;
+            tx.commit().await?;
+            self.delete_blobs(&orphans).await;
+            total += ids.len() as u64;
+        }
+        Ok(total)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

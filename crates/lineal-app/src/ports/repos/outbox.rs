@@ -61,6 +61,15 @@ pub struct StoredEvent {
     pub created_at: DateTime<Utc>,
 }
 
+/// Ein aufgegebenes Event eines Konsumenten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadLetter {
+    pub consumer: String,
+    pub event_id: EventId,
+    pub attempts: i32,
+    pub last_error: String,
+}
+
 #[async_trait]
 pub trait OutboxRepo: Send {
     /// Schreibt ein Event mit der `lastSyncId` der Transaktion (selber Commit wie die Änderung).
@@ -76,6 +85,21 @@ pub trait OutboxRepo: Send {
 
     /// Vermerkt die Zustellung an `consumer` (`outbox_delivery`), idempotent.
     async fn mark_delivered(&mut self, consumer: &str, ids: &[EventId]) -> AppResult<()>;
+
+    /// Zählt einen Fehlversuch von `consumer` für das Event dauerhaft (Zeile ohne `delivered_at`)
+    /// und merkt sich die Fehlermeldung. Liefert die Zahl der Versuche inkl. dieses.
+    async fn record_failure(
+        &mut self,
+        consumer: &str,
+        event: EventId,
+        error: &str,
+    ) -> AppResult<i32>;
+
+    /// Gibt das Event für `consumer` auf (Dead-Letter): gilt als zugestellt, `last_error` bleibt.
+    async fn mark_dead_letter(&mut self, consumer: &str, event: EventId) -> AppResult<()>;
+
+    /// Aufgegebene Events (Dead-Letter), neueste zuerst.
+    async fn list_dead_letters(&mut self, limit: i64) -> AppResult<Vec<DeadLetter>>;
 
     /// Setzt `processed_at` bei allen Events, die an alle `consumers` zugestellt wurden.
     async fn mark_processed(&mut self, consumers: &[String]) -> AppResult<u64>;
