@@ -119,7 +119,7 @@ async fn make_project(env: &Env, teams: &[lineal_domain::ids::TeamId], number: i
         .unwrap();
     sqlx::query(
         "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id) \
-         VALUES ($1, $2, 'Checkout v2', $3, $4, $5)",
+         VALUES ($1, $2, 'Comment Test Project', $3, $4, $5)",
     )
     .bind(id)
     .bind(env.data.org.0)
@@ -794,8 +794,8 @@ async fn project_initiative_and_status_update_parents(pool: PgPool) {
             ErrorKind::NotFound
         );
     }
-    // Referenz über Kennung P-ENG-1 und Name
-    for r in ["P-ENG-1", "Checkout v2"] {
+    // Referenz über Kennung P-ENG-101 und Name
+    for r in ["P-ENG-101", "Comment Test Project"] {
         let page = env
             .app
             .list_comments(
@@ -857,13 +857,13 @@ async fn project_initiative_and_status_update_parents(pool: PgPool) {
 
     // Initiative: Workspace-Recht ViewInitiatives (Gast verboten), Schreib-Scope nötig
     let initiative = Uuid::now_v7();
-    sqlx::query("INSERT INTO initiative (id, organization_id, number, name) VALUES ($1, $2, 1, 'Q4 Platform')")
+    sqlx::query("INSERT INTO initiative (id, organization_id, number, name) VALUES ($1, $2, 101, 'Comment Test Initiative')")
         .bind(initiative)
         .bind(env.data.org.0)
         .execute(&env.pool)
         .await
         .unwrap();
-    let ispec = ParentSpec::Initiative("I-1".into());
+    let ispec = ParentSpec::Initiative("I-101".into());
     let ic = env
         .app
         .create_comment(
