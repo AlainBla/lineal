@@ -4,6 +4,7 @@ pub mod auto_archive;
 pub mod auto_close;
 pub mod cycles;
 pub mod due_reminders;
+pub mod email_digest;
 pub mod import_runner;
 pub mod notification_cap;
 pub mod purge;

@@ -15,7 +15,6 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use lineal_app::ports::repos::Principal;
 use lineal_app::{App, AppError, AppResult, RequestCtx};
-use sha2::{Digest, Sha256};
 
 /// Name des Session-Cookies.
 pub const SESSION_COOKIE: &str = "lineal_session";
@@ -56,14 +55,7 @@ impl AuthState {
 }
 
 /// SHA-256 des Tokens als Hex (Format des Lookups, 09 §2.2).
-pub fn hash_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    digest.iter().fold(String::with_capacity(64), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
+pub use lineal_app::usecases::auth::hash_token;
 
 /// Token aus der Anfrage: `Authorization` hat Vorrang vor dem Cookie.
 pub fn extract_token(headers: &HeaderMap) -> Option<(String, CredentialClass)> {

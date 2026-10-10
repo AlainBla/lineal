@@ -21,13 +21,9 @@ impl PeriodicJob for DueRemindersJob {
     }
 
     async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()> {
-        let due = app.create_due_reminders(now).await;
-        // Der Digest läuft auch, wenn die Erinnerungen scheitern.
-        let mails = app.send_email_digests(now).await;
-        let created = due?;
-        let sent = mails?;
-        if created + sent > 0 {
-            tracing::info!(created, sent, "due reminders and email digests");
+        let created = app.create_due_reminders(now).await?;
+        if created > 0 {
+            tracing::info!(created, "due reminders");
         }
         Ok(())
     }

@@ -9,12 +9,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 /// SHA-256-Hex (klein) eines Tokens – Schlüssel für `find_principal_by_token_hash`.
-pub fn hash_token(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
-}
+pub use lineal_app::usecases::auth::hash_token;
 
 /// Neue Request-ID im Format `req_<uuid-v7 ohne Bindestriche>`.
 pub fn new_request_id() -> String {
