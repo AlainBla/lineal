@@ -75,7 +75,7 @@ docker compose --profile app run --rm migrate seed --demo   # optional: Beispiel
 # Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Seed-Login z. B. alice@acme.example / lineal-dev
 ```
 
-Dienste: `migrate` (Einmal-Job, Server und Worker warten auf Erfolg), `server` (Netze `default` + `edge`), `worker`, `web` (nur Netz `edge`, Port `127.0.0.1:${LINEAL_HTTP_PORT:-8088}`). `LINEAL_TRUSTED_PROXIES` ist das feste `edge`-Subnetz `172.31.88.0/24`. Blobs liegen im Volume `blobs` (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor `web` terminieren, `LINEAL_BASE_URL=https://…` setzen (Cookie `Secure`, CSRF-Origin) und in `deploy/nginx.conf` `set_real_ip_from <TLS-Proxy>` + `real_ip_header X-Forwarded-For` ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; `seed --demo` nur für Demo-Installationen.
+Dienste: `migrate` (Einmal-Job, Server und Worker warten auf Erfolg), `server` (Netze `default` + `edge`), `worker`, `web` (nur Netz `edge`, Port `127.0.0.1:${LINEAL_HTTP_PORT:-8088}`). `LINEAL_TRUSTED_PROXIES` ist nur die feste Adresse des nginx-Containers `172.31.88.10/32` (nicht das Subnetz: Das Gateway `.1` ist der Host). Blobs liegen im Volume `blobs` (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor `web` terminieren, `LINEAL_BASE_URL=https://…` setzen (Cookie `Secure`, CSRF-Origin) und in `deploy/nginx.conf` `set_real_ip_from <TLS-Proxy>` + `real_ip_header X-Forwarded-For` ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; `seed --demo` nur für Demo-Installationen.
 
 ### 3.3 Hintergrundjobs
 

@@ -28,8 +28,9 @@ services:
       DATABASE_URL: postgres://lineal:lineal@postgres:5432/lineal
       LINEAL_BASE_URL: ${LINEAL_BASE_URL:-http://localhost:8088}
       LINEAL_SESSION_SECRET: ${LINEAL_SESSION_SECRET:-}  # Pflicht, mind. 32 Zeichen: openssl rand -hex 32
-      # Nur nginx (Netz `edge`) darf X-Forwarded-For setzen.
-      LINEAL_TRUSTED_PROXIES: 172.31.88.0/24
+      # Nur der nginx-Container (feste Adresse) darf X-Forwarded-For setzen – nicht das ganze
+      # Subnetz, sonst zählte auch das Gateway (Host) als vertrauenswürdiger Proxy.
+      LINEAL_TRUSTED_PROXIES: 172.31.88.10/32
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       postgres: { condition: service_healthy }
@@ -68,7 +69,8 @@ services:
     image: lineal-web:latest
     ports:
       - "127.0.0.1:${LINEAL_HTTP_PORT:-8088}:8080"
-    networks: [edge]
+    networks:
+      edge: { ipv4_address: 172.31.88.10 }
     depends_on:
       server: { condition: service_healthy }
     restart: unless-stopped
