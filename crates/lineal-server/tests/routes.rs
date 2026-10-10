@@ -28,8 +28,9 @@ async fn every_documented_path_is_routed() {
         (Method::POST, "/auth/login", StatusCode::NOT_IMPLEMENTED),
         (Method::POST, "/auth/logout", StatusCode::NOT_IMPLEMENTED),
         (Method::GET, "/auth/me", StatusCode::NOT_IMPLEMENTED),
-        (Method::PUT, "/uploads/t", StatusCode::NOT_IMPLEMENTED),
-        (Method::GET, "/files/t", StatusCode::NOT_IMPLEMENTED),
+        // Blob-Endpunkte (WP03): ungültige Signatur -> 403
+        (Method::PUT, "/uploads/t", StatusCode::FORBIDDEN),
+        (Method::GET, "/files/t", StatusCode::FORBIDDEN),
         (Method::GET, "/sync", StatusCode::NOT_IMPLEMENTED),
         (Method::GET, "/healthz", StatusCode::OK),
         (Method::GET, "/readyz", StatusCode::OK),

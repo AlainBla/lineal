@@ -11,8 +11,12 @@ pub async fn run() -> Result<()> {
         .await
         .with_context(|| format!("cannot bind {}", config.bind))?;
     tracing::info!(addr = %config.bind, dev = config.dev, "lineal listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")
+    // `ConnectInfo` liefert dem Rate-Limit die Client-IP (unauthentifizierte Buckets).
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server error")
 }

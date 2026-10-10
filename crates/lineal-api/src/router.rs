@@ -2,13 +2,17 @@
 //! Nicht implementierte Pfade antworten `501`.
 
 use crate::graphql::{LinealSchema, build_schema};
+use crate::middleware::auth::MaybeAuth;
+use crate::middleware::{self, gql};
+use crate::rate_limit::RateHandle;
 use crate::{blob, oauth, rest};
 use async_graphql::http::GraphiQLSource;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use lineal_app::App;
 use serde_json::json;
 use std::sync::Arc;
@@ -20,8 +24,15 @@ struct ApiState {
     dev: bool,
 }
 
-/// Baut den Router. `dev = true` schaltet GraphiQL auf `GET /graphql` frei.
+/// Baut den Router samt Plattform-Middleware. `dev = true` schaltet GraphiQL auf
+/// `GET /graphql` und CORS für den Vite-Dev-Server frei.
 pub fn router(app: Arc<App>, dev: bool) -> Router {
+    // Request-ID, Security-Header, CORS (dev), Auth, Rate-Limit (WP03).
+    middleware::apply(routes(app.clone(), dev), app, dev)
+}
+
+/// Alle Routen ohne Middleware (für Tests mit eigener `PlatformConfig`).
+pub fn routes(app: Arc<App>, dev: bool) -> Router {
     let state = ApiState {
         schema: build_schema(app.clone()),
         app,
@@ -44,10 +55,16 @@ pub fn router(app: Arc<App>, dev: bool) -> Router {
 
 async fn graphql_post(
     State(state): State<ApiState>,
-    Json(request): Json<async_graphql::Request>,
-) -> Json<async_graphql::Response> {
-    // WP03: Auth-Middleware setzt den `RequestCtx` und reicht ihn per `request.data(..)` durch.
-    Json(state.schema.execute(request).await)
+    MaybeAuth(auth): MaybeAuth,
+    rate: Option<Extension<RateHandle>>,
+    request: Result<Json<async_graphql::Request>, JsonRejection>,
+) -> Response {
+    match request {
+        Ok(Json(request)) => {
+            gql::execute(&state.schema, &auth, rate.map(|Extension(r)| r), request).await
+        }
+        Err(rejection) => gql::bad_body(&rejection),
+    }
 }
 
 async fn graphiql(State(state): State<ApiState>) -> impl IntoResponse {
@@ -112,8 +129,6 @@ mod tests {
             (Method::POST, "/auth/login"),
             (Method::POST, "/auth/logout"),
             (Method::GET, "/auth/me"),
-            (Method::PUT, "/uploads/tok"),
-            (Method::GET, "/files/tok"),
             (Method::POST, "/oauth/register"),
             (Method::GET, "/oauth/authorize"),
             (Method::POST, "/oauth/token"),
@@ -125,11 +140,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graphql_executes_and_graphiql_is_dev_only() {
-        let q = Body::from(r#"{"query":"{ _orgReady }"}"#);
-        let (status, body) = call(Method::POST, "/graphql", q, false).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("\"_orgReady\":true"), "{body}");
+    async fn blob_endpoints_reject_unsigned_tokens() {
+        for (m, uri) in [(Method::PUT, "/uploads/tok"), (Method::GET, "/files/tok")] {
+            let (status, body) = call(m, uri, Body::empty(), false).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+            assert!(body.contains("\"error\":\"forbidden\""), "{uri}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn graphql_requires_auth_executes_and_graphiql_is_dev_only() {
+        let q = || Body::from(r#"{"query":"{ _orgReady }"}"#);
+        // ohne Token: 401 mit extensions.code
+        let (status, body) = call(Method::POST, "/graphql", q(), false).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("\"code\":\"unauthenticated\""), "{body}");
+
+        // mit Token (FakeStore-Principal)
+        let principal = lineal_app::ports::repos::Principal {
+            org_id: lineal_domain::ids::OrgId::new_v7(),
+            actor: lineal_app::Actor::App {
+                id: lineal_domain::ids::UserId::new_v7(),
+            },
+            scopes: lineal_app::Scopes::read_only(),
+        };
+        let store = lineal_testkit::FakeStore::new().with_principal(
+            crate::middleware::auth::hash_token("lin_api_test"),
+            principal,
+        );
+        let app = lineal_testkit::test_app(Arc::new(store));
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/graphql")
+            .header("content-type", "application/json")
+            .header("authorization", "lin_api_test")
+            .body(q())
+            .unwrap();
+        let res = router(app, false).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&bytes).contains("\"_orgReady\":true"));
+
         assert_eq!(
             call(Method::GET, "/graphql", Body::empty(), false).await.0,
             StatusCode::NOT_FOUND

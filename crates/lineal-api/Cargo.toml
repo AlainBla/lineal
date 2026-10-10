@@ -23,8 +23,14 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+async-trait.workspace = true
+base64 = "0.22"
+http-body-util.workspace = true
+hmac = "0.12"
+sha2 = "0.10"
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies]
 lineal-testkit.workspace = true
-http-body-util.workspace = true
 tokio.workspace = true

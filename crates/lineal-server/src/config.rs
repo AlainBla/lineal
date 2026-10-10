@@ -32,9 +32,14 @@ impl Config {
         if session_secret.len() < 32 {
             bail!("LINEAL_SESSION_SECRET must be at least 32 bytes");
         }
+        let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
+        // Das Default-Secret ist öffentlich bekannt: hinter HTTPS (Produktion) nie erlaubt.
+        if base_url.starts_with("https://") && session_secret == DEFAULT_SESSION_SECRET {
+            bail!("LINEAL_SESSION_SECRET must be set when LINEAL_BASE_URL is https");
+        }
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
-            base_url: get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into()),
+            base_url,
             session_secret,
             blob_dir: get("LINEAL_BLOB_DIR")
                 .map_or_else(|| PathBuf::from("./var/blobs"), PathBuf::from),
@@ -67,5 +72,24 @@ mod tests {
                 .is_err()
         );
         assert!(Config::from_lookup(|k| (k == "LINEAL_BIND").then(|| "nope".into())).is_err());
+    }
+
+    #[test]
+    fn default_secret_is_rejected_behind_https() {
+        let https = |k: &str| (k == "LINEAL_BASE_URL").then(|| "https://lineal.example".into());
+        assert!(Config::from_lookup(https).is_err());
+        let with_secret = |k: &str| match k {
+            "LINEAL_BASE_URL" => Some("https://lineal.example".into()),
+            "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
+            _ => None,
+        };
+        assert!(Config::from_lookup(with_secret).is_ok());
+    }
+
+    #[test]
+    fn blob_dir_is_configurable() {
+        let cfg =
+            Config::from_lookup(|k| (k == "LINEAL_BLOB_DIR").then(|| "/srv/blobs".into())).unwrap();
+        assert_eq!(cfg.blob_dir, PathBuf::from("/srv/blobs"));
     }
 }
