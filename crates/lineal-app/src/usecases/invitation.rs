@@ -52,6 +52,8 @@ pub struct CreatedInvitation {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AcceptInvitationInput {
     pub token: String,
+    /// E-Mail-Adresse, an die die Einladung ging (Pflicht, case-insensitiv geprüft).
+    pub email: String,
     /// Anzeigename; Default: Teil der E-Mail vor dem `@` bzw. Name des Platzhalter-Users.
     pub name: Option<String>,
     /// Passwort des neuen Zugangs (mind. 8 Zeichen); Pflicht ohne Konto-Session.
@@ -71,6 +73,19 @@ pub struct AcceptedInvitation {
 fn invitation_not_found() -> AppError {
     AppError::not_found("Could not find referenced Invitation.")
         .with_details(json!({ "type": "Invitation" }))
+}
+
+
+fn require_creator_or_admin(ctx: &RequestCtx, inv: &InvitationRecord) -> AppResult<()> {
+    let admin = matches!(
+        ctx.actor,
+        Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin)
+    );
+    if admin || resolve::user::actor_user_id(ctx) == Some(inv.inviter_id) {
+        Ok(())
+    } else {
+        Err(invitation_not_found())
+    }
 }
 
 fn random_token() -> String {
@@ -251,6 +266,7 @@ impl App {
             .get_invitation(id)
             .await?
             .ok_or_else(invitation_not_found)?;
+        require_creator_or_admin(ctx, &inv)?;
         if !matches!(inv.status.as_str(), "pending" | "expired") {
             return Err(AppError::conflict("The invitation can no longer be resent")
                 .with_details(json!({ "status": inv.status })));
@@ -297,6 +313,7 @@ impl App {
             .get_invitation(id)
             .await?
             .ok_or_else(invitation_not_found)?;
+        require_creator_or_admin(ctx, &inv)?;
         if inv.status != "pending" {
             return Err(AppError::conflict("Only pending invitations can be revoked")
                 .with_details(json!({ "status": inv.status })));
@@ -333,7 +350,12 @@ impl App {
             None => None,
         };
         let (accepted, email) = self
-            .accept_invitation_core(&input.token, input.name.as_deref(), password_hash, None)
+            .accept_invitation_core(
+                &input.token,
+                input.name.as_deref(),
+                password_hash,
+                Some(&input.email),
+            )
             .await?;
         // Session für den neuen Zugang.
         let login = match &input.password {
@@ -525,5 +547,66 @@ impl App {
             },
             inv.email,
         ))
+    }
+}
+
+impl App {
+    /// `createWorkspace` mit einer Konto-Session (docs/09 §1.6): ein angemeldeter User legt einen
+    /// weiteren Workspace an und wird dort Owner; Name, E-Mail und Passwort-Hash werden aus dem
+    /// Konto übernommen. Höchstens 10 Workspaces je E-Mail-Adresse.
+    pub async fn create_workspace_for_account(
+        &self,
+        ctx: &RequestCtx,
+        name: &str,
+        url_key: Option<&str>,
+    ) -> AppResult<super::org::WorkspaceCreated> {
+        forbid_system(ctx)?;
+        if !ctx.scopes.write {
+            return Err(AppError::forbidden(
+                "Token scope does not allow write operations.",
+            ));
+        }
+        let me = resolve::user::actor_user_id(ctx)
+            .filter(|_| matches!(ctx.actor, Actor::User { .. }))
+            .ok_or_else(|| AppError::forbidden("Only users can create workspaces."))?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let account = tx
+            .users()
+            .get(me)
+            .await?
+            .filter(|u| u.active && u.status == "active")
+            .ok_or_else(|| AppError::forbidden("Only active users can create workspaces."))?;
+        drop(tx);
+        let mut sys = self.store.begin_system().await?;
+        let owned = sys
+            .auth()
+            .find_login_candidates(&account.email, None)
+            .await?
+            .len();
+        let hash = sys.webhooks().password_hash_of_account(me).await?;
+        drop(sys);
+        if owned >= 10 {
+            return Err(
+                AppError::limit_exceeded("Too many workspaces for this account.")
+                    .with_details(json!({ "limit": "maxWorkspacesPerAccount" })),
+            );
+        }
+        let created = self
+            .create_workspace(super::org::CreateWorkspaceInput {
+                name: name.to_string(),
+                url_key: url_key.map(str::to_string),
+                owner_name: account.name.clone(),
+                owner_email: account.email.clone(),
+                owner_password: None,
+            })
+            .await?;
+        if let Some(h) = hash {
+            let mut tx = self.store.begin(created.org.id).await?;
+            tx.users()
+                .set_password_hash(created.owner.id, &h, self.clock.now())
+                .await?;
+            tx.commit().await?;
+        }
+        Ok(created)
     }
 }

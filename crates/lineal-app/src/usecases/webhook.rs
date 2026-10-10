@@ -214,6 +214,10 @@ pub fn parse_target_url(raw: &str, policy: UrlPolicy) -> AppResult<Url> {
         "http" if policy.allow_http => {}
         _ => return Err(invalid_url("url must use https")),
     }
+    // Nur Standardports: 443 (Dev zusätzlich 80 und frei wählbare Ports für lokale Empfänger).
+    if !policy.allow_http && url.port().is_some_and(|p| p != 443) {
+        return Err(invalid_url("only port 443 is allowed"));
+    }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(invalid_url("url must not contain credentials"));
     }
@@ -888,6 +892,21 @@ impl App {
         let now = self.clock.now();
         let mut planned = 0;
         for hook in hooks {
+            // Der Ersteller muss die Daten des Teams weiterhin sehen dürfen (aktiv, bei nicht
+            // öffentlichen Teams Mitglied bzw. Admin).
+            if let Some(t) = hook.team_id {
+                let creator = tx.users().get(hook.creator_id).await?;
+                let ok = match creator {
+                    Some(u) if u.active && u.status == "active" => {
+                        visibility(t) == Some(TeamVisibility::Public)
+                            || tx.teams().get_membership(t, u.id).await?.is_some()
+                    }
+                    _ => false,
+                };
+                if !ok {
+                    continue;
+                }
+            }
             let Some(visible) = visible_teams_for_hook(&hook, &teams, &visibility) else {
                 continue;
             };
@@ -1099,6 +1118,10 @@ mod tests {
         }
         assert!(parse_target_url("https://93.184.216.34/hook", s).is_ok());
         assert!(parse_target_url("https://example.com/hook?x=1", s).is_ok());
+        assert!(parse_target_url("https://example.com:443/hook", s).is_ok());
+        assert!(parse_target_url("https://example.com:8443/hook", s).is_err());
+        assert!(parse_target_url("https://[::ffff:7f00:1]/hook", s).is_err());
+        assert!(parse_target_url("https://[::ffff:127.0.0.1]:443/hook", s).is_err());
     }
 
     #[test]

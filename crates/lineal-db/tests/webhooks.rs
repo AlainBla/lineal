@@ -487,6 +487,7 @@ async fn invitations_invite_accept_resend_revoke(pool: PgPool) {
     // Annehmen: falsche/unbekannte Token -> not_found.
     let accept = |token: &str| AcceptInvitationInput {
         token: token.into(),
+        email: "dave@acme.example".into(),
         name: Some("Dave Example".into()),
         password: Some("correct horse battery".into()),
     };
@@ -553,6 +554,7 @@ async fn accepting_links_the_imported_placeholder_user(pool: PgPool) {
         .app
         .accept_invitation(AcceptInvitationInput {
             token: c[0].token.clone(),
+            email: "GINA@acme.example".into(),
             name: Some("Gina Example".into()),
             password: Some("correct horse battery".into()),
         })
@@ -856,4 +858,75 @@ async fn cycle_settings_changes_drive_the_cycle_engine(pool: PgPool) {
         .unwrap();
     let (_, off) = fx.app.list_cycles(&alice(), "ENG", None).await.unwrap();
     assert!(off.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn invitation_authorization_regressions(pool: PgPool) {
+    let fx = setup(pool).await;
+    let c = fx
+        .app
+        .invite_users(&alice(), invite(&["dave@acme.example"], UserRole::User, &["ENG"]))
+        .await
+        .unwrap();
+    // Falsche E-Mail zum Token: nicht annehmbar (auch case-insensitiv passende geht).
+    let bad = fx
+        .app
+        .accept_invitation(AcceptInvitationInput {
+            token: c[0].token.clone(),
+            email: "mallory@acme.example".into(),
+            name: None,
+            password: Some("correct horse battery".into()),
+        })
+        .await;
+    assert_eq!(kind(bad), ErrorKind::NotFound);
+    // Bob (nicht Ersteller, kein Admin) darf weder erneut senden noch widerrufen.
+    assert_eq!(kind(fx.app.resend_invitation(&bob(), c[0].invitation.id).await), ErrorKind::NotFound);
+    assert_eq!(kind(fx.app.revoke_invitation(&bob(), c[0].invitation.id).await), ErrorKind::NotFound);
+    // Gast in ein Team, dessen Owner Bob nicht ist: verboten; als Owner von WEB erlaubt.
+    assert_eq!(
+        kind(fx.app.invite_users(&bob(), invite(&["g1@acme.example"], UserRole::Guest, &["ENG"])).await),
+        ErrorKind::Forbidden
+    );
+    fx.app
+        .invite_users(&bob(), invite(&["g2@acme.example"], UserRole::Guest, &["WEB"]))
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn webhook_target_is_revalidated_at_delivery_and_creator_visibility_is_enforced(pool: PgPool) {
+    let fx = setup(pool).await;
+    let hook = fx.app.create_webhook(&alice(), ws_hook(&["Issue"])).await.unwrap().webhook;
+    // Rebinding-Szenario: das Ziel wurde beim Speichern geprüft, zeigt zur Zustellung aber auf Loopback
+    // (hier direkt in der DB; zur Laufzeit würde DNS wechseln). Die Zustellung muss neu prüfen.
+    fx.app.create_issue(&alice(), issue("ENG", "A")).await.unwrap();
+    plan_all(&fx).await;
+    sqlx::query("UPDATE webhook SET url = 'https://127.0.0.1/hook' WHERE id = $1")
+        .bind(hook.id.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let due = fx.app.claim_due_webhook_deliveries(fx.app.clock.now(), 10).await.unwrap();
+    assert_eq!(due.len(), 1);
+    let policy = lineal_app::usecases::webhook::UrlPolicy::for_app(&fx.app);
+    assert_eq!(policy, lineal_app::usecases::webhook::UrlPolicy::STRICT);
+    let url = lineal_app::usecases::webhook::parse_target_url(&due[0].webhook.url, policy);
+    assert!(url.is_err(), "Loopback-Ziel wird bei der Zustellung abgelehnt");
+    for mapped in ["https://[::ffff:127.0.0.1]/", "https://[::ffff:10.0.0.1]/", "https://0.0.0.0/", "https://100.64.1.1/", "https://224.0.0.1/"] {
+        assert!(lineal_app::usecases::webhook::parse_target_url(mapped, policy).is_err(), "{mapped}");
+    }
+
+    // Ersteller verliert die Sicht auf das private Team: keine Zustellung mehr.
+    let des = fx.app.create_webhook(&bob(), team_hook("DES", &["Issue"])).await.unwrap().webhook;
+    sqlx::query("DELETE FROM team_membership WHERE team_id = $1 AND user_id = $2")
+        .bind(fx.data.des.0)
+        .bind(fx.data.bob.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    // (Alice legt das Issue an: als Admin ohne Mitgliedschaft nicht möglich; Bob war Mitglied -> direkt per SQL.)
+    let before = deliveries(&fx, des.id).await.len();
+    fx.app.create_issue(&alice(), issue("ENG", "B")).await.unwrap();
+    plan_all(&fx).await;
+    assert_eq!(deliveries(&fx, des.id).await.len(), before);
 }
