@@ -71,3 +71,5 @@ WP10-Leftovers:
 - Snapshot-Bündelung, Dokument-Mentions/Abos, documentMoved, CRDT; useDefaultTemplate API; Form-Templates; get_issue.attachments/documents einhängen.
 WP11-Leftovers: ancestors.some nur id; Favoriten-Umsortieren; View-Abos; View-Archiv bei Team-Löschung; Eigentümerwechsel; Suche 'simple' statt Stemming; Triage-Ausblendung flache MCP-Params.
 Erledigt durch Orchestrator: GraphQL `users(query, team, first)` -> [UserRef] ohne E-Mail (für WP13-Assignee-Picker/Mentions; WP14 bzw. Nachtrag WP13 einhängen).
+WP14-Leftovers: Filter-Chips aus filterData zurückwandeln; Filter-Bar an Team-Seiten; Such-Command global (Shell); Initiativen-Tabs; Roadmap-Timeline; Board in Views; Update-Diff; Initiative-Update-Composer; Team-Settings Templates/SLA/Hierarchie/Webhooks/Access/Recurring; Workspace-Settings Members/Teams/Security/API/Limits; Account-Settings; Projekt-Issues nach Milestone; users ohne Rolle/Owner.
+WP14 Query-Keys: siehe Abschlussbericht (inbox, overview, planning, views, search, docs, settings, users/known-users) – Hooks in features/<bereich>/queries.ts.
