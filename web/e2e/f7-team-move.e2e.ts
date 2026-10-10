@@ -14,7 +14,8 @@ test("F7: moving an issue to another team gives it a new identifier and keeps th
   await page.keyboard.press("Control+Shift+M");
   const picker = page.getByRole("dialog");
   await picker.getByPlaceholder("Move to team…").fill("Web");
-  await page.keyboard.press("Enter");
+  // Die Auswahl erst nach dem Filtern treffen (Enter vor dem Filter wählt sonst den falschen Eintrag).
+  await picker.getByRole("option", { name: "Web (WEB)" }).click();
   // Ohne Labels/Projekt gibt es nichts zu bestätigen: der Wechsel läuft direkt.
 
   const toast = page.getByText(/Moved to WEB-\d+/);

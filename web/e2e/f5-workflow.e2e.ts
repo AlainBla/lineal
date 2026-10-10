@@ -7,7 +7,10 @@ async function setStatus(page: Page, name: string): Promise<void> {
   await page.keyboard.press("s");
   const picker = page.getByRole("dialog");
   await picker.getByPlaceholder("Change status…").fill(name);
-  await page.keyboard.press("Enter");
+  await picker
+    .getByRole("option", { name: new RegExp(`${name}$`) })
+    .first()
+    .click();
   await expect(picker).toBeHidden();
   await expect(page.locator('[data-property="Status"]')).toContainText(name);
 }
