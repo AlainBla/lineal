@@ -1809,3 +1809,190 @@ async fn worker_gives_up_on_an_event_after_max_attempts(pool: PgPool) {
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn other_users_notifications_cannot_be_read_or_changed(pool: PgPool) {
+    let e = env(pool).await;
+    let issue = e.issue(e.d.eng, 1, 940, e.d.alice, Some(e.d.bob), 1).await;
+    e.handle(&e.user_ev(e.d.alice, eng_issue_created(issue, &e.d, vec![])))
+        .await;
+    let id = e.first_notification(e.d.bob).await;
+    let alice = ctx_for(SeedUser::Alice);
+    for err in [
+        e.app.get_notification(&alice, id).await.unwrap_err(),
+        e.app.open_notification(&alice, id).await.unwrap_err(),
+        e.app
+            .mark_notification(
+                &alice,
+                id,
+                MarkNotificationInput {
+                    read: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+        e.app
+            .mark_notification(
+                &alice,
+                id,
+                MarkNotificationInput {
+                    snoozed_until_at: Some(Some(e.app.clock.now() + Duration::hours(1))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+        e.app
+            .archive_notification(&alice, id, true)
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(err.kind, ErrorKind::NotFound);
+    }
+    // Alices Massenaktionen berühren Bobs Notification nicht.
+    assert_eq!(
+        e.app
+            .mark_all_notifications_read(&alice, None)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        e.app.archive_all_notifications(&alice, None).await.unwrap(),
+        0
+    );
+    let (read, archived): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) =
+        sqlx::query_as("SELECT read_at, archived_at FROM notification WHERE id = $1")
+            .bind(id.0)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert!(read.is_none() && archived.is_none());
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn removal_from_private_team_hides_notifications_everywhere_and_stops_email(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    // Bob ist Mitglied des privaten Teams DES und wird dort zugewiesen (E-Mail für assignments an).
+    let issue = e.issue(e.d.des, 3, 941, alice, Some(bob), 1).await;
+    sqlx::query("UPDATE issue SET title = 'Geheimes Redesign' WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::System,
+        None,
+        eng_issue_created(issue, &e.d, vec![]),
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["issueAssignedToYou"]);
+    let ctx = ctx_for(SeedUser::Bob);
+    let id = e.first_notification(bob).await;
+    assert_eq!(
+        e.app
+            .list_notifications(&ctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 1);
+
+    // Bob verliert die Mitgliedschaft in DES.
+    sqlx::query("DELETE FROM team_membership WHERE user_id = $1 AND team_id = $2")
+        .bind(bob.0)
+        .bind(e.d.des.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert!(
+        e.app
+            .list_notifications(&ctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 0);
+    assert_eq!(
+        e.app.get_notification(&ctx, id).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        e.app.open_notification(&ctx, id).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    let mark = MarkNotificationInput {
+        read: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(
+        e.app
+            .mark_notification(&ctx, id, mark)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        e.app
+            .archive_notification(&ctx, id, true)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        e.app.mark_all_notifications_read(&ctx, None).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        e.app.archive_all_notifications(&ctx, None).await.unwrap(),
+        0
+    );
+
+    // Digest: weder Titel noch Text gelangen per E-Mail an Bob.
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::hours(1))
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(e.mails.0.lock().unwrap().is_empty());
+    let emailed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM notification WHERE emailed_at IS NOT NULL")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(emailed, 0);
+
+    // Kontrolle: mit Mitgliedschaft geht die Mail raus und enthält keine fremde E-Mail-Adresse.
+    sqlx::query("INSERT INTO team_membership (organization_id, team_id, user_id, owner) VALUES ($1,$2,$3,false)")
+        .bind(e.d.org.0)
+        .bind(e.d.des.0)
+        .bind(bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::hours(1))
+            .await
+            .unwrap(),
+        1
+    );
+    let mails = e.mails.0.lock().unwrap();
+    assert!(mails[0].body.contains("Geheimes Redesign"));
+    assert!(
+        !mails[0].body.contains("@acme.example"),
+        "{}",
+        mails[0].body
+    );
+}

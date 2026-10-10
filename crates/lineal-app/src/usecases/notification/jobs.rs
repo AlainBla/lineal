@@ -210,8 +210,23 @@ impl App {
                 let immediate = prefs.email_format == "immediate";
                 let hold = setting(&prefs, "emailHoldOutsideWorkHours", true);
                 let only_priority = setting(&prefs, "emailOnlyPriority", false);
-                let due: Vec<&NotificationView> = views
-                    .iter()
+                // Zum Versandzeitpunkt noch Zugriff auf das Bezugsobjekt? (kein Inhalt aus entzogenen Teams)
+                let mut allowed: Vec<&NotificationView> = Vec::new();
+                for v in &views {
+                    let teams = match (v.issue_team_id, v.n.project_id) {
+                        (Some(t), _) => vec![t],
+                        (None, Some(p)) if v.n.target_type == "project" => {
+                            tx.notifications().project_team_ids(p).await?
+                        }
+                        _ => Vec::new(),
+                    };
+                    let mut fan = Fan::new(&mut *tx, now, None).await?;
+                    if fan.can_see_any(user, &teams).await? {
+                        allowed.push(v);
+                    }
+                }
+                let due: Vec<&NotificationView> = allowed
+                    .into_iter()
                     .filter(|v| channel_enabled(&channels, category_of(&v.n.kind), "email"))
                     .filter(|v| !only_priority || v.n.is_priority)
                     .filter(|v| {

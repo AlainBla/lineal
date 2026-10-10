@@ -17,7 +17,7 @@ const VIEW_SELECT: &str = "SELECT n.id, n.user_id, n.type AS kind, n.category, n
     n.issue_id, n.team_id, n.project_id, n.project_update_id, n.project_milestone_id, n.initiative_id, \
     n.initiative_update_id, n.document_id, n.comment_id, n.parent_comment_id, n.reaction_emoji, n.read_at, \
     n.snoozed_until_at, n.unsnoozed_at, n.emailed_at, n.is_priority, n.group_key, n.created_at, n.updated_at, \
-    n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.title AS issue_title, \
+    n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.team_id AS issue_team_id, i.title AS issue_title, \
     p.name AS project_name, ini.name AS initiative_name, d.title AS document_title, u.email AS recipient_email \
     FROM notification n \
     JOIN \"user\" u ON u.organization_id = n.organization_id AND u.id = n.user_id \
@@ -33,6 +33,15 @@ fn visible_sql(vis: &str) -> String {
         "(n.issue_id IS NULL OR i.team_id = ANY({vis})) \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
               WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis})))"
+    )
+}
+
+/// Wie [`visible_sql`], aber ohne Joins (für UPDATE-Statements).
+fn visible_sub_sql(vis: &str) -> String {
+    format!(
+        "((n.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue vi WHERE vi.id = n.issue_id AND vi.team_id = ANY({vis}))) \
+         AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
+              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))))"
     )
 }
 
@@ -87,6 +96,7 @@ struct ViewRow {
     archived_at: Option<DateTime<Utc>>,
     actor_name: Option<String>,
     issue_identifier: Option<String>,
+    issue_team_id: Option<Uuid>,
     issue_title: Option<String>,
     project_name: Option<String>,
     initiative_name: Option<String>,
@@ -127,6 +137,7 @@ impl From<ViewRow> for NotificationView {
             },
             actor_name: r.actor_name,
             issue_identifier: r.issue_identifier,
+            issue_team_id: r.issue_team_id.map(TeamId),
             issue_title: r.issue_title,
             project_name: r.project_name,
             initiative_name: r.initiative_name,
@@ -436,19 +447,22 @@ impl NotificationRepo for PgTx {
     async fn mark_all_read(
         &mut self,
         user: UserId,
+        visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
     ) -> AppResult<u64> {
         let sql = format!(
             "UPDATE notification n SET read_at = $3, updated_at = $3, version = version + 1 \
              WHERE n.organization_id = $1 AND n.user_id = $2 AND n.read_at IS NULL \
-               AND n.archived_at IS NULL AND {}",
+               AND n.archived_at IS NULL AND {} AND {}",
+            visible_sub_sql("$4"),
             bulk_sql(filter)
         );
         let res = sqlx::query(&sql)
             .bind(self.org.0)
             .bind(user.0)
             .bind(now)
+            .bind(uuids(visible_teams))
             .execute(&mut *self.tx)
             .await
             .map_err(db_err)?;
@@ -505,18 +519,21 @@ impl NotificationRepo for PgTx {
     async fn archive_all(
         &mut self,
         user: UserId,
+        visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
     ) -> AppResult<u64> {
         let sql = format!(
             "UPDATE notification n SET archived_at = $3, updated_at = $3, version = version + 1 \
-             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {}",
+             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {}",
+            visible_sub_sql("$4"),
             bulk_sql(filter)
         );
         let res = sqlx::query(&sql)
             .bind(self.org.0)
             .bind(user.0)
             .bind(now)
+            .bind(uuids(visible_teams))
             .execute(&mut *self.tx)
             .await
             .map_err(db_err)?;

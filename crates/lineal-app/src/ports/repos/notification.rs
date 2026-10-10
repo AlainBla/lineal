@@ -55,6 +55,8 @@ pub struct NotificationView {
     pub n: Notification,
     pub actor_name: Option<String>,
     pub issue_identifier: Option<String>,
+    /// Aktuelles Team des Issues (für Sichtbarkeitsprüfungen zum Lesezeitpunkt).
+    pub issue_team_id: Option<TeamId>,
     pub issue_title: Option<String>,
     pub project_name: Option<String>,
     pub initiative_name: Option<String>,
@@ -386,6 +388,7 @@ pub trait NotificationRepo: Send {
     async fn mark_all_read(
         &mut self,
         _user: UserId,
+        _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
     ) -> AppResult<u64> {
@@ -418,6 +421,7 @@ pub trait NotificationRepo: Send {
     async fn archive_all(
         &mut self,
         _user: UserId,
+        _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
     ) -> AppResult<u64> {
