@@ -90,6 +90,10 @@ Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Pol
 
 Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; `BlobStore::delete` entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).
 
+### 4.6 Lieferkette
+
+`scripts/check.sh` führt (wenn installiert) `cargo deny check advisories bans licenses` aus (`deny.toml`: nur permissive Lizenzen, keine unbekannten Registries) und `npm audit --omit=dev --audit-level=high` für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). **Begründete Ausnahme:** `npm audit` meldet für Dev-Werkzeuge hohe Funde in der Kette `@graphql-codegen/cli` → `graphql-tools` → `globby`/`micromatch` → `braces` (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte `braces`-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn `@graphql-codegen/cli` oder `braces` aktualisiert werden.
+
 ## 5. Entscheidungen bei Widersprüchen zwischen Kapiteln
 
 | Stelle | Entscheidung |

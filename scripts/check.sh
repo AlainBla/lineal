@@ -25,6 +25,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 step "cargo test"
 cargo test --workspace
 
+step "cargo deny: advisories, bans, licenses (optional)"
+if cargo deny --version >/dev/null 2>&1; then
+  cargo deny check advisories bans licenses
+else
+  echo "übersprungen: cargo-deny fehlt (cargo install cargo-deny --locked)"
+fi
+
 step "GraphQL-Schema exportieren (web/schema.graphql wird neu erzeugt)"
 cargo run -q -p lineal-server -- schema-export --out web/schema.graphql
 
@@ -35,6 +42,11 @@ step "web: npm ci, typecheck, lint, test"
   npm run typecheck
   npm run lint
   npm test
+  # Laufzeit-Abhängigkeiten müssen frei von hohen Schwachstellen sein (bricht ab).
+  npm audit --omit=dev --audit-level=high
+  # Dev-Werkzeuge: Funde nur anzeigen. Bekannt: braces (ReDoS) in der @graphql-codegen-Kette,
+  # es gibt noch keine gepatchte Version; betrifft nur den Build mit eigenen Dateien (docs/15 §4.6).
+  npm audit --audit-level=high >/dev/null 2>&1 || echo "Hinweis: npm audit meldet Funde in Dev-Werkzeugen (bekannt, siehe docs/15 Abschnitt 4.6)"
 )
 
 printf '\n\033[1;32mcheck.sh: alles grün\033[0m\n'

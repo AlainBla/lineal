@@ -33351,6 +33351,8 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 </ul>
 <h3 id="ch-15-umsetzungsstand-4-5-dateien-und-l-schen">4.5 Dateien und Löschen</h3>
 <p>Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; <code>BlobStore::delete</code> entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).</p>
+<h3 id="ch-15-umsetzungsstand-4-6-lieferkette">4.6 Lieferkette</h3>
+<p><code>scripts/check.sh</code> führt (wenn installiert) <code>cargo deny check advisories bans licenses</code> aus (<code>deny.toml</code>: nur permissive Lizenzen, keine unbekannten Registries) und <code>npm audit --omit=dev --audit-level=high</code> für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). <strong>Begründete Ausnahme:</strong> <code>npm audit</code> meldet für Dev-Werkzeuge hohe Funde in der Kette <code>@graphql-codegen/cli</code> → <code>graphql-tools</code> → <code>globby</code>/<code>micromatch</code> → <code>braces</code> (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte <code>braces</code>-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn <code>@graphql-codegen/cli</code> oder <code>braces</code> aktualisiert werden.</p>
 <h2 id="ch-15-umsetzungsstand-5-entscheidungen-bei-widerspr-chen-zwischen-kapiteln">5. Entscheidungen bei Widersprüchen zwischen Kapiteln</h2>
 <table>
 <thead>
