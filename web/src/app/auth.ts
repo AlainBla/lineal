@@ -147,8 +147,20 @@ export function validateLogin(values: LoginValues): LoginErrors {
 }
 
 /** Nur Pfade innerhalb der App zulassen (kein Open Redirect). */
+/**
+ * Nur Ziele auf derselben Origin zulassen (Schutz vor Open Redirect).
+ * Lehnt u. a. `//host`, `/\\host`, Steuerzeichen und absolute URLs ab.
+ */
 export function safeRedirect(target: unknown): string {
-  return typeof target === "string" && target.startsWith("/") && !target.startsWith("//")
-    ? target
-    : "/";
+  if (typeof target !== "string" || !target.startsWith("/")) return "/";
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\u0000-\u001f\u007f]/.test(target) || target.startsWith("//")) return "/";
+  try {
+    const origin = window.location.origin;
+    const url = new URL(target, origin);
+    if (url.origin !== origin) return "/";
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return "/";
+  }
 }
