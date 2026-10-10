@@ -24,3 +24,4 @@ tracing.workspace = true
 lineal-db.workspace = true
 lineal-testkit.workspace = true
 sqlx.workspace = true
+uuid.workspace = true

@@ -1,4 +1,5 @@
-//! Outbox-Konsument `notifications` (WP08). Im Scaffold ein No-op.
+//! Outbox-Konsument `notifications` (WP08): Fan-out der Domain-Events in Inbox-Notifications
+//! (docs/10 §4). Die Logik steht in `lineal_app::usecases::notification::fanout`.
 
 use crate::EventConsumer;
 use async_trait::async_trait;
@@ -13,7 +14,7 @@ impl EventConsumer for NotificationsConsumer {
         "notifications"
     }
 
-    async fn handle(&self, _app: &App, _ev: &StoredEvent) -> AppResult<()> {
-        Ok(())
+    async fn handle(&self, app: &App, ev: &StoredEvent) -> AppResult<()> {
+        app.fan_out_event(ev).await.map(|_| ())
     }
 }

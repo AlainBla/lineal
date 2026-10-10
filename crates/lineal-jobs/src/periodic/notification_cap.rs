@@ -1,4 +1,6 @@
-//! Periodischer Job `notification_cap` (WP08). Im Scaffold ein No-op.
+//! Periodischer Job `notification_cap` (WP08): höchstens `maxUnarchivedNotificationsPerUser`
+//! (Default 2000) nicht archivierte Notifications je User; entfernt außerdem archivierte
+//! Notifications nach 90 Tagen.
 
 use crate::{PeriodicJob, Schedule};
 use async_trait::async_trait;
@@ -18,7 +20,11 @@ impl PeriodicJob for NotificationCapJob {
         Schedule::Every(Duration::from_secs(300))
     }
 
-    async fn run(&self, _app: &App, _now: DateTime<Utc>) -> AppResult<()> {
+    async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()> {
+        let archived = app.enforce_notification_cap(now).await?;
+        if archived > 0 {
+            tracing::info!(archived, "notification cap enforced");
+        }
         Ok(())
     }
 }

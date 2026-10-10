@@ -5,8 +5,10 @@ use chrono::Duration as ChronoDuration;
 use lineal_app::App;
 use lineal_app::AppResult;
 use lineal_app::ports::repos::NewJob;
+use lineal_domain::ids::EventId;
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const PERIODIC_PREFIX: &str = "periodic:";
@@ -19,6 +21,9 @@ pub struct WorkerConfig {
     pub batch: i64,
     /// Wartezeit, wenn nichts zu tun war.
     pub poll_interval: Duration,
+    /// Fehlversuche eines Konsumenten je Event, danach gilt das Event als zugestellt (mit
+    /// Fehler-Log, "Dead Letter"), damit ein kaputtes Event die Warteschlange nicht dauerhaft belastet.
+    pub max_event_attempts: u32,
 }
 
 impl Default for WorkerConfig {
@@ -27,6 +32,7 @@ impl Default for WorkerConfig {
             worker_id: format!("worker-{}", std::process::id()),
             batch: 100,
             poll_interval: Duration::from_millis(200),
+            max_event_attempts: 10,
         }
     }
 }
@@ -51,6 +57,8 @@ pub struct Worker {
     consumers: Vec<Arc<dyn EventConsumer>>,
     periodic: Vec<Arc<dyn PeriodicJob>>,
     cfg: WorkerConfig,
+    /// Fehlversuche je (Konsument, Event); nur im Speicher (nach einem Neustart zählt es neu).
+    failures: Mutex<HashMap<(&'static str, EventId), u32>>,
 }
 
 impl Worker {
@@ -71,7 +79,31 @@ impl Worker {
             consumers,
             periodic,
             cfg,
+            failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Zählt einen Fehlversuch; `true`, wenn das Limit erreicht ist und das Event aufgegeben wird.
+    fn record_failure(&self, consumer: &'static str, event: EventId) -> bool {
+        let mut map = self
+            .failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let attempts = map.entry((consumer, event)).or_insert(0);
+        *attempts += 1;
+        if *attempts >= self.cfg.max_event_attempts {
+            map.remove(&(consumer, event));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_failures(&self, consumer: &'static str, event: EventId) {
+        self.failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(consumer, event));
     }
 
     /// Ein Durchlauf: Outbox verteilen, periodische Jobs einplanen, fällige Jobs ausführen.
@@ -126,7 +158,18 @@ impl Worker {
             let mut ok_ids = Vec::with_capacity(events.len());
             for ev in &events {
                 match consumer.handle(&self.app, ev).await {
-                    Ok(()) => ok_ids.push(ev.id),
+                    Ok(()) => {
+                        self.clear_failures(consumer.name(), ev.id);
+                        ok_ids.push(ev.id);
+                    }
+                    Err(e) if self.record_failure(consumer.name(), ev.id) => {
+                        tracing::error!(
+                            consumer = consumer.name(), event = %ev.id, error = %e,
+                            attempts = self.cfg.max_event_attempts,
+                            "consumer gave up on event (dead letter), marked as delivered"
+                        );
+                        ok_ids.push(ev.id);
+                    }
                     Err(e) => tracing::warn!(
                         consumer = consumer.name(), event = %ev.id, error = %e,
                         "consumer failed, event stays undelivered"

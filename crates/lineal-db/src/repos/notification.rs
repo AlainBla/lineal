@@ -1,8 +1,1217 @@
-//! `NotificationRepo` für `PgTx` (Stub; Methoden ergänzt das zuständige Arbeitspaket).
+//! `NotificationRepo` für `PgTx` (WP08).
 
+use super::user::parse_role;
+use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
+use chrono::{DateTime, NaiveDate, Utc};
+use lineal_app::AppResult;
 use lineal_app::ports::repos::NotificationRepo;
+use lineal_app::ports::repos::notification::*;
+use lineal_app::ports::repos::user::{Page, PageCursor, PageRequest};
+use lineal_domain::ids::{CommentId, IssueId, NotificationId, ProjectId, TeamId, UserId};
+use serde_json::Value;
+use uuid::Uuid;
+
+const VIEW_SELECT: &str = "SELECT n.id, n.user_id, n.type AS kind, n.category, n.target_type, n.actor_id, \
+    n.issue_id, n.team_id, n.project_id, n.project_update_id, n.project_milestone_id, n.initiative_id, \
+    n.initiative_update_id, n.document_id, n.comment_id, n.parent_comment_id, n.reaction_emoji, n.read_at, \
+    n.snoozed_until_at, n.unsnoozed_at, n.emailed_at, n.is_priority, n.group_key, n.created_at, n.updated_at, \
+    n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.title AS issue_title, \
+    p.name AS project_name, ini.name AS initiative_name, d.title AS document_title, u.email AS recipient_email \
+    FROM notification n \
+    JOIN \"user\" u ON u.organization_id = n.organization_id AND u.id = n.user_id \
+    LEFT JOIN \"user\" a ON a.organization_id = n.organization_id AND a.id = n.actor_id \
+    LEFT JOIN issue i ON i.organization_id = n.organization_id AND i.id = n.issue_id \
+    LEFT JOIN project p ON p.organization_id = n.organization_id AND p.id = n.project_id \
+    LEFT JOIN initiative ini ON ini.organization_id = n.organization_id AND ini.id = n.initiative_id \
+    LEFT JOIN document d ON d.organization_id = n.organization_id AND d.id = n.document_id ";
+
+/// Bezugsobjekt sichtbar (`$vis` = Array sichtbarer Team-IDs).
+fn visible_sql(vis: &str) -> String {
+    format!(
+        "(n.issue_id IS NULL OR i.team_id = ANY({vis})) \
+         AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
+              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis})))"
+    )
+}
+
+/// Nicht (mehr) gesnoozt.
+fn awake_sql(now: &str) -> String {
+    format!(
+        "(n.snoozed_until_at IS NULL OR n.snoozed_until_at <= {now} OR n.unsnoozed_at IS NOT NULL)"
+    )
+}
+
+fn bulk_sql(filter: BulkFilter) -> &'static str {
+    match filter {
+        BulkFilter::All => "TRUE",
+        BulkFilter::Read => {
+            "NOT EXISTS (SELECT 1 FROM notification x WHERE x.user_id = n.user_id \
+             AND x.group_key = n.group_key AND x.archived_at IS NULL AND x.read_at IS NULL)"
+        }
+        BulkFilter::Completed => {
+            "EXISTS (SELECT 1 FROM issue ci WHERE ci.id = n.issue_id \
+             AND ci.state_type IN ('completed','canceled','duplicate'))"
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ViewRow {
+    id: Uuid,
+    user_id: Uuid,
+    kind: String,
+    category: String,
+    target_type: String,
+    actor_id: Option<Uuid>,
+    issue_id: Option<Uuid>,
+    team_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+    project_update_id: Option<Uuid>,
+    project_milestone_id: Option<Uuid>,
+    initiative_id: Option<Uuid>,
+    initiative_update_id: Option<Uuid>,
+    document_id: Option<Uuid>,
+    comment_id: Option<Uuid>,
+    parent_comment_id: Option<Uuid>,
+    reaction_emoji: Option<String>,
+    read_at: Option<DateTime<Utc>>,
+    snoozed_until_at: Option<DateTime<Utc>>,
+    unsnoozed_at: Option<DateTime<Utc>>,
+    emailed_at: Option<DateTime<Utc>>,
+    is_priority: bool,
+    group_key: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
+    actor_name: Option<String>,
+    issue_identifier: Option<String>,
+    issue_title: Option<String>,
+    project_name: Option<String>,
+    initiative_name: Option<String>,
+    document_title: Option<String>,
+    recipient_email: String,
+}
+
+impl From<ViewRow> for NotificationView {
+    fn from(r: ViewRow) -> Self {
+        Self {
+            n: Notification {
+                id: NotificationId(r.id),
+                user_id: UserId(r.user_id),
+                kind: r.kind,
+                category: r.category,
+                target_type: r.target_type,
+                actor_id: r.actor_id.map(UserId),
+                issue_id: r.issue_id.map(IssueId),
+                team_id: r.team_id.map(TeamId),
+                project_id: r.project_id.map(ProjectId),
+                project_update_id: r.project_update_id,
+                project_milestone_id: r.project_milestone_id,
+                initiative_id: r.initiative_id,
+                initiative_update_id: r.initiative_update_id,
+                document_id: r.document_id,
+                comment_id: r.comment_id.map(CommentId),
+                parent_comment_id: r.parent_comment_id.map(CommentId),
+                reaction_emoji: r.reaction_emoji,
+                read_at: r.read_at,
+                snoozed_until_at: r.snoozed_until_at,
+                unsnoozed_at: r.unsnoozed_at,
+                emailed_at: r.emailed_at,
+                is_priority: r.is_priority,
+                group_key: r.group_key,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                archived_at: r.archived_at,
+            },
+            actor_name: r.actor_name,
+            issue_identifier: r.issue_identifier,
+            issue_title: r.issue_title,
+            project_name: r.project_name,
+            initiative_name: r.initiative_name,
+            document_title: r.document_title,
+            recipient_email: r.recipient_email,
+        }
+    }
+}
+
+fn uuids<T: Copy + Into<Uuid>>(ids: &[T]) -> Vec<Uuid> {
+    ids.iter().map(|i| (*i).into()).collect()
+}
+
+#[derive(sqlx::FromRow)]
+struct IssueFactsRow {
+    id: Uuid,
+    team_id: Uuid,
+    identifier: String,
+    title: String,
+    creator_id: Option<Uuid>,
+    assignee_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+    cycle_id: Option<Uuid>,
+    state_type: String,
+    priority: i32,
+    due_date: Option<NaiveDate>,
+}
+
+impl From<IssueFactsRow> for IssueFacts {
+    fn from(r: IssueFactsRow) -> Self {
+        Self {
+            id: IssueId(r.id),
+            team_id: TeamId(r.team_id),
+            identifier: r.identifier,
+            title: r.title,
+            creator_id: r.creator_id.map(UserId),
+            assignee_id: r.assignee_id.map(UserId),
+            project_id: r.project_id.map(ProjectId),
+            cycle_id: r.cycle_id,
+            state_type: r.state_type,
+            priority: r.priority,
+            due_date: r.due_date,
+        }
+    }
+}
+
+const ISSUE_FACTS: &str = "SELECT id, team_id, identifier, title, creator_id, assignee_id, project_id, \
+    cycle_id, state_type, priority, due_date FROM issue WHERE organization_id = $1 AND ";
+
+type PrefsRow = (
+    Uuid,
+    String,
+    Option<String>,
+    String,
+    bool,
+    Vec<String>,
+    Value,
+);
+
+fn prefs_from(r: PrefsRow) -> UserNotificationPrefs {
+    UserNotificationPrefs {
+        user_id: UserId(r.0),
+        email: r.1,
+        timezone: r.2,
+        email_format: r.3,
+        due_date_reminders: r.4,
+        priority_categories: r.5,
+        settings: r.6,
+    }
+}
+
+const PREFS_COLS: &str = "id, email, timezone, email_format, due_date_reminders, \
+    notification_priority_categories, notification_settings";
+
+type SubRow = (
+    Uuid,
+    Uuid,
+    String,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<String>,
+    Vec<String>,
+    bool,
+    bool,
+);
+
+const SUB_COLS: &str = "id, subscriber_id, target_type, team_id, project_id, initiative_id, cycle_id, \
+    label_id, context_view_type, notification_subscription_types, include_sub_initiative_updates, active";
+
+fn kind_of(s: &str) -> Option<ObjectKind> {
+    Some(match s {
+        "team" => ObjectKind::Team,
+        "project" => ObjectKind::Project,
+        "initiative" => ObjectKind::Initiative,
+        "cycle" => ObjectKind::Cycle,
+        "label" => ObjectKind::Label,
+        _ => return None,
+    })
+}
+
+fn sub_from(r: SubRow) -> Option<ObjectSubscription> {
+    let target = r.3.or(r.4).or(r.5).or(r.6).or(r.7)?;
+    Some(ObjectSubscription {
+        id: r.0,
+        subscriber_id: UserId(r.1),
+        kind: kind_of(&r.2)?,
+        target_id: target,
+        context_view_type: r.8,
+        types: r.9,
+        include_sub_initiative_updates: r.10,
+        active: r.11,
+    })
+}
 
 #[async_trait]
-impl NotificationRepo for PgTx {}
+impl NotificationRepo for PgTx {
+    async fn insert_notification(&mut self, n: &NewNotification) -> AppResult<bool> {
+        let res = sqlx::query(
+            "INSERT INTO notification (id, organization_id, user_id, type, category, target_type, actor_id, \
+             issue_id, team_id, project_id, project_update_id, project_milestone_id, initiative_id, \
+             initiative_update_id, document_id, comment_id, parent_comment_id, reaction_emoji, is_priority, \
+             dedup_key, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21) \
+             ON CONFLICT (user_id, dedup_key) DO NOTHING",
+        )
+        .bind(n.id.0)
+        .bind(self.org.0)
+        .bind(n.user_id.0)
+        .bind(&n.kind)
+        .bind(&n.category)
+        .bind(&n.target_type)
+        .bind(n.actor_id.map(|a| a.0))
+        .bind(n.issue_id.map(|a| a.0))
+        .bind(n.team_id.map(|a| a.0))
+        .bind(n.project_id.map(|a| a.0))
+        .bind(n.project_update_id)
+        .bind(n.project_milestone_id)
+        .bind(n.initiative_id)
+        .bind(n.initiative_update_id)
+        .bind(n.document_id)
+        .bind(n.comment_id.map(|a| a.0))
+        .bind(n.parent_comment_id.map(|a| a.0))
+        .bind(&n.reaction_emoji)
+        .bind(n.is_priority)
+        .bind(&n.dedup_key)
+        .bind(n.now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if res.rows_affected() == 0 {
+            return Ok(false);
+        }
+        // Neue Aktivität in der Gruppe beendet ein laufendes Snooze (docs/05 §6.4 Regel 3).
+        sqlx::query(
+            "UPDATE notification SET unsnoozed_at = $3, updated_at = $3, version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND id <> $4 \
+               AND group_key = (SELECT group_key FROM notification WHERE id = $4) \
+               AND snoozed_until_at > $3 AND unsnoozed_at IS NULL AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(n.user_id.0)
+        .bind(n.now)
+        .bind(n.id.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(true)
+    }
+
+    async fn get_notification(
+        &mut self,
+        user: UserId,
+        id: NotificationId,
+    ) -> AppResult<Option<NotificationView>> {
+        let sql =
+            format!("{VIEW_SELECT} WHERE n.organization_id = $1 AND n.user_id = $2 AND n.id = $3");
+        let row: Option<ViewRow> = sqlx::query_as(&sql)
+            .bind(self.org.0)
+            .bind(user.0)
+            .bind(id.0)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn list_notifications(
+        &mut self,
+        user: UserId,
+        query: &InboxQuery,
+        now: DateTime<Utc>,
+        page: &PageRequest,
+    ) -> AppResult<Page<NotificationView>> {
+        let mut sql = format!(
+            "{VIEW_SELECT} WHERE n.organization_id = $1 AND n.user_id = $2 AND {} ",
+            visible_sql("$3")
+        );
+        if !query.include_archived {
+            sql.push_str("AND n.archived_at IS NULL ");
+        }
+        if !query.include_snoozed {
+            sql.push_str(&format!("AND {} ", awake_sql("$4")));
+        }
+        if query.unread_only {
+            sql.push_str("AND n.read_at IS NULL ");
+        }
+        sql.push_str("AND ($5::timestamptz IS NULL OR (n.created_at, n.id) < ($5, $6)) ");
+        sql.push_str("ORDER BY n.created_at DESC, n.id DESC LIMIT $7");
+        let rows: Vec<ViewRow> = sqlx::query_as(&sql)
+            .bind(self.org.0)
+            .bind(user.0)
+            .bind(uuids(&query.visible_teams))
+            .bind(now)
+            .bind(page.cursor.map(|c| c.key))
+            .bind(page.cursor.map_or(Uuid::nil(), |c| c.id))
+            .bind(page.limit + 1)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        let mut items: Vec<NotificationView> = rows.into_iter().map(Into::into).collect();
+        let has_next = items.len() as i64 > page.limit;
+        if has_next {
+            items.truncate(page.limit as usize);
+        }
+        let next = if has_next {
+            items.last().map(|v| PageCursor {
+                key: v.n.created_at,
+                id: v.n.id.0,
+            })
+        } else {
+            None
+        };
+        Ok(Page { items, next })
+    }
+
+    async fn count_unread_groups(
+        &mut self,
+        user: UserId,
+        visible_teams: &[TeamId],
+        now: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        let sql = format!(
+            "SELECT count(*) FROM (SELECT n.group_key FROM notification n \
+             LEFT JOIN issue i ON i.organization_id = n.organization_id AND i.id = n.issue_id \
+             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {} \
+             GROUP BY n.group_key HAVING bool_or(n.read_at IS NULL)) g",
+            visible_sql("$3"),
+            awake_sql("$4")
+        );
+        sqlx::query_scalar(&sql)
+            .bind(self.org.0)
+            .bind(user.0)
+            .bind(uuids(visible_teams))
+            .bind(now)
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(db_err)
+    }
+
+    async fn set_read(
+        &mut self,
+        user: UserId,
+        id: NotificationId,
+        read: bool,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE notification SET read_at = CASE WHEN $4 THEN $5 ELSE NULL END, updated_at = $5, \
+             version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND id = $3 AND (read_at IS NULL) = $4",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(id.0)
+        .bind(read)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn mark_group_read(
+        &mut self,
+        user: UserId,
+        group_key: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE notification SET read_at = $4, updated_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND group_key = $3 \
+               AND read_at IS NULL AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(group_key)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn mark_all_read(
+        &mut self,
+        user: UserId,
+        filter: BulkFilter,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let sql = format!(
+            "UPDATE notification n SET read_at = $3, updated_at = $3, version = version + 1 \
+             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.read_at IS NULL \
+               AND n.archived_at IS NULL AND {}",
+            bulk_sql(filter)
+        );
+        let res = sqlx::query(&sql)
+            .bind(self.org.0)
+            .bind(user.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn snooze_group(
+        &mut self,
+        user: UserId,
+        group_key: &str,
+        until: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE notification SET snoozed_until_at = $4, unsnoozed_at = NULL, updated_at = $5, \
+             version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND group_key = $3 AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(group_key)
+        .bind(until)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn set_group_archived(
+        &mut self,
+        user: UserId,
+        group_key: &str,
+        archive: bool,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE notification SET archived_at = CASE WHEN $4 THEN $5 ELSE NULL END, updated_at = $5, \
+             version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND group_key = $3 \
+               AND (archived_at IS NULL) = $4",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(group_key)
+        .bind(archive)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn archive_all(
+        &mut self,
+        user: UserId,
+        filter: BulkFilter,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let sql = format!(
+            "UPDATE notification n SET archived_at = $3, updated_at = $3, version = version + 1 \
+             WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {}",
+            bulk_sql(filter)
+        );
+        let res = sqlx::query(&sql)
+            .bind(self.org.0)
+            .bind(user.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn unsnooze_due(&mut self, now: DateTime<Utc>) -> AppResult<u64> {
+        // Bewusst mandantenübergreifend; nur über `Store::begin_system` aufzurufen.
+        let res = sqlx::query(
+            "UPDATE notification SET unsnoozed_at = $1, read_at = NULL, updated_at = $1, version = version + 1 \
+             WHERE snoozed_until_at IS NOT NULL AND snoozed_until_at <= $1 AND unsnoozed_at IS NULL \
+               AND archived_at IS NULL",
+        )
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn archive_over_cap(&mut self, now: DateTime<Utc>) -> AppResult<u64> {
+        // Bewusst mandantenübergreifend; nur über `Store::begin_system` aufzurufen.
+        let res = sqlx::query(
+            "WITH over_cap AS ( \
+                 SELECT n.organization_id, n.user_id, \
+                        COALESCE((o.limits->>'maxUnarchivedNotificationsPerUser')::int, 2000) AS cap \
+                 FROM notification n JOIN organization o ON o.id = n.organization_id \
+                 WHERE n.archived_at IS NULL \
+                 GROUP BY n.organization_id, n.user_id, o.limits \
+                 HAVING count(*) > COALESCE((o.limits->>'maxUnarchivedNotificationsPerUser')::int, 2000)), \
+             ranked AS ( \
+                 SELECT n.id, oc.cap, row_number() OVER (PARTITION BY n.user_id \
+                        ORDER BY COALESCE(n.snoozed_until_at > $1 AND n.unsnoozed_at IS NULL, false) DESC, \
+                                 n.created_at DESC, n.id DESC) AS rn \
+                 FROM notification n JOIN over_cap oc \
+                   ON oc.organization_id = n.organization_id AND oc.user_id = n.user_id \
+                 WHERE n.archived_at IS NULL) \
+             UPDATE notification SET archived_at = $1, updated_at = $1, version = version + 1 \
+             WHERE id IN (SELECT id FROM ranked WHERE rn > cap)",
+        )
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn purge_archived(&mut self, before: DateTime<Utc>) -> AppResult<u64> {
+        let res = sqlx::query(
+            "DELETE FROM notification WHERE archived_at IS NOT NULL AND archived_at < $1",
+        )
+        .bind(before)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn list_email_candidates(
+        &mut self,
+        since: DateTime<Utc>,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<NotificationView>> {
+        let sql = format!(
+            "{VIEW_SELECT} WHERE n.organization_id = $1 AND n.read_at IS NULL AND n.emailed_at IS NULL \
+             AND n.archived_at IS NULL AND u.active AND n.created_at >= $2 AND {} \
+             ORDER BY n.created_at, n.id LIMIT $4",
+            awake_sql("$3")
+        );
+        let rows: Vec<ViewRow> = sqlx::query_as(&sql)
+            .bind(self.org.0)
+            .bind(since)
+            .bind(now)
+            .bind(limit)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn mark_emailed(&mut self, ids: &[NotificationId], now: DateTime<Utc>) -> AppResult<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE notification SET emailed_at = $3, updated_at = $3, version = version + 1 \
+             WHERE organization_id = $1 AND id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(uuids(ids))
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_due_candidates(&mut self, due_until: NaiveDate) -> AppResult<Vec<DueCandidate>> {
+        let rows: Vec<(Uuid, Uuid, Uuid, NaiveDate, Option<String>)> = sqlx::query_as(
+            "SELECT i.id, i.team_id, i.assignee_id, i.due_date, u.timezone \
+             FROM issue i JOIN \"user\" u ON u.organization_id = i.organization_id AND u.id = i.assignee_id \
+             WHERE i.organization_id = $1 AND i.due_date IS NOT NULL AND i.due_date <= $2 \
+               AND i.state_type NOT IN ('completed','canceled','duplicate') \
+               AND i.archived_at IS NULL AND NOT i.trashed AND u.due_date_reminders AND u.active",
+        )
+        .bind(self.org.0)
+        .bind(due_until)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(i, t, a, d, tz)| DueCandidate {
+                issue_id: IssueId(i),
+                team_id: TeamId(t),
+                assignee_id: UserId(a),
+                due_date: d,
+                timezone: tz,
+            })
+            .collect())
+    }
+
+    async fn list_org_ids(&mut self) -> AppResult<Vec<Uuid>> {
+        sqlx::query_scalar("SELECT id FROM organization ORDER BY id")
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)
+    }
+
+    async fn issue_facts(&mut self, id: IssueId) -> AppResult<Option<IssueFacts>> {
+        let row: Option<IssueFactsRow> = sqlx::query_as(&format!("{ISSUE_FACTS}id = $2"))
+            .bind(self.org.0)
+            .bind(id.0)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn issue_facts_by_ref(&mut self, reference: &str) -> AppResult<Option<IssueFacts>> {
+        if let Ok(id) = Uuid::parse_str(reference.trim()) {
+            return self.issue_facts(IssueId(id)).await;
+        }
+        let row: Option<IssueFactsRow> = sqlx::query_as(&format!(
+            "{ISSUE_FACTS}(identifier = upper($2) OR id = (SELECT issue_id FROM issue_identifier_alias \
+             WHERE organization_id = $1 AND identifier = upper($2) AND issue_id IS NOT NULL)) \
+             ORDER BY trashed, created_at DESC LIMIT 1"
+        ))
+        .bind(self.org.0)
+        .bind(reference.trim())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn comment_facts(&mut self, id: CommentId) -> AppResult<Option<CommentFacts>> {
+        let row: Option<(Uuid, Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> =
+            sqlx::query_as(
+                "SELECT id, user_id, issue_id, project_id, parent_id FROM comment \
+             WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(self.org.0)
+            .bind(id.0)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(|(id, u, i, p, par)| CommentFacts {
+            id: CommentId(id),
+            author_id: u.map(UserId),
+            issue_id: i.map(IssueId),
+            project_id: p.map(ProjectId),
+            parent_id: par.map(CommentId),
+        }))
+    }
+
+    async fn reaction_facts(&mut self, id: Uuid) -> AppResult<Option<ReactionFacts>> {
+        let row: Option<(Uuid, String, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT user_id, emoji, issue_id, comment_id FROM reaction WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(u, e, i, c)| ReactionFacts {
+            user_id: UserId(u),
+            emoji: e,
+            issue_id: i.map(IssueId),
+            comment_id: c.map(CommentId),
+        }))
+    }
+
+    async fn relation_facts(&mut self, id: Uuid) -> AppResult<Option<RelationFacts>> {
+        let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT issue_id, related_issue_id, type FROM issue_relation WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(a, b, k)| RelationFacts {
+            issue_id: IssueId(a),
+            related_issue_id: IssueId(b),
+            kind: k,
+        }))
+    }
+
+    async fn project_update_facts(&mut self, id: Uuid) -> AppResult<Option<ProjectUpdateFacts>> {
+        let row: Option<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+            "SELECT id, project_id, user_id FROM project_update WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(id, p, u)| ProjectUpdateFacts {
+            id,
+            project_id: ProjectId(p),
+            author_id: UserId(u),
+        }))
+    }
+
+    async fn project_team_ids(&mut self, project: ProjectId) -> AppResult<Vec<TeamId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT team_id FROM project_team WHERE organization_id = $1 AND project_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(project.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(TeamId).collect())
+    }
+
+    async fn fanout_users(&mut self, ids: &[UserId]) -> AppResult<Vec<FanoutUser>> {
+        let rows: Vec<(Uuid, String, bool)> = sqlx::query_as(
+            "SELECT id, role, active FROM \"user\" WHERE organization_id = $1 AND id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(uuids(ids))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter()
+            .map(|(id, role, active)| {
+                Ok(FanoutUser {
+                    id: UserId(id),
+                    role: parse_role(&role)?,
+                    active,
+                })
+            })
+            .collect()
+    }
+
+    async fn subscribe_issue(
+        &mut self,
+        issue: IssueId,
+        user: UserId,
+        thread: Option<CommentId>,
+        reason: SubscriptionReason,
+        now: DateTime<Utc>,
+    ) -> AppResult<SubscribeOutcome> {
+        let existing: Option<(Uuid, bool)> = sqlx::query_as(
+            "SELECT id, active FROM issue_subscription WHERE organization_id = $1 AND issue_id = $2 \
+             AND user_id = $3 AND thread_comment_id IS NOT DISTINCT FROM $4",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(user.0)
+        .bind(thread.map(|t| t.0))
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        match existing {
+            None => {
+                sqlx::query(
+                    "INSERT INTO issue_subscription (organization_id, issue_id, user_id, thread_comment_id, \
+                     active, reason, created_at, updated_at) VALUES ($1,$2,$3,$4,true,$5,$6,$6)",
+                )
+                .bind(self.org.0)
+                .bind(issue.0)
+                .bind(user.0)
+                .bind(thread.map(|t| t.0))
+                .bind(reason.as_str())
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                Ok(SubscribeOutcome::Created)
+            }
+            Some((id, false)) if reason.reactivates() => {
+                sqlx::query(
+                    "UPDATE issue_subscription SET active = true, reason = $2, updated_at = $3, \
+                     version = version + 1 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(reason.as_str())
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                Ok(SubscribeOutcome::Reactivated)
+            }
+            Some(_) => Ok(SubscribeOutcome::Unchanged),
+        }
+    }
+
+    async fn unsubscribe_issue(
+        &mut self,
+        issue: IssueId,
+        user: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE issue_subscription SET active = false, updated_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND issue_id = $2 AND user_id = $3 AND active",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(user.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let was_active = res.rows_affected() > 0;
+        // Ohne Datensatz einen inaktiven anlegen, damit Kommentieren nicht erneut abonniert.
+        sqlx::query(
+            "INSERT INTO issue_subscription (organization_id, issue_id, user_id, thread_comment_id, \
+             active, reason, created_at, updated_at) \
+             SELECT $1,$2,$3,NULL,false,'manual',$4,$4 \
+             WHERE NOT EXISTS (SELECT 1 FROM issue_subscription WHERE issue_id = $2 AND user_id = $3 \
+                               AND thread_comment_id IS NULL)",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(user.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(was_active)
+    }
+
+    async fn list_issue_subscriptions(
+        &mut self,
+        issue: IssueId,
+    ) -> AppResult<Vec<IssueSubscription>> {
+        let rows: Vec<(Uuid, Option<Uuid>, bool, String)> = sqlx::query_as(
+            "SELECT user_id, thread_comment_id, active, reason FROM issue_subscription \
+             WHERE organization_id = $1 AND issue_id = $2 ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(u, t, a, r)| IssueSubscription {
+                user_id: UserId(u),
+                thread_comment_id: t.map(CommentId),
+                active: a,
+                reason: r,
+            })
+            .collect())
+    }
+
+    async fn issue_subscribers(&mut self, issue: IssueId) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT user_id FROM issue_subscription WHERE organization_id = $1 AND issue_id = $2 \
+             AND active AND thread_comment_id IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn thread_subscribers(
+        &mut self,
+        issue: IssueId,
+        thread: CommentId,
+    ) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT user_id FROM issue_subscription WHERE organization_id = $1 AND issue_id = $2 \
+             AND active AND thread_comment_id = $3",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(thread.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn thread_participants(&mut self, thread: CommentId) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT user_id FROM comment WHERE organization_id = $1 AND (id = $2 OR parent_id = $2) \
+             AND user_id IS NOT NULL AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(thread.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn upsert_object_subscription(
+        &mut self,
+        sub: &UpsertObjectSubscription,
+    ) -> AppResult<ObjectSubscription> {
+        let col = sub.kind.column();
+        let existing: Option<Uuid> = sqlx::query_scalar(&format!(
+            "SELECT id FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
+             AND target_type = $3 AND {col} = $4 AND context_view_type IS NOT DISTINCT FROM $5"
+        ))
+        .bind(self.org.0)
+        .bind(sub.subscriber_id.0)
+        .bind(sub.kind.as_str())
+        .bind(sub.target_id)
+        .bind(&sub.context_view_type)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let id = match existing {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE notification_subscription SET notification_subscription_types = $2, \
+                     include_sub_initiative_updates = $3, active = $4, updated_at = $5, version = version + 1 \
+                     WHERE id = $1",
+                )
+                .bind(id)
+                .bind(&sub.types)
+                .bind(sub.include_sub_initiative_updates)
+                .bind(sub.active)
+                .bind(sub.now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                id
+            }
+            None => {
+                sqlx::query(&format!(
+                    "INSERT INTO notification_subscription (id, organization_id, subscriber_id, target_type, \
+                     {col}, context_view_type, notification_subscription_types, \
+                     include_sub_initiative_updates, active, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)"
+                ))
+                .bind(sub.id)
+                .bind(self.org.0)
+                .bind(sub.subscriber_id.0)
+                .bind(sub.kind.as_str())
+                .bind(sub.target_id)
+                .bind(&sub.context_view_type)
+                .bind(&sub.types)
+                .bind(sub.include_sub_initiative_updates)
+                .bind(sub.active)
+                .bind(sub.now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                sub.id
+            }
+        };
+        let row: SubRow = sqlx::query_as(&format!(
+            "SELECT {SUB_COLS} FROM notification_subscription WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sub_from(row)
+            .ok_or_else(|| lineal_app::AppError::internal("invalid notification subscription"))
+    }
+
+    async fn list_object_subscriptions(
+        &mut self,
+        user: UserId,
+    ) -> AppResult<Vec<ObjectSubscription>> {
+        let rows: Vec<SubRow> = sqlx::query_as(&format!(
+            "SELECT {SUB_COLS} FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
+             AND archived_at IS NULL AND target_type IN ('team','project','initiative','cycle','label') \
+             ORDER BY created_at, id"
+        ))
+        .bind(self.org.0)
+        .bind(user.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().filter_map(sub_from).collect())
+    }
+
+    async fn object_subscribers(
+        &mut self,
+        kind: ObjectKind,
+        target: Uuid,
+        ntype: &str,
+    ) -> AppResult<Vec<UserId>> {
+        let col = kind.column();
+        let rows: Vec<Uuid> = sqlx::query_scalar(&format!(
+            "SELECT DISTINCT subscriber_id FROM notification_subscription WHERE organization_id = $1 \
+             AND target_type = $2 AND {col} = $3 AND active AND archived_at IS NULL \
+             AND $4 = ANY(notification_subscription_types)"
+        ))
+        .bind(self.org.0)
+        .bind(kind.as_str())
+        .bind(target)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn initiative_subscribers_of_project(
+        &mut self,
+        project: ProjectId,
+        ntype: &str,
+    ) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT ns.subscriber_id FROM notification_subscription ns \
+             WHERE ns.organization_id = $1 AND ns.target_type = 'initiative' AND ns.active \
+               AND ns.archived_at IS NULL AND $3 = ANY(ns.notification_subscription_types) \
+               AND ns.initiative_id IN (SELECT initiative_id FROM initiative_to_project WHERE project_id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(project.0)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn label_subscribers_of_issue(
+        &mut self,
+        issue: IssueId,
+        ntype: &str,
+    ) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT ns.subscriber_id FROM notification_subscription ns \
+             WHERE ns.organization_id = $1 AND ns.target_type = 'label' AND ns.active \
+               AND ns.archived_at IS NULL AND $3 = ANY(ns.notification_subscription_types) \
+               AND ns.label_id IN (SELECT label_id FROM issue_to_label WHERE issue_id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn label_team(&mut self, label: Uuid) -> AppResult<Option<Option<TeamId>>> {
+        let row: Option<Option<Uuid>> = sqlx::query_scalar(
+            "SELECT team_id FROM issue_label WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(label)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|t| t.map(TeamId)))
+    }
+
+    async fn cycle_team(&mut self, cycle: Uuid) -> AppResult<Option<TeamId>> {
+        let row: Option<Uuid> =
+            sqlx::query_scalar("SELECT team_id FROM cycle WHERE organization_id = $1 AND id = $2")
+                .bind(self.org.0)
+                .bind(cycle)
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+        Ok(row.map(TeamId))
+    }
+
+    async fn initiative_exists(&mut self, initiative: Uuid) -> AppResult<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM initiative WHERE organization_id = $1 AND id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(initiative)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn get_prefs(&mut self, user: UserId) -> AppResult<Option<UserNotificationPrefs>> {
+        let row: Option<PrefsRow> = sqlx::query_as(&format!(
+            "SELECT {PREFS_COLS} FROM \"user\" WHERE organization_id = $1 AND id = $2"
+        ))
+        .bind(self.org.0)
+        .bind(user.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(prefs_from))
+    }
+
+    async fn update_prefs(
+        &mut self,
+        user: UserId,
+        patch: &UserNotificationPrefsPatch,
+        now: DateTime<Utc>,
+    ) -> AppResult<UserNotificationPrefs> {
+        let row: PrefsRow = sqlx::query_as(&format!(
+            "UPDATE \"user\" SET email_format = COALESCE($3, email_format), \
+             due_date_reminders = COALESCE($4, due_date_reminders), \
+             notification_priority_categories = COALESCE($5, notification_priority_categories), \
+             notification_settings = notification_settings || COALESCE($6, '{{}}'::jsonb), \
+             updated_at = $7, version = version + 1 \
+             WHERE organization_id = $1 AND id = $2 RETURNING {PREFS_COLS}"
+        ))
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(&patch.email_format)
+        .bind(patch.due_date_reminders)
+        .bind(&patch.priority_categories)
+        .bind(&patch.settings)
+        .bind(now)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(prefs_from(row))
+    }
+
+    async fn list_channel_preferences(
+        &mut self,
+        user: UserId,
+    ) -> AppResult<Vec<ChannelPreference>> {
+        let rows: Vec<(String, String, bool)> = sqlx::query_as(
+            "SELECT category, channel, enabled FROM notification_channel_preference \
+             WHERE organization_id = $1 AND user_id = $2 AND archived_at IS NULL ORDER BY category, channel",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(category, channel, enabled)| ChannelPreference {
+                category,
+                channel,
+                enabled,
+            })
+            .collect())
+    }
+
+    async fn set_channel_preference(
+        &mut self,
+        user: UserId,
+        pref: &ChannelPreference,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO notification_channel_preference (organization_id, user_id, category, channel, \
+             enabled, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6) \
+             ON CONFLICT (user_id, category, channel) DO UPDATE SET enabled = EXCLUDED.enabled, \
+             updated_at = EXCLUDED.updated_at, version = notification_channel_preference.version + 1",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(&pref.category)
+        .bind(&pref.channel)
+        .bind(pref.enabled)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn priority_categories(
+        &mut self,
+        users: &[UserId],
+    ) -> AppResult<Vec<(UserId, Vec<String>)>> {
+        let rows: Vec<(Uuid, Vec<String>)> = sqlx::query_as(
+            "SELECT id, notification_priority_categories FROM \"user\" \
+             WHERE organization_id = $1 AND id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(uuids(users))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(|(u, c)| (UserId(u), c)).collect())
+    }
+}
