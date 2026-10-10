@@ -4,9 +4,27 @@ type Mutation {
 	"""
 	_orgMutationReady: Boolean!
 	"""
+	Ändert Workspace-Settings (Admin/Owner).
+	"""
+	workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_teamMutationReady: Boolean!
+	teamCreate(input: TeamCreateInput!): TeamPayload!
+	teamUpdate(id: String!, input: TeamUpdateInput!): TeamPayload!
+	"""
+	Hängt ein Team unter einen Parent (`parentId = null`: Un-Nesting). Nur Workspace-Admins.
+	"""
+	nestTeam(teamId: String!, parentId: String, options: NestTeamOptions): TeamPayload!
+	teamMembershipCreate(teamId: String!, userId: String!, owner: Boolean): SuccessPayload!
+	teamMembershipDelete(teamId: String!, userId: String!): SuccessPayload!
+	workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
+	workflowStateUpdate(id: String!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!
+	"""
+	Archiviert einen Status; mit Issues ist `targetStateId` Pflicht.
+	"""
+	workflowStateArchive(id: String!, targetStateId: String): SuccessPayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -69,15 +87,53 @@ type Mutation {
 	_importMutationReady: Boolean!
 }
 
+input NestTeamOptions {
+	addMissingMembersToParent: Boolean
+	downgradeVisibility: Boolean
+	inheritWorkflowStatuses: Boolean
+	inheritIssueEstimation: Boolean
+}
+
+"""
+`Organization`.
+"""
+type Organization {
+	id: String!
+	name: String!
+	urlKey: String!
+	previousUrlKeys: [String!]!
+	logoUrl: String
+	fiscalYearStartMonth: Int!
+	initiativesEnabled: Boolean!
+	createdAt: String!
+	updatedAt: String!
+}
+
 type Query {
 	"""
 	Platzhalter des Scaffolds.
 	"""
 	_orgReady: Boolean!
 	"""
+	Der Workspace des Aufrufers.
+	"""
+	workspace: Organization!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_teamReady: Boolean!
+	"""
+	Sichtbare Teams (private Teams ohne Mitgliedschaft erscheinen nicht).
+	"""
+	teams(query: String, parentTeam: String, ancestorTeam: String, includeArchived: Boolean, first: Int): [Team!]!
+	"""
+	Ein Team per UUID, Key oder Name; nicht sichtbar → `not_found`.
+	"""
+	team(id: String!): Team!
+	"""
+	Workflow-Status eines Teams.
+	"""
+	workflowStates(teamId: String!): [WorkflowState!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -138,6 +194,111 @@ type Query {
 	Platzhalter des Scaffolds.
 	"""
 	_importReady: Boolean!
+}
+
+type SuccessPayload {
+	success: Boolean!
+}
+
+"""
+`Team`.
+"""
+type Team {
+	id: String!
+	key: String!
+	name: String!
+	displayName: String!
+	parentId: String
+	description: String
+	icon: String
+	color: String
+	visibility: String!
+	timezone: String!
+	triageEnabled: Boolean!
+	cyclesEnabled: Boolean!
+	issueEstimationType: String!
+	inheritWorkflowStatuses: Boolean!
+	retiredAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+input TeamCreateInput {
+	name: String!
+	key: String
+	description: String
+	icon: String
+	color: String
+	parentId: String
+	visibility: String
+	timezone: String
+	triageEnabled: Boolean
+	copySettingsFromTeamId: String
+}
+
+type TeamPayload {
+	success: Boolean!
+	team: Team
+}
+
+input TeamUpdateInput {
+	name: String
+	key: String
+	description: String
+	icon: String
+	color: String
+	timezone: String
+	visibility: String
+	triageEnabled: Boolean
+	cyclesEnabled: Boolean
+}
+
+"""
+`WorkflowState`.
+"""
+type WorkflowState {
+	id: String!
+	teamId: String!
+	name: String!
+	type: String!
+	color: String!
+	description: String
+	position: Float!
+	inheritedFromId: String
+	isDefault: Boolean!
+}
+
+input WorkflowStateCreateInput {
+	teamId: String!
+	name: String!
+	type: String!
+	color: String!
+	description: String
+	position: Float
+}
+
+type WorkflowStatePayload {
+	success: Boolean!
+	workflowState: WorkflowState
+}
+
+input WorkflowStateUpdateInput {
+	name: String
+	color: String
+	description: String
+	position: Float
+}
+
+type WorkspacePayload {
+	success: Boolean!
+	workspace: Organization
+}
+
+input WorkspaceUpdateInput {
+	name: String
+	urlKey: String
+	fiscalYearStartMonth: Int
+	initiativesEnabled: Boolean
 }
 
 """

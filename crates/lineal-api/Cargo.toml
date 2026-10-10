@@ -34,3 +34,5 @@ tokio-util = { version = "0.7", features = ["io"] }
 [dev-dependencies]
 lineal-testkit.workspace = true
 tokio.workspace = true
+lineal-db.workspace = true
+sqlx.workspace = true

@@ -30,3 +30,5 @@ lineal-testkit.workspace = true
 tokio.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
+lineal-db.workspace = true
+sqlx.workspace = true

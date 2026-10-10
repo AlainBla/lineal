@@ -206,7 +206,11 @@ mod tests {
     async fn every_tool_dispatches_to_a_not_implemented_handler() {
         let app = fake_app();
         let ctx = ctx_for(SeedUser::Alice);
-        for (name, _) in all_tools() {
+        for (name, group) in all_tools() {
+            // WP02 hat teams_users und statuses implementiert (eigene Contract-Tests).
+            if matches!(group, Group::TeamsUsers | Group::Statuses) {
+                continue;
+            }
             let res = dispatch(&app, &ctx, name, Value::Null).await.expect(name);
             let err = res.expect_err(name);
             assert_eq!(err.kind, ErrorKind::Internal, "{name}");

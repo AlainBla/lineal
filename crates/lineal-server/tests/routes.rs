@@ -25,9 +25,13 @@ async fn every_documented_path_is_routed() {
         (Method::POST, "/oauth/register", StatusCode::NOT_IMPLEMENTED),
         (Method::GET, "/oauth/authorize", StatusCode::NOT_IMPLEMENTED),
         (Method::POST, "/oauth/token", StatusCode::NOT_IMPLEMENTED),
-        (Method::POST, "/auth/login", StatusCode::NOT_IMPLEMENTED),
-        (Method::POST, "/auth/logout", StatusCode::NOT_IMPLEMENTED),
-        (Method::GET, "/auth/me", StatusCode::NOT_IMPLEMENTED),
+        (
+            Method::POST,
+            "/auth/login",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (Method::POST, "/auth/logout", StatusCode::OK),
+        (Method::GET, "/auth/me", StatusCode::UNAUTHORIZED),
         // Blob-Endpunkte (WP03): ungültige Signatur -> 403
         (Method::PUT, "/uploads/t", StatusCode::FORBIDDEN),
         (Method::GET, "/files/t", StatusCode::FORBIDDEN),

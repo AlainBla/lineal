@@ -16,6 +16,7 @@ lineal-app.workspace = true
 lineal-db.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+serde_json.workspace = true
 chrono-tz.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
