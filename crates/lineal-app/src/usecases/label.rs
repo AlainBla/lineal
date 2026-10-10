@@ -205,7 +205,15 @@ fn name_conflicts<'a>(
         .collect()
 }
 
-fn name_conflict_error(name: &str, found: &[&Label]) -> AppError {
+fn name_conflict_error(snap: &PolicySnapshot, name: &str, found: &[&Label]) -> AppError {
+    // Labels unsichtbarer (privater) Teams werden nie genannt.
+    let visible = snap.visible_team_ids();
+    let found: Vec<&Label> = found
+        .iter()
+        .copied()
+        .filter(|l| l.team_id.is_none_or(|t| visible.contains(&t)))
+        .collect();
+    let found = found.as_slice();
     AppError::conflict(format!(
         "A label named \"{name}\" already exists in this scope."
     ))
@@ -394,7 +402,7 @@ impl App {
         let conflicts =
             name_conflicts(&snap, &existing, scope, parent.as_ref().map(|g| g.id), None);
         if !conflicts.is_empty() {
-            return Err(name_conflict_error(&name, &conflicts));
+            return Err(name_conflict_error(&snap, &name, &conflicts));
         }
         let group_type = match (kind, is_group) {
             (LabelKind::Issue, true) => {
@@ -463,7 +471,7 @@ impl App {
                     Some(label.id),
                 );
                 if !conflicts.is_empty() {
-                    return Err(name_conflict_error(&n, &conflicts));
+                    return Err(name_conflict_error(&snap, &n, &conflicts));
                 }
             }
             patch.name = Some(n);

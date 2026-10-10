@@ -112,6 +112,7 @@ fn transition_error(e: DomainError) -> AppError {
 }
 
 /// Statuswechsel mit Zeitstempeln und `sortOrder` (docs/03 §1.6, §12). `explicit_sort` hat Vorrang.
+#[allow(clippy::too_many_arguments)]
 pub async fn change_state(
     tx: &mut dyn Tx,
     team: &Team,
@@ -447,6 +448,7 @@ pub struct PlanningChange {
 /// (docs/01 Issue-Invarianten 2–4): Cycle gehört zum Team, das Team nimmt am Projekt teil,
 /// der Meilenstein gehört zum Projekt. Liefert `true`, wenn der Status wegen eines aktiven
 /// Cycles von `backlog` auf `unstarted` gewechselt ist (`state_set_explicitly = false`).
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_planning(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
@@ -607,6 +609,7 @@ fn label_error(e: DomainError, reason: &str) -> AppError {
 ///
 /// `baseline` ist die Menge vor der Änderung (beim Teamwechsel bereits um nicht verfügbare Labels
 /// bereinigt), `current` die tatsächlich gespeicherte (für „Retired bleibt erhalten“).
+#[allow(clippy::too_many_arguments)]
 pub async fn plan_labels(
     tx: &mut dyn Tx,
     tree: &TeamTree,
@@ -621,7 +624,12 @@ pub async fn plan_labels(
     let mut resolved_new: Vec<Label> = Vec::new();
     let mut removed_refs: Vec<LabelId> = Vec::new();
     for r in remove {
-        let found = resolve::label::candidates(tx, LabelKind::Issue, r).await?;
+        let scopes = resolve::label::available_scopes(tree, team);
+        let found: Vec<_> = resolve::label::candidates(tx, LabelKind::Issue, r)
+            .await?
+            .into_iter()
+            .filter(|l| l.team_id.is_none_or(|t| scopes.contains(&t)))
+            .collect();
         if found.is_empty() {
             return Err(resolve::label::label_not_found(LabelKind::Issue, r));
         }

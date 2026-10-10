@@ -151,6 +151,7 @@ async fn add(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn remove(
     tx: &mut dyn Tx,
     env: &Env<'_>,

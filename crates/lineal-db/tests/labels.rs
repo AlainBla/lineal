@@ -683,3 +683,80 @@ async fn project_and_initiative_labels(pool: PgPool) {
         .await
         .unwrap();
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn private_team_labels_are_invisible_to_non_members(pool: PgPool) {
+    let (app, _) = setup(pool).await;
+    let (alice, bob) = (ctx_for(SeedUser::Alice), ctx_for(SeedUser::Bob));
+    app.save_label(
+        &bob,
+        ISSUE,
+        SaveLabelInput {
+            team_id: Some("DES".into()),
+            ..save("Geheim")
+        },
+    )
+    .await
+    .unwrap();
+    // Liste
+    let list = app
+        .list_labels(
+            &alice,
+            ISSUE,
+            ListLabelsInput {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(list.items.iter().all(|l| l.label.name != "Geheim"));
+    // Namensauflösung: not_found (kein ambiguous, keine Kandidaten)
+    for tool_call in [
+        app.save_label(
+            &alice,
+            ISSUE,
+            SaveLabelInput {
+                id: Some("Geheim".into()),
+                color: Some("#000000".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|_| ()),
+        app.retire_label(&alice, ISSUE, "geheim").await.map(|_| ()),
+        app.restore_label(&alice, ISSUE, "Geheim").await.map(|_| ()),
+    ] {
+        assert_eq!(kind(tool_call), ErrorKind::NotFound);
+    }
+    // Auch gleichnamiges Label in ENG macht die Auflösung nicht mehrdeutig
+    app.save_label(
+        &alice,
+        ISSUE,
+        SaveLabelInput {
+            team_id: Some("ENG".into()),
+            ..save("Geheim")
+        },
+    )
+    .await
+    .unwrap();
+    let ok = app.retire_label(&alice, ISSUE, "Geheim").await.unwrap();
+    assert_eq!(ok.team.unwrap().1, "ENG");
+    // Namenskonflikt mit unsichtbarem Label verrät es nicht
+    app.save_label(
+        &bob,
+        ISSUE,
+        SaveLabelInput {
+            team_id: Some("DES".into()),
+            ..save("Nur-Design")
+        },
+    )
+    .await
+    .unwrap();
+    let e = app
+        .save_label(&alice, ISSUE, save("Nur-Design"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
+    assert_eq!(e.details["conflictingLabels"], serde_json::json!([]));
+}

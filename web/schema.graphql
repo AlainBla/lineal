@@ -1,3 +1,138 @@
+"""
+`Issue`.
+"""
+type Issue {
+	id: String!
+	identifier: String!
+	previousIdentifiers: [String!]!
+	title: String!
+	description: String
+	priority: Int!
+	estimate: Int
+	teamId: String!
+	stateId: String!
+	stateName: String!
+	stateType: String!
+	assigneeId: String
+	creatorId: String
+	parentId: String
+	projectId: String
+	projectMilestoneId: String
+	cycleId: String
+	labelIds: [String!]!
+	dueDate: String
+	sortOrder: Float!
+	startedAt: String
+	completedAt: String
+	canceledAt: String
+	archivedAt: String
+	trashed: Boolean!
+	createdAt: String!
+	updatedAt: String!
+}
+
+type IssueConnection {
+	nodes: [Issue!]!
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
+input IssueCreateInput {
+	id: String
+	teamId: String!
+	title: String
+	description: String
+	stateId: String
+	assigneeId: String
+	priority: Int
+	estimate: Float
+	labelIds: [String!]
+	parentId: String
+	projectId: String
+	projectMilestoneId: String
+	cycleId: String
+	dueDate: String
+	sortOrder: Float
+}
+
+"""
+`IssueLabel`.
+"""
+type IssueLabel {
+	id: String!
+	name: String!
+	color: String!
+	description: String
+	teamId: String
+	parentId: String
+	isGroup: Boolean!
+	groupType: String
+	retiredAt: String
+	archivedAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+input IssueLabelCreateInput {
+	name: String!
+	color: String
+	description: String
+	teamId: String
+	parentId: String
+	isGroup: Boolean
+	groupType: String
+}
+
+type IssueLabelPayload {
+	success: Boolean!
+	issueLabel: IssueLabel
+}
+
+input IssueLabelUpdateInput {
+	name: String
+	color: String
+	description: String
+	parentId: String
+	isGroup: Boolean
+	groupType: String
+}
+
+type IssuePayload {
+	success: Boolean!
+	issue: Issue
+}
+
+input IssueRelationCreateInput {
+	issueId: String!
+	relatedIssueId: String!
+	"""
+	`blocks`, `related` oder `duplicate`.
+	"""
+	type: String!
+}
+
+"""
+Tri-State: ein weggelassenes Feld bleibt unverändert, ein explizites `null` leert es.
+"""
+input IssueUpdateInput {
+	title: String
+	description: String
+	stateId: String
+	assigneeId: String
+	priority: Int
+	estimate: Float
+	teamId: String
+	parentId: String
+	labelIds: [String!]
+	addedLabelIds: [String!]
+	removedLabelIds: [String!]
+	projectId: String
+	projectMilestoneId: String
+	cycleId: String
+	dueDate: String
+	sortOrder: Float
+}
+
 type Mutation {
 	"""
 	Platzhalter des Scaffolds.
@@ -29,10 +164,23 @@ type Mutation {
 	Platzhalter des Scaffolds.
 	"""
 	_issueMutationReady: Boolean!
+	issueCreate(input: IssueCreateInput!): IssuePayload!
+	issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
+	"""
+	Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
+	"""
+	issueArchive(id: String!, trash: Boolean): IssuePayload!
+	issueUnarchive(id: String!): IssuePayload!
+	issueDelete(id: String!, permanentlyDelete: Boolean): IssuePayload!
+	issueRelationCreate(input: IssueRelationCreateInput!): IssuePayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
 	_labelMutationReady: Boolean!
+	issueLabelCreate(input: IssueLabelCreateInput!): IssueLabelPayload!
+	issueLabelUpdate(id: String!, input: IssueLabelUpdateInput!): IssueLabelPayload!
+	issueLabelRetire(id: String!): IssueLabelPayload!
+	issueLabelRestore(id: String!): IssueLabelPayload!
 	"""
 	Platzhalter des Scaffolds.
 	"""
@@ -139,9 +287,21 @@ type Query {
 	"""
 	_issueReady: Boolean!
 	"""
+	Ein Issue per UUID oder Kennung (auch frühere); nicht sichtbar → `not_found`.
+	"""
+	issue(id: String!): Issue!
+	"""
+	Issues der sichtbaren Teams.
+	"""
+	issues(teamId: String, assigneeId: String, state: String, label: String, projectId: String, cycleId: String, priority: Int, includeArchived: Boolean, first: Int, after: String): IssueConnection!
+	"""
 	Platzhalter des Scaffolds.
 	"""
 	_labelReady: Boolean!
+	"""
+	Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
+	"""
+	issueLabels(teamId: String, name: String, includeGroups: Boolean, includeArchived: Boolean, first: Int): [IssueLabel!]!
 	"""
 	Platzhalter des Scaffolds.
 	"""

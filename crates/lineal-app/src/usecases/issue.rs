@@ -407,7 +407,7 @@ async fn load_views(tx: &mut dyn Tx, issues: Vec<Issue>) -> AppResult<Vec<IssueV
         .collect())
 }
 
-fn team_of<'a>(snap: &'a PolicySnapshot, id: TeamId) -> AppResult<&'a Team> {
+fn team_of(snap: &PolicySnapshot, id: TeamId) -> AppResult<&Team> {
     snap.tree.get(id).ok_or_else(crate::policy::team_not_found)
 }
 
