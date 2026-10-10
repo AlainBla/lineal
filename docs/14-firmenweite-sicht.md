@@ -54,7 +54,7 @@ flowchart LR
 | Operation | Zweck |
 |---|---|
 | `issues(filter, …)` ohne Team-Filter | Workspace-Issues (existiert bereits, [09](09-api-events.md)); `filter.team` optional mit `includeSubTeams` |
-| `workspaceOverview(input: { teamIds?, includeSubTeams = true, period })` → `{ teams: [TeamMetrics], projects: ProjectHealthSummary, initiatives: [InitiativeSummary], atRisk: [IssueRef] }` | Dashboard |
+| `workspaceOverview(input: { teamIds?, includeSubTeams = true, period })` → `{ teams: [TeamMetrics], projects: ProjectHealthSummary, initiatives: [InitiativeSummary], atRisk: [IssueRef] }` | Dashboard **Umsetzung:** `workspaceOverview` und `get_workspace_overview` verwenden den Default `includeSubTeams = true`; Team-Views ([05 §3](05-views-suche-inbox.md)) behalten `false`. |
 | `workload(input: { teamIds?, cycle: current \| next })` → `[{ user, perTeam: [{ team, openIssues, points }] }]` | Auslastung |
 | `activeCycles(teamIds?)` | Cycle-Übersicht |
 

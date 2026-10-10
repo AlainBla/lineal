@@ -319,6 +319,9 @@ RUST_LOG=info,lineal=debug
 
 ## 8. Abweichungen aus dem Scaffold (S1/S2, verbindlich für alle WPs)
 
+- **`lineal-sync` kennt `sqlx`** (Ausnahme von der Adapter-Regel in §2): `LISTEN/NOTIFY` auf dem Kanal `lineal_sync` braucht einen `PgListener`/`PgPool`; alles andere (Auth, Sichtbarkeit, `sync_log`) läuft über die Ports `Store`/`Tx`.
+
+
 - `Tx` hat zusätzlich `org_id()`, `last_sync_id()`, `overview()` und `imports()`; `Store::begin_system()` für Worker ohne Benutzerkontext. `OutboxRepo` hat `claim_undelivered`, `mark_delivered`, `mark_processed`; `PeriodicJob` hat `name()`.
 - `/mcp` und `/.well-known/*` liefert `lineal_mcp::router`, `/sync` liefert `lineal_sync::router`; `lineal_server::build_router` setzt sie mit dem API-Router zusammen.
 - GraphQL-Platzhalter sind sichtbare Felder `_<bereich>Ready` / `_<bereich>MutationReady`; das zuständige WP entfernt seinen Platzhalter, sobald es echte Felder hat.

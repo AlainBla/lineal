@@ -528,6 +528,9 @@ Ein Inline-Kommentar referenziert eine markierte Textstelle der Issue-Beschreibu
 
 ### 6.3 Bearbeiten und Löschen
 
+> **Umsetzung (WP17-Abgleich 03 ↔ 07):** Ein Top-Level-Kommentar mit Antworten wird nicht entfernt, sondern behält seine Zeile mit `deleted_at` und einem Platzhalter-Body; die Antworten bleiben. Die Wurzel eines Inline-Threads ist nicht löschbar: `invalid_request` mit `details.reason = "inline_root"`. Gilt auch für das MCP-Tool `delete_comment` ([07](07-mcp-server.md)).
+
+
 | Aktion | Wer | Wirkung |
 |---|---|---|
 | Bearbeiten | nur der Autor | setzt `editedAt` (Anzeige „bearbeitet“); neue Mentions → Notifications nur für neu hinzugekommene User |
@@ -582,6 +585,9 @@ Dateien werden nicht durch den API-Server geschleust, sondern direkt in den Obje
 3. **finalize** (`create_attachment_from_upload(issue, assetUrl, title?, subtitle?)`): Server prüft, dass das Objekt existiert und die Größe zur Ankündigung passt, und legt den `Attachment` mit `url = assetUrl`, `sourceType = "upload"` an.
 
 **Größenlimit:** konfigurierbares Workspace-Limit, Default **2 GB** (Obergrenze des Original-MCP) → bei Überschreitung `limit_exceeded`. Nicht finalisierte Objekte werden nach 24 h vom Aufräumjob gelöscht.
+
+> **Umsetzung (WP17-Abgleich 03 ↔ 07):** Das Limit ist fest 2 GiB und **exklusiv** (`size >= 2 GiB`); die Überschreitung meldet schon `prepare` als `limit_exceeded` (`details.limit = "maxUploadBytes"`) – nicht `invalid_request`, wie 07 es für `prepare_attachment_upload` nennt. `finalize` meldet `invalid_request` mit `details.reason` `upload_missing` bzw. `upload_size_mismatch`. Reservierungen gelten 1 h; nie finalisierte Objekte räumt der Job `purge` 1 Tag nach Ablauf der Reservierung samt Blob ab.
+
 
 **Download:** `assetUrl` ist nicht öffentlich. Beim Lesen (Kommentare, `get_attachment`, Bilder in Markdown) liefert der Server **signierte Download-URLs mit 5 Minuten Gültigkeit**; die Signatur wird erst nach Zugriffsprüfung auf das Issue erzeugt.
 

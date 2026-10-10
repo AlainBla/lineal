@@ -2359,6 +2359,9 @@ Kommentare hängen an genau einem Parent: Issue, Projekt, Initiative, Dokument, 
 
 #### `delete_comment`
 
+> **Umsetzung:** Gilt die Löschregel aus [03 §6.3](03-issues-workflow.md): Platzhalter für Top-Level-Kommentare mit Antworten, Inline-Wurzel nicht löschbar (`invalid_request`, `reason = "inline_root"`).
+
+
 > Delete a Lineal comment. Inline description comments (those with non-null `quotedText`) anchor a mark in the editor, so their root cannot be deleted — delete the replies individually or resolve the thread instead.
 
 ```json
@@ -2495,6 +2498,9 @@ sequenceDiagram
 Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung werden nach 1 h verworfen.
 
 **Fehler:** `not_found` (Issue); `invalid_request` (`size` ≥ 2 GB, leerer Dateiname, ungültiger MIME-Typ); `limit_exceeded` (Speicherkontingent, offene Uploads). **Core:** `ReserveUpload` – [03-issues-workflow.md](03-issues-workflow.md) (Anhänge), Objektspeicher in [10](10-architektur-umsetzung.md).
+
+> **Umsetzung:** `size` ≥ 2 GiB liefert `limit_exceeded` (siehe [03 §7.2](03-issues-workflow.md)); alle anderen genannten Eingabefehler `invalid_request`.
+
 
 #### `create_attachment_from_upload`
 
@@ -4197,6 +4203,9 @@ Mit `id`: das einzelne Objekt ohne Hülle. `project` bei `type: "initiative"` (o
 ---
 
 ### 3.14 Triage
+
+> **Umsetzung:** „Person on triage now“ ist der gespeicherte `currentUserId` (Job `triage_rotation`, höchstens 60 s Verzögerung nach Schichtwechsel); die kommenden Schichten kommen aus `TimeScheduleEntry` ab jetzt, begrenzt durch `limit`.
+
 
 #### `get_triage_responsibility`
 

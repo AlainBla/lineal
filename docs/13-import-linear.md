@@ -155,7 +155,7 @@ Läuft mit `updatedAfter = letzter erfolgreicher Laufbeginn`. Geänderte Objekte
 | Operation | Zweck |
 |---|---|
 | `importScan(input: { source, token })` → `ImportRun` mit Mengen und Konflikten | Verbindung prüfen, Plan vorbereiten |
-| `importStart(input: { runId, teams, userMapping, keyMapping, dryRun })` | Lauf starten (asynchron als Job) |
+| `importStart(input: { runId, teams, userMapping, keyMapping, dryRun })` | Lauf starten (asynchron als Job) **Umsetzung:** `importScan` legt den Lauf mit Status `scanning` an und kehrt sofort zurück; der Job `import_runner` (10 s) führt den Scan asynchron aus. Zusätzlicher Status `canceled` (Abbruch durch Admin, Migration 1800). Projekt- und Initiativnummern vergibt der Import über die Team-/Workspace-Zähler (`next_import_number`) statt die Linear-Nummern zu übernehmen; die Zuordnung steht in `import_mapping`. |
 | `importPause(runId)`, `importResume(runId)`, `importCancel(runId)` | Steuerung |
 | `importRun(id)`, `importRuns` | Status, Fortschritt, Bericht |
 
