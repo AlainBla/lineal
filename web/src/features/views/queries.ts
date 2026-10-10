@@ -5,7 +5,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ISSUE_FIELDS, type IssueList } from "@/features/issues/queries";
-import { fetchUsers } from "@/features/issues/users";
 import type {
   CustomView,
   CustomViewConnection,
@@ -260,13 +259,3 @@ export function useResetPreferences(t: PrefTarget | null) {
 }
 
 // ---------- Personen (Assignee-Filter, Picker) ----------
-
-/** `users(query, team, first)`: sichtbare Personen ohne E-Mail (Sicherheits-Checkliste 6); teilt den Cache mit dem Picker. */
-export function useUsers(query = "", team?: string, enabled = true) {
-  return useQuery({
-    queryKey: ["users", query, team ?? ""] as const,
-    enabled,
-    staleTime: 60_000,
-    queryFn: ({ signal }) => fetchUsers(query, team, 200, signal),
-  });
-}
