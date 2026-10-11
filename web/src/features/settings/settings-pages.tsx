@@ -143,6 +143,7 @@ export function WorkspaceSettingsPage({ ws }: { ws: string }) {
   const session = useSession();
   const nav = [
     { label: "Workspace", to: `/${ws}/settings/workspace`, active: true },
+    { label: "API", to: `/${ws}/settings/api`, active: false },
     ...(session?.teams ?? []).map((t) => ({
       label: `Team · ${t.name}`,
       to: `/${ws}/settings/teams/${t.key}/general`,
