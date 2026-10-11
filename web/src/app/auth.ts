@@ -14,6 +14,8 @@ export interface SessionUser {
   name: string;
   email: string;
   avatarUrl: string | null;
+  /** Workspace-Rolle (`owner`, `admin`, `user`, `guest`); fehlt, wenn der Server sie nicht liefert. */
+  role?: string;
 }
 
 export interface SessionWorkspace {
@@ -82,6 +84,7 @@ export function normalizeSession(raw: unknown): Session | null {
       email,
       name: str(u.displayName) ?? str(u.name) ?? email.split("@")[0] ?? email,
       avatarUrl: str(u.avatarUrl) ?? null,
+      ...(str(u.role) ? { role: str(u.role)! } : {}),
     },
     workspace: { id: str(w?.id) ?? urlKey, name: str(w?.name) ?? urlKey, urlKey },
     teams: parseTeams(root?.teams),

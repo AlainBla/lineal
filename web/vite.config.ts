@@ -10,6 +10,8 @@ const backend = process.env.LINEAL_BACKEND ?? "http://localhost:8080";
 const proxy = {
   "/graphql": backend,
   "/auth": backend,
+  // Nur der REST-Endpunkt; die Seite `/invite/<token>` liefert die SPA.
+  "/invite/accept": backend,
   "/mcp": backend,
   "/sync": { target: backend, ws: true },
 };
