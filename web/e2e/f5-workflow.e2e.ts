@@ -32,4 +32,9 @@ test("F5: a new issue moves Todo, In Progress, Done and back with the S picker",
   // Der Zustand liegt auf dem Server: nach einem Reload ist er noch da.
   await page.reload();
   await expect(page.locator('[data-property="Status"]')).toContainText("In Progress");
+
+  // Der Aktivitätsverlauf (Issue.history) zeigt den Anlage-Eintrag. Statuswechsel des Erstellers
+  // innerhalb von 3 Minuten gelten serverseitig als Teil der Erstellung und stehen nicht einzeln darin.
+  const timeline = page.getByRole("list", { name: "Activity timeline" });
+  await expect(timeline.getByText("created the issue")).toBeVisible();
 });

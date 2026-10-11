@@ -56,7 +56,6 @@ WP07-Leftovers:
 - GraphQL-Platzhalter _xReady: Test in graphql/mod.rs generisch machen -> Orchestrator.
 WP13-Lücken (Backend-GraphQL fehlt):
 - users-Query (Assignee-Picker, Mentions) – größte UX-Lücke.
-- issue.children (teamübergreifend), issue.relations, issue.history lesen.
 - Abo-Zustand eines Issues (issueSubscription für Viewer).
 - issueBatchUpdate, Drafts, Template-Auswahl im Create-Modal (nach WP10).
 - issues-Query mit Filter-JSON (WP11) -> Client-Filter ersetzen.
@@ -84,6 +83,7 @@ WP17-Leftovers:
 - Team-Scope von API-Keys: Workspace-Admin-Aktionen (Rollen, Einstellungen) schränkt `team_scope` nicht ein; OAuth-Tokens haben keinen Team-Scope; API-Keys lassen sich weder per GraphQL noch REST anlegen (nur App::create_api_key) – für E2E per SQL.
 - Sync: geteilte Issues erreichen den Empfänger nicht live (Sync-Gruppe `user:<id>` für Shares fehlt); `/sync/bootstrap`.
 - Einladungen: Web-Seite `/invite/<token>` fehlt (REST-Endpunkt vorhanden).
-- Issue.children/relations/history: N+1 in Listen (nur für Detailansicht gedacht); Web-Detailansicht nutzt die Felder noch nicht.
+- Issue.children/relations/history: N+1 in Listen (nur für Detailansicht gedacht; die Web-Detailansicht nutzt sie seit WP21 über eine eigene Query).
+- Verlaufsanzeige (WP21): Der Server schwärzt unsichtbare Verweise (Team, Parent, Projekt, Cycle, Meilenstein) zu `null`; das ist von „nicht gesetzt“ nicht unterscheidbar. Die Web-Anzeige liest `null` auf nur einer Seite als „nicht gesetzt“, auf beiden als „ein privates Element“. Parent/Meilenstein erscheinen ohne Namen („a parent issue“); Statuswechsel des Erstellers innerhalb von 3 Minuten stehen serverseitig nicht einzeln im Verlauf (Erstellungsfenster).
 - E2E: nur die Flows F3, F5, F7, F12, F13, F17 und Sichtbarkeit privater Teams; übrige Flows aus docs/08 ungetestet; Kein E2E-Lauf in CI (scripts/e2e.sh manuell).
 - Lieferkette: braces (ReDoS) in der @graphql-codegen-Kette ohne gepatchte Version (Dev-Werkzeug, siehe docs/15 §4.6).
