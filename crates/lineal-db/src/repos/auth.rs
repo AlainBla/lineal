@@ -6,7 +6,7 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::auth::{ApiKeyRecord, LoginCandidate, NewApiKey, NewSession};
-use lineal_app::ports::repos::{AuthRepo, Principal};
+use lineal_app::ports::repos::{AuthRepo, CredentialKind, Principal};
 use lineal_app::{Actor, AppResult, Scopes};
 use lineal_domain::enums::UserRole;
 use lineal_domain::ids::{ApiKeyId, OrgId, TeamId, UserId};
@@ -85,6 +85,7 @@ impl AuthRepo for PgTx {
                 scopes.admin = false;
             }
             return Ok(Some(Principal {
+                kind: CredentialKind::Session,
                 org_id: OrgId(org),
                 actor: actor_for(UserId(user), role),
                 scopes,
@@ -107,6 +108,7 @@ impl AuthRepo for PgTx {
         if let Some((org, user, role, scopes, team_ids)) = row {
             let role = parse_role(&role)?;
             return Ok(Some(Principal {
+                kind: CredentialKind::ApiKey,
                 org_id: OrgId(org),
                 actor: actor_for(UserId(user), role),
                 scopes: scopes_from(&scopes, role),
@@ -135,6 +137,7 @@ impl AuthRepo for PgTx {
                 actor_for(UserId(user), role)
             };
             return Ok(Some(Principal {
+                kind: CredentialKind::OAuth,
                 org_id: OrgId(org),
                 actor,
                 scopes: scopes_from(&scopes, role),

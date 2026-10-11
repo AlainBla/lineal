@@ -13,7 +13,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use lineal_app::ports::repos::Principal;
+use lineal_app::ports::repos::{CredentialKind, Principal};
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 
 /// Name des Session-Cookies.
@@ -28,6 +28,20 @@ pub enum CredentialClass {
     ApiKey,
     OAuth,
     Session,
+}
+
+/// Klasse zur tatsächlichen Token-Art (nicht zum Transportweg).
+fn class_of(kind: CredentialKind) -> CredentialClass {
+    match kind {
+        CredentialKind::Session => CredentialClass::Session,
+        CredentialKind::ApiKey => CredentialClass::ApiKey,
+        CredentialKind::OAuth => CredentialClass::OAuth,
+    }
+}
+
+/// Cookie transportiert nur Sessions; `Authorization` nur API-Keys und OAuth-Tokens.
+fn transport_matches(transport: CredentialClass, kind: CredentialKind) -> bool {
+    (transport == CredentialClass::Session) == (kind == CredentialKind::Session)
 }
 
 /// Ergebnis der Authentifizierung dieser Anfrage.
@@ -142,7 +156,15 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                 return blocked_response(req.uri().path(), wait);
             }
             match lookup_principal(&p.app, &token).await {
+                Ok(Some(principal)) if !transport_matches(class, principal.kind) => {
+                    // Token-Art passt nicht zum Transport (z. B. API-Key im Session-Cookie).
+                    if let Some(ip) = &ip_key {
+                        p.fails.record_ip(ip, now_ms);
+                    }
+                    AuthState::Invalid
+                }
                 Ok(Some(principal)) => {
+                    let class = class_of(principal.kind);
                     let request_id = req
                         .extensions()
                         .get::<RequestId>()
@@ -155,6 +177,7 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                             request_id,
                             scopes: principal.scopes,
                             team_scope: principal.team_scope,
+                            via_session: principal.kind == CredentialKind::Session,
                         },
                         class,
                     }

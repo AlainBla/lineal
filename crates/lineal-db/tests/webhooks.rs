@@ -961,6 +961,8 @@ async fn invitations_of_another_workspace_cannot_be_accepted_or_managed(pool: Pg
         request_id: "r".into(),
         scopes: Scopes::all(),
         team_scope: None,
+
+        via_session: false,
     };
     let c = fx
         .app

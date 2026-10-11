@@ -24,6 +24,64 @@ type ActiveCycle {
 }
 
 """
+`ApiKey` (ohne Hash und Klartext).
+"""
+type ApiKey {
+	id: String!
+	label: String!
+	keyPrefix: String!
+	scopes: [String!]!
+	"""
+	`null` = alle Teams des Users.
+	"""
+	teams: [ApiKeyTeam!]
+	createdAt: String!
+	lastUsedAt: String
+	expiresAt: String
+	revokedAt: String
+}
+
+input ApiKeyCreateInput {
+	label: String!
+	scopes: [ApiKeyScope!]!
+	"""
+	Team-Referenzen (UUID/Key/Name) – nur sichtbare Teams.
+	"""
+	teamIds: [String!]
+	"""
+	ISO-8601-Zeitpunkt in der Zukunft.
+	"""
+	expiresAt: String
+}
+
+type ApiKeyCreatePayload {
+	success: Boolean!
+	apiKey: ApiKey!
+	"""
+	Klartext-Token, nur in dieser Antwort.
+	"""
+	token: String!
+}
+
+type ApiKeyRevokePayload {
+	success: Boolean!
+}
+
+enum ApiKeyScope {
+	READ
+	WRITE
+}
+
+"""
+Team-Beschränkung eines Keys (nur sichtbare Teams).
+"""
+type ApiKeyTeam {
+	id: String!
+	key: String!
+	name: String!
+}
+
+"""
 `Attachment` (Link oder hochgeladene Datei; `url` ist bei Uploads kurzlebig signiert).
 """
 type Attachment {
@@ -1246,6 +1304,14 @@ type Mutation {
 	importPause(runId: String!): ImportRun!
 	importResume(runId: String!): ImportRun!
 	importCancel(runId: String!): ImportRun!
+	"""
+	Legt einen Key an. Nur per Cookie-Session (nie mit einem API-Key/OAuth-Token).
+	"""
+	apiKeyCreate(input: ApiKeyCreateInput!): ApiKeyCreatePayload!
+	"""
+	Widerruft einen eigenen Key (fremde IDs → `not_found`, auch für Admins).
+	"""
+	apiKeyRevoke(id: String!): ApiKeyRevokePayload!
 }
 
 input NestTeamOptions {
@@ -1781,6 +1847,10 @@ type Query {
 	Bericht eines Laufs (übernommen, übersprungen, Warnungen, Konflikte).
 	"""
 	importReport(runId: String!, severity: String, first: Int, offset: Int): ImportReport!
+	"""
+	Eigene API-Keys des Viewers (neueste zuerst, inkl. widerrufener).
+	"""
+	apiKeys: [ApiKey!]!
 }
 
 """

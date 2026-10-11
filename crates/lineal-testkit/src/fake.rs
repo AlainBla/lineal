@@ -344,6 +344,7 @@ mod tests {
     #[tokio::test]
     async fn configurable_principal_lookup() {
         let principal = Principal {
+            kind: lineal_app::ports::repos::CredentialKind::ApiKey,
             org_id: OrgId::new_v7(),
             actor: Actor::App {
                 id: UserId::new_v7(),

@@ -59,6 +59,9 @@ pub struct RequestCtx {
     /// Team-Beschränkung eines API-Keys (`api_key.team_ids`): nur diese Teams sind sichtbar und
     /// änderbar. `None` = keine Beschränkung (Sessions, OAuth, System).
     pub team_scope: Option<Vec<TeamId>>,
+    /// `true`, wenn die Anfrage mit einer Web-Session (Cookie) authentifiziert wurde – nicht mit
+    /// API-Key oder OAuth-Token. Nur dann dürfen z. B. neue API-Keys angelegt werden.
+    pub via_session: bool,
 }
 
 impl RequestCtx {
@@ -70,6 +73,7 @@ impl RequestCtx {
             request_id: request_id.into(),
             scopes: Scopes::all(),
             team_scope: None,
+            via_session: false,
         }
     }
 }

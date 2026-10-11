@@ -1,6 +1,7 @@
 //! GraphQL-Schema: Root-Typen sind `MergedObject`s aus Teilobjekten pro Fachbereich.
 //! Gemeinsame Datei: nur S1 / Orchestrator.
 
+pub mod api_key;
 pub mod comment;
 pub mod cycle;
 pub mod document;
@@ -23,6 +24,7 @@ use async_graphql::{EmptySubscription, MergedObject, Schema};
 use lineal_app::App;
 use std::sync::Arc;
 
+use api_key::{ApiKeyMutation, ApiKeyQuery};
 use comment::{CommentMutation, CommentQuery};
 use cycle::{CycleMutation, CycleQuery};
 use document::{DocumentMutation, DocumentQuery};
@@ -61,6 +63,7 @@ pub struct QueryRoot(
     OverviewQuery,
     WebhookQuery,
     ImportQuery,
+    ApiKeyQuery,
 );
 
 #[derive(MergedObject, Default)]
@@ -83,6 +86,7 @@ pub struct MutationRoot(
     OverviewMutation,
     WebhookMutation,
     ImportMutation,
+    ApiKeyMutation,
 );
 
 /// Das Lineal-Schema (ohne Subscriptions; Echtzeit läuft über `/sync`).

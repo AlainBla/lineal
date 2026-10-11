@@ -3,7 +3,7 @@
 
 use crate::error::graphql_error_response;
 use crate::graphql::LinealSchema;
-use crate::middleware::auth::AuthState;
+use crate::middleware::auth::{AuthState, CredentialClass};
 use crate::rate_limit::{RateHandle, complexity_headers, denied_error};
 use async_graphql::parser::types::{
     DocumentOperations, ExecutableDocument, OperationType, Selection, SelectionSet,
@@ -222,7 +222,18 @@ pub async fn execute(
         }
         decision = Some((d, cost));
     }
-    run(schema, request.data(ctx.clone()), &ctx.request_id, decision).await
+    // Art der Anmeldung für Resolver, die nur per Cookie-Session erlaubt sind (API-Keys).
+    let class = match auth {
+        AuthState::Authenticated { class, .. } => *class,
+        _ => CredentialClass::Anonymous,
+    };
+    run(
+        schema,
+        request.data(ctx.clone()).data(class),
+        &ctx.request_id,
+        decision,
+    )
+    .await
 }
 
 async fn run(

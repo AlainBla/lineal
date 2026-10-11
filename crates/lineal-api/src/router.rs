@@ -165,6 +165,7 @@ mod tests {
 
         // mit Token (FakeStore-Principal)
         let principal = lineal_app::ports::repos::Principal {
+            kind: lineal_app::ports::repos::CredentialKind::ApiKey,
             org_id: lineal_domain::ids::OrgId::new_v7(),
             actor: lineal_app::Actor::App {
                 id: lineal_domain::ids::UserId::new_v7(),

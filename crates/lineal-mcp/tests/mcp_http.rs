@@ -21,6 +21,7 @@ const RO: &str = "lineal_api_readonly";
 fn principal(scopes: Scopes) -> Principal {
     let seed = SeedData::acme();
     Principal {
+        kind: lineal_app::ports::repos::CredentialKind::ApiKey,
         org_id: seed.org,
         actor: Actor::User {
             id: seed.alice,

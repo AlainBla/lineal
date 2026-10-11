@@ -547,6 +547,7 @@ pub(crate) mod fixtures {
             request_id: "req_test".into(),
             scopes: crate::context::Scopes::all(),
             team_scope: None,
+            via_session: false,
         }
     }
 }

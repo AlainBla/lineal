@@ -23,6 +23,8 @@ use uuid::Uuid;
 pub const SESSION_TTL_DAYS: i64 = 14;
 /// Präfix persönlicher API-Keys.
 pub const API_KEY_PREFIX: &str = "lin_api_";
+/// Höchstzahl gleichzeitig aktiver (nicht widerrufener, nicht abgelaufener) Keys je User.
+pub const MAX_ACTIVE_API_KEYS: usize = 25;
 
 /// SHA-256 (hex, Kleinbuchstaben) über das komplette Token.
 pub fn hash_token(token: &str) -> String {
@@ -185,6 +187,13 @@ impl App {
         let user_id = resolve::user::actor_user_id(ctx)
             .filter(|_| matches!(ctx.actor, crate::context::Actor::User { .. }))
             .ok_or_else(|| AppError::forbidden("Only users can create personal API keys."))?;
+        // Nie mit einem API-Key/OAuth-Token (sonst könnte ein beschränkter Key einen
+        // unbeschränkten erzeugen): nur Web-Session.
+        if !ctx.via_session {
+            return Err(AppError::forbidden(
+                "API keys can only be created from a browser session.",
+            ));
+        }
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::CreatePersonalApiKey)?;
@@ -233,10 +242,37 @@ impl App {
             }
             None => None,
         };
+        // Ein team-beschränkter Aufrufer kann keinen unbeschränkten Key erzeugen.
+        let team_ids = match (&ctx.team_scope, team_ids) {
+            (None, ids) => ids,
+            (Some(scope), None) => Some(scope.clone()),
+            (Some(scope), Some(ids)) => {
+                if ids.iter().any(|t| !scope.contains(t)) {
+                    return Err(AppError::forbidden(
+                        "The key cannot cover more teams than your own token",
+                    )
+                    .with_details(json!({ "field": "teams" })));
+                }
+                Some(ids)
+            }
+        };
         let now = self.clock.now();
         if input.expires_at.is_some_and(|e| e <= now) {
             return Err(AppError::invalid_request("expiresAt must be in the future")
                 .with_details(json!({ "field": "expiresAt" })));
+        }
+        let active = tx
+            .auth()
+            .list_api_keys(user_id)
+            .await?
+            .iter()
+            .filter(|k| k.revoked_at.is_none() && k.expires_at.is_none_or(|e| e > now))
+            .count();
+        if active >= MAX_ACTIVE_API_KEYS {
+            return Err(AppError::limit_exceeded(format!(
+                "at most {MAX_ACTIVE_API_KEYS} active API keys per user"
+            ))
+            .with_details(json!({ "field": "label" })));
         }
         let key = format!("{API_KEY_PREFIX}{}", random_hex());
         let id = ApiKeyId(self.ids.new_uuid());

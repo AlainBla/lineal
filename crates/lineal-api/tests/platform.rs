@@ -31,6 +31,7 @@ const KEY_RO: &str = "lin_api_bob_readonly";
 
 fn principal(scopes: Scopes) -> Principal {
     Principal {
+        kind: lineal_app::ports::repos::CredentialKind::ApiKey,
         org_id: OrgId::new_v7(),
         actor: Actor::App {
             id: UserId::new_v7(),
@@ -44,7 +45,16 @@ fn app_with_keys() -> Arc<App> {
     let store = FakeStore::new()
         .with_principal(hash_token(KEY_RW), principal(Scopes::read_write()))
         .with_principal(hash_token(KEY_RO), principal(Scopes::read_only()))
-        .with_principal(hash_token("session-token"), principal(Scopes::all()));
+        .with_principal(hash_token("lin_oauth_token"), {
+            let mut p = principal(Scopes::all());
+            p.kind = lineal_app::ports::repos::CredentialKind::OAuth;
+            p
+        })
+        .with_principal(hash_token("session-token"), {
+            let mut p = principal(Scopes::all());
+            p.kind = lineal_app::ports::repos::CredentialKind::Session;
+            p
+        });
     test_app(Arc::new(store))
 }
 
@@ -95,6 +105,65 @@ fn same_origin(mut req: Request<Body>) -> Request<Body> {
 
 fn api(app: Arc<App>) -> Router {
     lineal_api::router(app, false)
+}
+
+/// Token-Art und Transport müssen zusammenpassen: Cookie nur für Sessions, `Authorization`
+/// nur für API-Keys/OAuth-Tokens (sonst ließe sich die „nur Session“-Prüfung umgehen).
+#[tokio::test]
+async fn token_kind_must_match_transport() {
+    let router = api(app_with_keys());
+    for (name, value) in [
+        ("cookie", format!("lineal_session={KEY_RW}")),
+        ("cookie", "lineal_session=lin_oauth_token".to_owned()),
+        ("authorization", "session-token".to_owned()),
+        ("authorization", "Bearer session-token".to_owned()),
+    ] {
+        let r = send(
+            &router,
+            same_origin(gql(Some((name, &value)), "{ __typename }")),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNAUTHORIZED,
+            "{name}: {value}: {}",
+            r.body
+        );
+        assert!(r.body.contains("unauthenticated"), "{}", r.body);
+    }
+    // Zulässige Kombinationen bleiben.
+    for (name, value) in [
+        ("cookie", "lineal_session=session-token".to_owned()),
+        ("authorization", KEY_RW.to_owned()),
+        ("authorization", "Bearer lin_oauth_token".to_owned()),
+    ] {
+        let r = send(
+            &router,
+            same_origin(gql(Some((name, &value)), "{ __typename }")),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::OK, "{name}: {}", r.body);
+    }
+    // REST `/auth/me` prüft dieselbe Regel.
+    for (name, value) in [
+        ("cookie", format!("lineal_session={KEY_RW}")),
+        ("cookie", "lineal_session=lin_oauth_token".to_owned()),
+        ("authorization", "Bearer session-token".to_owned()),
+    ] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/auth/me")
+            .header(name, value.as_str())
+            .body(Body::empty())
+            .unwrap();
+        let r = send(&router, req).await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNAUTHORIZED,
+            "{name}: {value}: {}",
+            r.body
+        );
+    }
 }
 
 // ---------------------------------------------------------------- Fehlermodell

@@ -44,7 +44,7 @@ export LINEAL_BIN="$PWD/target/debug/lineal"
 rm -rf /tmp/lineal-e2e-blobs
 
 step "API-Keys für den MCP-Flow (F17) anlegen: Bob, einmal frei, einmal nur ENG"
-# API-Keys lassen sich (noch) nicht über GraphQL anlegen; der Test bekommt feste, erfundene Tokens.
+# SQL-Weg bleibt für feste, erfundene Tokens (F17); der UI-Weg wird in f19-api-keys.e2e.ts geprüft.
 export LINEAL_E2E_API_KEY="lin_api_e2e_bob_full_0000000000000001"
 export LINEAL_E2E_API_KEY_ENG="lin_api_e2e_bob_eng_0000000000000002"
 key_sql() { # $1 Token, $2 Label, $3 team_ids-Ausdruck
