@@ -7,6 +7,7 @@ import { errorText } from "@/features/issues/error-text";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Organization } from "@/gql/graphql";
 
+import { workspaceSettingsNav } from "./nav";
 import { useSettingsTeam, useUpdateWorkspace, useWorkspaceSettings } from "./queries";
 import {
   CyclesSection,
@@ -141,14 +142,7 @@ function WorkspaceForm({ ws }: { ws: Organization }) {
 export function WorkspaceSettingsPage({ ws }: { ws: string }) {
   const q = useWorkspaceSettings();
   const session = useSession();
-  const nav = [
-    { label: "Workspace", to: `/${ws}/settings/workspace`, active: true },
-    ...(session?.teams ?? []).map((t) => ({
-      label: `Team · ${t.name}`,
-      to: `/${ws}/settings/teams/${t.key}/general`,
-      active: false,
-    })),
-  ];
+  const nav = workspaceSettingsNav(ws, session, "workspace");
   return (
     <SettingsShell title="Settings" nav={nav}>
       {q.isLoading && <ListSkeleton rows={4} />}
