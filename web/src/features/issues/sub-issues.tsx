@@ -1,20 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Issue } from "@/gql/graphql";
 
-import { useCreateIssue, useTeamIssues } from "./hooks";
+import { useCreateIssue, useIssueExtras } from "./hooks";
 import { Avatar, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { issuePath, subIssueProgress } from "./model";
 import { errorMessage, showToast } from "./toast-store";
 
 /**
- * Sub-Issues eines Issues (docs/08 §2.2, F8). Die Kinder stammen aus der Teamliste im Cache
- * (`parentId`); Kinder in anderen Teams erscheinen dort, sobald deren Liste geladen wurde.
+ * Sub-Issues eines Issues (docs/08 §2.2, F8). Die Kinder kommen aus `Issue.children` der Detail-Query
+ * (teamübergreifend, nur für den Aufrufer sichtbare); Anlegen invalidiert diese Query.
  */
 export function SubIssuesSection({
   issue,
@@ -29,15 +29,12 @@ export function SubIssuesSection({
   adding: boolean;
   onAddingChange: (v: boolean) => void;
 }) {
-  const team = useTeamIssues(issue.teamId);
+  const extras = useIssueExtras(issue.id);
   const create = useCreateIssue();
   const [title, setTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const children = useMemo(
-    () => (team.data?.issues ?? []).filter((i) => i.parentId === issue.id),
-    [team.data, issue.id],
-  );
+  const children = (extras.data?.children ?? []).filter((c) => !c.trashed);
   const progress = subIssueProgress(children);
 
   const submit = (e: FormEvent) => {
@@ -70,6 +67,11 @@ export function SubIssuesSection({
           <Plus /> {children.length === 0 ? "Add sub-issues" : "New sub-issue"}
         </Button>
       </header>
+      {extras.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          Could not load sub-issues.
+        </p>
+      )}
       {children.length > 0 && (
         <ul className="flex flex-col rounded-lg border border-border">
           {children.map((c) => {

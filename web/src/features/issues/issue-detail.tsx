@@ -316,7 +316,12 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               adding={addingSub}
               onAddingChange={setAddingSub}
             />
-            <RelationsSection issue={issue} dialog={relationDialog} onDialog={setRelationDialog} />
+            <RelationsSection
+              issue={issue}
+              ws={ws}
+              dialog={relationDialog}
+              onDialog={setRelationDialog}
+            />
             <ActivitySection issue={issue} lookup={lookup} />
           </div>
         </article>

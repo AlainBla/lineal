@@ -1,4 +1,6 @@
+import { Link } from "@tanstack/react-router";
 import { Link2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -7,30 +9,32 @@ import { Input } from "@/components/ui/input";
 import type { Issue } from "@/gql/graphql";
 import { useShortcutContext } from "@/lib/shortcuts";
 
-import { StatusIcon } from "./icons";
-import { RELATION_CHOICES, relationInput, type RelationChoice } from "./model";
-import { createRelation, fetchIssue } from "./queries";
+import { useIssueExtras } from "./hooks";
+import {
+  issuePath,
+  relationGroups,
+  RELATION_CHOICES,
+  relationInput,
+  type RelationChoice,
+} from "./model";
+import { createRelation, fetchIssue, keys } from "./queries";
 import { errorMessage } from "./toast-store";
 
-interface AddedRelation {
-  choice: RelationChoice;
-  issue: Issue;
-}
-
-/**
- * Relationen („Blocked by“, „Blocking“, „Related“, „Duplicate of“). Das Schema bietet nur
- * `issueRelationCreate`, keinen Lesezugriff: angezeigt werden die in dieser Sitzung angelegten Relationen.
- */
+/** Relationen („Blocked by“, „Blocking“, „Related“, „Duplicate of“) aus `Issue.relations` der Detail-Query. */
 export function RelationsSection({
   issue,
+  ws,
   dialog,
   onDialog,
 }: {
   issue: Issue;
+  ws: string;
   dialog: RelationChoice | null;
   onDialog: (c: RelationChoice | null) => void;
 }) {
-  const [added, setAdded] = useState<AddedRelation[]>([]);
+  const qc = useQueryClient();
+  const extras = useIssueExtras(issue.id);
+  const groups = extras.data ? relationGroups(extras.data.relations) : [];
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,7 +58,7 @@ export function RelationsSection({
         return;
       }
       await createRelation(relationInput(dialog, issue.id, other.id));
-      setAdded((prev) => [...prev, { choice: dialog, issue: other }]);
+      await qc.invalidateQueries({ queryKey: keys.issueDetails });
       setValue("");
       onDialog(null);
     } catch (err) {
@@ -72,22 +76,28 @@ export function RelationsSection({
           <Link2 /> Add relation
         </Button>
       </header>
-      {added.length === 0 ? (
+      {groups.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          Mark issues as blocked by, blocking, related or duplicate (M B, M X, M R, M M).
+          {extras.isError
+            ? "Could not load relations."
+            : "Mark issues as blocked by, blocking, related or duplicate (M B, M X, M R, M M)."}
         </p>
       ) : (
-        <ul className="flex flex-col">
-          {added.map((r) => (
-            <li key={`${r.choice}:${r.issue.id}`} className="flex items-center gap-2 text-sm">
-              <span className="w-24 text-xs text-muted-foreground">
-                {RELATION_CHOICES.find((c) => c.id === r.choice)?.label}
-              </span>
-              <StatusIcon type={r.issue.stateType} title={r.issue.stateName} />
-              <span className="text-xs text-muted-foreground">{r.issue.identifier}</span>
-              <span className="truncate">{r.issue.title}</span>
-            </li>
-          ))}
+        <ul className="flex flex-col gap-0.5">
+          {groups.flatMap((g) =>
+            g.items.map((r) => (
+              <li key={`${g.label}:${r.id}`}>
+                <Link
+                  to={issuePath(ws, r.identifier) as "/"}
+                  className="flex items-center gap-2 rounded px-1 text-sm hover:bg-surface-hover"
+                >
+                  <span className="w-24 text-xs text-muted-foreground">{g.label}</span>
+                  <span className="text-xs text-muted-foreground">{r.identifier}</span>
+                  <span className="truncate">{r.title}</span>
+                </Link>
+              </li>
+            )),
+          )}
         </ul>
       )}
       <Dialog open={dialog !== null} onOpenChange={(o) => !o && onDialog(null)}>

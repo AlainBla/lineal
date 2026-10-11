@@ -2,7 +2,7 @@
  * Reine Logik der Issue-Ansichten (ohne React): Statuskategorien, Prioritäten, Ansichten
  * Active/Backlog/All, Board-Spalten, Drag-&-Drop-Statuswechsel, Schätzskalen. Fachregeln: docs/03, docs/05 §3.1.
  */
-import type { Issue, IssueLabel, WorkflowState } from "@/gql/graphql";
+import type { Issue, IssueLabel, IssueRelations, RelatedIssue, WorkflowState } from "@/gql/graphql";
 
 export type StateType =
   "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "duplicate";
@@ -414,6 +414,17 @@ export function slugify(title: string): string {
     .slice(0, 60)
     .replace(/-+$/g, "");
   return s || "issue";
+}
+
+/** Gruppen der Relationsanzeige in Reihenfolge und Beschriftung (Sicht des aktuellen Issues). */
+export function relationGroups(r: IssueRelations): Array<{ label: string; items: RelatedIssue[] }> {
+  return [
+    { label: "Blocked by", items: r.blockedBy },
+    { label: "Blocking", items: r.blocks },
+    { label: "Related", items: r.relatedTo },
+    { label: "Duplicate of", items: r.duplicateOf ? [r.duplicateOf] : [] },
+    { label: "Duplicates", items: r.duplicates },
+  ].filter((g) => g.items.length > 0);
 }
 
 /** Ereignisse aus den Zeitstempeln des Issues (das Schema bietet keinen History-Abruf). */

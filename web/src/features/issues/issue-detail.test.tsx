@@ -6,6 +6,7 @@ import "@/app/test-polyfills";
 import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 
 import { IssueDetailPage } from "./issue-detail";
+import type { IssueExtras } from "./queries";
 import { resetKnownUsers } from "./users";
 import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
@@ -54,8 +55,26 @@ const CHILD = makeIssue({
   stateId: "s-done",
 });
 
-function handlers() {
+const OTHER_TEAM_CHILD = makeIssue({
+  id: "i3",
+  identifier: "DES-4",
+  title: "Icon-Set liefern",
+  teamId: "team-des",
+  parentId: "i1",
+  stateId: "s-todo",
+});
+
+function handlers(extras: Partial<IssueExtras> = {}) {
   return {
+    IssueExtras: () => ({
+      issue: {
+        id: "i1",
+        children: [CHILD, OTHER_TEAM_CHILD],
+        relations: { blocks: [], blockedBy: [], relatedTo: [], duplicateOf: null, duplicates: [] },
+        history: [],
+        ...extras,
+      },
+    }),
     IssueDetail: (v: Record<string, unknown>) => {
       if (v.id === "ENG-120" || v.id === "i1") return { issue: ISSUE };
       return { issue: makeIssue({ id: "i9", identifier: String(v.id), title: "Anderes Issue" }) };
@@ -154,7 +173,10 @@ describe("Issue-Detail", () => {
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
     const subs = await screen.findByRole("region", { name: "Sub-issues" });
     expect(await within(subs).findByText("Zahlungsformular umbauen")).toBeInTheDocument();
-    expect(within(subs).getByLabelText("Sub-issue progress")).toHaveTextContent("1/1");
+    // Kind aus einem anderen Team (nur über Issue.children sichtbar, nicht in der ENG-Liste).
+    expect(within(subs).getByText("Icon-Set liefern")).toBeInTheDocument();
+    expect(within(subs).getByText("DES-4")).toBeInTheDocument();
+    expect(within(subs).getByLabelText("Sub-issue progress")).toHaveTextContent("1/2");
 
     const comment = await screen.findByRole("article", { name: "Comment by Alice" });
     expect(within(comment).getByTestId("comment-body")).toHaveTextContent("Sieht gut aus @Alice");
@@ -219,7 +241,23 @@ describe("Issue-Detail", () => {
   });
 
   it("legt eine Relation „blocking“ über den Dialog an", async () => {
-    const gql = mockGraphql(handlers());
+    let blocks: Array<{ id: string; identifier: string; title: string }> = [];
+    const h = handlers();
+    const gql = mockGraphql({
+      ...h,
+      IssueExtras: () => ({
+        issue: {
+          id: "i1",
+          children: [],
+          relations: { blocks, blockedBy: [], relatedTo: [], duplicateOf: null, duplicates: [] },
+          history: [],
+        },
+      }),
+      IssueRelationCreate: () => {
+        blocks = [{ id: "i9", identifier: "ENG-132", title: "Anderes Issue" }];
+        return { issueRelationCreate: { success: true } };
+      },
+    });
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
     await screen.findByLabelText("Title");
     await userEvent.keyboard("m");
@@ -231,7 +269,11 @@ describe("Issue-Detail", () => {
     expect(gql.of("IssueRelationCreate")[0]!.variables).toEqual({
       input: { issueId: "i1", relatedIssueId: "i9", type: "blocks" },
     });
-    expect(await screen.findByText("Anderes Issue")).toBeInTheDocument();
+    // Die Relation kommt aus der neu geladenen Detail-Query.
+    const rel = await screen.findByRole("region", { name: "Related issues" });
+    expect(await within(rel).findByText("Anderes Issue")).toBeInTheDocument();
+    expect(within(rel).getByText("Blocking")).toBeInTheDocument();
+    expect(gql.of("IssueExtras").length).toBeGreaterThanOrEqual(2);
   });
 
   it("zeigt einen Fehlerzustand mit Wiederholen, wenn das Issue nicht lädt", async () => {
