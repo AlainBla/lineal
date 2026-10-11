@@ -101,6 +101,8 @@ function str(v: unknown): string | undefined {
 function applyIssue(qc: QueryClient, a: SyncAction, pending: Pending): void {
   const id = a.modelId;
   pending.add(["overview"]);
+  // Verlauf, Kinder und Relationen ändern sich bei jeder Issue-Änderung (auch Kinder/Gegenstücke).
+  pending.add(issueKeys.issueDetails);
   if (a.action === "A" || a.action === "D") {
     removeFromLists(qc, id);
     pending.add(["issue"]);
@@ -149,6 +151,7 @@ function invalidateFor(a: SyncAction, pending: Pending): void {
     case "Attachment":
     case "IssueRelation":
     case "IssueSubscription":
+      pending.add(issueKeys.issueDetails);
       pending.add(["issue"]);
       break;
     case "Project":

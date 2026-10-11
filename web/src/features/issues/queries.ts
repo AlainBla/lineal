@@ -30,6 +30,9 @@ export const keys = {
   teamIssues: (team: string) => ["issues", "team", team] as const,
   myIssues: (tab: string, userId: string | undefined) => ["issues", "my", tab, userId] as const,
   issue: (ref: string) => ["issue", ref] as const,
+  /** Nachladefelder der Detailansicht (children, relations, history); eigener Präfix, damit Listen-Patches sie nicht treffen. */
+  issueDetail: (id: string) => ["issue-detail", id] as const,
+  issueDetails: ["issue-detail"] as const,
   teamMeta: (team: string) => ["team-meta", team] as const,
   comments: (issueId: string) => ["comments", issueId] as const,
   teams: ["issue-teams"] as const,
@@ -119,6 +122,31 @@ export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Iss
   const res = await gqlRequest<{ issue: Issue }, { id: string }>(
     `query IssueDetail($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
     { id: ref },
+    { signal },
+  );
+  return res.issue;
+}
+
+/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 3). */
+export type IssueExtras = Pick<Issue, "children" | "relations" | "history">;
+
+const RELATED = "id identifier title";
+const EXTRAS_QUERY = `query IssueExtras($id: String!) {
+  issue(id: $id) {
+    id
+    children(first: 100) { ${ISSUE_FIELDS} }
+    relations {
+      blocks { ${RELATED} } blockedBy { ${RELATED} } relatedTo { ${RELATED} }
+      duplicateOf { ${RELATED} } duplicates { ${RELATED} }
+    }
+    history { id actorId source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
+  }
+}`;
+
+export async function fetchIssueExtras(id: string, signal?: AbortSignal): Promise<IssueExtras> {
+  const res = await gqlRequest<{ issue: IssueExtras }, { id: string }>(
+    EXTRAS_QUERY,
+    { id },
     { signal },
   );
   return res.issue;

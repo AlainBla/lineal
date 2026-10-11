@@ -19,6 +19,7 @@ import {
   deleteReaction,
   fetchComments,
   fetchIssue,
+  fetchIssueExtras,
   fetchIssues,
   fetchTeamMeta,
   fetchTeams,
@@ -96,6 +97,15 @@ export function useIssue(ref: string) {
   });
 }
 
+/** Kinder, Relationen und Verlauf eines Issues (nur Detailansicht; nie in Listen). */
+export function useIssueExtras(issueId: string | undefined) {
+  return useQuery({
+    queryKey: keys.issueDetail(issueId ?? ""),
+    enabled: !!issueId,
+    queryFn: ({ signal }) => fetchIssueExtras(issueId!, signal),
+  });
+}
+
 export function useComments(issueId: string | undefined) {
   const remember = useRememberUsers();
   return useQuery({
@@ -156,6 +166,7 @@ export function useUpdateIssue() {
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: keys.issues });
       void qc.invalidateQueries({ queryKey: ["issue"] });
+      void qc.invalidateQueries({ queryKey: keys.issueDetails });
     },
   });
 }
@@ -167,6 +178,7 @@ export function useCreateIssue() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.issues });
       void qc.invalidateQueries({ queryKey: ["issue"] });
+      void qc.invalidateQueries({ queryKey: keys.issueDetails });
     },
   });
 }
