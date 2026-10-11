@@ -188,6 +188,47 @@ describe("Issue-Detail", () => {
     expect(screen.getByRole("region", { name: "Activity" })).toBeInTheDocument();
   });
 
+  it("mischt Verlauf und Kommentare chronologisch und schwärzt unsichtbare Ziele", async () => {
+    mockGraphql(
+      handlers({
+        history: [
+          {
+            id: "h-late",
+            actorId: "user-bob",
+            source: "user",
+            changes: { stateId: { from: "s-todo", to: "s-done" } },
+            addedLabelIds: [],
+            removedLabelIds: [],
+            relationChanges: null,
+            flags: [],
+            createdAt: "2026-10-03T08:00:00Z",
+          },
+          {
+            id: "h-early",
+            actorId: null,
+            source: "import",
+            changes: { projectId: { from: null, to: null } },
+            addedLabelIds: ["l-bug"],
+            removedLabelIds: [],
+            relationChanges: null,
+            flags: ["created"],
+            createdAt: "2026-10-01T08:00:00Z",
+          },
+        ],
+      }),
+    );
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const timeline = await screen.findByRole("list", { name: "Activity timeline" });
+    const early = await within(timeline).findByLabelText(
+      "Import created the issue, changed the project (a private item), added label Bug",
+    );
+    const comment = await within(timeline).findByRole("article", { name: "Comment by Alice" });
+    const late = within(timeline).getByLabelText("Bob changed status from Todo to Done");
+    // Reihenfolge: Import (1.10.) < Kommentar (2.10.) < Statuswechsel (3.10.)
+    expect(early.compareDocumentPosition(comment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(comment.compareDocumentPosition(late) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("Taste S öffnet den Status-Picker, Auswahl sendet issueUpdate", async () => {
     const gql = mockGraphql(handlers());
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
