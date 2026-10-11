@@ -1,4 +1,10 @@
-import { createRootRoute, Outlet, redirect, useRouter } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  Outlet,
+  redirect,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 
 import { ensureSession, useSession } from "@/app/auth";
 import { PlaceholderPage } from "@/app/placeholder";
@@ -6,10 +12,11 @@ import { Shell } from "@/app/shell";
 import { Button } from "@/components/ui/button";
 
 export const Route = createRootRoute({
-  // Auth-Guard: ohne gültige Session (GET /auth/me) geht jede Seite außer /login auf /login.
+  // Auth-Guard: ohne gültige Session (GET /auth/me) geht jede Seite außer /login und den öffentlichen
+  // Einladungsseiten (/invite/<token>) auf /login.
   beforeLoad: async ({ location }) => {
     const session = await ensureSession();
-    if (!session && location.pathname !== "/login") {
+    if (!session && location.pathname !== "/login" && !isPublicPath(location.pathname)) {
       throw redirect({ to: "/login", search: { redirect: location.href } });
     }
   },
@@ -19,9 +26,13 @@ export const Route = createRootRoute({
   errorComponent: RootError,
 });
 
+/** Öffentliche Seiten ohne Login und ohne App-Shell. */
+const isPublicPath = (pathname: string) => pathname.startsWith("/invite/");
+
 function RootLayout() {
   const session = useSession();
-  if (!session) return <Outlet />;
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  if (!session || isPublicPath(pathname)) return <Outlet />;
   return (
     <Shell session={session}>
       <Outlet />
