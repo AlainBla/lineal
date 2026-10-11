@@ -23,6 +23,8 @@ use uuid::Uuid;
 pub const SESSION_TTL_DAYS: i64 = 14;
 /// Präfix persönlicher API-Keys.
 pub const API_KEY_PREFIX: &str = "lin_api_";
+/// Höchstzahl gleichzeitig aktiver (nicht widerrufener, nicht abgelaufener) Keys je User.
+pub const MAX_ACTIVE_API_KEYS: usize = 25;
 
 /// SHA-256 (hex, Kleinbuchstaben) über das komplette Token.
 pub fn hash_token(token: &str) -> String {
@@ -237,6 +239,19 @@ impl App {
         if input.expires_at.is_some_and(|e| e <= now) {
             return Err(AppError::invalid_request("expiresAt must be in the future")
                 .with_details(json!({ "field": "expiresAt" })));
+        }
+        let active = tx
+            .auth()
+            .list_api_keys(user_id)
+            .await?
+            .iter()
+            .filter(|k| k.revoked_at.is_none() && k.expires_at.is_none_or(|e| e > now))
+            .count();
+        if active >= MAX_ACTIVE_API_KEYS {
+            return Err(AppError::limit_exceeded(format!(
+                "at most {MAX_ACTIVE_API_KEYS} active API keys per user"
+            ))
+            .with_details(json!({ "field": "label" })));
         }
         let key = format!("{API_KEY_PREFIX}{}", random_hex());
         let id = ApiKeyId(self.ids.new_uuid());

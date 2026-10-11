@@ -67,9 +67,7 @@ async fn setup(pool: PgPool) -> Fx {
     let mut tx = store.begin(data.org).await.unwrap();
     seed::run(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
-    let clock = Arc::new(TestClock(Mutex::new(
-        Utc.with_ymd_and_hms(2026, 10, 10, 7, 15, 0).unwrap(),
-    )));
+    let clock = Arc::new(TestClock(Mutex::new(Utc::now())));
     let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
     app.clock = clock.clone();
     let app = Arc::new(app);
