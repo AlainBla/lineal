@@ -427,22 +427,5 @@ export function relationGroups(r: IssueRelations): Array<{ label: string; items:
   ].filter((g) => g.items.length > 0);
 }
 
-/** Ereignisse aus den Zeitstempeln des Issues (das Schema bietet keinen History-Abruf). */
-export function issueEvents(
-  issue: Issue,
-  lookup: { assigneeName: (id: string | null) => string | null },
-): Array<{ id: string; text: string; at: string }> {
-  const creator = lookup.assigneeName(issue.creatorId);
-  const events = [
-    { id: "created", text: `${creator ?? "Someone"} created the issue`, at: issue.createdAt },
-  ];
-  if (issue.startedAt) events.push({ id: "started", text: "Work started", at: issue.startedAt });
-  if (issue.completedAt)
-    events.push({ id: "completed", text: "Marked as completed", at: issue.completedAt });
-  if (issue.canceledAt)
-    events.push({ id: "canceled", text: "Marked as canceled", at: issue.canceledAt });
-  return events.sort((a, b) => a.at.localeCompare(b.at));
-}
-
 /** Pfad zum Issue-Detail (docs/08 §1.3). */
 export const issuePath = (ws: string, identifier: string) => `/${ws}/issue/${identifier}`;

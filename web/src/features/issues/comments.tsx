@@ -4,13 +4,14 @@ import { useMemo, useRef, useState } from "react";
 import { useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Comment, Issue } from "@/gql/graphql";
+import type { Comment, Issue, IssueHistoryEntry } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
-import { useComments, useCreateComment, useReactions } from "./hooks";
+import { useComments, useCreateComment, useIssueExtras, useReactions } from "./hooks";
 import { Avatar } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { issueEvents, relativeTime } from "./model";
+import { describeHistory, type HistoryResolver } from "./history";
+import { relativeTime } from "./model";
 import { setSubscription } from "./queries";
 import { RichEditor } from "./rich-editor";
 import { ErrorState } from "./states";
@@ -240,23 +241,81 @@ function CommentCard({
   );
 }
 
-/** Activity-Abschnitt: Abo-Schalter, Ereignisse, Kommentar-Threads mit Reaktionen, Kommentar-Editor. */
+type TimelineItem =
+  | { kind: "comment"; at: string; comment: Comment }
+  | { kind: "history"; at: string; entry: IssueHistoryEntry };
+
+function HistoryLine({ entry, resolver }: { entry: IssueHistoryEntry; resolver: HistoryResolver }) {
+  const d = describeHistory(entry, resolver);
+  if (d.phrases.length === 0) return null;
+  return (
+    <li
+      className="flex items-baseline gap-2 text-xs text-muted-foreground"
+      aria-label={`${d.actor} ${d.phrases.join(", ")}`}
+    >
+      <span
+        aria-hidden
+        className="size-1.5 shrink-0 translate-y-[-1px] rounded-full bg-border-strong"
+      />
+      <span className="min-w-0">
+        <span className="font-medium text-foreground">{d.actor}</span> {d.phrases.join(", ")}
+        {d.via && <span className="text-subtle-foreground"> (via {d.via})</span>}
+        <time
+          dateTime={d.createdAt}
+          className="text-subtle-foreground"
+          title={new Date(d.createdAt).toLocaleString()}
+        >
+          {" "}
+          · {relativeTime(d.createdAt)}
+        </time>
+      </span>
+    </li>
+  );
+}
+
+/** Activity-Abschnitt: Abo-Schalter, Verlauf und Kommentar-Threads chronologisch gemischt, Kommentar-Editor. */
 export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: IssueLookup }) {
   const comments = useComments(issue.id);
   const users = useKnownUsers();
   const myReactions = useRef(new Map<string, string>());
   const [subscribed, setSubscribed] = useState(false);
 
-  const { roots, repliesByParent } = useMemo(() => {
+  const extras = useIssueExtras(issue.id);
+  const session = useSession();
+
+  const resolver = useMemo<HistoryResolver>(
+    () => ({
+      user: (id) => lookup.assigneeName(id),
+      state: (id) => lookup.state(id)?.name ?? null,
+      label: (id) => lookup.label(id)?.name ?? null,
+      project: (id) => lookup.projectName(id),
+      cycle: (id) => lookup.cycleName(id),
+      team: (id) => session?.teams.find((t) => t.id === id)?.name ?? null,
+    }),
+    [lookup, session],
+  );
+
+  const { timeline, repliesByParent } = useMemo(() => {
     const all = [...(comments.data ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const by = new Map<string, Comment[]>();
     for (const c of all) {
       if (c.parentId) by.set(c.parentId, [...(by.get(c.parentId) ?? []), c]);
     }
-    return { roots: all.filter((c) => !c.parentId), repliesByParent: by };
-  }, [comments.data]);
+    const items: TimelineItem[] = [
+      ...all
+        .filter((c) => !c.parentId)
+        .map((comment): TimelineItem => ({ kind: "comment", at: comment.createdAt, comment })),
+      ...(extras.data?.history ?? []).map((entry): TimelineItem => ({
+        kind: "history",
+        at: entry.createdAt,
+        entry,
+      })),
+    ];
+    // `sort` ist stabil: bei gleichem Zeitstempel bleibt der Verlauf vor dem Kommentar.
+    items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    return { timeline: items, repliesByParent: by };
+  }, [comments.data, extras.data]);
 
-  const events = issueEvents(issue, lookup);
   const toggleSub = () => {
     const next = !subscribed;
     setSubscribed(next);
@@ -280,36 +339,37 @@ export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: Issue
           {subscribed ? <BellOff /> : <Bell />} {subscribed ? "Unsubscribe" : "Subscribe"}
         </Button>
       </header>
-      <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-        {events.map((e) => (
-          <li key={e.id} className="flex gap-2">
-            <span>{e.text}</span>
-            <span className="text-subtle-foreground" title={new Date(e.at).toLocaleString()}>
-              · {relativeTime(e.at)}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {comments.isLoading ? (
-        <Skeleton className="h-16 w-full" />
-      ) : comments.isError ? (
+      {extras.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          Could not load the activity history.
+        </p>
+      )}
+      {comments.isError ? (
         <ErrorState
           title="Could not load comments"
           error={comments.error}
           onRetry={() => void comments.refetch()}
         />
       ) : (
-        roots.map((c) => (
-          <CommentCard
-            key={c.id}
-            comment={c}
-            replies={repliesByParent.get(c.id) ?? []}
-            issueId={issue.id}
-            users={users}
-            myReactions={myReactions}
-          />
-        ))
+        <ol className="flex flex-col gap-2" aria-label="Activity timeline">
+          {timeline.map((item) =>
+            item.kind === "history" ? (
+              <HistoryLine key={`h-${item.entry.id}`} entry={item.entry} resolver={resolver} />
+            ) : (
+              <li key={`c-${item.comment.id}`}>
+                <CommentCard
+                  comment={item.comment}
+                  replies={repliesByParent.get(item.comment.id) ?? []}
+                  issueId={issue.id}
+                  users={users}
+                  myReactions={myReactions}
+                />
+              </li>
+            ),
+          )}
+        </ol>
       )}
+      {comments.isLoading && <Skeleton className="h-16 w-full" />}
       <CommentComposer
         issueId={issue.id}
         placeholder="Leave a comment…"
