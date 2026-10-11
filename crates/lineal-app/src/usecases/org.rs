@@ -234,6 +234,8 @@ impl App {
             request_id: "req_create_workspace".into(),
             scopes: Scopes::all(),
             team_scope: None,
+
+            via_session: false,
         };
         emit(
             &mut *tx,

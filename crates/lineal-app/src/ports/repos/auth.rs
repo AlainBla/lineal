@@ -12,9 +12,19 @@ fn unimplemented_repo<T>() -> AppResult<T> {
     Err(AppError::internal("not implemented"))
 }
 
+/// Art des Tokens, bestimmt durch die Tabelle, in der der Hash gefunden wurde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    Session,
+    ApiKey,
+    OAuth,
+}
+
 /// Aufgelöster Aufrufer eines Tokens (Session, API-Key oder OAuth-Token).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
+    /// Tatsächliche Token-Art (nicht die Transportart Cookie/Header).
+    pub kind: CredentialKind,
     pub org_id: OrgId,
     pub actor: Actor,
     pub scopes: Scopes,

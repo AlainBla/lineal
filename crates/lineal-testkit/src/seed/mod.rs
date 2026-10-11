@@ -72,6 +72,8 @@ pub fn ctx_for(user: SeedUser) -> RequestCtx {
         request_id: format!("req_test_{user:?}").to_lowercase(),
         scopes: Scopes::all(),
         team_scope: None,
+        // Wie ein Browser-Aufruf mit Session-Cookie (Tests für session-only Use-Cases).
+        via_session: true,
     }
 }
 

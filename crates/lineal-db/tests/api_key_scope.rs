@@ -38,6 +38,7 @@ async fn ctx_of_key(app: &App, key: &str) -> RequestCtx {
         request_id: "req_key".into(),
         scopes: p.scopes,
         team_scope: p.team_scope,
+        via_session: false,
     }
 }
 

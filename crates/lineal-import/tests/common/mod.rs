@@ -72,6 +72,7 @@ impl Env {
             request_id: "req_import_test".into(),
             scopes: Scopes::all(),
             team_scope: None,
+            via_session: false,
         }
     }
 

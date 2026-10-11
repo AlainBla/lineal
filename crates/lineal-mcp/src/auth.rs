@@ -58,6 +58,8 @@ pub async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, 
         request_id: new_request_id(),
         scopes: principal.scopes,
         team_scope: principal.team_scope,
+
+        via_session: false,
     })
 }
 

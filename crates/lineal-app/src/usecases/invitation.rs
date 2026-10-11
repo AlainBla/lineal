@@ -506,6 +506,8 @@ impl App {
             request_id: "req_accept_invitation".into(),
             scopes: crate::context::Scopes::read_write(),
             team_scope: None,
+
+            via_session: false,
         };
         emit(&mut *tx, &ev_ctx, DomainEvent::UserCreated { user_id }).await?;
         for t in &inv.team_ids {

@@ -6,7 +6,7 @@ use super::*;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use http_body_util::BodyExt;
 use lineal_app::ports::repos::auth::NewSession;
 use lineal_app::ports::{Clock, Store};

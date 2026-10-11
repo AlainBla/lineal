@@ -260,3 +260,117 @@ async fn validation_scope_teams_and_limits(pool: sqlx::PgPool) {
     .await;
     assert_eq!(code(&res), "not_found");
 }
+
+/// Ein Key im Session-Cookie ist kein Session-Login: kein 200 und kein neuer Key (Eskalation
+/// von einem team-beschränkten zu einem unbeschränkten Key).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn api_key_in_session_cookie_cannot_mint_keys(pool: sqlx::PgPool) {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use lineal_app::usecases::auth::CreateApiKeyInput;
+    use tower::ServiceExt;
+
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = test_app(Arc::new(store));
+    // Team-beschränkter Key (nur ENG), angelegt aus einer Session.
+    let created = app
+        .create_api_key(
+            &ctx_for(SeedUser::Bob),
+            CreateApiKeyInput {
+                label: "scoped".into(),
+                scopes: vec!["read".into(), "write".into()],
+                teams: Some(vec!["ENG".into()]),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    let router = lineal_api::router(app.clone(), false);
+    let body = json!({ "query": "mutation { apiKeyCreate(input: { label: \"evil\", scopes: [READ, WRITE] }) { token } }" });
+    let req = |name: &str, value: String| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/graphql")
+            .header("content-type", "application/json")
+            .header("origin", "http://localhost:8080")
+            .header("x-lineal-csrf", "1")
+            .header(name, value)
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    // Als Cookie: 401 (Token-Art passt nicht zum Transport).
+    let res = router
+        .clone()
+        .oneshot(req("cookie", format!("lineal_session={}", created.key)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // Als Authorization-Header: Anmeldung gültig, aber Anlegen verboten.
+    let res = router
+        .oneshot(req("authorization", created.key.clone()))
+        .await
+        .unwrap();
+    let bytes = http_body_util::BodyExt::collect(res.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("forbidden"), "{text}");
+    assert!(!text.contains("lin_api_"), "{text}");
+    let n = app
+        .list_api_keys(&ctx_for(SeedUser::Bob))
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(n, 1);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn use_case_requires_session_and_keeps_team_scope(pool: sqlx::PgPool) {
+    use lineal_app::usecases::auth::CreateApiKeyInput;
+
+    let store = PgStore::new(pool);
+    let data = SeedData::acme();
+    let mut tx = store.begin(data.org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = test_app(Arc::new(store));
+    let input = |teams: Option<Vec<&str>>| CreateApiKeyInput {
+        label: "k".into(),
+        scopes: vec!["read".into()],
+        teams: teams.map(|t| t.into_iter().map(String::from).collect()),
+        expires_at: None,
+    };
+    // Kein Session-Kontext (API-Key/OAuth) -> forbidden.
+    let mut not_session = ctx_for(SeedUser::Bob);
+    not_session.via_session = false;
+    let err = app
+        .create_api_key(&not_session, input(None))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::Forbidden);
+
+    // Team-beschränkter Kontext: ohne Angabe erbt der Key die Beschränkung ...
+    let mut scoped = ctx_for(SeedUser::Bob);
+    scoped.team_scope = Some(vec![data.eng]);
+    let k = app.create_api_key(&scoped, input(None)).await.unwrap();
+    assert_eq!(k.record.team_ids, Some(vec![data.eng]));
+    // ... eine Teilmenge ist erlaubt, ein fremdes Team nicht.
+    let k = app
+        .create_api_key(&scoped, input(Some(vec!["ENG"])))
+        .await
+        .unwrap();
+    assert_eq!(k.record.team_ids, Some(vec![data.eng]));
+    let err = app
+        .create_api_key(&scoped, input(Some(vec!["WEB"])))
+        .await
+        .unwrap_err();
+    // Außerhalb des Scopes unsichtbar (not_found) oder verboten – nie erlaubt.
+    assert!(matches!(
+        err.kind,
+        lineal_app::ErrorKind::Forbidden | lineal_app::ErrorKind::NotFound
+    ));
+}

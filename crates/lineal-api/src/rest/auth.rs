@@ -209,13 +209,19 @@ pub async fn logout(State(app): State<Arc<App>>, headers: HeaderMap) -> Response
 
 /// `GET /auth/me`: der eingeloggte User (Session-Cookie oder `Authorization`-Header).
 pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    let Some(token) = cookie_value(&headers, SESSION_COOKIE).or_else(|| bearer(&headers)) else {
+    let cookie = cookie_value(&headers, SESSION_COOKIE);
+    let from_cookie = cookie.is_some();
+    let Some(token) = cookie.or_else(|| bearer(&headers)) else {
         return error_response(AppError::unauthenticated("Missing credentials."));
     };
     let principal = match app.principal_for_token(&token).await {
         Ok(p) => p,
         Err(e) => return error_response(e),
     };
+    // Cookie nur für Sessions, Header nie für Sessions (kein Token-Typ-Mix).
+    if from_cookie != (principal.kind == lineal_app::ports::repos::CredentialKind::Session) {
+        return error_response(AppError::unauthenticated("Invalid or expired token."));
+    }
     let user_id = match principal.actor {
         Actor::User { id, .. } | Actor::App { id } => id,
         Actor::System => return error_response(AppError::unauthenticated("Invalid token.")),
@@ -226,6 +232,8 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         request_id: "req_me".into(),
         scopes: principal.scopes,
         team_scope: principal.team_scope.clone(),
+
+        via_session: false,
     };
     let (user, org) = match (
         app.get_user(&ctx, &user_id.to_string()).await,

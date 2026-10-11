@@ -330,6 +330,8 @@ async fn notification_data(
         request_id: format!("sync_{}", ev.id),
         scopes: Scopes::read_only(),
         team_scope: None,
+
+        via_session: false,
     };
     match app
         .get_notification(&ctx, lineal_domain::ids::NotificationId(id))
