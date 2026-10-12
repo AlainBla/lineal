@@ -22,6 +22,7 @@ const SETTINGS = {
   pinnedViewManagementRole: "admin",
   importRole: "admin",
   allowedInviteDomains: ["acme.example"],
+  auditLogRetentionDays: 365,
 };
 
 function clientWithRole(role: string) {
@@ -98,6 +99,33 @@ describe("SecuritySettingsPage", () => {
     await waitFor(() =>
       expect(screen.queryByText("Save security settings?")).not.toBeInTheDocument(),
     );
+  });
+
+  it("edits the audit log retention within 30 to 3650 days", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <SecuritySettingsPage ws="acme" />,
+      clientWithRole("owner"),
+      "/acme/settings/security",
+    );
+    const user = userEvent.setup();
+    const field = await screen.findByLabelText("Audit log retention in days");
+    expect(field).toHaveValue("365");
+    await user.clear(field);
+    await user.type(field, "10");
+    expect(screen.getByRole("alert")).toHaveTextContent("between 30 and 3650");
+    expect(screen.getByRole("button", { name: "Save…" })).toBeDisabled();
+    await user.clear(field);
+    await user.type(field, "90");
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    expect(await screen.findByRole("list", { name: "Changes" })).toHaveTextContent(
+      "365 days → 90 days",
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(gql.of("SettingsSecurityUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsSecurityUpdate")[0]!.variables).toEqual({
+      input: { auditLogRetentionDays: 90 },
+    });
   });
 
   it("shows server errors in the confirmation and keeps the draft", async () => {

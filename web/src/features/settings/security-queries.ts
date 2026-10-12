@@ -18,7 +18,21 @@ export const ROLE_FIELDS = [
 
 export type RoleField = (typeof ROLE_FIELDS)[number];
 
-export type SecuritySettings = Record<RoleField, string> & { allowedInviteDomains: string[] };
+export type SecuritySettings = Record<RoleField, string> & {
+  allowedInviteDomains: string[];
+  auditLogRetentionDays: number;
+};
+
+/** Erlaubter Bereich der Audit-Aufbewahrung in Tagen (Server prüft dieselben Grenzen). */
+export const AUDIT_RETENTION_MIN = 30;
+export const AUDIT_RETENTION_MAX = 3650;
+
+/** Ganzzahl im erlaubten Bereich oder `null`. */
+export function parseRetentionDays(text: string): number | null {
+  if (!/^\d{1,5}$/.test(text.trim())) return null;
+  const n = Number(text.trim());
+  return n >= AUDIT_RETENTION_MIN && n <= AUDIT_RETENTION_MAX ? n : null;
+}
 
 /** Verständliche Frage je Recht (Reihenfolge wie in docs/02 §6.3). */
 export const ROLE_QUESTIONS: Record<RoleField, string> = {
@@ -55,7 +69,7 @@ export function parseDomains(text: string): string[] {
 
 export const securityKey = ["settings", "security"] as const;
 
-const FIELDS = `${ROLE_FIELDS.join(" ")} allowedInviteDomains`;
+const FIELDS = `${ROLE_FIELDS.join(" ")} allowedInviteDomains auditLogRetentionDays`;
 
 /** Liefert `null`, wenn der Server keine Settings liefert (kein Fehlerzustand für reine Hinweise). */
 export function useSecuritySettings(enabled = true) {
@@ -76,6 +90,7 @@ export function useSecuritySettings(enabled = true) {
 
 export type SecurityUpdate = Partial<Record<RoleField, string>> & {
   allowedInviteDomains?: string[];
+  auditLogRetentionDays?: number;
 };
 
 export function useUpdateSecuritySettings() {

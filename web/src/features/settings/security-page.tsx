@@ -14,7 +14,10 @@ import { useShortcutContext } from "@/lib/shortcuts";
 
 import { workspaceSettingsNav } from "./nav";
 import {
+  AUDIT_RETENTION_MAX,
+  AUDIT_RETENTION_MIN,
   parseDomains,
+  parseRetentionDays,
   ROLE_FIELDS,
   ROLE_OPTIONS,
   ROLE_QUESTIONS,
@@ -32,11 +35,16 @@ const sameList = (a: string[], b: string[]) =>
 interface Draft {
   roles: Record<RoleField, string>;
   domains: string;
+  retention: string;
 }
 
 function toDraft(s: SecuritySettings): Draft {
   const roles = Object.fromEntries(ROLE_FIELDS.map((f) => [f, s[f]])) as Record<RoleField, string>;
-  return { roles, domains: s.allowedInviteDomains.join("\n") };
+  return {
+    roles,
+    domains: s.allowedInviteDomains.join("\n"),
+    retention: String(s.auditLogRetentionDays),
+  };
 }
 
 function diff(saved: SecuritySettings, draft: Draft): SecurityUpdate {
@@ -44,6 +52,8 @@ function diff(saved: SecuritySettings, draft: Draft): SecurityUpdate {
   for (const f of ROLE_FIELDS) if (draft.roles[f] !== saved[f]) update[f] = draft.roles[f];
   const domains = parseDomains(draft.domains);
   if (!sameList(domains, saved.allowedInviteDomains)) update.allowedInviteDomains = domains;
+  const days = parseRetentionDays(draft.retention);
+  if (days !== null && days !== saved.auditLogRetentionDays) update.auditLogRetentionDays = days;
   return update;
 }
 
@@ -90,6 +100,12 @@ function ConfirmDialog({
                 </strong>
               </li>
             )}
+            {update.auditLogRetentionDays !== undefined && (
+              <li>
+                Audit log retention: {saved.auditLogRetentionDays} days →{" "}
+                <strong>{update.auditLogRetentionDays} days</strong>
+              </li>
+            )}
           </ul>
           {error != null && (
             <p role="alert" className="text-xs text-destructive">
@@ -115,6 +131,7 @@ function SecurityForm({ saved, isOwner }: { saved: SecuritySettings; isOwner: bo
   const [draft, setDraft] = useState<Draft>(() => toDraft(saved));
   const [confirming, setConfirming] = useState(false);
   const changes = useMemo(() => diff(saved, draft), [saved, draft]);
+  const retentionInvalid = parseRetentionDays(draft.retention) === null;
   const dirty = Object.keys(changes).length > 0;
 
   return (
@@ -123,7 +140,7 @@ function SecurityForm({ saved, isOwner }: { saved: SecuritySettings; isOwner: bo
       aria-label="Security settings"
       onSubmit={(e) => {
         e.preventDefault();
-        if (dirty) {
+        if (dirty && !retentionInvalid) {
           update.reset();
           setConfirming(true);
         }
@@ -183,8 +200,28 @@ function SecurityForm({ saved, isOwner }: { saved: SecuritySettings; isOwner: bo
           One domain per line, without @. Subdomains must be listed separately.
         </p>
       </Section>
+      <Section
+        title="Audit log retention"
+        description={`Entries older than this are deleted automatically (${AUDIT_RETENTION_MIN} to ${AUDIT_RETENTION_MAX} days).`}
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <input
+            aria-label="Audit log retention in days"
+            inputMode="numeric"
+            className="h-8 w-24 rounded-md border border-input bg-transparent px-2.5 text-sm"
+            value={draft.retention}
+            onChange={(e) => setDraft((d) => ({ ...d, retention: e.target.value }))}
+          />
+          <span>days</span>
+        </div>
+        {retentionInvalid && (
+          <p role="alert" className="text-xs text-destructive">
+            Enter a whole number between {AUDIT_RETENTION_MIN} and {AUDIT_RETENTION_MAX}.
+          </p>
+        )}
+      </Section>
       <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={!dirty}>
+        <Button type="submit" size="sm" disabled={!dirty || retentionInvalid}>
           Save…
         </Button>
         <Button
