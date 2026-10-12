@@ -73,6 +73,7 @@ beforeEach(() => {
     commandMenuOpen: false,
     shortcutHelpOpen: false,
     createIssueOpen: false,
+    createTeamOpen: false,
     detailsOpen: false,
   });
 });

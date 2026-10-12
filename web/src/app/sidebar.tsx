@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   ListTodo,
   LogOut,
+  Plus,
   RefreshCw,
   Search,
   Settings,
@@ -401,7 +402,22 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
 
           <FavoritesSection ws={ws} />
 
-          <SectionLabel>Your teams</SectionLabel>
+          <div className="flex items-center justify-between pr-1">
+            <SectionLabel>Your teams</SectionLabel>
+            {session.user.role !== "guest" && (
+              <Hint label="New team">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="mt-3 size-5"
+                  aria-label="Create new team"
+                  onClick={() => setUiState({ createTeamOpen: true })}
+                >
+                  <Plus />
+                </Button>
+              </Hint>
+            )}
+          </div>
           <TeamsSection ws={ws} data={data} loading={isLoading} />
         </nav>
       </div>

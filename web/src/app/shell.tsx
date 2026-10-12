@@ -9,6 +9,7 @@ import { ShortcutHelp } from "@/app/shortcut-help";
 import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
 import { IssuesHost } from "@/features/issues/host";
+import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
 import { useSyncStream } from "@/lib/store";
 
@@ -46,6 +47,7 @@ export function Shell({ session, children }: { session: Session; children: React
       <ConnectedCommandMenu />
       <ShortcutHelp />
       <IssuesHost />
+      <ConnectedNewTeamDialog />
     </div>
   );
 }

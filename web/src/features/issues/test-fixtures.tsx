@@ -108,6 +108,8 @@ export const TEAM_META: TeamMeta = {
     icon: null,
     color: null,
     visibility: "public",
+    allMembersCanJoin: true,
+    memberCount: 2,
     timezone: "UTC",
     triageEnabled: false,
     cyclesEnabled: true,

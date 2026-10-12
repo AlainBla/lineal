@@ -100,6 +100,14 @@ export function buildGlobalActions(args: {
     },
 
     {
+      id: "team.create",
+      title: "Create team",
+      section: "Teams",
+      keywords: ["new team", "add team"],
+      icon: Users,
+      perform: () => setUiState({ createTeamOpen: true }),
+    },
+    {
       id: "ui.sidebar",
       title: "Toggle sidebar",
       section: "Interface",

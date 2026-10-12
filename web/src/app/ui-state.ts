@@ -9,6 +9,8 @@ export interface UiState {
   commandMenuOpen: boolean;
   shortcutHelpOpen: boolean;
   createIssueOpen: boolean;
+  /** Dialog „New team“ (Sidebar „+“, Command-Menü, Settings → Teams). */
+  createTeamOpen: boolean;
   /** Rechte Detail-Sidebar (`]`); die Inhalte liefern die Feature-WPs. */
   detailsOpen: boolean;
 }
@@ -28,6 +30,7 @@ let state: UiState = {
   commandMenuOpen: false,
   shortcutHelpOpen: false,
   createIssueOpen: false,
+  createTeamOpen: false,
   detailsOpen: false,
 };
 
