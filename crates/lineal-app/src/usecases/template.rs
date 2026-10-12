@@ -519,6 +519,20 @@ impl App {
         Ok(view(&snap, t))
     }
 
+    /// Die drei Default-Templates eines Teams (für die Team-Settings).
+    pub async fn get_team_default_templates(
+        &self,
+        ctx: &RequestCtx,
+        team: &str,
+    ) -> AppResult<crate::ports::repos::template::TeamDefaults> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Content).await?;
+        let d = tx.templates().team_defaults(team.id).await?;
+        tx.commit().await?;
+        Ok(d)
+    }
+
     /// Setzt oder löscht ein Default-Template des Teams (docs/06 §2.8).
     pub async fn set_team_default_template(
         &self,

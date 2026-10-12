@@ -1864,6 +1864,10 @@ type Query {
 	Templates des Teams (eigene, geerbte, Workspace) bzw. alle sichtbaren.
 	"""
 	templates(teamId: String, type: TemplateKind): [Template!]!
+	"""
+	Gesetzte Default-Templates eines Teams.
+	"""
+	teamDefaultTemplates(teamId: String!): TeamDefaultTemplates!
 	template(id: String!): Template!
 	"""
 	Triage-Liste eines Teams (nicht gesnoozte, älteste zuerst).
@@ -2084,6 +2088,15 @@ input TeamCyclesInput {
 	`moveToBacklog` | `addToCycle` beim Einschalten von „Active issues“.
 	"""
 	existingActiveIssues: String
+}
+
+"""
+Default-Templates eines Teams (Ids; `null` = keines gesetzt).
+"""
+type TeamDefaultTemplates {
+	forMembersId: String
+	forNonMembersId: String
+	projectId: String
 }
 
 type TeamLifecyclePayload {

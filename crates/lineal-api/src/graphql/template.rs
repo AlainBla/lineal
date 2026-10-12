@@ -148,6 +148,15 @@ pub struct TemplateIssuePayload {
     pub warnings: Vec<String>,
 }
 
+/// Default-Templates eines Teams (Ids; `null` = keines gesetzt).
+#[derive(SimpleObject)]
+#[graphql(name = "TeamDefaultTemplates")]
+pub struct TeamDefaultTemplatesGql {
+    pub for_members_id: Option<String>,
+    pub for_non_members_id: Option<String>,
+    pub project_id: Option<String>,
+}
+
 #[derive(Default)]
 pub struct TemplateQuery;
 
@@ -171,6 +180,23 @@ impl TemplateQuery {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    /// Gesetzte Default-Templates eines Teams.
+    async fn team_default_templates(
+        &self,
+        ctx: &Context<'_>,
+        team_id: String,
+    ) -> async_graphql::Result<TeamDefaultTemplatesGql> {
+        let d = app(ctx)?
+            .get_team_default_templates(request_ctx(ctx)?, &team_id)
+            .await
+            .map_err(gql_err)?;
+        Ok(TeamDefaultTemplatesGql {
+            for_members_id: d.members.map(|x| x.to_string()),
+            for_non_members_id: d.non_members.map(|x| x.to_string()),
+            project_id: d.project.map(|x| x.to_string()),
+        })
     }
 
     async fn template(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<TemplateGql> {
