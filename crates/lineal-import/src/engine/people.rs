@@ -81,7 +81,14 @@ impl Session<'_, '_> {
         let explicit = self.opts.user_mapping.get(&src).copied().flatten();
         let mut target: Option<Uuid> = None;
         if let Some(id) = explicit {
-            if self.tx()?.users().get(UserId(id)).await?.is_some() {
+            // Nur aktive Benutzer (oder frühere Import-Platzhalter) dieses Workspace.
+            let usable = self
+                .tx()?
+                .users()
+                .get(UserId(id))
+                .await?
+                .is_some_and(|u| u.active || u.status == "imported");
+            if usable {
                 target = Some(id);
             } else {
                 self.note(
@@ -111,9 +118,8 @@ impl Session<'_, '_> {
                 }
                 let id = self.new_id();
                 let display = self.free_display_name(&email).await?;
-                let role = if n.bool("admin").unwrap_or(false) {
-                    "admin"
-                } else if n.bool("guest").unwrap_or(false) {
+                // Platzhalter bekommen nie mehr Rechte als `user`, auch wenn die Quelle Admins kennt.
+                let role = if n.bool("guest").unwrap_or(false) {
                     "guest"
                 } else {
                     "user"

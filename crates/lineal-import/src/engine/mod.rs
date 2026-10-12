@@ -972,6 +972,11 @@ impl Session<'_, '_> {
 
     /// Vorbereitung: Workspace, Benutzer-/Label-Metadaten, Umschreibe-Kontext, Team-Auswahl.
     pub(crate) async fn init(&mut self) -> HResult<()> {
+        // Ziel-Teams und Rechte des Starters bei jeder Ausführung neu prüfen (vor jedem Schreiben).
+        self.eng
+            .app
+            .import_verify_targets(self.org, &self.run)
+            .await?;
         let ws = self.eng.source.workspace().await?;
         if self.run.checkpoint["step"].is_null() {
             for n in self.eng.source.notices() {

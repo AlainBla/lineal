@@ -612,7 +612,8 @@ impl ImportRepo for PgTx {
 
     async fn find_user_id_by_email(&mut self, email: &str) -> AppResult<Option<Uuid>> {
         sqlx::query_scalar(
-            "SELECT id FROM \"user\" WHERE organization_id = $1 AND lower(email) = lower($2)",
+            "SELECT id FROM \"user\" WHERE organization_id = $1 AND lower(email) = lower($2) \
+             AND archived_at IS NULL AND (active OR status = 'imported')",
         )
         .bind(self.org.0)
         .bind(email)

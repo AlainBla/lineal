@@ -587,3 +587,302 @@ async fn target_team_needs_visibility_and_write_access(pool: PgPool) {
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
     assert_eq!(e.count("SELECT count(*) FROM issue").await, 0);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sicherheit: Ziel-Teams und Rechte werden bei jeder Ausführung neu geprüft
+// ---------------------------------------------------------------------------------------------
+
+async fn add_admin(e: &Env, name: &str) -> lineal_domain::ids::UserId {
+    let id = lineal_domain::ids::UserId(Uuid::new_v4());
+    sqlx::query("INSERT INTO \"user\" (id, organization_id, name, display_name, email, role) VALUES ($1, $2, $3, $3, $4, 'admin')")
+        .bind(id.0)
+        .bind(e.org.0)
+        .bind(name)
+        .bind(format!("{name}@acme.test"))
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// Gescannter Lauf, den `starter` mit Ziel-Team `team` startet (noch nicht ausgeführt).
+async fn started_into_with(
+    e: &Env,
+    src: &FakeSource,
+    starter: lineal_domain::ids::UserId,
+    role: lineal_domain::enums::UserRole,
+    team: Uuid,
+) -> Uuid {
+    let planned = e.scan(src).await;
+    e.app
+        .import_start(
+            &e.ctx(starter, role),
+            ImportStartInput {
+                run_id: planned.id,
+                teams: vec!["KOL".into()],
+                projects: vec!["p-5".into()],
+                target_teams: BTreeMap::from([("KOL".to_owned(), team)]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    planned.id
+}
+
+async fn started_into(
+    e: &Env,
+    src: &FakeSource,
+    starter: lineal_domain::ids::UserId,
+    team: Uuid,
+) -> Uuid {
+    started_into_with(e, src, starter, lineal_domain::enums::UserRole::Admin, team).await
+}
+
+async fn started_into_as_owner(e: &Env, src: &FakeSource, team: Uuid) -> Uuid {
+    started_into_with(e, src, e.alice, lineal_domain::enums::UserRole::Owner, team).await
+}
+
+async fn run_and_expect_abort(e: &Env, src: &FakeSource, run: Uuid) {
+    let before = e.snapshot().await;
+    let out = e
+        .engine(src, EngineConfig::default())
+        .run(e.org, run)
+        .await
+        .unwrap();
+    assert!(matches!(out, RunOutcome::Failed(_)), "{out:?}");
+    let r = e.app.import_get_run(&e.alice_ctx(), run).await.unwrap();
+    assert_eq!(r.status, "failed");
+    let msg = r.error.unwrap_or_default();
+    assert!(
+        msg.contains("no longer available") || msg.contains("invalid"),
+        "{msg}"
+    );
+    let after = e.snapshot().await;
+    assert_eq!(before, after, "nothing was written");
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn execution_aborts_when_the_starter_loses_access_or_the_team_is_retired(pool: PgPool) {
+    let e = env(pool).await;
+    let src = source();
+    let carl = add_admin(&e, "carl").await;
+    let team = existing_team(&e, "KP").await;
+
+    // Starter wird gesperrt.
+    let run = started_into(&e, &src, carl, team).await;
+    sqlx::query("UPDATE \"user\" SET active = false WHERE id = $1")
+        .bind(carl.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    run_and_expect_abort(&e, &src, run).await;
+
+    // Starter verliert das Import-Recht (Rolle user).
+    let run = started_into_as_owner(&e, &src, team).await;
+    sqlx::query("UPDATE \"user\" SET role = 'user' WHERE id = $1")
+        .bind(e.alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    run_and_expect_abort(&e, &src, run).await;
+    sqlx::query("UPDATE \"user\" SET role = 'owner' WHERE id = $1")
+        .bind(e.alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+
+    // Zielteam wird stillgelegt.
+    let run = started_into_as_owner(&e, &src, team).await;
+    sqlx::query("UPDATE team SET retired_at = now() WHERE id = $1")
+        .bind(team)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    run_and_expect_abort(&e, &src, run).await;
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn resume_checks_the_target_again(pool: PgPool) {
+    let e = env(pool).await;
+    let src = source();
+    let team = existing_team(&e, "KP").await;
+    let run = started_into_as_owner(&e, &src, team).await;
+    let out = e
+        .engine(
+            &src,
+            EngineConfig {
+                stop_after_phase: Some(2),
+                ..Default::default()
+            },
+        )
+        .run(e.org, run)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Stopped { after_phase: 2 });
+    sqlx::query("UPDATE team SET trashed = true, trashed_at = now() WHERE id = $1")
+        .bind(team)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let out = e
+        .engine(&src, EngineConfig::default())
+        .run(e.org, run)
+        .await
+        .unwrap();
+    assert!(matches!(out, RunOutcome::Failed(_)), "{out:?}");
+    assert_eq!(
+        e.count("SELECT count(*) FROM issue").await,
+        0,
+        "no issue reached the target team after the resume"
+    );
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn manipulated_options_cannot_redirect_the_import(pool: PgPool) {
+    let e = env(pool).await;
+    let src = source();
+    let carl = add_admin(&e, "carl").await;
+    let team = existing_team(&e, "KP").await;
+    let secret = e
+        .app
+        .create_team(
+            &e.alice_ctx(),
+            CreateTeamInput {
+                name: "Geheim".into(),
+                key: Some("GEH".into()),
+                visibility: Some(lineal_domain::enums::TeamVisibility::Private),
+                inherit_workflow_statuses: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .team
+        .id
+        .0;
+    // Team eines fremden Workspace.
+    let other = env_n(e.pool.clone(), 2).await;
+    let foreign = existing_team(&other, "FRD").await;
+
+    for bad in [secret, foreign] {
+        let run = started_into(&e, &src, carl, team).await;
+        sqlx::query("UPDATE import_run SET options = jsonb_set(options, '{targetTeams,KOL}', to_jsonb($2::text)) WHERE id = $1")
+            .bind(run)
+            .bind(bad.to_string())
+            .execute(&e.pool)
+            .await
+            .unwrap();
+        run_and_expect_abort(&e, &src, run).await;
+    }
+    // Schlüssel, der nicht zu den importierten Teams gehört, und kaputte Werte.
+    let run = started_into(&e, &src, carl, team).await;
+    sqlx::query("UPDATE import_run SET options = jsonb_set(options, '{targetTeams}', '{\"PLN\": \"not-a-uuid\"}') WHERE id = $1")
+        .bind(run)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    run_and_expect_abort(&e, &src, run).await;
+
+    // Beim Start selbst: fremde oder private Team-IDs sind not_found.
+    let planned = e.scan(&src).await;
+    for bad in [secret, foreign] {
+        let err = e
+            .app
+            .import_start(
+                &e.ctx(carl, lineal_domain::enums::UserRole::Admin),
+                ImportStartInput {
+                    run_id: planned.id,
+                    teams: vec!["KOL".into()],
+                    target_teams: BTreeMap::from([("KOL".to_owned(), bad)]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NotFound, "{err:?}");
+    }
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn only_admins_may_start_resume_or_cancel_runs_with_targets(pool: PgPool) {
+    let e = env(pool).await;
+    let src = source();
+    let team = existing_team(&e, "KP").await;
+    let run = started_into_as_owner(&e, &src, team).await;
+    for r in [
+        e.app.import_pause(&e.bob_ctx(), run).await,
+        e.app.import_resume(&e.bob_ctx(), run).await,
+        e.app.import_cancel(&e.bob_ctx(), run).await,
+    ] {
+        assert_eq!(r.unwrap_err().kind, ErrorKind::Forbidden);
+    }
+    let err = e
+        .app
+        .import_start(
+            &e.bob_ctx(),
+            ImportStartInput {
+                run_id: run,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Forbidden);
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn people_are_matched_only_to_active_users_and_created_as_plain_placeholders(pool: PgPool) {
+    let e = env(pool).await;
+    let src = source();
+    // Gesperrter Benutzer mit der E-Mail einer Linear-Person.
+    let suspended = Uuid::new_v4();
+    sqlx::query("INSERT INTO \"user\" (id, organization_id, name, display_name, email, role, active) VALUES ($1, $2, 'Erin Lokal', 'erinlokal', 'erin@partner.test', 'user', false)")
+        .bind(suspended)
+        .bind(e.org.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // Admin-Flag der Quelle darf keine Admin-Rolle erzeugen.
+    let mut users = src.entity(lineal_import::SourceEntity::Users);
+    for u in &mut users {
+        if u["id"] == "u-frank" {
+            u["admin"] = serde_json::json!(true);
+        }
+    }
+    src.set_entity(lineal_import::SourceEntity::Users, users);
+    let team = existing_team(&e, "KP").await;
+    let run = started_into_as_owner(&e, &src, team).await;
+    let out = e
+        .engine(&src, EngineConfig::default())
+        .run(e.org, run)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    assert_eq!(
+        e.count(&format!(
+            "SELECT count(*) FROM issue WHERE assignee_id = '{suspended}' OR creator_id = '{suspended}'"
+        ))
+        .await,
+        0,
+        "the suspended user was not attached"
+    );
+    assert_eq!(
+        e.count(&format!(
+            "SELECT count(*) FROM import_mapping WHERE target_id = '{suspended}'"
+        ))
+        .await,
+        0
+    );
+    assert_eq!(
+        e.count("SELECT count(*) FROM \"user\" WHERE status = 'imported' AND role <> 'user'")
+            .await,
+        0,
+        "placeholders are plain users"
+    );
+    assert_eq!(
+        e.count("SELECT count(*) FROM \"user\" WHERE status = 'imported' AND active")
+            .await,
+        0
+    );
+}
