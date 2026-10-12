@@ -114,8 +114,8 @@ for f in "$ROOT"/crates/lineal-db/migrations/*.sql; do
 done
 if (( BACKUP_VERSION > IMAGE_VERSION )); then
   warn "Das Backup hat den Migrationsstand $BACKUP_VERSION, die Migrationen dieses Checkouts reichen nur bis $IMAGE_VERSION."
-  warn "Das Backup stammt aus einer neueren Version. Die Images bzw. den Checkout zuerst auf diesen Stand bringen,"
-  warn "sonst bricht 'migrate' nach dem Restore ab und die Anwendung startet nicht."
+  warn "Das Backup stammt aus einer neueren Version des Codes. Images bzw. Checkout zuerst auf diesen Stand bringen;"
+  warn "mit älterem Code kann die Anwendung nach dem Restore fehlerhaft laufen."
 fi
 
 # 3. Bestätigung
