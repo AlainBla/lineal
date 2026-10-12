@@ -17,6 +17,8 @@ FROM rust:${RUST_VERSION}-bookworm AS rust-build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY crates ./crates
+# Gepatchte Abhängigkeiten (vendor/yrs, siehe PATCH.md).
+COPY vendor ./vendor
 # lineal-mcp bettet die Fachdoku und den Tool-Snapshot ein (include_str!).
 COPY docs ./docs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
