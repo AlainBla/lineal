@@ -5,12 +5,12 @@
 
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
-use crate::policy::PolicySnapshot;
+use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::issue::Issue;
 use crate::resolve::user::actor_user_id;
 use lineal_domain::identifier::{ParsedIdentifier, parse_identifier};
-use lineal_domain::ids::IssueId;
+use lineal_domain::ids::{IssueId, TeamId};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -54,6 +54,44 @@ pub async fn can_see(
         Some(u) => Ok(tx.issues().get_share(issue.id, u).await?.is_some()),
         None => Ok(false),
     }
+}
+
+/// Zentrale Prüfung für Unterobjekte eines Issues (Kommentare, Reaktionen, Anhänge): `action` auf
+/// dem Team des Issues. Ist das Team unsichtbar, genügt eine Freigabe an den Akteur für Lesen,
+/// Kommentieren und Reagieren (`ViewTeam`, `CommentIssue`, `ReactIssue`) – nie für mehr und nie
+/// für andere Issues des Teams. Der Token-Scope (`read`/`write`) gilt weiter.
+pub async fn authorize_issue(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    issue: IssueId,
+    team: TeamId,
+    action: Action,
+) -> AppResult<()> {
+    let err = match snap.require_team(ctx, action, team) {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    let shareable = matches!(
+        action,
+        Action::ViewTeam | Action::CommentIssue | Action::ReactIssue
+    );
+    if err.kind != crate::error::ErrorKind::NotFound || !shareable {
+        return Err(err);
+    }
+    let Some(user) = actor_user_id(ctx) else {
+        return Err(err);
+    };
+    if tx.issues().get_share(issue, user).await?.is_none() {
+        return Err(err);
+    }
+    if !ctx.scopes.read || (action.is_write() && !ctx.scopes.write) {
+        return Err(
+            AppError::forbidden("Token scope does not allow this operation.")
+                .with_details(json!({ "reason": "insufficient_scope" })),
+        );
+    }
+    Ok(())
 }
 
 pub(crate) async fn lookup(tx: &mut dyn Tx, reference: &str) -> AppResult<IssueId> {

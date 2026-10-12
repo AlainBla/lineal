@@ -40,6 +40,14 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
   await expect(carol.getByRole("alert")).toBeVisible();
   await expect(carol.getByText(title)).toHaveCount(0);
 
+  // Ein Kommentar von Bob am Issue: Carol soll ihn nach dem Teilen lesen können.
+  const note = unique("Kommentar");
+  const commented = await callTool(request, key, "save_comment", {
+    issueId: identifier,
+    body: note,
+  });
+  expect(commented.isError, JSON.stringify(commented.data)).toBe(false);
+
   // Bob teilt (MCP `share_issue`, API-Key von Bob): der Sync-Strom stellt es Carol zu.
   const shared = await callTool(request, key, "share_issue", {
     issue: identifier,
@@ -50,6 +58,9 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
   await expect(carol.getByRole("textbox", { name: "Title" })).toHaveValue(title, {
     timeout: 20_000,
   });
+
+  // Kommentare des geteilten Issues sind lesbar (kein „Could not load comments“).
+  await expect(carol.getByText(note)).toBeVisible({ timeout: 20_000 });
 
   // Entzug: das Issue verschwindet bei Carol wieder.
   const unshared = await callTool(request, key, "unshare_issue", {
