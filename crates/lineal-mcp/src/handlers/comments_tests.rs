@@ -531,6 +531,13 @@ async fn mentions_land_in_the_outbox_only_with_access(pool: sqlx::PgPool) {
 async fn share_recipient_reads_and_comments_only_on_the_shared_issue(pool: sqlx::PgPool) {
     let env = setup(pool).await;
     let data = SeedData::acme();
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(data.org.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
     let shared = make_issue(&env, data.eng).await;
     let other = make_issue(&env, data.eng).await;
     let mut idents = vec![];
@@ -694,5 +701,69 @@ async fn share_recipient_reads_and_comments_only_on_the_shared_issue(pool: sqlx:
         .await,
     ] {
         assert_eq!(err_kind(r), ErrorKind::NotFound);
+    }
+}
+
+/// Freigaben gelten nicht für team-beschränkte API-Keys und nicht, wenn der Workspace Freigaben
+/// abgeschaltet hat (zentrale Regel `resolve::issue::share_recipient`).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn share_does_not_escape_team_scope_or_disabled_sharing(pool: sqlx::PgPool) {
+    let env = setup(pool).await;
+    let data = SeedData::acme();
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(data.org.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let shared = make_issue(&env, data.eng).await;
+    let ident: String = sqlx::query_scalar("SELECT identifier FROM issue WHERE id = $1")
+        .bind(shared)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO issue_share (organization_id, issue_id, user_id, shared_by_id) VALUES ($1,$2,$3,$4)",
+    )
+    .bind(data.org.0)
+    .bind(shared)
+    .bind(data.carol.0)
+    .bind(data.bob.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    // Gegenprobe: mit normaler Session sieht Carol das geteilte Issue.
+    call(&env, SeedUser::Carol, "get_issue", json!({ "id": ident }))
+        .await
+        .unwrap();
+
+    // Team-beschränkter Key (nur WEB): kein Zugriff über die Freigabe.
+    let mut scoped = ctx_for(SeedUser::Carol);
+    scoped.team_scope = Some(vec![data.web]);
+    for (tool, args) in [
+        ("get_issue", json!({ "id": ident })),
+        ("list_comments", json!({ "issueId": ident })),
+    ] {
+        let r = dispatch(&env.app, &scoped, tool, args)
+            .await
+            .expect("known tool");
+        assert_eq!(err_kind(r), ErrorKind::NotFound, "{tool}");
+    }
+
+    // Freigaben im Workspace abgeschaltet: bestehende Freigaben wirken nicht mehr.
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": false}'::jsonb WHERE id = $1",
+    )
+    .bind(data.org.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    for (tool, args) in [
+        ("get_issue", json!({ "id": ident })),
+        ("list_comments", json!({ "issueId": ident })),
+    ] {
+        let r = call(&env, SeedUser::Carol, tool, args).await;
+        assert_eq!(err_kind(r), ErrorKind::NotFound, "{tool}");
     }
 }

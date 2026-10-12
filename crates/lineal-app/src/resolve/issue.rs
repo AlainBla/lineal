@@ -8,9 +8,8 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::issue::Issue;
-use crate::resolve::user::actor_user_id;
 use lineal_domain::identifier::{ParsedIdentifier, parse_identifier};
-use lineal_domain::ids::{IssueId, TeamId};
+use lineal_domain::ids::{IssueId, TeamId, UserId};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -50,8 +49,32 @@ pub async fn can_see(
     if snap.visible_team_ids().contains(&issue.team_id) {
         return Ok(true);
     }
-    match actor_user_id(ctx) {
-        Some(u) => Ok(tx.issues().get_share(issue.id, u).await?.is_some()),
+    share_grants_access(tx, snap, ctx, issue.id).await
+}
+
+/// Für wen Freigaben gelten: nur Menschen (keine Apps), nur solange der Workspace Freigaben
+/// erlaubt und nie für team-beschränkte API-Keys (ein Key mit `team_scope` darf über eine
+/// Freigabe nicht aus seinen Teams heraus).
+pub fn share_recipient(snap: &PolicySnapshot, ctx: &RequestCtx) -> Option<UserId> {
+    match ctx.actor {
+        crate::context::Actor::User { id, .. }
+            if ctx.team_scope.is_none() && snap.org.limits.issue_sharing_enabled =>
+        {
+            Some(id)
+        }
+        _ => None,
+    }
+}
+
+/// Wie [`share_recipient`], zusätzlich muss das Issue mit dem Akteur geteilt sein.
+pub async fn share_grants_access(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    issue: IssueId,
+) -> AppResult<bool> {
+    match share_recipient(snap, ctx) {
+        Some(user) => Ok(tx.issues().get_share(issue, user).await?.is_some()),
         None => Ok(false),
     }
 }
@@ -79,10 +102,7 @@ pub async fn authorize_issue(
     if err.kind != crate::error::ErrorKind::NotFound || !shareable {
         return Err(err);
     }
-    let Some(user) = actor_user_id(ctx) else {
-        return Err(err);
-    };
-    if tx.issues().get_share(issue, user).await?.is_none() {
+    if !share_grants_access(tx, snap, ctx, issue).await? {
         return Err(err);
     }
     if !ctx.scopes.read || (action.is_write() && !ctx.scopes.write) {
