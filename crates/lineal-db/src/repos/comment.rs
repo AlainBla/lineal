@@ -30,6 +30,8 @@ struct CommentRow {
     document_id: Option<Uuid>,
     parent_id: Option<Uuid>,
     quoted_text: Option<String>,
+    anchor_start: Option<String>,
+    anchor_end: Option<String>,
     edited_at: Option<DateTime<Utc>>,
     resolved_at: Option<DateTime<Utc>>,
     resolving_comment_id: Option<Uuid>,
@@ -43,7 +45,7 @@ struct CommentRow {
 
 const COMMENT_COLS: &str = "id, user_id, body, issue_id, project_id, project_milestone_id, \
     project_update_id, initiative_id, initiative_update_id, document_id, parent_id, quoted_text, \
-    edited_at, resolved_at, resolving_comment_id, resolving_user_id, deleted_at, version, \
+    anchor_start, anchor_end, edited_at, resolved_at, resolving_comment_id, resolving_user_id, deleted_at, version, \
     created_at, updated_at, archived_at";
 
 impl CommentRow {
@@ -72,6 +74,8 @@ impl CommentRow {
             parent,
             parent_id: self.parent_id.map(CommentId),
             quoted_text: self.quoted_text,
+            anchor_start: self.anchor_start,
+            anchor_end: self.anchor_end,
             edited_at: self.edited_at,
             resolved_at: self.resolved_at,
             resolving_comment_id: self.resolving_comment_id.map(CommentId),
@@ -461,6 +465,38 @@ impl CommentRepo for PgTx {
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)
+    }
+
+    async fn set_anchor(&mut self, id: CommentId, start: &str, end: &str) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE comment SET anchor_start = $3, anchor_end = $4 \
+             WHERE organization_id = $1 AND id = $2 AND parent_id IS NULL AND quoted_text IS NOT NULL",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(start)
+        .bind(end)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn inline_without_anchor(
+        &mut self,
+        document: DocumentId,
+    ) -> AppResult<Vec<(CommentId, String)>> {
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT id, quoted_text FROM comment WHERE organization_id = $1 AND document_id = $2 \
+             AND parent_id IS NULL AND quoted_text IS NOT NULL AND anchor_start IS NULL \
+             AND archived_at IS NULL ORDER BY created_at, id LIMIT 500",
+        )
+        .bind(self.org.0)
+        .bind(document.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(|(i, q)| (CommentId(i), q)).collect())
     }
 
     async fn update_body(

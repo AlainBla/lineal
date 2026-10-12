@@ -264,6 +264,10 @@ impl Shared {
                     let load = self.app.collab_load(ctx, target).await?;
                     let (doc, epoch, version) =
                         build_room_doc(&self.app, ctx, target, load).await?;
+                    // Altbestand: Kommentar-Anker aus `quotedText` ableiten (best effort).
+                    if let Err(e) = self.app.collab_backfill_anchors(ctx, target, &doc).await {
+                        tracing::debug!(error = %e, "collab anchor backfill failed");
+                    }
                     let now = Instant::now();
                     let checkpoint = doc
                         .transact()

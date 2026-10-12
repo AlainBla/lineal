@@ -185,6 +185,34 @@ impl App {
         Ok(written)
     }
 
+    /// Altbestand: Inline-Kommentare ohne Positionsanker bekommen Anker aus `quotedText` (erstes
+    /// Vorkommen im Text), sobald der Raum geladen wird; ohne Treffer bleibt der Fallback `quotedText`.
+    pub async fn collab_backfill_anchors(
+        &self,
+        ctx: &RequestCtx,
+        target: CollabTarget,
+        doc: &yrs::Doc,
+    ) -> AppResult<usize> {
+        let CollabTarget::Document(doc_id) = target;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        // Lesezugriff genügt nicht: Anker schreiben nur Berechtigte (Sichtbarkeit wird geprüft).
+        let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
+        if !access.can_write {
+            return Ok(0);
+        }
+        let pending = tx.comments().inline_without_anchor(doc_id).await?;
+        let mut n = 0;
+        for (id, quoted) in pending {
+            if let Some((a, b)) = crdt::anchors_for_quote(doc, &quoted) {
+                tx.comments().set_anchor(id, &a, &b).await?;
+                n += 1;
+            }
+        }
+        tx.commit().await?;
+        Ok(n)
+    }
+
     /// Aktuelle Inhaltsrevision (leichte Abfrage für das Erkennen externer Änderungen).
     pub async fn collab_version(&self, ctx: &RequestCtx, target: CollabTarget) -> AppResult<i32> {
         let mut tx = self.store.begin(ctx.org_id).await?;

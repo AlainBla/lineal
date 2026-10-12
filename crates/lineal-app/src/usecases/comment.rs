@@ -54,6 +54,8 @@ pub struct CommentView {
     pub reactions: Vec<ReactionGroup>,
     /// Kennung des Issues bei Issue-Kommentaren (für die URL).
     pub issue_identifier: Option<String>,
+    /// Zustand des Inline-Ankers (`attached`/`detached`), nur bei Inline-Kommentaren an Dokumenten.
+    pub anchor_state: Option<&'static str>,
 }
 
 /// Ergebnis einer Schreiboperation.
@@ -348,6 +350,7 @@ async fn build_views(tx: &mut dyn Tx, comments: Vec<Comment>) -> AppResult<Vec<C
     }
     let mut authors: HashMap<UserId, Option<AuthorRef>> = HashMap::new();
     let mut identifiers: HashMap<IssueId, Option<String>> = HashMap::new();
+    let mut doc_cache: HashMap<DocumentId, Option<(Option<yrs::Doc>, String)>> = HashMap::new();
     let mut views = Vec::with_capacity(comments.len());
     for c in comments {
         let author = match c.user_id {
@@ -384,14 +387,53 @@ async fn build_views(tx: &mut dyn Tx, comments: Vec<Comment>) -> AppResult<Vec<C
                 user_ids,
             })
             .collect();
+        let anchor_state = match (c.parent, c.parent_id, &c.quoted_text) {
+            (ParentRef::Document(d), None, Some(q)) => {
+                if let std::collections::hash_map::Entry::Vacant(e) = doc_cache.entry(d) {
+                    e.insert(load_anchor_doc(tx, d).await?);
+                }
+                doc_cache
+                    .get(&d)
+                    .and_then(Option::as_ref)
+                    .map(|(doc, markdown)| {
+                        match (&c.anchor_start, &c.anchor_end, doc) {
+                            (Some(a), Some(b), Some(doc)) => {
+                                crate::collab::crdt::anchor_state(doc, a, b)
+                                    .map(crate::collab::crdt::AnchorState::as_str)
+                                    .unwrap_or("detached")
+                            }
+                            // Ohne Positionsanker: `detached`, sobald der Text nicht mehr vorkommt.
+                            _ if markdown.contains(q.as_str()) => "attached",
+                            _ => "detached",
+                        }
+                    })
+            }
+            _ => None,
+        };
         views.push(CommentView {
             comment: c,
             author,
             reactions,
             issue_identifier,
+            anchor_state,
         });
     }
     Ok(views)
+}
+
+/// Dokument-Markdown und (falls vorhanden) CRDT-Zustand für die Auflösung von Inline-Ankern.
+async fn load_anchor_doc(
+    tx: &mut dyn Tx,
+    id: DocumentId,
+) -> AppResult<Option<(Option<yrs::Doc>, String)>> {
+    let Some(doc) = tx.documents().get(id).await? else {
+        return Ok(None);
+    };
+    let state = tx.documents().content_state(doc.content_id, false).await?;
+    let ydoc = state
+        .and_then(|s| s.state)
+        .and_then(|s| crate::collab::crdt::doc_from_state(&s));
+    Ok(Some((ydoc, doc.content)))
 }
 
 /// Lädt einen lebenden (nicht archivierten, nicht durch Platzhalter ersetzten) Kommentar und
@@ -637,6 +679,59 @@ impl App {
     }
 
     /// Bearbeitet den Body (nur der Autor). Neue Erwähnungen gehen ins Event.
+    /// Hängt Positionsanker (relative Positionen des Editors, Base64) an einen eigenen
+    /// Inline-Kommentar eines Dokuments (docs/06 §1.8). Ungültige Kodierung → `invalid_request`.
+    pub async fn set_comment_anchor(
+        &self,
+        ctx: &RequestCtx,
+        id: &str,
+        start: &str,
+        end: &str,
+    ) -> AppResult<CommentMutation> {
+        let invalid =
+            |m: &str| AppError::invalid_request(m).with_details(json!({ "field": "anchorStart" }));
+        if !crate::collab::crdt::anchor_is_valid(start)
+            || !crate::collab::crdt::anchor_is_valid(end)
+        {
+            return Err(invalid(
+                "anchorStart/anchorEnd must be valid relative positions",
+            ));
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let (comment, _scope) =
+            load_accessible(&mut *tx, &snap, ctx, id, Action::CommentIssue, true, false).await?;
+        if comment.user_id.is_none() || comment.user_id != actor_user(ctx) {
+            return Err(AppError::forbidden("Only the author can anchor a comment.")
+                .with_details(json!({ "reason": "not_author" })));
+        }
+        if !matches!(comment.parent, ParentRef::Document(_))
+            || comment.parent_id.is_some()
+            || comment.quoted_text.is_none()
+        {
+            return Err(invalid(
+                "Only inline comments on documents can have anchors",
+            ));
+        }
+        tx.comments().set_anchor(comment.id, start, end).await?;
+        let updated = tx
+            .comments()
+            .get(comment.id)
+            .await?
+            .ok_or_else(|| AppError::internal("comment missing"))?;
+        let last_sync_id = tx.last_sync_id().await?;
+        let mut views = build_views(&mut *tx, vec![updated]).await?;
+        let view = views
+            .pop()
+            .ok_or_else(|| AppError::internal("comment view missing"))?;
+        tx.commit().await?;
+        Ok(CommentMutation {
+            view,
+            last_sync_id,
+            mentioned_user_ids: vec![],
+        })
+    }
+
     pub async fn update_comment(
         &self,
         ctx: &RequestCtx,

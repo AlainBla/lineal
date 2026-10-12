@@ -185,6 +185,12 @@ type Comment {
 	documentId: String
 	parentId: String
 	quotedText: String
+	"""
+	Positionsanker (Base64 relativer Positionen) und Zustand `attached`/`detached` (docs/06 §1.8).
+	"""
+	anchorStart: String
+	anchorEnd: String
+	anchorState: String
 	editedAt: String
 	resolvedAt: String
 	resolvingUserId: String
@@ -216,6 +222,12 @@ input CommentCreateInput {
 	Inline-Kommentar: zitierte Textstelle der Beschreibung.
 	"""
 	quotedText: String
+	"""
+	Positionsanker des Inline-Kommentars (relative Positionen, Base64); nur zusammen und nur
+	mit `quotedText` an Dokumenten.
+	"""
+	anchorStart: String
+	anchorEnd: String
 }
 
 type CommentDeletePayload {

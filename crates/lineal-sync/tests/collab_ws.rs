@@ -927,3 +927,88 @@ async fn revoked_token_and_lost_membership_close_the_connection(pool: PgPool) {
     alice.pump(Duration::from_secs(2)).await;
     assert_eq!(alice.closed, Some(4401));
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn comment_anchors_survive_edits_and_detach_when_text_is_removed(pool: PgPool) {
+    use lineal_app::ports::repos::user::OrderBy;
+    use lineal_app::usecases::comment::{CreateCommentInput, ListCommentsInput, ParentSpec};
+    let e = env(pool).await;
+    let doc = e
+        .doc(SeedUser::Alice, "ENG", "Spec", "Hallo schöne Welt")
+        .await;
+    let c = e
+        .app
+        .create_comment(
+            &user(SeedUser::Bob),
+            CreateCommentInput {
+                parent: Some(ParentSpec::Document(doc.to_string())),
+                reply_to: None,
+                body: "Warum schön?".into(),
+                quoted_text: Some("schöne".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let id = c.view.comment.id;
+    let list = |e: &Env| {
+        let app = e.app.clone();
+        async move {
+            app.list_comments(
+                &user(SeedUser::Alice),
+                ListCommentsInput {
+                    parent: ParentSpec::Document(doc.to_string()),
+                    order_by: OrderBy::CreatedAt,
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|v| v.comment.id == id)
+            .unwrap()
+        }
+    };
+    // Altbestand ohne Anker: Fallback über den Klartext.
+    let v = list(&e).await;
+    assert_eq!(v.comment.anchor_start, None);
+    assert_eq!(v.anchor_state, Some("attached"));
+
+    // Beim Öffnen des Raums werden die Anker aus quotedText abgeleitet.
+    let first = e.join("alice", doc).await;
+    drop(first);
+    let v = list(&e).await;
+    assert!(v.comment.anchor_start.is_some() && v.comment.anchor_end.is_some());
+    assert_eq!(v.anchor_state, Some("attached"));
+
+    // Einfügungen davor (API): der Anker wandert mit; quotedText bleibt unverändert.
+    let save = |content: &str| SaveDocumentInput {
+        id: Some(doc.to_string()),
+        content: Some(content.into()),
+        ..Default::default()
+    };
+    e.app
+        .save_document(&user(SeedUser::Bob), save("Vorwort Hallo schöne Welt"))
+        .await
+        .unwrap();
+    let v = list(&e).await;
+    assert_eq!(v.anchor_state, Some("attached"));
+    assert_eq!(v.comment.quoted_text.as_deref(), Some("schöne"));
+
+    // Der markierte Text verschwindet: detached, der Kommentar bleibt erhalten.
+    e.app
+        .save_document(&user(SeedUser::Bob), save("Vorwort Hallo Welt"))
+        .await
+        .unwrap();
+    let v = list(&e).await;
+    assert_eq!(v.anchor_state, Some("detached"));
+
+    // Ungültige Anker werden abgelehnt.
+    let err = e
+        .app
+        .set_comment_anchor(&user(SeedUser::Bob), &id.to_string(), "!!!", "???")
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+}

@@ -60,6 +60,10 @@ pub struct CommentGql {
     pub document_id: Option<String>,
     pub parent_id: Option<String>,
     pub quoted_text: Option<String>,
+    /// Positionsanker (Base64 relativer Positionen) und Zustand `attached`/`detached` (docs/06 §1.8).
+    pub anchor_start: Option<String>,
+    pub anchor_end: Option<String>,
+    pub anchor_state: Option<String>,
     pub edited_at: Option<String>,
     pub resolved_at: Option<String>,
     pub resolving_user_id: Option<String>,
@@ -92,6 +96,9 @@ impl From<CommentView> for CommentGql {
             document_id: pick(ParentKind::Document),
             parent_id: c.parent_id.map(|p| p.to_string()),
             quoted_text: c.quoted_text,
+            anchor_start: c.anchor_start,
+            anchor_end: c.anchor_end,
+            anchor_state: v.anchor_state.map(str::to_owned),
             edited_at: c.edited_at.map(ts),
             resolved_at: c.resolved_at.map(ts),
             resolving_user_id: c.resolving_user_id.map(|u| u.to_string()),
@@ -133,6 +140,10 @@ pub struct CommentCreateInput {
     pub parent_id: Option<String>,
     /// Inline-Kommentar: zitierte Textstelle der Beschreibung.
     pub quoted_text: Option<String>,
+    /// Positionsanker des Inline-Kommentars (relative Positionen, Base64); nur zusammen und nur
+    /// mit `quotedText` an Dokumenten.
+    pub anchor_start: Option<String>,
+    pub anchor_end: Option<String>,
 }
 
 #[derive(InputObject)]
@@ -494,6 +505,14 @@ impl CommentMutation {
             )
             .await
             .map_err(gql_err)?;
+        let m = match (&input.anchor_start, &input.anchor_end) {
+            (None, None) => m,
+            (Some(a), Some(b)) => app(ctx)?
+                .set_comment_anchor(request_ctx(ctx)?, &m.view.comment.id.to_string(), a, b)
+                .await
+                .map_err(gql_err)?,
+            _ => return Err(invalid("anchorStart and anchorEnd must be given together")),
+        };
         Ok(CommentPayload {
             success: true,
             last_sync_id: sync_id(m.last_sync_id),

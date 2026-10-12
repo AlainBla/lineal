@@ -89,6 +89,9 @@ pub struct Comment {
     /// Wurzelkommentar des Threads (`None` = Top-Level).
     pub parent_id: Option<CommentId>,
     pub quoted_text: Option<String>,
+    /// Positionsanker (Base64 relativer Positionen, WP36) eines Inline-Kommentars am Dokumentinhalt.
+    pub anchor_start: Option<String>,
+    pub anchor_end: Option<String>,
     pub edited_at: Option<DateTime<Utc>>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub resolving_comment_id: Option<CommentId>,
@@ -193,6 +196,17 @@ pub trait CommentRepo: Send {
     }
     /// Nicht archivierte Antworten eines Wurzelkommentars.
     async fn count_replies(&mut self, root: CommentId) -> AppResult<i64> {
+        not_implemented()
+    }
+    /// Setzt die Positionsanker eines Inline-Kommentars (ändert weder Version noch `updated_at`).
+    async fn set_anchor(&mut self, id: CommentId, start: &str, end: &str) -> AppResult<()> {
+        not_implemented()
+    }
+    /// Inline-Wurzelkommentare eines Dokuments ohne Positionsanker (Altbestand): `(id, quotedText)`.
+    async fn inline_without_anchor(
+        &mut self,
+        document: DocumentId,
+    ) -> AppResult<Vec<(CommentId, String)>> {
         not_implemented()
     }
     async fn update_body(
