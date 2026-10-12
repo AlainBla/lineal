@@ -918,6 +918,8 @@ function evaluateSlaRules(issue, trigger):           // trigger: create | update
 - **Manuelles SLA** (`slaBreachesAt`, optional `slaType` per API/MCP): setzt `slaStartedAt = now`, leert `dueDate`, markiert `slaSetManually`. Eine Removal-Regel kann es beim nächsten Update entfernen; Setz-Regeln überschreiben es nicht (**Festlegung**).
 - `slaRuleId` und `slaSetManually` sind interne Felder von Lineal (im Original nicht öffentlich).
 
+> **Umsetzung (WP30):** Die Regelverwaltung steht in den Team-Settings („SLA“, docs/15 §4.9). Der Editor bildet Bedingungen auf Priorität und Labels ab; weitere Filterfelder der Regel (Status, Assignee, Creator, Team, Projekt) setzt nur die API und bleiben beim Bearbeiten unverändert. Gespeichert wird die Dauer als ISO-8601 (`PT24H`, `P1W`; bei `onlyBusinessDays` Tage = Arbeitstage), nicht als Millisekunden.
+
 ### 11.3 Arbeitstage berechnen
 
 ```text
@@ -991,6 +993,8 @@ Wiederkehrende Issues sind ein optionales Feature (Ausbaustufe nach dem Kern). M
 - Spätere Änderungen an der Vorlage wirken nur auf **künftige** Instanzen, nicht auf bereits erzeugte Issues.
 - Erzeugung durch den Job-Runner mit Akteur `null` (`botActor = "recurring"`); die Statuswahl folgt 1.5 (Template-Status oder `defaultIssueState`, keine Triage).
 - Pausieren/Beenden der Wiederholung: Feld `recurrence = null` an der Vorlage.
+
+> **Umsetzung (WP30):** Die Wiederholung ist eine eigene Regel (`recurring_issue`) mit Verweis auf ein Issue-Template des Teams; Rhythmus `daily | weekly | monthly` (kein `yearly`), `interval`, ISO-Wochentag, `dayOfMonth` (kürzere Monate: letzter Tag), lokale Uhrzeit und Startdatum in `Team.timezone`. Der **nächste Lauf** wird aus dem Rhythmus berechnet (nicht aus dem `dueDate` der letzten Instanz) und läuft zur eingestellten Uhrzeit; das `dueDate` der Instanz kommt aus `dueIn` des Templates. Der Job `recurring_issues` läuft minütlich, erzeugt je Regel höchstens ein Issue je Lauf (verpasste Läufe werden nicht nachgeholt) und ist über `(Regel, Zeitpunkt)` idempotent. Pausieren = Feld `paused`. Ersteller der erzeugten Issues ist `null` (Akteur `system`, Historienquelle `automation`). Siehe docs/15 §4.9.
 
 ---
 
