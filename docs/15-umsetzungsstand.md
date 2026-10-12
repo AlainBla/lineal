@@ -28,7 +28,7 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 - **Planung/Automationen:** Snooze-Wiedervorlage bei Aktivität, Auto-Archive-Benachrichtigung, Cycles/Projekte auto-archivieren, Kapazität, `cycleNumberBase`.
 - **Dokumente/Templates:** Dokument-Kaskade bei Issue-/Projekt-/Team-Löschen nur teilweise, Snapshot-Bündelung, Dokument-Mentions, CRDT, Form-Templates, `useDefaultTemplate`.
 - **Views/Suche:** Favoriten umsortieren, View-Abos, Eigentümerwechsel, Stemming (Volltext-Konfiguration `simple`).
-- **Web:** Filter-Chips aus `filterData` zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (Templates/SLA/Hierarchie/Webhooks/Access/Recurring), Workspace-Settings (Teams/Limits; Members, Security und API sind vorhanden), Account-Settings.
+- **Web:** Filter-Chips aus `filterData` zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (Templates/SLA/Hierarchie/Webhooks/Access/Recurring), Workspace-Settings (Limits; Teams, Members, Security und API sind vorhanden), Account-Settings.
 - **Webhooks/Auth:** `client_credentials`, App-User und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (`UrlPolicy`) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.
 - **Import:** Linear-Feldnamen nur gegen Mock getestet; Views/Favoriten/Issue-Reaktionen/Update-Kommentare werden nicht importiert; Dry-Run ohne Downloads.
 - **Rate-Limit:** In-Process-Verteidigung in der Tiefe (siehe 4.4); weitere Feinheiten (u. a. Fehlversuchs-Zähler der Token-Prüfung ohne Reservierung, geteilter Überlauf-Bucket) sind als offene Punkte notiert.
@@ -164,6 +164,10 @@ Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Pol
 
 Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; `BlobStore::delete` entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).
 
+### 4.6 Lieferkette
+
+`scripts/check.sh` führt (wenn installiert) `cargo deny check advisories bans licenses` aus (`deny.toml`: nur permissive Lizenzen, keine unbekannten Registries) und `npm audit --omit=dev --audit-level=high` für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). **Begründete Ausnahme:** `npm audit` meldet für Dev-Werkzeuge hohe Funde in der Kette `@graphql-codegen/cli` → `graphql-tools` → `globby`/`micromatch` → `braces` (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte `braces`-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn `@graphql-codegen/cli` oder `braces` aktualisiert werden.
+
 ### 4.7 Audit-Log (WP25)
 
 - Tabelle `audit_log` (Migration 2500): je Eintrag Zeitpunkt, Akteur (`actor_user_id`, `actor_kind` user/app/system), Zugangsart (`credential_kind` session/api_key/oauth/cli), Aktion, Ziel, Details (JSON), IP und Request-ID. Geschrieben wird in **derselben** Transaktion wie die Änderung (`App::record_audit`), nicht über die Outbox.
@@ -177,9 +181,13 @@ Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; `BlobStore::delete` ent
 
 Entscheidung: Die Leseberechtigung nutzt die Prüfung „Owner/Admin mit Scope `read` und `admin`“ direkt und nicht `Action::UpdateWorkspaceSettings`, weil diese Aktion zusätzlich einen Schreib-Scope verlangt. Ein Nur-Lese-Admin-Key darf das Log lesen, aber keine Einstellungen ändern.
 
-### 4.6 Lieferkette
+### 4.8 Teams anlegen und verwalten (WP26)
 
-`scripts/check.sh` führt (wenn installiert) `cargo deny check advisories bans licenses` aus (`deny.toml`: nur permissive Lizenzen, keine unbekannten Registries) und `npm audit --omit=dev --audit-level=high` für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). **Begründete Ausnahme:** `npm audit` meldet für Dev-Werkzeuge hohe Funde in der Kette `@graphql-codegen/cli` → `graphql-tools` → `globby`/`micromatch` → `braces` (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte `braces`-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn `@graphql-codegen/cli` oder `braces` aktualisiert werden.
+- Web: Settings-Seite `/{ws}/settings/teams` (Eintrag „Teams“ in der Settings-Navigation): alle sichtbaren Teams im Baum (Name, Key, Icon/Farbe, Parent, Sichtbarkeit, Mitgliederzahl, Status aktiv/retired) mit Links zu den Team-Settings und Button „New team“ (ausgeblendet für Gäste; sonst entscheidet der Server über `teamCreationRole`, Fehler erscheinen im Dialog).
+- Dialog „New team“ (Sidebar „+“ neben „Your teams“, Command-Menü „Create team“, Teams-Seite): Name, Key (Vorschlag aus dem Namen nach docs/02 §2.2, live gegen `^[A-Z][A-Z0-9]{0,6}$` und reservierte Keys geprüft, Hinweis bei Kollision mit einem sichtbaren Team, Konflikt mit historischen/unsichtbaren Keys meldet der Server), Icon, Farbe, Parent-Team, Sichtbarkeit (nach Parent eingeschränkt, docs/02 §5.2; unter privatem Parent Default `restricted`), „Copy settings from team“. Nach Erfolg wird die Session (`/auth/me`) neu geladen, die Sidebar aktualisiert sich ohne Reload und die App springt auf die Team-Übersicht.
+- Team-General: Beschreibung, Icon, Farbe; Key-Wechsel mit Bestätigungsdialog (alle Kennungen wechseln, alte bleiben auflösbar) und Weiterleitung auf die URL mit neuem Key; Abschnitt „Access“ (unter „Members“): Sichtbarkeit und `allMembersCanJoin`; „Danger zone“: stilllegen (bei aktiven Sub-Teams Pflichtwahl `retire`/`unnest`), reaktivieren, löschen (Bestätigung durch Eintippen des Team-Keys, bei Sub-Teams Wahl `delete`/`unnest`). Rechte entscheidet der Server, Fehler erscheinen am Dialog.
+- GraphQL: `Team.memberCount` (Feldresolver über `list_team_members`; `null`, wenn der Aufrufer die Mitglieder nicht sehen darf), `Team.allMembersCanJoin`, `allMembersCanJoin` in `TeamCreateInput`/`TeamUpdateInput`. Test: `crates/lineal-api/tests/team_settings_gql.rs`.
+- Tests: Vitest (`team-key`, `new-team-dialog`, `teams-page`, `team-danger-zone`), E2E F26 (`web/e2e/f26-team-create.e2e.ts`: Alice legt „KollegePlus“/KP an, sieht es in der Sidebar, Issue KP-1).
 
 ## 5. Entscheidungen bei Widersprüchen zwischen Kapiteln
 
