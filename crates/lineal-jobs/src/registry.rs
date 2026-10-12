@@ -3,12 +3,15 @@
 use crate::consumers::*;
 use crate::periodic::*;
 use crate::{EventConsumer, PeriodicJob};
+use lineal_app::usecases::notification::views::ViewSubscriptions;
 use std::sync::Arc;
 
 /// Alle Outbox-Konsumenten.
 pub fn consumers() -> Vec<Arc<dyn EventConsumer>> {
     vec![
-        Arc::new(notifications::NotificationsConsumer),
+        Arc::new(notifications::NotificationsWithViewsConsumer {
+            views: Arc::new(ViewSubscriptions),
+        }),
         Arc::new(search_index::SearchIndexConsumer),
         Arc::new(sync::SyncConsumer),
         Arc::new(webhooks::WebhooksConsumer),
