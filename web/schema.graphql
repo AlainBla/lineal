@@ -401,6 +401,20 @@ The input/output is a string in RFC3339 format.
 scalar DateTime
 
 """
+Ein gelöschtes, noch wiederherstellbares Team.
+"""
+type DeletedTeamGql {
+	id: String!
+	key: String!
+	name: String!
+	displayName: String!
+	parentId: String
+	trashedAt: String!
+	restorableUntil: String!
+	subTeamCount: Int!
+}
+
+"""
 `Document` (Inhalt als Markdown).
 """
 type Document {
@@ -1385,6 +1399,27 @@ input NestTeamOptions {
 	downgradeVisibility: Boolean
 	inheritWorkflowStatuses: Boolean
 	inheritIssueEstimation: Boolean
+	"""
+	Eigene Zuordnung einzelner Status (eigener Status -> Status des Parents); der Rest folgt
+	der automatischen Zuordnung.
+	"""
+	stateMapping: [StateMappingInput!]
+}
+
+"""
+Ein Konflikt der Nesting-Vorschau; `details` hängt von `kind` ab.
+"""
+type NestingConflictGql {
+	"""
+	`membership`, `visibility`, `workflowState`, `label`, `cycle`, `estimate`.
+	"""
+	kind: String!
+	message: String!
+	details: JSON!
+}
+
+type NestingPreviewGql {
+	conflicts: [NestingConflictGql!]!
 }
 
 """
@@ -1738,6 +1773,16 @@ type Query {
 	"""
 	teams(query: String, parentTeam: String, ancestorTeam: String, includeArchived: Boolean, first: Int): [Team!]!
 	"""
+	Gelöschte Teams innerhalb der Papierkorb-Frist („Recently deleted“); nur für Workspace-Admins,
+	sonst leer.
+	"""
+	deletedTeams: [DeletedTeamGql!]!
+	"""
+	Vorschau auf `nestTeam`: Konflikte (Mitglieder, Sichtbarkeit, Status, Labels, Cycles,
+	Schätzung) ohne zu schreiben. Nur Workspace-Admins.
+	"""
+	previewTeamNesting(teamId: String!, parentId: String): NestingPreviewGql!
+	"""
 	Ein Team per UUID, Key oder Name; nicht sichtbar → `not_found`.
 	"""
 	team(id: String!): Team!
@@ -2020,6 +2065,11 @@ input SecuritySettingsUpdateInput {
 	Aufbewahrung des Audit-Logs in Tagen (30 bis 3650).
 	"""
 	auditLogRetentionDays: Int
+}
+
+input StateMappingInput {
+	fromStateId: String!
+	toStateId: String!
 }
 
 type SuccessPayload {

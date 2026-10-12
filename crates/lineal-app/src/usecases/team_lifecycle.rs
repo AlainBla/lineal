@@ -64,6 +64,17 @@ pub struct TeamPurgeStats {
     pub errors: Vec<String>,
 }
 
+/// Ein gelöschtes, noch wiederherstellbares Team („Recently deleted“).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletedTeam {
+    pub view: TeamView,
+    pub trashed_at: DateTime<Utc>,
+    /// Bis dahin kann das Team (samt gleichzeitig gelöschter Sub-Teams) zurückkommen.
+    pub restorable_until: DateTime<Utc>,
+    /// Mit dem Team gleichzeitig gelöschte Nachfahren.
+    pub sub_team_count: usize,
+}
+
 fn view(tree: &TeamTree, id: TeamId) -> AppResult<TeamView> {
     let team = tree.get(id).cloned().ok_or_else(team_not_found)?;
     Ok(TeamView {
@@ -325,6 +336,56 @@ impl App {
         }
         emit(tx, ctx, DomainEvent::TeamUpdated { team_id: team }).await?;
         Ok(())
+    }
+
+    /// Gelöschte Teams innerhalb der Papierkorb-Frist, neueste zuerst. Nur Admins/Owner sehen sie
+    /// (für alle anderen ist die Liste leer – gelöschte Teams sind für sie unsichtbar). Teams, die
+    /// zusammen mit ihrem Parent gelöscht wurden, erscheinen nicht einzeln: die Wiederherstellung
+    /// des Parents bringt sie zurück.
+    pub async fn list_deleted_teams(&self, ctx: &RequestCtx) -> AppResult<Vec<DeletedTeam>> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let now = self.clock.now();
+        let retention = Duration::days(snap.org.limits.trash_retention_days);
+        let mut out = Vec::new();
+        for t in snap.tree.all().filter(|t| t.trashed) {
+            let Some(trashed_at) = t.trashed_at else {
+                continue;
+            };
+            let until = trashed_at + retention;
+            if until <= now
+                || snap
+                    .require_team(ctx, Action::RestoreDeletedTeam, t.id)
+                    .is_err()
+            {
+                continue;
+            }
+            let together_with_parent = t
+                .parent_id
+                .and_then(|p| snap.tree.get(p))
+                .is_some_and(|p| p.trashed && p.trashed_at == Some(trashed_at));
+            if together_with_parent {
+                continue;
+            }
+            let mut sub_team_count = 0;
+            let mut queue = vec![t.id];
+            while let Some(cur) = queue.pop() {
+                for c in snap.tree.children(cur) {
+                    if c.trashed && c.trashed_at == Some(trashed_at) {
+                        sub_team_count += 1;
+                        queue.push(c.id);
+                    }
+                }
+            }
+            out.push(DeletedTeam {
+                view: view(&snap.tree, t.id)?,
+                trashed_at,
+                restorable_until: until,
+                sub_team_count,
+            });
+        }
+        out.sort_by(|a, b| (b.trashed_at, b.view.team.id.0).cmp(&(a.trashed_at, a.view.team.id.0)));
+        Ok(out)
     }
 
     /// Stellt ein gelöschtes Team wieder her (Admin/Owner, innerhalb von `trashRetentionDays`).

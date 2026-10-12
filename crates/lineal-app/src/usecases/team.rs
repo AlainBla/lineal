@@ -15,6 +15,7 @@ use crate::policy::{
     Action, PolicySnapshot, TeamTree, team_not_found, visibility_allowed_under_parent,
 };
 use crate::ports::Tx;
+use crate::ports::repos::label::{Label, LabelKind, LabelListFilter};
 use crate::ports::repos::team::{Membership, NewMembership, NewTeam, Team, TeamPatch};
 use crate::ports::repos::user::{OrderBy, Page, PageCursor, PageRequest, User};
 use crate::resolve;
@@ -1280,7 +1281,7 @@ impl App {
         let parent =
             resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
         nesting_checks(&snap, &team, &parent)?;
-        let plan = plan_nesting(&mut *tx, &snap, &team, &parent).await?;
+        let plan = plan_nesting(&mut *tx, &snap, &team, &parent, self.clock.now()).await?;
         Ok(plan.into_preview())
     }
 
@@ -1340,7 +1341,7 @@ impl App {
         let parent =
             resolve::team::resolve_in(&mut *tx, &snap, parent_ref, Visibility::Management).await?;
         nesting_checks(&snap, &team, &parent)?;
-        let plan = plan_nesting(&mut *tx, &snap, &team, &parent).await?;
+        let plan = plan_nesting(&mut *tx, &snap, &team, &parent, self.clock.now()).await?;
         if !plan.visibility_changes.is_empty() && !options.downgrade_visibility {
             return Err(AppError::conflict(
                 "The visibility of the team conflicts with its new parent",
@@ -1374,6 +1375,24 @@ impl App {
             parent_id: Some(Some(parent.id)),
             ..Default::default()
         };
+        if options.inherit_workflow_statuses && !options.state_mapping.is_empty() {
+            // Jede Zuordnung muss von einem eigenen Status auf einen Status des Parents zeigen.
+            let own = tx.states().list_for_team(team.id, false).await?;
+            let targets = tx.states().list_for_team(parent.id, false).await?;
+            let bad = options.state_mapping.iter().any(|(from, to)| {
+                !own.iter()
+                    .any(|s| s.id == *from && s.state_type != StateType::Triage)
+                    || !targets
+                        .iter()
+                        .any(|s| s.id == *to && s.state_type != StateType::Triage)
+            });
+            if bad {
+                return Err(invalid(
+                    "stateMapping",
+                    "every entry must map a status of the team to a status of the parent team",
+                ));
+            }
+        }
         if options.inherit_workflow_statuses {
             let pointers = normalize_to_parent(
                 self,
@@ -1482,10 +1501,35 @@ fn nesting_checks(snap: &PolicySnapshot, team: &Team, parent: &Team) -> AppResul
     Ok(())
 }
 
+/// Ein eigener Status des Teams und der Status des Parents, auf den er automatisch fällt.
+struct StateMapEntry {
+    from_id: StateId,
+    from_name: String,
+    from_type: StateType,
+    to_id: StateId,
+    to_name: String,
+}
+
+/// Label des Teams, das im Workspace oder in Parent/Vorfahren schon existiert.
+struct LabelDuplicate {
+    id: String,
+    name: String,
+    existing_id: String,
+}
+
 struct NestingPlan {
     visibility_changes: Vec<(TeamId, TeamVisibility, TeamVisibility)>,
     missing_members: Vec<UserId>,
-    states: Vec<(String, String)>,
+    states: Vec<StateMapEntry>,
+    /// Der Parent hat Cycles: das Team übernimmt dessen Zeitplan.
+    cycles: Option<CyclePlan>,
+    estimate: Option<(String, String)>,
+    labels: Vec<LabelDuplicate>,
+}
+
+struct CyclePlan {
+    team_cycles_enabled: bool,
+    future_cycles: usize,
 }
 
 impl NestingPlan {
@@ -1518,7 +1562,39 @@ impl NestingPlan {
             conflicts.push(NestingConflict {
                 kind: "workflowState".into(),
                 message: "Workflow statuses are mapped to the parent's statuses.".into(),
-                details: json!({ "states": self.states.iter().map(|(n, t)| json!({ "name": n, "type": t })).collect::<Vec<_>>() }),
+                details: json!({ "states": self.states.iter().map(|m| json!({
+                    "id": m.from_id.to_string(),
+                    "name": m.from_name,
+                    "type": m.from_type.as_str(),
+                    "targetId": m.to_id.to_string(),
+                    "targetName": m.to_name,
+                })).collect::<Vec<_>>() }),
+            });
+        }
+        if !self.labels.is_empty() {
+            conflicts.push(NestingConflict {
+                kind: "label".into(),
+                message: "Labels with the same name exist in the workspace or the parent team. They stay team labels (merging is not supported yet).".into(),
+                details: json!({ "labels": self.labels.iter().map(|l| json!({
+                    "id": l.id, "name": l.name, "existingId": l.existing_id,
+                })).collect::<Vec<_>>() }),
+            });
+        }
+        if let Some(c) = &self.cycles {
+            conflicts.push(NestingConflict {
+                kind: "cycle".into(),
+                message: "The team adopts the cycle schedule of its parent; its own upcoming cycles are replaced.".into(),
+                details: json!({
+                    "teamCyclesEnabled": c.team_cycles_enabled,
+                    "upcomingCycles": c.future_cycles,
+                }),
+            });
+        }
+        if let Some((from, to)) = &self.estimate {
+            conflicts.push(NestingConflict {
+                kind: "estimate".into(),
+                message: "The estimation scale of the parent replaces the team's scale.".into(),
+                details: json!({ "from": from, "to": to }),
             });
         }
         NestingPreview { conflicts }
@@ -1530,6 +1606,7 @@ async fn plan_nesting(
     snap: &PolicySnapshot,
     team: &Team,
     parent: &Team,
+    now: DateTime<Utc>,
 ) -> AppResult<NestingPlan> {
     // Sichtbarkeit: T gegen P, dann jeder Nachfahre gegen seinen (ggf. herabgestuften) Parent.
     let mut changes = Vec::new();
@@ -1577,18 +1654,135 @@ async fn plan_nesting(
             missing.push(u);
         }
     }
-    let states = tx
+    let own: Vec<_> = tx
         .states()
         .list_for_team(team.id, false)
         .await?
         .into_iter()
         .filter(|s| s.state_type != StateType::Triage && s.inherited_from_id.is_none())
-        .map(|s| (s.name, s.state_type.as_str().to_string()))
+        .collect();
+    let targets: Vec<_> = tx
+        .states()
+        .list_for_team(parent.id, false)
+        .await?
+        .into_iter()
+        .filter(|s| s.state_type != StateType::Triage)
+        .collect();
+    let mut states = Vec::new();
+    for s in &own {
+        // Dieselbe Regel wie `normalize_to_parent`: gleicher Typ + Name, sonst erster der Kategorie.
+        let target = targets
+            .iter()
+            .find(|t| {
+                t.state_type == s.state_type && t.name.to_lowercase() == s.name.to_lowercase()
+            })
+            .or_else(|| {
+                targets
+                    .iter()
+                    .filter(|t| t.state_type == s.state_type)
+                    .min_by(|a, b| a.position.total_cmp(&b.position))
+            });
+        if let Some(t) = target {
+            states.push(StateMapEntry {
+                from_id: s.id,
+                from_name: s.name.clone(),
+                from_type: s.state_type,
+                to_id: t.id,
+                to_name: t.name.clone(),
+            });
+        }
+    }
+    let cycles = if parent.cycles_enabled {
+        let future = tx
+            .cycles()
+            .list_for_team(team.id, true)
+            .await?
+            .into_iter()
+            .filter(|c| c.inherited_from_id.is_none() && c.starts_at > now)
+            .count();
+        Some(CyclePlan {
+            team_cycles_enabled: team.cycles_enabled,
+            future_cycles: future,
+        })
+    } else {
+        None
+    };
+    let scale = |t: &Team| {
+        format!(
+            "{}{}",
+            t.issue_estimation_type.as_str(),
+            if t.issue_estimation_extended {
+                " (extended)"
+            } else {
+                ""
+            }
+        )
+    };
+    let estimate = (scale(team) != scale(parent)
+        || team.issue_estimation_allow_zero != parent.issue_estimation_allow_zero)
+        .then(|| (scale(team), scale(parent)));
+    // Gleichnamige Labels: Workspace, Parent und Vorfahren gegen die Team-Labels.
+    let mut scopes = vec![None, Some(parent.id)];
+    scopes.extend(snap.tree.ancestors(parent.id).iter().map(|a| Some(a.id)));
+    let page = PageRequest {
+        limit: 250,
+        ..Default::default()
+    };
+    let available = tx
+        .labels()
+        .list(
+            LabelKind::Issue,
+            &LabelListFilter {
+                scopes,
+                include_groups: true,
+                ..Default::default()
+            },
+            &page,
+        )
+        .await?
+        .items;
+    let own_labels = tx
+        .labels()
+        .list(
+            LabelKind::Issue,
+            &LabelListFilter {
+                scopes: vec![Some(team.id)],
+                include_groups: true,
+                ..Default::default()
+            },
+            &page,
+        )
+        .await?
+        .items;
+    let key = |l: &Label, all: &[Label]| {
+        let group = l
+            .parent_id
+            .and_then(|p| all.iter().find(|g| g.id == p))
+            .map(|g| g.name.to_lowercase())
+            .unwrap_or_default();
+        (group, l.name.to_lowercase(), l.is_group)
+    };
+    let labels = own_labels
+        .iter()
+        .filter_map(|l| {
+            let k = key(l, &own_labels);
+            available
+                .iter()
+                .find(|a| key(a, &available) == k)
+                .map(|a| LabelDuplicate {
+                    id: l.id.to_string(),
+                    name: l.name.clone(),
+                    existing_id: a.id.to_string(),
+                })
+        })
         .collect();
     Ok(NestingPlan {
         visibility_changes: changes,
         missing_members: missing,
         states,
+        cycles,
+        estimate,
+        labels,
     })
 }
 

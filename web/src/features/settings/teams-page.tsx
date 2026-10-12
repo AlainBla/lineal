@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { setUiState } from "@/app/ui-state";
@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 
 import { workspaceSettingsNav } from "./nav";
+import { TeamNestingDialog } from "./team-nesting-dialog";
+import { DeletedTeamsSection } from "./teams-deleted";
 import { useTeamsOverview, type TeamRow } from "./teams-queries";
 import { Section, SettingsShell } from "./ui";
 
@@ -36,11 +38,13 @@ function TeamRowItem({
   team,
   depth,
   parentName,
+  onMove,
 }: {
   ws: string;
   team: TeamRow;
   depth: number;
   parentName: string | null;
+  onMove?: () => void;
 }) {
   const retired = !!team.retiredAt;
   return (
@@ -83,6 +87,17 @@ function TeamRowItem({
       >
         {retired ? "Retired" : "Active"}
       </span>
+      {onMove && (
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={`Move ${team.name}`}
+          disabled={retired}
+          onClick={onMove}
+        >
+          Move…
+        </Button>
+      )}
     </li>
   );
 }
@@ -95,6 +110,8 @@ export function TeamsSettingsPage({ ws }: { ws: string }) {
   const rows = useMemo(() => orderTeams(q.data ?? []), [q.data]);
   const names = useMemo(() => new Map((q.data ?? []).map((t) => [t.id, t.name])), [q.data]);
   const canTry = session?.user.role !== "guest";
+  const admin = session?.user.role === "owner" || session?.user.role === "admin";
+  const [moving, setMoving] = useState<TeamRow | null>(null);
   return (
     <SettingsShell title="Settings" nav={nav}>
       <Section title="Teams" description="All teams you can see in this workspace.">
@@ -125,11 +142,14 @@ export function TeamsSettingsPage({ ws }: { ws: string }) {
                 team={team}
                 depth={depth}
                 parentName={team.parentId ? (names.get(team.parentId) ?? null) : null}
+                onMove={admin ? () => setMoving(team) : undefined}
               />
             ))}
           </ul>
         )}
       </Section>
+      {admin && <DeletedTeamsSection />}
+      <TeamNestingDialog team={moving} all={q.data ?? []} onClose={() => setMoving(null)} />
     </SettingsShell>
   );
 }

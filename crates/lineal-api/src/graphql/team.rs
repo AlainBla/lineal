@@ -3,7 +3,9 @@
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
+use async_graphql::types::Json;
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
+use lineal_app::AppError;
 use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::usecases::state::{CreateStateInput, StateView, UpdateStateInput};
 use lineal_app::usecases::team::{
@@ -179,6 +181,42 @@ pub struct NestTeamOptions {
     pub downgrade_visibility: Option<bool>,
     pub inherit_workflow_statuses: Option<bool>,
     pub inherit_issue_estimation: Option<bool>,
+    /// Eigene Zuordnung einzelner Status (eigener Status -> Status des Parents); der Rest folgt
+    /// der automatischen Zuordnung.
+    pub state_mapping: Option<Vec<StateMappingInput>>,
+}
+
+#[derive(InputObject)]
+pub struct StateMappingInput {
+    pub from_state_id: String,
+    pub to_state_id: String,
+}
+
+/// Ein Konflikt der Nesting-Vorschau; `details` hängt von `kind` ab.
+#[derive(SimpleObject)]
+pub struct NestingConflictGql {
+    /// `membership`, `visibility`, `workflowState`, `label`, `cycle`, `estimate`.
+    pub kind: String,
+    pub message: String,
+    pub details: Json<serde_json::Value>,
+}
+
+#[derive(SimpleObject)]
+pub struct NestingPreviewGql {
+    pub conflicts: Vec<NestingConflictGql>,
+}
+
+/// Ein gelöschtes, noch wiederherstellbares Team.
+#[derive(SimpleObject)]
+pub struct DeletedTeamGql {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    pub display_name: String,
+    pub parent_id: Option<String>,
+    pub trashed_at: String,
+    pub restorable_until: String,
+    pub sub_team_count: i32,
 }
 
 #[derive(InputObject)]
@@ -226,6 +264,33 @@ fn patch_value<T>(v: MaybeUndefined<T>) -> Option<Option<T>> {
     }
 }
 
+fn state_id(s: &str) -> async_graphql::Result<StateId> {
+    uuid::Uuid::parse_str(s.trim())
+        .map(StateId)
+        .map_err(|_| gql_err(AppError::invalid_request("stateMapping needs status ids")))
+}
+
+fn nest_options(o: NestTeamOptions) -> async_graphql::Result<NestOptions> {
+    let d = NestOptions::default();
+    let mut mapping = Vec::new();
+    for m in o.state_mapping.unwrap_or_default() {
+        mapping.push((state_id(&m.from_state_id)?, state_id(&m.to_state_id)?));
+    }
+    Ok(NestOptions {
+        add_missing_members_to_parent: o
+            .add_missing_members_to_parent
+            .unwrap_or(d.add_missing_members_to_parent),
+        downgrade_visibility: o.downgrade_visibility.unwrap_or(d.downgrade_visibility),
+        inherit_workflow_statuses: o
+            .inherit_workflow_statuses
+            .unwrap_or(d.inherit_workflow_statuses),
+        inherit_issue_estimation: o
+            .inherit_issue_estimation
+            .unwrap_or(d.inherit_issue_estimation),
+        state_mapping: mapping,
+    })
+}
+
 fn visibility(s: &str) -> async_graphql::Result<TeamVisibility> {
     TeamVisibility::from_str(s).map_err(|e| gql_err(e.into()))
 }
@@ -263,6 +328,53 @@ impl TeamQuery {
             .await
             .map_err(gql_err)?;
         Ok(page.items.into_iter().map(Into::into).collect())
+    }
+
+    /// Gelöschte Teams innerhalb der Papierkorb-Frist („Recently deleted“); nur für Workspace-Admins,
+    /// sonst leer.
+    async fn deleted_teams(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<DeletedTeamGql>> {
+        let teams = app(ctx)?
+            .list_deleted_teams(request_ctx(ctx)?)
+            .await
+            .map_err(gql_err)?;
+        Ok(teams
+            .into_iter()
+            .map(|d| DeletedTeamGql {
+                id: d.view.team.id.to_string(),
+                key: d.view.team.key.clone(),
+                name: d.view.team.name.clone(),
+                display_name: d.view.display_name.clone(),
+                parent_id: d.view.team.parent_id.map(|p| p.to_string()),
+                trashed_at: d.trashed_at.to_rfc3339(),
+                restorable_until: d.restorable_until.to_rfc3339(),
+                sub_team_count: i32::try_from(d.sub_team_count).unwrap_or(i32::MAX),
+            })
+            .collect())
+    }
+
+    /// Vorschau auf `nestTeam`: Konflikte (Mitglieder, Sichtbarkeit, Status, Labels, Cycles,
+    /// Schätzung) ohne zu schreiben. Nur Workspace-Admins.
+    async fn preview_team_nesting(
+        &self,
+        ctx: &Context<'_>,
+        team_id: String,
+        parent_id: Option<String>,
+    ) -> async_graphql::Result<NestingPreviewGql> {
+        let p = app(ctx)?
+            .preview_team_nesting(request_ctx(ctx)?, &team_id, parent_id.as_deref())
+            .await
+            .map_err(gql_err)?;
+        Ok(NestingPreviewGql {
+            conflicts: p
+                .conflicts
+                .into_iter()
+                .map(|c| NestingConflictGql {
+                    kind: c.kind,
+                    message: c.message,
+                    details: Json(c.details),
+                })
+                .collect(),
+        })
     }
 
     /// Ein Team per UUID, Key oder Name; nicht sichtbar → `not_found`.
@@ -384,20 +496,7 @@ impl TeamMutation {
         parent_id: Option<String>,
         options: Option<NestTeamOptions>,
     ) -> async_graphql::Result<TeamPayload> {
-        let d = NestOptions::default();
-        let o = options.map(|o| NestOptions {
-            add_missing_members_to_parent: o
-                .add_missing_members_to_parent
-                .unwrap_or(d.add_missing_members_to_parent),
-            downgrade_visibility: o.downgrade_visibility.unwrap_or(d.downgrade_visibility),
-            inherit_workflow_statuses: o
-                .inherit_workflow_statuses
-                .unwrap_or(d.inherit_workflow_statuses),
-            inherit_issue_estimation: o
-                .inherit_issue_estimation
-                .unwrap_or(d.inherit_issue_estimation),
-            state_mapping: Vec::new(),
-        });
+        let o = options.map(nest_options).transpose()?;
         let team = app(ctx)?
             .nest_team(
                 request_ctx(ctx)?,
