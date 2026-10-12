@@ -501,6 +501,18 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Status eines Teams mit Typ und Name (Name ohne Beachtung der Groß-/Kleinschreibung) –
+    /// Zuordnung beim Import in ein bestehendes Team.
+    async fn find_state_by_type_and_name(
+        &mut self,
+        team_id: Uuid,
+        state_type: &str,
+        name: &str,
+    ) -> AppResult<Option<Uuid>> {
+        let _ = (team_id, state_type, name);
+        nyi()
+    }
+
     /// Anzahl gemappter Objekte eines Typs, die in der Zieltabelle tatsächlich existieren (Verifikation).
     async fn count_mapped_rows(
         &mut self,

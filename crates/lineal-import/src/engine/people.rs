@@ -42,6 +42,15 @@ impl Session<'_, '_> {
     }
 
     pub(crate) async fn step_users(&mut self) -> HResult<()> {
+        if self.opts.scoped() {
+            self.note(
+                "info",
+                "User",
+                None,
+                "partial import: people are matched or created as placeholders only when they are referenced",
+            );
+            return Ok(());
+        }
         let nodes = self.fetch_all(SourceEntity::Users).await?;
         for chunk in nodes.chunks(self.eng.config.page_size.max(1) as usize) {
             self.begin_unit().await?;
@@ -56,7 +65,7 @@ impl Session<'_, '_> {
         Ok(())
     }
 
-    async fn user(&mut self, n: N<'_>) -> AppResult<()> {
+    pub(crate) async fn user(&mut self, n: N<'_>) -> AppResult<()> {
         let src = n
             .id()
             .ok_or_else(|| AppError::invalid_request("user without id"))?
@@ -88,6 +97,7 @@ impl Session<'_, '_> {
         {
             target = self.tx()?.imports().find_user_id_by_email(email).await?;
         }
+        let matched = target.is_some();
         let target = match target {
             Some(t) => t,
             None => {
@@ -133,6 +143,11 @@ impl Session<'_, '_> {
         };
         self.put_mapping("User", &src, target, n, &checksum).await?;
         self.counters("User").created += 1;
+        self.plan_add(if matched {
+            "usersMatched"
+        } else {
+            "usersPlaceholder"
+        });
         Ok(())
     }
 
@@ -151,6 +166,11 @@ impl Session<'_, '_> {
             let before = pending.len();
             for v in pending {
                 let n = N(v);
+                if let Some(existing) = n.id().and_then(|i| self.target_by_source.get(i)).copied() {
+                    let r = self.map_existing_team(n, existing).await;
+                    self.item_result("Team", n.id(), r)?;
+                    continue;
+                }
                 let parent = n.ref_id("parent").filter(|p| self.selected.contains(*p));
                 if let Some(p) = parent {
                     let mapped = self.target("Team", p).await?;
@@ -179,6 +199,34 @@ impl Session<'_, '_> {
             pending = next;
         }
         self.end_unit(None).await?;
+        Ok(())
+    }
+
+    /// Linear-Team einem bestehenden Lineal-Team zuordnen: nur das Mapping wird gespeichert, die
+    /// Einstellungen des Lineal-Teams bleiben unverändert.
+    async fn map_existing_team(&mut self, n: N<'_>, existing: Uuid) -> AppResult<()> {
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("team without id"))?
+            .to_owned();
+        let tx = self.tx()?;
+        let Some(team) = tx.teams().get(TeamId(existing)).await? else {
+            return Err(AppError::invalid_request("the target team is gone"));
+        };
+        let checksum = super::node::checksum_of(n.0);
+        self.put_mapping("Team", &src, existing, n, &checksum)
+            .await?;
+        self.counters("Team").unchanged += 1;
+        self.plan_add("teamsMapped");
+        self.note(
+            "info",
+            "Team",
+            Some(&src),
+            format!(
+                "mapped to the existing Lineal team `{}`; its settings are not changed and issue numbers are assigned anew",
+                team.key
+            ),
+        );
         Ok(())
     }
 
@@ -373,6 +421,11 @@ impl Session<'_, '_> {
             return Err(AppError::invalid_request("membership without team"));
         };
         if !self.selected.contains(team_src) {
+            self.counters("TeamMembership").skipped += 1;
+            return Ok(());
+        }
+        if self.target_by_source.contains_key(team_src) {
+            // Die Mitglieder eines bestehenden Lineal-Teams ändert der Import nicht.
             self.counters("TeamMembership").skipped += 1;
             return Ok(());
         }

@@ -5,7 +5,7 @@
 
 use apollo_compiler::{ExecutableDocument, Schema, validation::Valid};
 use lineal_import::adapter::linear::{WORKSPACE_QUERY, build_query};
-use lineal_import::port::{PageQuery, SourceEntity};
+use lineal_import::port::{PageQuery, Scope, SourceEntity};
 
 fn schema() -> Valid<Schema> {
     let text = include_str!("data/linear-schema.graphql");
@@ -40,13 +40,22 @@ fn every_entity_query_matches_schema_with_and_without_filter() {
     let mut all = Vec::new();
     for e in SourceEntity::ALL {
         for after in [None, Some("2026-03-01T10:00:00Z".parse().unwrap())] {
-            let body = build_query(&PageQuery {
-                entity: e,
-                cursor: None,
-                updated_after: after,
-                limit: 100,
-            });
-            all.extend(errors(&schema, e.as_str(), body["query"].as_str().unwrap()));
+            for scope in [
+                Scope::default(),
+                Scope {
+                    teams: vec!["11111111-aaaa-4bbb-8ccc-000000000001".into()],
+                    projects: vec!["22222222-aaaa-4bbb-8ccc-000000000002".into()],
+                },
+            ] {
+                let body = build_query(&PageQuery {
+                    entity: e,
+                    cursor: None,
+                    updated_after: after,
+                    limit: 100,
+                    scope,
+                });
+                all.extend(errors(&schema, e.as_str(), body["query"].as_str().unwrap()));
+            }
         }
     }
     all.sort();
@@ -102,6 +111,7 @@ fn every_entity_query_stays_far_below_the_complexity_limit() {
             cursor: None,
             updated_after: None,
             limit: 100,
+            scope: Scope::default(),
         });
         let first = body["variables"]["first"].as_f64().unwrap();
         let doc = ExecutableDocument::parse_and_validate(

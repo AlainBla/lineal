@@ -55,7 +55,7 @@ struct QuerySpec {
 const ISSUE_FIELDS: &str = "id number identifier title description priority estimate sortOrder dueDate \
     createdAt updatedAt archivedAt startedAt completedAt canceledAt autoClosedAt autoArchivedAt triagedAt \
     snoozedUntilAt slaStartedAt slaMediumRiskAt slaHighRiskAt slaBreachesAt slaType trashed previousIdentifiers \
-    url team { id key } state { id } assignee { id } creator { id } parent { id } project { id } \
+    url team { id key } state { id } assignee { id } delegate { id } creator { id } parent { id } project { id } \
     projectMilestone { id } cycle { id } labels(first: 50) { nodes { id } }";
 
 fn spec(entity: SourceEntity) -> QuerySpec {
@@ -276,6 +276,38 @@ pub fn flatten_connections(v: Value) -> Value {
     }
 }
 
+/// IDs als GraphQL-Liste; nur UUID-artige Zeichen (keine Einschleusung von Abfrage-Text).
+fn id_list(ids: &[String]) -> Option<String> {
+    let ok: Vec<String> = ids
+        .iter()
+        .filter(|i| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .map(|i| format!("\"{i}\""))
+        .collect();
+    (!ok.is_empty() && ok.len() == ids.len()).then(|| format!("[{}]", ok.join(", ")))
+}
+
+/// Filter, die die Abfrage auf die gewählten Teams/Projekte einschränken (Linear liefert dann nur
+/// diese Objekte; ohne Einschränkung wird der ganze Workspace gelesen).
+fn scope_filters(entity: SourceEntity, scope: &crate::port::Scope) -> Vec<String> {
+    use SourceEntity::*;
+    let mut out = Vec::new();
+    if let Some(list) = id_list(&scope.teams) {
+        match entity {
+            Issues | IssueHistory | IssueSubscriptions | WorkflowStates | Cycles => {
+                out.push(format!("team: {{ id: {{ in: {list} }} }}"));
+            }
+            Comments => out.push(format!("issue: {{ team: {{ id: {{ in: {list} }} }} }}")),
+            _ => {}
+        }
+    }
+    if matches!(entity, Issues | IssueHistory | IssueSubscriptions)
+        && let Some(list) = id_list(&scope.projects)
+    {
+        out.push(format!("project: {{ id: {{ in: {list} }} }}"));
+    }
+    out
+}
+
 /// Der GraphQL-Request (Query-Text und Variablen) für eine Seite.
 pub fn build_query(q: &PageQuery) -> Value {
     let s = spec(q.entity);
@@ -287,11 +319,16 @@ pub fn build_query(q: &PageQuery) -> Value {
     if !s.args.is_empty() {
         args.push(s.args.to_owned());
     }
+    let mut parts: Vec<String> = Vec::new();
     if let (true, Some(after)) = (s.filter, q.updated_after) {
-        args.push(format!(
-            "filter: {{ updatedAt: {{ gt: \"{}\" }} }}",
+        parts.push(format!(
+            "updatedAt: {{ gt: \"{}\" }}",
             after.to_rfc3339_opts(SecondsFormat::Millis, true)
         ));
+    }
+    parts.extend(scope_filters(q.entity, &q.scope));
+    if !parts.is_empty() {
+        args.push(format!("filter: {{ {} }}", parts.join(", ")));
     }
     let arg_list = if args.is_empty() {
         String::new()
@@ -639,6 +676,7 @@ mod tests {
             cursor: Some("abc".into()),
             updated_after: Some(after),
             limit: 50,
+            scope: Default::default(),
         });
         let q = body["query"].as_str().unwrap();
         assert!(
@@ -657,6 +695,44 @@ mod tests {
     }
 
     #[test]
+    fn scope_limits_issue_and_comment_queries_to_teams_and_projects() {
+        let scope = crate::port::Scope {
+            teams: vec!["t-1".into(), "t-2".into()],
+            projects: vec!["p-1".into()],
+        };
+        let q = |entity| {
+            build_query(&PageQuery {
+                entity,
+                cursor: None,
+                updated_after: None,
+                limit: 100,
+                scope: scope.clone(),
+            })["query"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let issues = q(SourceEntity::Issues);
+        assert!(issues.contains("team: { id: { in: [\"t-1\", \"t-2\"] } }"));
+        assert!(issues.contains("project: { id: { in: [\"p-1\"] } }"));
+        assert!(q(SourceEntity::Comments).contains("issue: { team: { id: { in: [\"t-1\""));
+        // Ungültige IDs werden nicht in den Abfragetext übernommen.
+        let evil = crate::port::Scope {
+            teams: vec!["x\" } } ) { id } #".into()],
+            projects: vec![],
+        };
+        let body = build_query(&PageQuery {
+            entity: SourceEntity::Issues,
+            cursor: None,
+            updated_after: None,
+            limit: 10,
+            scope: evil,
+        });
+        assert!(!body["query"].as_str().unwrap().contains("x\\\""));
+        assert!(!body["query"].as_str().unwrap().contains("team: {"));
+    }
+
+    #[test]
     fn every_entity_builds_a_read_only_query() {
         for e in SourceEntity::ALL {
             let body = build_query(&PageQuery {
@@ -664,6 +740,7 @@ mod tests {
                 cursor: None,
                 updated_after: None,
                 limit: 1000,
+                scope: Default::default(),
             });
             let q = body["query"].as_str().unwrap();
             assert!(q.starts_with("query"), "{e:?}");

@@ -11,12 +11,13 @@ use super::audit::AuditEvent;
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
-use crate::policy::{Action, require_workspace};
+use crate::policy::{Action, PolicySnapshot, require_workspace};
 use crate::ports::repos::import::{ImportRun, ImportRunUpdate, NewImportRun};
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::{DateTime, Duration, Utc};
 use hkdf::Hkdf;
+use lineal_domain::ids::TeamId;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -135,6 +136,10 @@ pub struct ImportStartInput {
     pub dry_run: bool,
     /// Nur Änderungen seit dem letzten erfolgreichen Lauf (docs/13 §4.2).
     pub delta: bool,
+    /// Linear-Projekt-IDs; leer = alle Projekte/Issues der gewählten Teams (docs/13 §4.6).
+    pub projects: Vec<String>,
+    /// Linear-Team-Key -> ID eines **bestehenden** Lineal-Teams (kein neues Team; docs/13 §4.7).
+    pub target_teams: BTreeMap<String, Uuid>,
 }
 
 /// Aufbereitete Optionen (`import_run.options`), vom Importer gelesen.
@@ -149,6 +154,8 @@ pub fn options_json(
         "keyMapping": input.key_mapping,
         "dryRun": input.dry_run,
         "delta": input.delta,
+        "projects": input.projects,
+        "targetTeams": input.target_teams,
         "updatedAfter": updated_after,
     })
 }
@@ -289,12 +296,66 @@ impl App {
         if selected.is_empty() {
             return Err(invalid("teams", "no team to import"));
         }
+        let scan_projects: std::collections::BTreeSet<&str> = run.stats["scan"]["teams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|t| t["projects"].as_array().into_iter().flatten())
+            .filter_map(|p| p["id"].as_str())
+            .collect();
+        if input.projects.len() > 1000 {
+            return Err(invalid("projects", "too many projects"));
+        }
+        for p in &input.projects {
+            if !scan_projects.contains(p.as_str()) {
+                return Err(invalid("projects", format!("unknown project `{p}`")));
+            }
+        }
+        if !input.target_teams.is_empty() {
+            let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+            let mut used = std::collections::BTreeSet::new();
+            for (key, team_id) in &input.target_teams {
+                if !selected.contains(key) {
+                    return Err(invalid(
+                        "targetTeams",
+                        format!("`{key}` is not one of the imported teams"),
+                    ));
+                }
+                // Sichtbarkeit (sonst not_found) und Schreibrecht (sonst forbidden).
+                snap.require_team(ctx, Action::ViewTeam, TeamId(*team_id))?;
+                snap.require_team(ctx, Action::CreateIssue, TeamId(*team_id))?;
+                snap.require_team(ctx, Action::UpdateTeamSettings, TeamId(*team_id))?;
+                let team = tx
+                    .teams()
+                    .get(TeamId(*team_id))
+                    .await?
+                    .ok_or_else(|| AppError::not_found("Could not find referenced Team."))?;
+                if team.retired_at.is_some() || team.trashed {
+                    return Err(invalid("targetTeams", "the target team is retired"));
+                }
+                if team.inherit_workflow_statuses {
+                    return Err(invalid(
+                        "targetTeams",
+                        "the target team inherits its workflow statuses; choose a team with its own",
+                    ));
+                }
+                if !used.insert(*team_id) {
+                    return Err(invalid(
+                        "targetTeams",
+                        "a Lineal team can only be the target of one Linear team per run",
+                    ));
+                }
+            }
+        }
         let mut conflicts = Vec::new();
         let mut targets: BTreeMap<String, String> = BTreeMap::new();
         for key in &selected {
             let Some((src_id, _)) = scan_teams.iter().find(|(_, k)| k == key) else {
                 return Err(invalid("teams", format!("unknown team `{key}`")));
             };
+            if input.target_teams.contains_key(key) {
+                continue; // wird einem bestehenden Team zugeordnet: kein Key-Konflikt möglich
+            }
             let target = input
                 .key_mapping
                 .get(key)

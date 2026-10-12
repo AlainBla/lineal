@@ -183,6 +183,7 @@ async fn rate_limits_are_waited_out_and_errors_never_contain_the_token() {
             entity: SourceEntity::Issues,
             cursor: None,
             updated_after: None,
+            scope: Default::default(),
             limit: 50,
         })
         .await

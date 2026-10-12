@@ -875,6 +875,25 @@ impl ImportRepo for PgTx {
         .map_err(db_err)
     }
 
+    async fn find_state_by_type_and_name(
+        &mut self,
+        team_id: Uuid,
+        state_type: &str,
+        name: &str,
+    ) -> AppResult<Option<Uuid>> {
+        sqlx::query_scalar(
+            "SELECT id FROM workflow_state WHERE organization_id = $1 AND team_id = $2 \
+             AND type = $3 AND lower(name) = lower($4) AND archived_at IS NULL LIMIT 1",
+        )
+        .bind(self.org.0)
+        .bind(team_id)
+        .bind(state_type)
+        .bind(name)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn count_mapped_rows(
         &mut self,
         source: &str,

@@ -344,6 +344,9 @@ impl ImportEngine<'_> {
             .map_err(src_err)?;
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         let mut issues_per_team: BTreeMap<String, i64> = BTreeMap::new();
+        let mut issues_per_project: BTreeMap<String, i64> = BTreeMap::new();
+        let mut project_nodes: Vec<Value> = Vec::new();
+        let mut status_names: BTreeMap<String, String> = BTreeMap::new();
         let mut truncated = Vec::new();
         for entity in SourceEntity::ALL {
             // Abgeleitete Entitäten (History, Abos) werden nicht gezählt (würde alle Issues erneut lesen).
@@ -364,16 +367,31 @@ impl ImportEngine<'_> {
                         cursor: cursor.clone(),
                         updated_after: None,
                         limit: 100,
+                        scope: Default::default(),
                     })
                     .await
                     .map_err(src_err)?;
                 n += page.items.len() as i64;
-                if entity == SourceEntity::Issues {
-                    for v in &page.items {
-                        if let Some(t) = N(v).ref_id("team") {
-                            *issues_per_team.entry(t.to_owned()).or_default() += 1;
+                match entity {
+                    SourceEntity::Issues => {
+                        for v in &page.items {
+                            if let Some(t) = N(v).ref_id("team") {
+                                *issues_per_team.entry(t.to_owned()).or_default() += 1;
+                            }
+                            if let Some(p) = N(v).ref_id("project") {
+                                *issues_per_project.entry(p.to_owned()).or_default() += 1;
+                            }
                         }
                     }
+                    SourceEntity::Projects => project_nodes.extend(page.items.iter().cloned()),
+                    SourceEntity::ProjectStatuses => {
+                        for v in &page.items {
+                            if let (Some(id), Some(name)) = (N(v).id(), N(v).text("name")) {
+                                status_names.insert(id.to_owned(), name.to_owned());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 pages += 1;
                 match page.next_cursor {
@@ -406,7 +424,26 @@ impl ImportEngine<'_> {
             if conflict {
                 conflicts.push(json!({ "key": key, "reason": "key_exists" }));
             }
+            // Projekte des Teams (ein Projekt über mehrere Teams erscheint bei jedem davon).
+            let projects: Vec<Value> = project_nodes
+                .iter()
+                .filter(|p| N(p).ref_ids("teams", 100).contains(&id))
+                .filter_map(|p| {
+                    let pn = N(p);
+                    let pid = pn.id()?;
+                    let status = pn
+                        .ref_id("status")
+                        .and_then(|s| status_names.get(s).cloned())
+                        .or_else(|| pn.0["status"]["name"].as_str().map(str::to_owned));
+                    Some(json!({
+                        "id": pid, "name": pn.text("name"), "status": status,
+                        "issueCount": issues_per_project.get(pid).copied().unwrap_or(0),
+                        "teamIds": pn.ref_ids("teams", 100),
+                    }))
+                })
+                .collect();
             team_out.push(json!({
+                "projects": projects,
                 "id": id, "key": key, "name": n.text("name"), "private": super::people::is_private(n),
                 "parentId": n.ref_id("parent"), "issueCount": issues_per_team.get(id).copied().unwrap_or(0),
                 "conflict": conflict,

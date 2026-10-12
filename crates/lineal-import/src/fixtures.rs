@@ -388,3 +388,245 @@ pub fn small_workspace() -> Value {
     v["workspace"]["name"] = json!("Acme (small)");
     v
 }
+
+/// Fixture nach dem Muster eines Teilimports (WP28): zwei Wurzelteams (`KOL` „KollegePlus“ und
+/// `PLN`), 20 Projekte (davon 5 über beide Teams), eigene Status je Team (13 bzw. 11, mehrere je
+/// Kategorie, Namen unterschiedlich, je ein `Duplicate`), 18 **Workspace**-Labels mit Beschreibung
+/// (eines zurückgezogen), Agent-Delegierung, unbekannte Enum-Werte und `issues_per_team` Issues je
+/// Team. Alles erfunden.
+pub fn scope_workspace(issues_per_team: i64) -> Value {
+    let users = json!([
+        { "id": "u-alice", "name": "Alice Admin", "displayName": "alice", "email": "alice@acme.test", "admin": true, "active": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "u-erin", "name": "Erin Extern", "displayName": "erin", "email": "erin@partner.test", "admin": false, "active": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "u-frank", "name": "Frank Fremd", "displayName": "frank", "email": "frank@partner.test", "admin": false, "active": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "u-gina", "name": "Gina Unbeteiligt", "displayName": "gina", "email": "gina@partner.test", "admin": false, "active": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "u-bot", "name": "Helper Agent", "displayName": "helper-agent", "email": "agent@partner.test", "admin": false, "active": true, "createdAt": at(0), "updatedAt": at(0) },
+    ]);
+    let team = |idv: &str, key: &str, name: &str| {
+        json!({ "id": idv, "key": key, "name": name, "visibility": "public", "timezone": "Europe/Berlin",
+                "createdAt": at(0), "updatedAt": at(0), "cyclesEnabled": true, "cycleDuration": 2.0, "cycleStartDay": 1.0,
+                "upcomingCycleCount": 2.0, "triageEnabled": key == "KOL" })
+    };
+    let teams = json!([
+        team("t-kol", "KOL", "KollegePlus"),
+        team("t-pln", "PLN", "Planung")
+    ]);
+    let memberships = json!([
+        { "id": "m-1", "user": id("u-alice"), "team": id("t-kol"), "owner": true, "createdAt": at(0) },
+        { "id": "m-2", "user": id("u-erin"), "team": id("t-kol"), "owner": false, "createdAt": at(0) },
+        { "id": "m-3", "user": id("u-frank"), "team": id("t-pln"), "owner": false, "createdAt": at(0) },
+    ]);
+    // Status je Team: (Slug, Name, Typ, Farbe)
+    let kol_states = [
+        ("triage", "Eingang", "triage", "#BEC2C8"),
+        ("backlog", "Backlog", "backlog", "#E2E2E2"),
+        ("ready", "Bereit", "unstarted", "#E2E2E2"),
+        ("next", "Als Naechstes", "unstarted", "#F2C94C"),
+        ("dev", "In Entwicklung", "started", "#F2994A"),
+        ("review", "Im Review", "started", "#F2994A"),
+        ("qa", "Abnahme", "started", "#BB87FC"),
+        ("blocked", "Blockiert", "started", "#EB5757"),
+        ("staging", "Auf Staging", "started", "#26B5CE"),
+        ("done", "Erledigt", "completed", "#5E6AD2"),
+        ("released", "Ausgeliefert", "completed", "#4CB782"),
+        ("archived", "Abgenommen", "completed", "#4EA7FC"),
+        ("dup", "Duplicate", "canceled", "#95A2B3"),
+    ];
+    let pln_states = [
+        ("idea", "Idee", "backlog", "#BEC2C8"),
+        ("later", "Spaeter", "backlog", "#E2E2E2"),
+        ("todo", "Geplant", "unstarted", "#E2E2E2"),
+        ("soon", "Demnaechst", "unstarted", "#F2C94C"),
+        ("work", "In Arbeit", "started", "#F2994A"),
+        ("wait", "Wartet auf Kunde", "started", "#EB5757"),
+        ("check", "Pruefung", "started", "#BB87FC"),
+        ("fin", "Fertig", "completed", "#5E6AD2"),
+        ("paid", "Abgerechnet", "completed", "#4CB782"),
+        ("drop", "Verworfen", "canceled", "#95A2B3"),
+        ("dup", "duplicate", "canceled", "#95A2B3"),
+    ];
+    let mut states: Vec<Value> = Vec::new();
+    for (team_id, prefix, defs) in [
+        ("t-kol", "kol", &kol_states[..]),
+        ("t-pln", "pln", &pln_states[..]),
+    ] {
+        for (i, (slug, name, ty, color)) in defs.iter().enumerate() {
+            states.push(json!({ "id": format!("s-{prefix}-{slug}"), "name": name, "type": ty, "color": color,
+                "description": format!("{name} ({prefix})"), "position": (i as f64) * 1.5 + 0.25, "team": id(team_id),
+                "createdAt": at(0), "updatedAt": at(0) }));
+        }
+    }
+    let label_names = [
+        "Bug",
+        "Feature",
+        "Kunde",
+        "Intern",
+        "Dringend",
+        "Design",
+        "Backend",
+        "Frontend",
+        "Doku",
+        "Recht",
+        "Finanzen",
+        "Hosting",
+        "Sicherheit",
+        "Wartung",
+        "Idee",
+        "Support",
+        "Altlast",
+        "Pilot",
+    ];
+    let labels: Vec<Value> = label_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let mut l = json!({ "id": format!("l-{i}"), "name": name, "color": format!("#{:02X}{:02X}{:02X}", 40 + i * 9, 200 - i * 7, 90 + i * 5),
+                "description": format!("Label {name}"), "isGroup": false, "createdAt": at(0), "updatedAt": at(0) });
+            if *name == "Altlast" {
+                l["retiredAt"] = json!(at(5));
+            }
+            l
+        })
+        .collect();
+    let project_statuses = json!([
+        { "id": "ps-backlog", "name": "Backlog", "type": "backlog", "color": "#BEC2C8", "position": 0, "indefinite": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "ps-planned", "name": "Planned", "type": "planned", "color": "#BEC2C8", "position": 1, "indefinite": true, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "ps-started", "name": "In Progress", "type": "started", "color": "#F2C94C", "position": 2, "indefinite": false, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "ps-done", "name": "Completed", "type": "completed", "color": "#5E6AD2", "position": 3, "indefinite": false, "createdAt": at(0), "updatedAt": at(0) },
+        { "id": "ps-canceled", "name": "Canceled", "type": "canceled", "color": "#95A2B3", "position": 4, "indefinite": false, "createdAt": at(0), "updatedAt": at(0) },
+    ]);
+    let status_ids = [
+        "ps-backlog",
+        "ps-planned",
+        "ps-started",
+        "ps-done",
+        "ps-canceled",
+    ];
+    // 20 Projekte: 0–4 über beide Teams, 5–12 nur KOL, 13–19 nur PLN.
+    let projects: Vec<Value> = (0..20)
+        .map(|i| {
+            let teams = match i {
+                0..=4 => vec![id("t-kol"), id("t-pln")],
+                5..=12 => vec![id("t-kol")],
+                _ => vec![id("t-pln")],
+            };
+            let mut p = json!({ "id": format!("p-{i}"), "name": format!("Projekt {i:02}"), "color": "#4F46E5",
+                "status": { "id": status_ids[i % 5], "name": "x" }, "priority": (i % 5) as i64,
+                "lead": id(if i % 2 == 0 { "u-alice" } else { "u-erin" }), "slugId": format!("{:012x}", 0xabc000 + i),
+                "teams": teams, "members": [id("u-alice"), id("u-frank")], "labels": [],
+                "health": "onTrack", "createdAt": at(10 + i as i64), "updatedAt": at(10 + i as i64) });
+            if i == 3 {
+                p["health"] = json!("somethingNew");
+            }
+            p
+        })
+        .collect();
+    let milestones: Vec<Value> = (0..20)
+        .step_by(4)
+        .map(|i| {
+            json!({ "id": format!("ms-{i}"), "name": format!("Meilenstein {i}"), "project": id(&format!("p-{i}")),
+                    "targetDate": "2026-12-01", "sortOrder": 1.0, "createdAt": at(30), "updatedAt": at(30) })
+        })
+        .collect();
+    let project_updates: Vec<Value> = (0..20)
+        .step_by(5)
+        .map(|i| {
+            json!({ "id": format!("pu-{i}"), "body": format!("Stand Projekt {i}"), "health": "onTrack", "user": id("u-alice"),
+                    "project": id(&format!("p-{i}")), "createdAt": at(40), "updatedAt": at(40) })
+        })
+        .collect();
+    let mut cycles: Vec<Value> = Vec::new();
+    for (team_id, prefix) in [("t-kol", "kol"), ("t-pln", "pln")] {
+        for n in 1..=3i64 {
+            cycles.push(json!({ "id": format!("c-{prefix}-{n}"), "number": n, "startsAt": at(24 * 14 * (n - 1)),
+                "endsAt": at(24 * 14 * n), "team": id(team_id), "createdAt": at(0), "updatedAt": at(0) }));
+        }
+    }
+    // Issues, Kommentare, Anhänge, Relationen
+    let mut issues: Vec<Value> = Vec::new();
+    let mut comments: Vec<Value> = Vec::new();
+    let mut attachments: Vec<Value> = Vec::new();
+    let mut relations: Vec<Value> = Vec::new();
+    let people = ["u-alice", "u-erin", "u-frank", "u-bot"];
+    for (team_id, key, prefix, defs, own_projects) in [
+        (
+            "t-kol",
+            "KOL",
+            "kol",
+            &kol_states[..],
+            (0..13).collect::<Vec<usize>>(),
+        ),
+        (
+            "t-pln",
+            "PLN",
+            "pln",
+            &pln_states[..],
+            (0..5).chain(13..20).collect(),
+        ),
+    ] {
+        for n in 1..=issues_per_team {
+            let nu = n as usize;
+            let issue_id = format!("i-{prefix}-{n}");
+            let state = defs[nu % defs.len()].0;
+            let project = if nu % 3 == 0 {
+                Value::Null
+            } else {
+                id(&format!("p-{}", own_projects[nu % own_projects.len()]))
+            };
+            let mut labels = vec![id(&format!("l-{}", nu % 18))];
+            if nu % 4 == 0 {
+                labels.push(id(&format!("l-{}", (nu + 5) % 18)));
+            }
+            let mut issue = json!({ "id": issue_id, "number": n, "identifier": format!("{key}-{n}"),
+                "url": format!("https://linear.app/acme/issue/{key}-{n}/slug"), "title": format!("Aufgabe {n} ({key})"),
+                "description": format!("Beschreibung {n}"), "priority": (nu % 5) as i64,
+                "team": id(team_id), "state": id(&format!("s-{prefix}-{state}")), "creator": id("u-alice"),
+                "project": project, "labels": labels, "createdAt": at(50 + n), "updatedAt": at(50 + n) });
+            if nu % 5 != 0 {
+                issue["assignee"] = id(people[nu % 3]);
+            }
+            if nu % 17 == 0 {
+                issue["delegate"] = id("u-bot");
+            }
+            if nu % 23 == 0 {
+                issue["slaType"] = json!("brandNewKind");
+            }
+            if nu % 10 == 0 && n > 1 {
+                issue["parent"] = id(&format!("i-{prefix}-{}", n - 1));
+            }
+            issues.push(issue);
+            if nu % 5 == 0 {
+                comments.push(json!({ "id": format!("cm-{prefix}-{n}"), "body": format!("Kommentar zu {n}"), "user": id(people[nu % 3]),
+                    "issue": id(&issue_id), "createdAt": at(60 + n), "updatedAt": at(60 + n) }));
+            }
+            if nu % 7 == 0 {
+                attachments.push(json!({ "id": format!("at-{prefix}-{n}"), "url": format!("https://example.test/doc/{prefix}/{n}"),
+                    "title": format!("Link {n}"), "issue": id(&issue_id), "creator": id("u-alice"), "createdAt": at(60 + n), "updatedAt": at(60 + n) }));
+            }
+            // Relationen: innerhalb des Teams, und KOL-n -> PLN-n über die Teams hinweg
+            if nu % 6 == 0 && n > 2 {
+                relations.push(json!({ "id": format!("r-{prefix}-{n}"), "type": "blocks", "createdAt": at(70), "updatedAt": at(70),
+                    "issue": { "id": issue_id, "identifier": format!("{key}-{n}"), "url": format!("https://linear.app/acme/issue/{key}-{n}") },
+                    "relatedIssue": { "id": format!("i-{prefix}-{}", n - 1), "identifier": format!("{key}-{}", n - 1), "url": format!("https://linear.app/acme/issue/{key}-{}", n - 1) } }));
+            }
+            if prefix == "kol" && nu % 50 == 0 {
+                relations.push(json!({ "id": format!("rx-{n}"), "type": "related", "createdAt": at(70), "updatedAt": at(70),
+                    "issue": { "id": issue_id, "identifier": format!("KOL-{n}"), "url": format!("https://linear.app/acme/issue/KOL-{n}") },
+                    "relatedIssue": { "id": format!("i-pln-{n}"), "identifier": format!("PLN-{n}"), "url": format!("https://linear.app/acme/issue/PLN-{n}") } }));
+            }
+            if nu % 40 == 0 {
+                relations.push(json!({ "id": format!("rm-{prefix}-{n}"), "type": "mysteryRelation", "createdAt": at(70), "updatedAt": at(70),
+                    "issue": id(&issue_id), "relatedIssue": id(&format!("i-{prefix}-1")) }));
+            }
+        }
+    }
+    json!({
+        "workspace": { "id": "ws-scope", "name": "Partner Workspace", "urlKey": "acme", "viewerEmail": "alice@acme.test" },
+        "entities": {
+            "User": users, "Team": teams, "TeamMembership": memberships, "WorkflowState": states,
+            "IssueLabel": labels, "ProjectStatus": project_statuses, "Cycle": cycles, "Project": projects,
+            "ProjectMilestone": milestones, "ProjectUpdate": project_updates, "Issue": issues,
+            "IssueRelation": relations, "Comment": comments, "Attachment": attachments,
+        },
+    })
+}
