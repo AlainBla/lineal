@@ -20,7 +20,15 @@ export function accountNavItems(ws: string, active?: AccountSection) {
 }
 
 type WorkspaceSection =
-  "workspace" | "members" | "teams" | "labels" | "templates" | "api" | "security" | "audit" | "webhooks";
+  | "workspace"
+  | "members"
+  | "teams"
+  | "labels"
+  | "templates"
+  | "api"
+  | "security"
+  | "audit"
+  | "webhooks";
 
 /**
  * Navigation der Settings (linke Spalte): Gruppe „Account“ (persönlich), dann die Workspace-Seiten,

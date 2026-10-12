@@ -2,6 +2,8 @@ import { History } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ConnectionStatus, Presence } from "@/features/collab/presence";
+import { type CollabSession, useCollab } from "@/features/collab/use-collab";
 import { Input } from "@/components/ui/input";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
@@ -18,11 +20,16 @@ function Editor({
   doc,
   docRef,
   onRestored,
+  session,
 }: {
   doc: Document;
   docRef: string;
   onRestored: () => void;
+  /** Echtzeit-Sitzung; ohne (Fallback) gilt Stufe 1: Autosave mit `expectedVersion`. */
+  session: CollabSession | null;
 }) {
+  const collab = session?.provider ? session : null;
+  const isCollab = collab !== null;
   const save = useSaveDocument(docRef);
   const users = useKnownUsers();
   const [title, setTitle] = useState(doc.title);
@@ -44,7 +51,13 @@ function Editor({
     pending.current = {};
     setStatus("saving");
     save.mutate(
-      { id: doc.id, expectedVersion: version.current, patch },
+      {
+        id: doc.id,
+        // Im Echtzeitbetrieb ändert der Server den Inhalt laufend: nur der Titel wird gespeichert
+        // (letzter Schreiber gewinnt), ohne Versionsprüfung des Inhalts.
+        expectedVersion: isCollab ? undefined : version.current,
+        patch,
+      },
       {
         onSuccess: (d) => {
           version.current = d.contentVersion;
@@ -56,7 +69,7 @@ function Editor({
         },
       },
     );
-  }, [doc.id, save]);
+  }, [doc.id, save, isCollab]);
 
   const queue = (patch: { title?: string; content?: string }) => {
     pending.current = { ...pending.current, ...patch };
@@ -84,9 +97,16 @@ function Editor({
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col overflow-auto">
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-          <span className="text-xs text-muted-foreground" role="status">
-            {statusText[status]}
-          </span>
+          {collab ? (
+            <>
+              <ConnectionStatus status={collab.status} canWrite={collab.canWrite} />
+              <Presence provider={collab.provider} />
+            </>
+          ) : (
+            <span className="text-xs text-muted-foreground" role="status">
+              {statusText[status]}
+            </span>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -108,12 +128,18 @@ function Editor({
             className="h-10 border-transparent text-xl font-semibold"
           />
           <RichEditor
+            key={collab ? `collab:${collab.generation}` : "stage1"}
             value={doc.content}
             ariaLabel="Document content"
             users={users}
             placeholder="Write something…"
             onChange={(md) => queue({ content: md })}
             onBlur={flush}
+            collab={
+              collab?.provider
+                ? { provider: collab.provider, canWrite: collab.canWrite }
+                : undefined
+            }
           />
           {doc.warnings.length > 0 && (
             <p className="text-xs text-amber-500">{doc.warnings.join(" ")}</p>
@@ -174,7 +200,35 @@ function HistoryPanel({
   );
 }
 
-/** Dokument-Editor (docs/06, F15): TipTap-Editor mit Autosave und Versionshistorie. */
+/**
+ * Wählt die Betriebsart: Echtzeit (Stufe 2) sobald verbunden, Stufe 1 (Autosave), wenn der
+ * Collab-Endpunkt nicht erreichbar ist oder die Sitzung beendet wurde.
+ */
+function DocumentEditor({
+  doc,
+  docRef,
+  onRestored,
+}: {
+  doc: Document;
+  docRef: string;
+  onRestored: () => void;
+}) {
+  const session = useCollab(doc.id);
+  // Vor der ersten Verbindung (auch während der ersten Wiederholungen) wird nichts gerendert,
+  // damit kein Editor mit Stufe-1-Inhalt neben einem Echtzeit-Editor entsteht.
+  if (
+    session.status === "connecting" ||
+    (session.status === "disconnected" && !session.everConnected)
+  ) {
+    return <ListSkeleton rows={4} />;
+  }
+  const stage1 = session.status === "fallback" || session.status === "closed";
+  return (
+    <Editor doc={doc} docRef={docRef} onRestored={onRestored} session={stage1 ? null : session} />
+  );
+}
+
+/** Dokument-Editor (docs/06, F15): TipTap-Editor mit Echtzeit-Mitbearbeitung, Autosave und Versionshistorie. */
 export function DocumentPage({ docRef }: { docRef: string }) {
   const q = useDocument(docRef);
   const [nonce, setNonce] = useState(0);
@@ -197,7 +251,7 @@ export function DocumentPage({ docRef }: { docRef: string }) {
     );
   // Nach „Restore“ lädt der Editor den wiederhergestellten Inhalt neu (Autosave würde sonst den Cursor verlieren).
   return (
-    <Editor
+    <DocumentEditor
       key={`${q.data.id}:${nonce}`}
       doc={q.data}
       docRef={docRef}

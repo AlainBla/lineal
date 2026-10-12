@@ -7,6 +7,18 @@ import type { Document } from "@/gql/graphql";
 
 import { DocumentPage } from "./document-page";
 
+// Stufe 1 (Collab-Endpunkt nicht erreichbar): die Echtzeit-Tests liegen in features/collab.
+vi.mock("@/features/collab/use-collab", () => ({
+  useCollab: () => ({
+    provider: null,
+    status: "fallback",
+    canWrite: false,
+    synced: false,
+    everConnected: false,
+    generation: 0,
+  }),
+}));
+
 const doc: Document = {
   id: "d1",
   slugId: "abc",

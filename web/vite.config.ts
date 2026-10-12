@@ -14,6 +14,8 @@ const proxy = {
   "/invite/accept": backend,
   "/mcp": backend,
   "/sync": { target: backend, ws: true },
+  // Echtzeit-Mitbearbeitung (WebSocket, WP36).
+  "/collab": { target: backend, ws: true },
 };
 
 export default defineConfig({

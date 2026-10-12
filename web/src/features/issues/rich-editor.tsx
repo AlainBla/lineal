@@ -3,6 +3,8 @@
  * `Strg/Cmd+Enter` zum Absenden. Der Server bereinigt den Markdown beim Speichern (markdown::sanitize);
  * Mentions werden als `@Name` serialisiert (WP09 erkennt sie im Text).
  */
+import Collaboration from "@tiptap/extension-collaboration";
+import CollaborationCaret from "@tiptap/extension-collaboration-caret";
 import { Markdown } from "@tiptap/markdown";
 import Mention from "@tiptap/extension-mention";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -10,6 +12,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
 
+import type { CollabProvider } from "@/features/collab/provider";
 import { cn } from "@/lib/cn";
 
 import type { KnownUser } from "./users";
@@ -29,6 +32,12 @@ export interface RichEditorProps {
   /** `false` = nur Anzeige (Kommentartext). */
   editable?: boolean;
   className?: string;
+  /**
+   * Echtzeit-Mitbearbeitung (Yjs): der Inhalt kommt aus dem gemeinsamen Dokument, `value` wird
+   * ignoriert (nie zusätzlich `setContent`, sonst verdoppelt sich der Inhalt). Ohne Schreibrecht
+   * ist der Editor schreibgeschützt.
+   */
+  collab?: { provider: CollabProvider; canWrite: boolean };
 }
 
 interface Suggestion {
@@ -49,6 +58,7 @@ export function RichEditor({
   autoFocus,
   editable = true,
   className,
+  collab,
 }: RichEditorProps) {
   const usersRef = useRef(users);
   const submitRef = useRef(onSubmit);
@@ -71,8 +81,19 @@ export function RichEditor({
     extensions: [
       StarterKit.configure({
         link: { openOnClick: false, protocols: ["http", "https", "mailto"] },
+        // Mit Collaboration übernimmt Yjs Undo/Redo (sonst Konflikt mit dem History-Plugin).
+        ...(collab ? { undoRedo: false as const } : {}),
       }),
       Markdown,
+      ...(collab
+        ? [
+            Collaboration.configure({ document: collab.provider.doc }),
+            CollaborationCaret.configure({
+              provider: collab.provider,
+              user: collab.provider.identity ?? { name: "You", color: "#888888" },
+            }),
+          ]
+        : []),
       Placeholder.configure({ placeholder: placeholder ?? "" }),
       Mention.extend({
         renderMarkdown: (node) => `@${node.attrs?.label ?? node.attrs?.id ?? ""}`,
@@ -123,9 +144,8 @@ export function RichEditor({
         },
       }),
     ],
-    content: value,
-    contentType: "markdown",
-    editable,
+    ...(collab ? {} : { content: value, contentType: "markdown" as const }),
+    editable: editable && (collab ? collab.canWrite : true),
     autofocus: autoFocus ? "end" : false,
     editorProps: {
       attributes: {
@@ -143,7 +163,9 @@ export function RichEditor({
         return false;
       },
     },
-    onUpdate: ({ editor: ed }) => changeRef.current?.(ed.getMarkdown()),
+    onUpdate: ({ editor: ed }) => {
+      if (!collab) changeRef.current?.(ed.getMarkdown());
+    },
     onBlur: () => blurRef.current?.(),
   });
 

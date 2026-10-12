@@ -39,7 +39,7 @@ export interface DocumentPatch {
 export function useSaveDocument(ref: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { id: string; expectedVersion: number; patch: DocumentPatch }) => {
+    mutationFn: async (v: { id: string; expectedVersion?: number; patch: DocumentPatch }) => {
       const res = await gqlRequest<
         { documentUpdate: { success: boolean; document: Document | null } },
         { id: string; input: Record<string, unknown> }
@@ -47,7 +47,13 @@ export function useSaveDocument(ref: string) {
         `mutation DocumentSave($id: String!, $input: DocumentUpdateInput!) {
           documentUpdate(id: $id, input: $input) { success document { ${DOC_FIELDS} } }
         }`,
-        { id: v.id, input: { ...v.patch, expectedVersion: v.expectedVersion } },
+        {
+          id: v.id,
+          input: {
+            ...v.patch,
+            ...(v.expectedVersion === undefined ? {} : { expectedVersion: v.expectedVersion }),
+          },
+        },
       );
       if (!res.documentUpdate.document) throw new Error("Save failed");
       return res.documentUpdate.document;

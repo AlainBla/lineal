@@ -1111,6 +1111,10 @@ async fn handle_binary(
         }
         YMessage::Sync(SyncMessage::SyncStep2(update) | SyncMessage::Update(update)) => {
             if !access.can_write {
+                // Leere Antworten (Schritt 2 ohne Inhalt, 2 Bytes) sind für Nur-Leser normal.
+                if update.len() <= 2 {
+                    return Handled::Continue;
+                }
                 // Nur-Leser dürfen keine Änderungen senden: verwerfen und trennen.
                 return Handled::Stop(End::Code(CLOSE_FORBIDDEN, "read only"));
             }
