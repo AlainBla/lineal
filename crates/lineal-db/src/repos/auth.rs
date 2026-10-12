@@ -292,6 +292,28 @@ impl AuthRepo for PgTx {
             .await
             .map_err(db_err)?;
         }
+        // Noch nicht eingelöste OAuth-Codes (Refresh-Tokens liegen in `oauth_token`, s. o.).
+        sqlx::query(
+            "UPDATE oauth_authorization_code SET used_at = $3 \
+             WHERE organization_id = $1 AND user_id = $2 AND used_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        // Offene Einladungslinks des gesperrten Users.
+        sqlx::query(
+            "UPDATE invitation SET status = 'revoked', version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND inviter_id = $2 AND status = 'pending'",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 }

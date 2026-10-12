@@ -461,11 +461,10 @@ impl App {
                         .with_details(json!({ "field": key })),
                 );
             };
-            let ok = match (*k, role) {
-                (_, UserRole::Guest | UserRole::App) => false,
-                ("adminManagementRole", UserRole::User) => false,
-                _ => true,
-            };
+            let ok = !matches!(
+                (*k, role),
+                (_, UserRole::Guest | UserRole::App) | ("adminManagementRole", UserRole::User)
+            );
             if !ok {
                 return Err(AppError::invalid_request(format!(
                     "`{key}` does not allow the role `{}`",

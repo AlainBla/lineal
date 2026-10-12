@@ -565,3 +565,38 @@ fn pkce_and_scope_helpers() {
     assert_eq!(parse_scopes("write").unwrap(), vec!["read", "write"]);
     assert!(parse_scopes("read,root").is_none());
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn suspending_a_user_kills_codes_refresh_tokens_and_stays_dead(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    let alice = lineal_testkit::ctx_for(lineal_testkit::SeedUser::Alice);
+    let bob = SeedData::acme().bob.to_string();
+
+    // Ein Token-Paar und ein noch offener Code von Bob.
+    let code1 = obtain_code(&fx, &client, &fx.bob_cookie, "read%20write").await;
+    let (_, v) = exchange(&fx, &client, &code1, VERIFIER).await;
+    let (a1, r1) = (
+        v["access_token"].as_str().unwrap().to_string(),
+        v["refresh_token"].as_str().unwrap().to_string(),
+    );
+    let open_code = obtain_code(&fx, &client, &fx.bob_cookie, "read").await;
+    assert_eq!(mcp_call(&fx, &a1).await.0, StatusCode::OK);
+
+    fx.app.set_user_active(&alice, &bob, false).await.unwrap();
+    assert_eq!(mcp_call(&fx, &a1).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(refresh(&fx, &client, &r1).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        exchange(&fx, &client, &open_code, VERIFIER).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Nach der Entsperrung bleibt alles Alte unbrauchbar.
+    fx.app.set_user_active(&alice, &bob, true).await.unwrap();
+    assert_eq!(mcp_call(&fx, &a1).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(refresh(&fx, &client, &r1).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        exchange(&fx, &client, &open_code, VERIFIER).await.0,
+        StatusCode::BAD_REQUEST
+    );
+}

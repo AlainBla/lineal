@@ -240,7 +240,7 @@ impl OrgPolicy {
             .rsplit_once('@')
             .map(|(_, d)| d.trim().to_lowercase())
             .unwrap_or_default();
-        self.allowed_invite_domains.iter().any(|d| *d == domain)
+        self.allowed_invite_domains.contains(&domain)
     }
 
     /// Ob `role` mindestens die Rolle `min` hat.

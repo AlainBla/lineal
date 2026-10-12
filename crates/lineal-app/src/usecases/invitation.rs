@@ -459,6 +459,14 @@ impl App {
             .filter(|i| i.status == "pending" && i.expires_at > now)
             .ok_or_else(invitation_not_found)?;
         let org = tx.orgs().get().await?.ok_or_else(invitation_not_found)?;
+        // Aktuelle Domain-Beschränkung gilt auch für früher erstellte Einladungen und für das Konto,
+        // das sie annimmt (neutraler Fehler wie bei ungültigem Token).
+        let policy = crate::policy::OrgPolicy::from_json(&org.security_settings, &org.limits);
+        if !policy.invite_domain_allowed(&inv.email)
+            || required_email.is_some_and(|e| !policy.invite_domain_allowed(e))
+        {
+            return Err(invitation_not_found());
+        }
         let teams = tx.teams().list_all().await?;
         let tree = crate::policy::TeamTree::new(teams);
         let existing = tx.users().find_by_email(&inv.email).await?;

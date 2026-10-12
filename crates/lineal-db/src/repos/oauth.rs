@@ -147,7 +147,8 @@ impl PgTx {
              c.code_challenge, c.actor, c.family_id, c.expires_at, c.used_at \
              FROM oauth_authorization_code c JOIN oauth_application a \
                ON a.organization_id = c.organization_id AND a.id = c.application_id \
-             WHERE c.code_hash = $1",
+             WHERE c.code_hash = $1 AND EXISTS (SELECT 1 FROM \"user\" u WHERE u.organization_id = c.organization_id \
+               AND u.id = c.user_id AND u.active AND u.status = 'active' AND u.archived_at IS NULL)",
         )
         .bind(code_hash)
         .fetch_optional(&mut *self.tx)
@@ -264,7 +265,8 @@ impl PgTx {
              t.refresh_token_hash, t.previous_refresh_token_hash, t.rotated_at, t.family_id, t.revoked_at \
              FROM oauth_token t JOIN oauth_application a \
                ON a.organization_id = t.organization_id AND a.id = t.application_id \
-             WHERE t.refresh_token_hash = $1 OR t.previous_refresh_token_hash = $1 \
+             WHERE (t.refresh_token_hash = $1 OR t.previous_refresh_token_hash = $1) AND EXISTS (SELECT 1 FROM \"user\" u WHERE u.organization_id = t.organization_id \
+               AND u.id = t.user_id AND u.active AND u.status = 'active' AND u.archived_at IS NULL) \
              ORDER BY (t.refresh_token_hash = $1) DESC LIMIT 1",
         )
         .bind(hash)

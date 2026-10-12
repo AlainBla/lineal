@@ -6,7 +6,7 @@ use lineal_app::context::Actor;
 use lineal_app::ports::Clock;
 use lineal_app::ports::Store;
 use lineal_app::usecases::auth::{CreateApiKeyInput, LoginInput};
-use lineal_app::usecases::invitation::InviteUsersInput;
+use lineal_app::usecases::invitation::{AcceptInvitationInput, InviteUsersInput};
 use lineal_app::usecases::org::SecuritySettingsPatch;
 use lineal_app::usecases::user::CreateUserInput;
 use lineal_app::{App, ErrorKind, RequestCtx};
@@ -489,4 +489,58 @@ async fn suspending_kills_sessions_keys_and_blocks_login(pool: PgPool) {
     );
     let fresh = app.login(login("bob@acme.example")).await.unwrap();
     assert!(app.principal_for_token(&fresh.token).await.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn acceptance_rechecks_domains_and_suspension_revokes_invitations(pool: PgPool) {
+    let app = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let bob = ctx_for(SeedUser::Bob);
+    // Einladung an eine fremde Domain, bevor die Liste eingeschränkt wird.
+    let early = app
+        .invite_users(&alice, invite("x@other.example"))
+        .await
+        .unwrap();
+    let later = app
+        .invite_users(&alice, invite("y@acme.example"))
+        .await
+        .unwrap();
+    app.update_security_settings(&alice, patch(&[], Some(&["acme.example"])))
+        .await
+        .unwrap();
+    let accept = |token: &str, email: &str| AcceptInvitationInput {
+        token: token.to_owned(),
+        email: email.to_owned(),
+        name: Some("Neu".into()),
+        password: Some("correct-horse".into()),
+    };
+    assert_eq!(
+        kind(
+            app.accept_invitation(accept(&early[0].token, "x@other.example"))
+                .await
+        ),
+        ErrorKind::NotFound
+    );
+    assert!(
+        app.accept_invitation(accept(&later[0].token, "y@acme.example"))
+            .await
+            .is_ok()
+    );
+
+    // Offene Einladungen eines gesperrten Users werden widerrufen.
+    app.update_security_settings(&alice, patch(&[], Some(&[])))
+        .await
+        .unwrap();
+    let bobs = app
+        .invite_users(&bob, invite("z@acme.example"))
+        .await
+        .unwrap();
+    app.set_user_active(&alice, "bob", false).await.unwrap();
+    assert_eq!(
+        kind(
+            app.accept_invitation(accept(&bobs[0].token, "z@acme.example"))
+                .await
+        ),
+        ErrorKind::NotFound
+    );
 }
