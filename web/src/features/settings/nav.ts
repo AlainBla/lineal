@@ -4,13 +4,15 @@ import type { Session } from "@/app/auth";
 export function workspaceSettingsNav(
   ws: string,
   session: Session | null | undefined,
-  active: "workspace" | "members" | "api" | "security" | "audit",
+  active: "workspace" | "members" | "labels" | "templates" | "api" | "security" | "audit",
 ) {
   const role = session?.user.role;
   const admin = role === "owner" || role === "admin";
   return [
     { label: "Workspace", to: `/${ws}/settings/workspace`, active: active === "workspace" },
     { label: "Members", to: `/${ws}/settings/members`, active: active === "members" },
+    { label: "Labels", to: `/${ws}/settings/labels`, active: active === "labels" },
+    { label: "Templates", to: `/${ws}/settings/templates`, active: active === "templates" },
     ...(admin
       ? [
           { label: "Security", to: `/${ws}/settings/security`, active: active === "security" },
