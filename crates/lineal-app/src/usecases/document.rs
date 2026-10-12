@@ -759,7 +759,9 @@ impl App {
         input: SaveDocumentInput,
         bundle: bool,
     ) -> AppResult<DocumentView> {
-        self.save_document_with(tx, ctx, input, bundle, &collab::StateMode::FromMarkdown)
+        // Box::pin: dieser Weg liegt unter Issue-/Projekt-Anlage mit Templates; ohne Auslagerung
+        // auf den Heap wächst deren Future (Stack-Überlauf in Debug-Builds).
+        Box::pin(self.save_document_with(tx, ctx, input, bundle, &collab::StateMode::FromMarkdown))
             .await
     }
 
@@ -780,9 +782,9 @@ impl App {
             ));
         }
         let (doc, warnings) = match &input.id {
-            None => self.create_document_in(tx, &snap, ctx, &input, now).await?,
+            None => Box::pin(self.create_document_in(tx, &snap, ctx, &input, now)).await?,
             Some(r) => (
-                self.update_document_in(tx, &snap, ctx, r, &input, now, bundle, state)
+                Box::pin(self.update_document_in(tx, &snap, ctx, r, &input, now, bundle, state))
                     .await?,
                 vec![],
             ),

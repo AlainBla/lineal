@@ -68,7 +68,7 @@ WP10-Leftovers:
 - Dokument-Kaskade (trash_documents_of/restore_documents_of) in delete_issue, set_project_trashed, Team-Löschen einhängen -> Orchestrator/WP16.
 - Snapshot-Bündelung, Dokument-Mentions/Abos, documentMoved, CRDT; useDefaultTemplate API; Form-Templates; get_issue.attachments/documents einhängen.
 WP11-Leftovers: ancestors.some nur id; View-Archiv bei Team-Löschung; Suche 'simple' statt Stemming; Triage-Ausblendung flache MCP-Params.
-- (erledigt WP34) Dokument-Kaskade, Snapshot-Bündelung, Dokument-Mentions, useDefaultTemplate, Form-Templates. Offen: Dokument-Abos/documentContentChange/documentMoved-Fan-out, get_issue.attachments/documents einhängen; CRDT bewusst nicht gebaut.
+- (erledigt WP34) Dokument-Kaskade, Snapshot-Bündelung, Dokument-Mentions, useDefaultTemplate, Form-Templates. Offen: Dokument-Abos/documentContentChange/documentMoved-Fan-out, get_issue.attachments/documents einhängen. (erledigt WP36: CRDT-Echtzeit, siehe unten)
 WP11-Leftovers: ancestors.some nur id; Favoriten-Umsortieren; View-Abos; View-Archiv bei Team-Löschung; Eigentümerwechsel; (Stemming erledigt WP34); Triage-Ausblendung flache MCP-Params.
 Erledigt durch Orchestrator: GraphQL `users(query, team, first)` -> [UserRef] ohne E-Mail (für WP13-Assignee-Picker/Mentions; WP14 bzw. Nachtrag WP13 einhängen).
 WP14-Leftovers: Filter-Bar an Team-Seiten; Such-Command global (Shell); Board in Views; Update-Diff; Team-Settings Templates/SLA/Hierarchie/Webhooks/Access/Recurring; Workspace-Settings Members/Teams/Security/API/Limits; Account-Settings; Projekt-Issues nach Milestone; users ohne Rolle/Owner.
@@ -116,3 +116,12 @@ WP32-Leftovers:
 - `issueUnblocked` beim Entfernen einer `blocks`-Relation fehlt (Event ohne Relationsart, Zeile schon gelöscht); `*ThreadResolved`, `documentMention`/`documentContentChange`/`documentMoved`/`documentDeleted`/`documentRestored`/`documentSubscribed`, `projectDescriptionContentChange`, `initiativeDescriptionContentChange`, `initiativeUpdateCreated` werden nicht erzeugt.
 - Web: Bootstrap befüllt nur das Personenverzeichnis (die Caches sind Query-Caches, kein Objektgraph); Doc-Abo-Glocke in `features/docs` (WP34) fehlt; Gäste-Hinweis bei Freigabe (Notification beim Teilen) fehlt; Inbox bündelt die Anzeige nicht nach `groupKey` (der Server bündelt Ereignisse, nicht Gruppen).
 - `/sync/bootstrap` und `/sync` sind nicht durch das In-Process-Rate-Limit geschützt (nginx: `limit_req`).
+
+## WP36 Echtzeit-Mitbearbeitung (offen)
+
+- Mehrere Server-Instanzen: Räume leben im Prozessspeicher; nötig sind Sticky Sessions je Inhalt oder Pub/Sub zwischen Instanzen (docs/15 §3.5).
+- Web: Projekt- und Initiativ-Beschreibungen haben noch keinen Editor (der Endpunkt `/collab/project|initiative/{id}` ist fertig); Inline-Kommentar-Anker werden im Editor noch nicht als Markierung dargestellt/angelegt (API/GraphQL `anchorStart`/`anchorEnd` und `anchorState` existieren).
+- `yrs` ist als gepatchte Kopie `vendor/yrs` eingebunden (zwei Korrekturen, PATCH.md); bei Toolchain-Update auf die Upstream-Version (>= 0.28) zurückwechseln, `exclude` im Workspace streichen.
+- Beschreibungs-Räume führen den Zustand bei API-Schreibvorgängen nicht nach (Abgleich per Markdown-Diff im offenen Raum, sonst Neuaufbau mit neuer Epoche); ungespeicherte Raumänderungen der letzten ≤ 2 s können bei Schreiben ohne Zustandsführung verloren gehen.
+- Ein Schreib-Scope-Verlust trennt die Verbindung (4403); der Client verbindet sich danach nur lesend. Gewonnene Rechte gelten erst nach dem nächsten Verbindungsaufbau.
+- cargo-deny ist hier nicht installiert: Lizenzen von yrs (MIT) und Abhängigkeiten manuell geprüft.
