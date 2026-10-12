@@ -357,4 +357,96 @@ impl LabelRepo for PgTx {
         .await
         .map_err(db_err)
     }
+
+    async fn issues_with_issue_labels(
+        &mut self,
+        labels: &[LabelId],
+    ) -> AppResult<Vec<(lineal_domain::ids::IssueId, TeamId)>> {
+        let ids: Vec<Uuid> = labels.iter().map(|l| l.0).collect();
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT DISTINCT i.id, i.team_id FROM issue_to_label l \
+             JOIN issue i ON i.organization_id = l.organization_id AND i.id = l.issue_id \
+             WHERE l.organization_id = $1 AND l.label_id = ANY($2) ORDER BY i.id",
+        )
+        .bind(self.org.0)
+        .bind(ids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(i, t)| (lineal_domain::ids::IssueId(i), TeamId(t)))
+            .collect())
+    }
+
+    async fn merge_issue_label(&mut self, source: LabelId, target: LabelId) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO issue_to_label (organization_id, issue_id, label_id, single_select_group_id, created_at) \
+             SELECT organization_id, issue_id, $3, NULL, created_at FROM issue_to_label \
+             WHERE organization_id = $1 AND label_id = $2 ON CONFLICT DO NOTHING",
+        )
+        .bind(self.org.0)
+        .bind(source.0)
+        .bind(target.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE issue_label SET last_applied_at = now() \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(target.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        // IDs sind UUID-Strings und damit eindeutig: Textersetzung im JSON ist sicher.
+        sqlx::query(
+            "UPDATE template SET template_data = replace(template_data::text, $2, $3)::jsonb \
+             WHERE organization_id = $1 AND type = 'issue' AND template_data::text LIKE '%' || $2 || '%'",
+        )
+        .bind(self.org.0)
+        .bind(source.0.to_string())
+        .bind(target.0.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE custom_view SET filter_data = replace(filter_data::text, $2, $3)::jsonb \
+             WHERE organization_id = $1 AND filter_data::text LIKE '%' || $2 || '%'",
+        )
+        .bind(self.org.0)
+        .bind(source.0.to_string())
+        .bind(target.0.to_string())
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn delete_issue_labels(&mut self, labels: &[LabelId]) -> AppResult<()> {
+        let ids: Vec<Uuid> = labels.iter().map(|l| l.0).collect();
+        sqlx::query(
+            "UPDATE issue_label SET inherited_from_id = NULL \
+             WHERE organization_id = $1 AND inherited_from_id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(&ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query("DELETE FROM issue_label WHERE organization_id = $1 AND parent_id = ANY($2)")
+            .bind(self.org.0)
+            .bind(&ids)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM issue_label WHERE organization_id = $1 AND id = ANY($2)")
+            .bind(self.org.0)
+            .bind(&ids)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
 }

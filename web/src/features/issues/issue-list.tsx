@@ -8,6 +8,7 @@ import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { IssueRow } from "./issue-row";
 import type { BoardColumn } from "./model";
+import type { Selection } from "./selection";
 
 interface ListProps {
   groups: BoardColumn[];
@@ -17,10 +18,19 @@ interface ListProps {
   onFocus: (id: string) => void;
   /** „+“ im Gruppenkopf: Issue mit Gruppenstatus anlegen. */
   onCreateInGroup?: (stateId: string) => void;
+  selection?: Selection;
 }
 
 /** Liste nach Status gruppiert (einklappbar, `+` je Gruppe). */
-export function IssueList({ groups, ws, lookup, focusedId, onFocus, onCreateInGroup }: ListProps) {
+export function IssueList({
+  groups,
+  ws,
+  lookup,
+  focusedId,
+  onFocus,
+  onCreateInGroup,
+  selection,
+}: ListProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setCollapsed((prev) => {
@@ -75,6 +85,7 @@ export function IssueList({ groups, ws, lookup, focusedId, onFocus, onCreateInGr
                     lookup={lookup}
                     focused={focusedId === issue.id}
                     onFocus={onFocus}
+                    selection={selection}
                   />
                 </div>
               ))}

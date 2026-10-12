@@ -492,6 +492,8 @@ Das Team eines Labels ist nach dem Anlegen nicht änderbar (`save_issue_label` l
 | **Delete** | irreversibel: entfernt das Label von allen Issues (History-Einträge mit `removedLabelIds`, Akteur = löschender User, keine Notifications) und löscht es. Bei Gruppe: Kinder werden mitgelöscht. Nur Admins oder Team-Owner. |
 | **Merge** | Quell-Labels → Ziel-Label: auf allen Issues wird Quelle durch Ziel ersetzt (Duplikate entfallen), danach werden die Quellen gelöscht. Ziel muss in allen betroffenen Teams verfügbar sein (typisch Workspace-Label). |
 
+> Umsetzung: Delete und Merge (Merge löscht die Quelle) verlangen zusätzlich zum Verwaltungsrecht des Labels die Rolle Admin/Owner bzw. Team-Owner des Label-Teams; Mitglieder, die Labels verwalten dürfen, können nur anlegen, ändern und zurückziehen. Merge ist auf einzelne Quell-Labels beschränkt (Gruppen nicht) und lehnt Ziele in `singleSelect`-Gruppen ab. Die gemeldete Zahl betroffener Issues zählt nur Issues in für den Aufrufer sichtbaren Teams. Siehe docs/15 §2.1.
+
 ### 5.5 Anwendungsregeln
 
 Beim Setzen von Labels auf ein Issue (`labels`, `addLabels`) wird pro Label geprüft:

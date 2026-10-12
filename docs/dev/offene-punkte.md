@@ -41,8 +41,7 @@ WP08-Leftovers:
 WP06-Leftovers:
 - save_issue template (WP10), links (App::link_attachment aus WP09 einhängen), releases ignoriert.
 - Parent/Child-Automationen §3.4, SLA-Risikostufen -> WP12.
-- moveSubIssues, Bulk-Move, issueBatchUpdate, issueRelationDelete, Label-Merge/-Delete -> WP13 braucht evtl. Batch; sonst WP17.
-- ENG-123-Erwähnung -> related-Relation; Duplicate: Subscriber wandern -> WP17.
+- moveSubIssues, Bulk-Move, issueBatchUpdate, Label-Merge/-Delete, ENG-123-Erwähnung -> related, Duplicate-Subscriber, Issue.subscribed: erledigt in WP33 (docs/15 §2.1). Offen: issueRelationDelete, Mehrfachauswahl in My Issues, MCP-Tool für Batch (nicht in docs/07).
 - GraphQL Payload lastSyncId, Relay-Connections -> WP15 (Sync) prüfen.
 - Share/Unshare ohne Event; issueSharingEnabled Default false.
 - Issue-Seed leer -> für Web-UI-Demo Seed nötig (WP13 eigenes seed? Orchestrator).

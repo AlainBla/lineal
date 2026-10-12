@@ -8,8 +8,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
 use lineal_app::usecases::issue::{
-    CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput, RelationChanges,
-    UpdateIssueInput,
+    BatchPatch, BatchUpdateInput, CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput,
+    RelationChanges, UpdateIssueInput,
 };
 use lineal_app::usecases::template::FormAnswer;
 use lineal_app::{AppError, AppResult};
@@ -172,6 +172,15 @@ impl IssueGql {
         })
     }
 
+    /// Ob der Aufrufer dieses Issue abonniert hat.
+    async fn subscribed(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        charge_detail_field(ctx)?;
+        app(ctx)?
+            .issue_subscribed(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)
+    }
+
     /// Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
     async fn history(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<IssueHistoryEntry>> {
         charge_detail_field(ctx)?;
@@ -268,6 +277,44 @@ pub struct IssueUpdateInput {
     pub cycle_id: MaybeUndefined<String>,
     pub due_date: MaybeUndefined<String>,
     pub sort_order: Option<f64>,
+    /// Bei einem Teamwechsel auch alle Sub-Issues verschieben (Default `false`).
+    pub move_sub_issues: Option<bool>,
+}
+
+/// Mehrfachaktion (`issueBatchUpdate`): dieselbe Änderung für bis zu 250 Issues.
+#[derive(InputObject)]
+pub struct IssueBatchUpdateInput {
+    pub ids: Vec<String>,
+    pub state_id: Option<String>,
+    pub priority: Option<i32>,
+    pub assignee_id: MaybeUndefined<String>,
+    pub added_label_ids: Option<Vec<String>>,
+    pub removed_label_ids: Option<Vec<String>>,
+    pub project_id: MaybeUndefined<String>,
+    pub cycle_id: MaybeUndefined<String>,
+    pub estimate: MaybeUndefined<f64>,
+    /// Zielteam (Bulk-Move).
+    pub team_id: Option<String>,
+    pub move_sub_issues: Option<bool>,
+    pub archive: Option<bool>,
+    /// In den Papierkorb legen.
+    pub delete: Option<bool>,
+}
+
+/// Fehler eines einzelnen Issues in `issueBatchUpdate`.
+#[derive(SimpleObject)]
+pub struct IssueBatchFailure {
+    pub id: String,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(SimpleObject)]
+pub struct IssueBatchPayload {
+    /// `true`, wenn mindestens ein Issue geändert wurde.
+    pub success: bool,
+    pub issues: Vec<IssueGql>,
+    pub failures: Vec<IssueBatchFailure>,
 }
 
 #[derive(InputObject)]
@@ -493,6 +540,7 @@ impl IssueMutation {
                     milestone: tri(input.project_milestone_id),
                     parent: tri(input.parent_id),
                     sort_order: input.sort_order,
+                    move_sub_issues: input.move_sub_issues.unwrap_or(false),
                     source: HistorySource::Api,
                     ..Default::default()
                 },
@@ -500,6 +548,50 @@ impl IssueMutation {
             .await
             .map_err(gql_err)?;
         Ok(payload(v))
+    }
+
+    /// Wendet eine Änderung auf mehrere Issues an (je Issue transaktional, Teilerfolge möglich).
+    async fn issue_batch_update(
+        &self,
+        ctx: &Context<'_>,
+        input: IssueBatchUpdateInput,
+    ) -> async_graphql::Result<IssueBatchPayload> {
+        let result = app(ctx)?
+            .issue_batch_update(
+                request_ctx(ctx)?,
+                BatchUpdateInput {
+                    ids: input.ids,
+                    patch: BatchPatch {
+                        state: input.state_id,
+                        priority: input.priority.map(i64::from),
+                        assignee: tri(input.assignee_id),
+                        add_labels: input.added_label_ids.unwrap_or_default(),
+                        remove_labels: input.removed_label_ids.unwrap_or_default(),
+                        project: tri(input.project_id),
+                        cycle: tri(input.cycle_id),
+                        estimate: tri(input.estimate),
+                        team: input.team_id,
+                        move_sub_issues: input.move_sub_issues.unwrap_or(false),
+                        archive: input.archive.unwrap_or(false),
+                        delete: input.delete.unwrap_or(false),
+                    },
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(IssueBatchPayload {
+            success: !result.updated.is_empty(),
+            issues: result.updated.into_iter().map(Into::into).collect(),
+            failures: result
+                .failures
+                .into_iter()
+                .map(|f| IssueBatchFailure {
+                    id: f.id,
+                    code: f.code,
+                    message: f.message,
+                })
+                .collect(),
+        })
     }
 
     /// Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.

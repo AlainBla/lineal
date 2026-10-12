@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
+import { BulkActions, type BulkKind } from "./bulk-actions";
 import { openCreateIssue } from "./create-store";
 import { useTeamIssues, useTeamMeta } from "./hooks";
 import { useIssueActions } from "./issue-actions";
@@ -16,6 +17,7 @@ import { IssueBoard } from "./issue-board";
 import { IssueList } from "./issue-list";
 import { buildBoardColumns, filterByView, groupByState, type TeamView } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
+import { useSelection } from "./selection";
 import { BoardSkeleton, EmptyState, ErrorState, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
@@ -56,6 +58,7 @@ export function TeamIssuesPage({
   const [layout, setLayoutState] = useState<Layout>(() => readLayout(teamKey, view));
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [request, setRequest] = useState<PickerRequest | null>(null);
+  const [bulkRequest, setBulkRequest] = useState<BulkKind | null>(null);
 
   useEffect(() => {
     const prev = document.title;
@@ -91,10 +94,46 @@ export function TeamIssuesPage({
   // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben) verwerfen.
   const focused: Issue | null = visible.find((i) => i.id === focusedId) ?? null;
   useFocusNav(layout === "board" ? grid : [grid.flat()], focused?.id ?? null, setFocusedId);
-  useIssueShortcuts({ context: "list", target: focused, open: setRequest, actions });
+  const selection = useSelection(useMemo(() => grid.flat(), [grid]));
+  const selectedIssues = useMemo(
+    () => visible.filter((i) => selection.has(i.id)),
+    [visible, selection],
+  );
+  // Mit Auswahl wirken die Picker-Kürzel (S, A, P, L, …) auf alle markierten Issues.
+  const openPicker = useCallback(
+    (req: PickerRequest) => {
+      if (selection.size > 0) setBulkRequest(req.kind);
+      else setRequest(req);
+    },
+    [selection.size],
+  );
+  useIssueShortcuts({
+    context: "list",
+    target: focused ?? selectedIssues[0] ?? null,
+    open: openPicker,
+    actions,
+  });
   const closePicker = useCallback(() => setRequest(null), []);
 
   useActions([
+    {
+      id: "issue.select",
+      title: "Select issue",
+      section: "Issues",
+      keys: "x",
+      context: "list",
+      enabled: focused !== null,
+      perform: () => focused && selection.toggle(focused.id),
+    },
+    {
+      id: "issue.clear-selection",
+      title: "Clear selection",
+      section: "Issues",
+      keys: "escape",
+      context: "list",
+      enabled: selection.size > 0,
+      perform: () => selection.clear(),
+    },
     {
       id: "view.toggle-layout",
       title: layout === "board" ? "Switch to list layout" : "Switch to board layout",
@@ -147,6 +186,7 @@ export function TeamIssuesPage({
         focusedId={focused?.id ?? null}
         onFocus={setFocusedId}
         onCreateInColumn={create}
+        selection={selection}
         onDrop={({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)}
       />
     );
@@ -159,6 +199,7 @@ export function TeamIssuesPage({
         focusedId={focused?.id ?? null}
         onFocus={setFocusedId}
         onCreateInGroup={create}
+        selection={selection}
       />
     );
   }
@@ -222,6 +263,12 @@ export function TeamIssuesPage({
         )}
       </div>
       <IssuePickerHost request={request} onClose={closePicker} />
+      <BulkActions
+        issues={selectedIssues}
+        onClear={selection.clear}
+        request={bulkRequest}
+        onRequest={setBulkRequest}
+      />
     </div>
   );
 }

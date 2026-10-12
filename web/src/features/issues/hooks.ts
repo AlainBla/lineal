@@ -15,6 +15,7 @@ import type { IssuePatch } from "./model";
 import {
   createComment,
   createIssue,
+  batchUpdateIssues,
   createReaction,
   deleteReaction,
   fetchComments,
@@ -25,6 +26,7 @@ import {
   fetchTeams,
   keys,
   updateIssue,
+  type IssueBatchVars,
   type IssueCreateVars,
   type IssueList,
   type IssueUpdateVars,
@@ -163,6 +165,19 @@ export function useUpdateIssue() {
     onSuccess: (issue) => {
       patchIssueCaches(qc, issue.id, issue);
     },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.issues });
+      void qc.invalidateQueries({ queryKey: ["issue"] });
+      void qc.invalidateQueries({ queryKey: keys.issueDetails });
+    },
+  });
+}
+
+/** Mehrfachaktion (`issueBatchUpdate`); danach werden alle Issue-Caches neu geladen. */
+export function useBatchUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: IssueBatchVars) => batchUpdateIssues(input),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: keys.issues });
       void qc.invalidateQueries({ queryKey: ["issue"] });

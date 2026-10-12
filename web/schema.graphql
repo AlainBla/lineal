@@ -898,9 +898,56 @@ type Issue {
 	"""
 	relations: IssueRelations!
 	"""
+	Ob der Aufrufer dieses Issue abonniert hat.
+	"""
+	subscribed: Boolean!
+	"""
 	Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
 	"""
 	history: [IssueHistoryEntry!]!
+}
+
+"""
+Fehler eines einzelnen Issues in `issueBatchUpdate`.
+"""
+type IssueBatchFailure {
+	id: String!
+	code: String!
+	message: String!
+}
+
+type IssueBatchPayload {
+	"""
+	`true`, wenn mindestens ein Issue geändert wurde.
+	"""
+	success: Boolean!
+	issues: [Issue!]!
+	failures: [IssueBatchFailure!]!
+}
+
+"""
+Mehrfachaktion (`issueBatchUpdate`): dieselbe Änderung für bis zu 250 Issues.
+"""
+input IssueBatchUpdateInput {
+	ids: [String!]!
+	stateId: String
+	priority: Int
+	assigneeId: String
+	addedLabelIds: [String!]
+	removedLabelIds: [String!]
+	projectId: String
+	cycleId: String
+	estimate: Float
+	"""
+	Zielteam (Bulk-Move).
+	"""
+	teamId: String
+	moveSubIssues: Boolean
+	archive: Boolean
+	"""
+	In den Papierkorb legen.
+	"""
+	delete: Boolean
 }
 
 type IssueConnection {
@@ -974,6 +1021,21 @@ type IssueLabel {
 	archivedAt: String
 	createdAt: String!
 	updatedAt: String!
+}
+
+"""
+Ergebnis von `issueLabelMerge`/`issueLabelDelete`.
+"""
+type IssueLabelBulkPayload {
+	success: Boolean!
+	"""
+	Zusammenführen: das Ziel-Label.
+	"""
+	issueLabel: IssueLabel
+	"""
+	Anzahl der betroffenen Issues.
+	"""
+	affectedIssues: Int!
 }
 
 input IssueLabelCreateInput {
@@ -1073,6 +1135,10 @@ input IssueUpdateInput {
 	cycleId: String
 	dueDate: String
 	sortOrder: Float
+	"""
+	Bei einem Teamwechsel auch alle Sub-Issues verschieben (Default `false`).
+	"""
+	moveSubIssues: Boolean
 }
 
 """
@@ -1134,6 +1200,10 @@ type Mutation {
 	issueCreate(input: IssueCreateInput!): IssuePayload!
 	issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
 	"""
+	Wendet eine Änderung auf mehrere Issues an (je Issue transaktional, Teilerfolge möglich).
+	"""
+	issueBatchUpdate(input: IssueBatchUpdateInput!): IssueBatchPayload!
+	"""
 	Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
 	"""
 	issueArchive(id: String!, trash: Boolean): IssuePayload!
@@ -1144,6 +1214,14 @@ type Mutation {
 	issueLabelUpdate(id: String!, input: IssueLabelUpdateInput!): IssueLabelPayload!
 	issueLabelRetire(id: String!): IssueLabelPayload!
 	issueLabelRestore(id: String!): IssueLabelPayload!
+	"""
+	Führt das Label `id` in `targetId` zusammen und löscht `id`.
+	"""
+	issueLabelMerge(id: String!, targetId: String!): IssueLabelBulkPayload!
+	"""
+	Löscht das Label (Gruppen samt Kindern) endgültig und entfernt es von allen Issues.
+	"""
+	issueLabelDelete(id: String!): IssueLabelBulkPayload!
 	"""
 	Neuer Thread, Antwort (`parentId`) oder Inline-Kommentar (`quotedText`).
 	"""
@@ -1263,6 +1341,15 @@ type Mutation {
 	"""
 	customViewDuplicate(id: String!): CustomViewPayload!
 	favoriteCreate(input: FavoriteCreateInput!): FavoritePayload!
+	"""
+	Verschiebt einen eigenen Favoriten (Reihenfolge per Drag & Drop): `sortOrder` ist die
+	Mittelwert-Position, `parentId` der Ordner (leer = oberste Ebene).
+	"""
+	favoriteUpdate(id: String!, sortOrder: Float!, parentId: String): FavoritePayload!
+	"""
+	Abonniert eine sichtbare Issue-View oder ändert das Abo (Default `issueAddedToView`).
+	"""
+	viewSubscriptionUpdate(customViewId: String!, active: Boolean!, notificationSubscriptionTypes: [String!]): ViewSubscription!
 	favoriteDelete(id: String!): FavoriteDeletePayload!
 	"""
 	Persönliche Änderung der Anzeigeoptionen (nur die genannten Schlüssel).
@@ -1448,6 +1535,19 @@ type Mutation {
 	Meldet alle eigenen Sessions außer der aktuellen ab.
 	"""
 	sessionsRevokeOthers: SessionRevokePayload!
+	"""
+	SLA ein-/ausschalten und Arbeitswoche setzen (legt beim ersten Aktivieren Standardregeln an).
+	"""
+	teamSlaUpdate(teamId: String!, input: TeamSlaUpdateInput!): TeamSla!
+	slaRuleCreate(input: SlaRuleCreateInput!): SlaRule!
+	slaRuleUpdate(teamId: String!, id: String!, input: SlaRuleUpdateInput!): SlaRule!
+	slaRuleDelete(teamId: String!, id: String!): TeamExtraSuccessPayload!
+	recurringIssueCreate(input: RecurringIssueCreateInput!): RecurringIssue!
+	"""
+	Rhythmus, Template oder Pause ändern.
+	"""
+	recurringIssueUpdate(id: String!, input: RecurringIssueUpdateInput!): RecurringIssue!
+	recurringIssueDelete(id: String!): TeamExtraSuccessPayload!
 }
 
 input NestTeamOptions {
@@ -1875,6 +1975,11 @@ type Query {
 	"""
 	issues(teamId: String, assigneeId: String, state: String, label: String, projectId: String, cycleId: String, priority: Int, includeArchived: Boolean, first: Int, after: String): IssueConnection!
 	"""
+	Anzahl der (für den Aufrufer sichtbaren) Issues mit diesem Label bzw. dieser Gruppe;
+	setzt das Recht zum Verwalten des Labels voraus (Bestätigung vor Merge/Delete).
+	"""
+	issueLabelUsage(id: String!): Int!
+	"""
 	Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
 	"""
 	issueLabels(teamId: String, name: String, includeGroups: Boolean, includeArchived: Boolean, first: Int): [IssueLabel!]!
@@ -1932,6 +2037,10 @@ type Query {
 	Eine sichtbare View (UUID, Slug, URL oder exakter Name); sonst `not_found`.
 	"""
 	customView(id: String!): CustomView!
+	"""
+	Eigenes Abo einer sichtbaren View (`null`, solange keines besteht).
+	"""
+	viewSubscription(customViewId: String!): ViewSubscription
 	"""
 	Favoriten des Viewers (nur sichtbare Ziele).
 	"""
@@ -2063,6 +2172,18 @@ type Query {
 	Eigene aktive Web-Sessions (nur mit Browser-Session), neueste zuerst.
 	"""
 	sessions: [UserSession!]!
+	"""
+	SLA-Einstellungen und Regeln eines Teams.
+	"""
+	teamSla(teamId: String!): TeamSla!
+	"""
+	Projekt-Labels des Workspace (für Projekt-Templates); gleiche Form wie `IssueLabel`.
+	"""
+	projectLabels(includeGroups: Boolean, first: Int): [IssueLabel!]!
+	"""
+	Wiederkehrende Issues eines Teams.
+	"""
+	recurringIssues(teamId: String!): [RecurringIssue!]!
 }
 
 """
@@ -2106,6 +2227,67 @@ type ReactionPayload {
 	success: Boolean!
 	lastSyncId: Float!
 	reaction: Reaction
+}
+
+"""
+Ein wiederkehrendes Issue.
+"""
+type RecurringIssue {
+	id: String!
+	teamId: String!
+	templateId: String!
+	templateName: String!
+	"""
+	`daily`, `weekly` oder `monthly`.
+	"""
+	frequency: String!
+	interval: Int!
+	"""
+	ISO-Wochentag 1 (Montag) bis 7 (Sonntag).
+	"""
+	weekday: Int
+	dayOfMonth: Int
+	"""
+	Lokale Uhrzeit in Minuten seit Mitternacht (Team-Zeitzone).
+	"""
+	minuteOfDay: Int!
+	startDate: String!
+	paused: Boolean!
+	nextRunAt: String!
+	lastRunAt: String
+	"""
+	Fehler des letzten fehlgeschlagenen Laufs (z. B. Template gelöscht).
+	"""
+	lastError: String
+	lastErrorAt: String
+	createdAt: String!
+}
+
+input RecurringIssueCreateInput {
+	teamId: String!
+	"""
+	Issue-Template (UUID oder Name).
+	"""
+	templateId: String!
+	frequency: String!
+	interval: Int
+	weekday: Int
+	dayOfMonth: Int
+	minuteOfDay: Int!
+	"""
+	`YYYY-MM-DD`; Default heute in der Team-Zeitzone.
+	"""
+	startDate: String
+}
+
+input RecurringIssueUpdateInput {
+	templateId: String
+	frequency: String
+	interval: Int
+	weekday: Int
+	dayOfMonth: Int
+	minuteOfDay: Int
+	paused: Boolean
 }
 
 """
@@ -2157,6 +2339,55 @@ type SessionRevokePayload {
 	Zahl der abgemeldeten Sessions.
 	"""
 	count: Int!
+}
+
+"""
+Eine SLA-Regel.
+"""
+type SlaRule {
+	id: String!
+	name: String!
+	position: Float!
+	"""
+	`IssueFilter` (Priorität, Status, Assignee, Creator, Team, Projekt, Labels).
+	"""
+	filter: JSON!
+	"""
+	`true` = die Regel entfernt ein SLA.
+	"""
+	removesSla: Boolean!
+	"""
+	ISO-8601-Dauer (Millisekunden-Dauer bei `all`, Arbeitstage bei `onlyBusinessDays`).
+	"""
+	duration: String
+	slaType: String!
+	"""
+	`issueCreation` oder `ruleMatch`.
+	"""
+	startMode: String!
+}
+
+input SlaRuleCreateInput {
+	teamId: String!
+	name: String!
+	filter: JSON!
+	removesSla: Boolean! = false
+	duration: String
+	"""
+	`all` (Default) oder `onlyBusinessDays`.
+	"""
+	slaType: String
+	startMode: String
+}
+
+input SlaRuleUpdateInput {
+	name: String
+	filter: JSON
+	removesSla: Boolean
+	duration: String
+	slaType: String
+	startMode: String
+	position: Float
 }
 
 input StateMappingInput {
@@ -2257,6 +2488,10 @@ type TeamDefaultTemplates {
 	projectId: String
 }
 
+type TeamExtraSuccessPayload {
+	success: Boolean!
+}
+
 type TeamLifecyclePayload {
 	success: Boolean!
 	team: Team
@@ -2277,6 +2512,24 @@ type TeamMetrics {
 type TeamPayload {
 	success: Boolean!
 	team: Team
+}
+
+"""
+SLA-Einstellungen eines Teams.
+"""
+type TeamSla {
+	teamId: String!
+	enabled: Boolean!
+	"""
+	`monToFri` oder `sunToThu`.
+	"""
+	workWeek: String!
+	rules: [SlaRule!]!
+}
+
+input TeamSlaUpdateInput {
+	enabled: Boolean
+	workWeek: String
 }
 
 input TeamUpdateInput {
@@ -2308,7 +2561,7 @@ input TeamUpdateInput {
 	"""
 	autoClosePeriod: Int
 	"""
-	Zielstatus (Id oder Name) der Kategorie `canceled`.
+	Zielstatus (Id oder Name) der Kategorie `canceled`; leerer Text setzt auf den Default zurück.
 	"""
 	autoCloseStateId: String
 	autoArchivePeriod: Int
@@ -2547,6 +2800,19 @@ type ViewPreferencesValues {
 	values: JSON!
 	hasPersonal: Boolean!
 	hasDefault: Boolean!
+}
+
+"""
+Abo auf eine Custom View (docs/05 §4.7).
+"""
+type ViewSubscription {
+	id: String!
+	viewId: String!
+	"""
+	`issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`.
+	"""
+	notificationSubscriptionTypes: [String!]!
+	active: Boolean!
 }
 
 """

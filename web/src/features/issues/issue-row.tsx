@@ -6,6 +6,7 @@ import type { Issue } from "@/gql/graphql";
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { estimateLabel, issuePath, relativeTime } from "./model";
+import type { Selection } from "./selection";
 
 interface RowProps {
   issue: Issue;
@@ -13,6 +14,30 @@ interface RowProps {
   lookup: IssueLookup;
   focused: boolean;
   onFocus: (id: string) => void;
+  /** Mehrfachauswahl (Shift-/Cmd-Klick, Checkbox); fehlt sie, ist die Zeile nicht auswählbar. */
+  selection?: Selection;
+}
+
+/** Checkbox am Zeilenanfang: erscheint beim Überfahren, bei Fokus oder sobald etwas gewählt ist. */
+export function SelectBox({ issue, selection }: { issue: Issue; selection: Selection }) {
+  const selected = selection.has(issue.id);
+  return (
+    <input
+      type="checkbox"
+      aria-label={`Select ${issue.identifier}`}
+      checked={selected}
+      readOnly
+      className={cn(
+        "size-3.5 shrink-0 cursor-pointer accent-primary focus-visible:opacity-100",
+        !selected && selection.size === 0 && "opacity-0 group-hover:opacity-100",
+      )}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        selection.toggle(issue.id);
+      }}
+    />
+  );
 }
 
 function LabelChips({
@@ -47,7 +72,8 @@ function LabelChips({
 }
 
 /** Zeile der Listenansicht: Priority, ID, Status, Titel, Labels, Projekt, Assignee, Datum (docs/08 §2.1). */
-export function IssueRow({ issue, ws, lookup, focused, onFocus }: RowProps) {
+export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: RowProps) {
+  const selected = selection?.has(issue.id) ?? false;
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   const project = lookup.projectName(issue.projectId);
@@ -57,12 +83,18 @@ export function IssueRow({ issue, ws, lookup, focused, onFocus }: RowProps) {
       to={issuePath(ws, issue.identifier) as "/"}
       data-issue-id={issue.id}
       data-focused={focused || undefined}
+      data-selected={selected || undefined}
       onFocus={() => onFocus(issue.id)}
+      onClick={(e) => {
+        if (selection?.handleClick(issue.id, e)) e.preventDefault();
+      }}
       className={cn(
         "group flex h-9 items-center gap-3 border-b border-border px-4 text-sm outline-none hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none",
         focused && "bg-surface-hover",
+        selected && "bg-surface-active",
       )}
     >
+      {selection && <SelectBox issue={issue} selection={selection} />}
       <PriorityIcon priority={issue.priority} />
       <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">
         {issue.identifier}

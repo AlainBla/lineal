@@ -317,6 +317,43 @@ describe("Issue-Detail", () => {
     expect(gql.of("IssueExtras").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("Glocke zeigt den Abo-Zustand des Servers und schaltet ihn um", async () => {
+    let subscribed = true;
+    const h = handlers();
+    const gql = mockGraphql({
+      ...h,
+      IssueExtras: () => ({
+        issue: {
+          id: "i1",
+          subscribed,
+          children: [],
+          relations: {
+            blocks: [],
+            blockedBy: [],
+            relatedTo: [],
+            duplicateOf: null,
+            duplicates: [],
+          },
+          history: [],
+        },
+      }),
+      IssueSubscription: () => {
+        subscribed = !subscribed;
+        return { issueUnsubscribe: { success: true, changed: true } };
+      },
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const bell = await screen.findByRole("button", { name: "Unsubscribe from this issue" });
+    expect(bell).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(bell);
+    await waitFor(() => expect(gql.of("IssueSubscription")).toHaveLength(1));
+    expect(gql.of("IssueSubscription")[0]!.variables).toEqual({ id: "i1" });
+    expect(await screen.findByRole("button", { name: "Subscribe to this issue" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("zeigt einen Fehlerzustand mit Wiederholen, wenn das Issue nicht lädt", async () => {
     mockGraphql({ IssueDetail: () => new Error("not allowed") });
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");

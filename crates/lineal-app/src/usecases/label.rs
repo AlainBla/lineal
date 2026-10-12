@@ -126,6 +126,24 @@ fn require_manage(snap: &PolicySnapshot, ctx: &RequestCtx, label: &Label) -> App
     Ok(())
 }
 
+/// Endgültiges Löschen (auch als Teil von Merge) nur für Admins bzw. Team-Owner (docs/03 §5.4).
+fn require_destroy(snap: &PolicySnapshot, label: &Label) -> AppResult<()> {
+    let allowed = snap.actor.is_admin()
+        || snap.actor.is_system()
+        || label
+            .team_id
+            .and_then(|t| snap.view(t).ok())
+            .is_some_and(|v| v.is_team_owner);
+    if allowed {
+        Ok(())
+    } else {
+        Err(
+            AppError::forbidden("Only admins or team owners can delete or merge labels.")
+                .with_details(json!({ "reason": "role" })),
+        )
+    }
+}
+
 async fn view_of(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
@@ -644,4 +662,236 @@ impl App {
         tx.commit().await?;
         Ok(view)
     }
+}
+
+/// Ergebnis von Merge/Delete: Anzahl betroffener Issues (nur in für den Aufrufer sichtbaren Teams).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabelBulkResult {
+    /// Das (verbleibende) Ziel-Label beim Merge, sonst `None`.
+    pub target: Option<LabelView>,
+    pub affected_issues: usize,
+}
+
+impl App {
+    /// Anzahl der Issues mit diesem Issue-Label, begrenzt auf für den Aufrufer sichtbare Teams
+    /// (für die Bestätigung vor „Delete“/„Merge“, docs/03 §5.4).
+    pub async fn issue_label_usage(&self, ctx: &RequestCtx, reference: &str) -> AppResult<i64> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let label = self
+            .find_label(&mut *tx, &snap, LabelKind::Issue, reference, None)
+            .await?;
+        require_manage(&snap, ctx, &label)?;
+        let mut ids = vec![label.id];
+        if label.is_group {
+            ids.extend(
+                tx.labels()
+                    .children(LabelKind::Issue, label.id)
+                    .await?
+                    .into_iter()
+                    .map(|c| c.id),
+            );
+        }
+        let visible = snap.visible_team_ids();
+        let issues = tx.labels().issues_with_issue_labels(&ids).await?;
+        Ok(issues.iter().filter(|(_, t)| visible.contains(t)).count() as i64)
+    }
+
+    /// Führt das Issue-Label `source` in `target` zusammen (docs/03 §5.4): Issues, Templates und
+    /// Views werden umgehängt, danach wird `source` gelöscht.
+    pub async fn merge_issue_label(
+        &self,
+        ctx: &RequestCtx,
+        source: &str,
+        target: &str,
+    ) -> AppResult<LabelBulkResult> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let now = self.clock.now();
+        let src = self
+            .find_label(&mut *tx, &snap, LabelKind::Issue, source, None)
+            .await?;
+        let dst = self
+            .find_label(&mut *tx, &snap, LabelKind::Issue, target, None)
+            .await?;
+        require_manage(&snap, ctx, &src)?;
+        require_manage(&snap, ctx, &dst)?;
+        require_destroy(&snap, &src)?;
+        if src.id == dst.id {
+            return Err(invalid(
+                "target",
+                "same_label",
+                "source and target must differ",
+            ));
+        }
+        if src.is_group || dst.is_group {
+            return Err(invalid(
+                "id",
+                "label_is_group",
+                "label groups cannot be merged",
+            ));
+        }
+        if dst.retired_at.is_some() {
+            return Err(invalid(
+                "target",
+                "label_retired",
+                "cannot merge into a retired label",
+            ));
+        }
+        if let Some(parent) = dst.parent_id
+            && let Some(g) = tx.labels().get(LabelKind::Issue, parent).await?
+            && g.effective_group_type() == LabelGroupType::SingleSelect
+        {
+            return Err(invalid(
+                "target",
+                "single_select_group",
+                "cannot merge into a label of a single-select group",
+            ));
+        }
+        let issues = tx.labels().issues_with_issue_labels(&[src.id]).await?;
+        // Ziel muss in allen betroffenen Teams verfügbar sein.
+        if let Some(t) = dst.team_id {
+            for (_, team) in &issues {
+                if !resolve::label::available_scopes(&snap.tree, *team).contains(&t) {
+                    return Err(invalid(
+                        "target",
+                        "target_not_available",
+                        "the target label is not available in all affected teams",
+                    ));
+                }
+            }
+        }
+        let mut had_target = Vec::new();
+        for (issue, _) in &issues {
+            had_target.push(tx.issues().label_ids(*issue).await?.contains(&dst.id));
+        }
+        tx.labels().merge_issue_label(src.id, dst.id).await?;
+        for ((issue_id, _), had) in issues.iter().zip(had_target) {
+            record_label_history(
+                self,
+                &mut *tx,
+                ctx,
+                *issue_id,
+                if had { vec![] } else { vec![dst.id] },
+                vec![src.id],
+                now,
+            )
+            .await?;
+        }
+        tx.labels().delete_issue_labels(&[src.id]).await?;
+        tx.outbox()
+            .push(NewEvent::from_ctx(
+                DomainEvent::IssueLabelRemoved { label_id: src.id },
+                ctx,
+            ))
+            .await?;
+        let saved = tx
+            .labels()
+            .get(LabelKind::Issue, dst.id)
+            .await?
+            .ok_or_else(|| AppError::internal("label vanished"))?;
+        let view = view_of(&mut *tx, &snap, saved, Vec::new()).await?;
+        let visible = snap.visible_team_ids();
+        let visible_count = issues.iter().filter(|(_, t)| visible.contains(t)).count();
+        tx.commit().await?;
+        Ok(LabelBulkResult {
+            target: Some(view),
+            affected_issues: visible_count,
+        })
+    }
+
+    /// Löscht ein Issue-Label endgültig (Gruppen samt Kindern, docs/03 §5.4); entfernt es von
+    /// allen Issues (History `removedLabelIds`, keine Benachrichtigungen).
+    pub async fn delete_issue_label(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<LabelBulkResult> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let now = self.clock.now();
+        let label = self
+            .find_label(&mut *tx, &snap, LabelKind::Issue, reference, None)
+            .await?;
+        require_manage(&snap, ctx, &label)?;
+        require_destroy(&snap, &label)?;
+        let mut ids = vec![label.id];
+        if label.is_group {
+            ids.extend(
+                tx.labels()
+                    .children(LabelKind::Issue, label.id)
+                    .await?
+                    .into_iter()
+                    .map(|c| c.id),
+            );
+        }
+        let issues = tx.labels().issues_with_issue_labels(&ids).await?;
+        let visible = snap.visible_team_ids();
+        let visible_count = issues.iter().filter(|(_, t)| visible.contains(t)).count();
+        for (issue_id, _) in &issues {
+            let present = tx.issues().label_ids(*issue_id).await?;
+            let removed: Vec<LabelId> = ids
+                .iter()
+                .copied()
+                .filter(|l| present.contains(l))
+                .collect();
+            record_label_history(self, &mut *tx, ctx, *issue_id, vec![], removed, now).await?;
+        }
+        tx.labels().delete_issue_labels(&ids).await?;
+        for id in &ids {
+            tx.outbox()
+                .push(NewEvent::from_ctx(
+                    DomainEvent::IssueLabelRemoved { label_id: *id },
+                    ctx,
+                ))
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(LabelBulkResult {
+            target: None,
+            affected_issues: visible_count,
+        })
+    }
+}
+
+/// History-Eintrag und Event für ein Issue, dessen Label-Menge sich durch Merge/Delete ändert.
+async fn record_label_history(
+    app: &App,
+    tx: &mut dyn Tx,
+    ctx: &RequestCtx,
+    issue_id: lineal_domain::ids::IssueId,
+    added: Vec<LabelId>,
+    removed: Vec<LabelId>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> AppResult<()> {
+    let Some(issue) = tx.issues().get(issue_id, false).await? else {
+        return Ok(());
+    };
+    let delta = super::issue::history::Delta {
+        added_labels: added,
+        removed_labels: removed,
+        ..Default::default()
+    };
+    super::issue::history::record(
+        tx,
+        app.ids.new_uuid(),
+        &issue,
+        actor_user_id(ctx),
+        crate::ports::repos::issue::HistorySource::User,
+        &delta,
+        now,
+    )
+    .await?;
+    tx.outbox()
+        .push(NewEvent::from_ctx(
+            DomainEvent::IssueUpdated {
+                issue_id: issue.id,
+                team_id: issue.team_id,
+                changed: vec!["labelIds".into()],
+                mentioned_user_ids: vec![],
+            },
+            ctx,
+        ))
+        .await?;
+    Ok(())
 }

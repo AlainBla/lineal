@@ -8,7 +8,7 @@ use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_domain::enums::LabelGroupType;
-use lineal_domain::ids::{LabelId, TeamId, UserId};
+use lineal_domain::ids::{IssueId, LabelId, TeamId, UserId};
 
 fn unimplemented_repo<T>() -> AppResult<T> {
     Err(AppError::internal("not implemented"))
@@ -159,6 +159,22 @@ pub trait LabelRepo: Send {
     }
     /// Anzahl Kinder einer Gruppe (für das Limit von 250).
     async fn count_children(&mut self, _kind: LabelKind, _group: LabelId) -> AppResult<i64> {
+        unimplemented_repo()
+    }
+    /// Issues (id, Team), die eines der Issue-Labels tragen (WP33: Merge/Delete).
+    async fn issues_with_issue_labels(
+        &mut self,
+        _labels: &[LabelId],
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        unimplemented_repo()
+    }
+    /// Hängt alle Issues von `source` an `target` um (ohne Duplikate) und ersetzt die ID in
+    /// Templates und gespeicherten Views; `source` bleibt bestehen.
+    async fn merge_issue_label(&mut self, _source: LabelId, _target: LabelId) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Löscht Issue-Labels endgültig (Zuordnungen entfallen, geerbte Kopien verlieren den Bezug).
+    async fn delete_issue_labels(&mut self, _labels: &[LabelId]) -> AppResult<()> {
         unimplemented_repo()
     }
 }
