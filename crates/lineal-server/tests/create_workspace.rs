@@ -62,3 +62,13 @@ async fn taken_url_key_and_weak_password_fail(pool: PgPool) {
         .unwrap_err();
     assert!(err.to_string().contains("password"), "{err}");
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn has_workspace_reflects_instance_state(pool: PgPool) {
+    use lineal_server::cli::serve::has_workspace;
+    assert!(!has_workspace(&pool).await.unwrap());
+    execute(&app(pool.clone()), &args(None), "correct-horse-1".into())
+        .await
+        .unwrap();
+    assert!(has_workspace(&pool).await.unwrap());
+}

@@ -3,9 +3,30 @@
 use super::{connect, shutdown_signal};
 use crate::build_router;
 use anyhow::{Context, Result};
+use sqlx::PgPool;
+
+/// Hinweis für die Ersteinrichtung, wenn die Instanz noch keinen Workspace hat.
+pub async fn warn_if_no_workspace(pool: &PgPool) {
+    if matches!(has_workspace(pool).await, Ok(false)) {
+        tracing::warn!(
+            "no workspace exists yet, nobody can log in. Create the first workspace and owner: \
+             `lineal create-workspace --name <name> --owner-email <email> --owner-name <name>` \
+             (password from LINEAL_OWNER_PASSWORD or interactive prompt; with Docker: \
+             `docker compose --profile app run --rm migrate create-workspace ...`)"
+        );
+    }
+}
+
+/// Gibt es mindestens einen Workspace?
+pub async fn has_workspace(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM organization)")
+        .fetch_one(pool)
+        .await
+}
 
 pub async fn run() -> Result<()> {
-    let (config, _pool, app) = connect().await?;
+    let (config, pool, app) = connect().await?;
+    warn_if_no_workspace(&pool).await;
     let router = build_router(app, config.dev);
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
