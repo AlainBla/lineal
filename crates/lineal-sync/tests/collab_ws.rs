@@ -1155,3 +1155,186 @@ async fn project_and_initiative_description_rooms_persist_to_their_owner(pool: P
         404
     );
 }
+
+async fn issue_for(e: &Env, who: SeedUser, team: &str, title: &str) -> Uuid {
+    use lineal_app::usecases::issue::CreateIssueInput;
+    e.app
+        .create_issue(
+            &user(who),
+            CreateIssueInput {
+                team: team.into(),
+                title: Some(title.into()),
+                description: Some("Beschreibung".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue
+        .id
+        .0
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn shared_issue_is_read_only_and_access_ends_when_sharing_is_switched_off(pool: PgPool) {
+    let e = env(pool).await;
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": true}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let id = issue_for(&e, SeedUser::Alice, "ENG", "Geteilt").await;
+    // Ohne Freigabe: Carol (Gast, nur WEB) sieht das ENG-Issue nicht.
+    assert_eq!(
+        e.status(Some("carol"), &format!("/collab/issue/{id}"))
+            .await,
+        404
+    );
+    e.app
+        .share_issue(
+            &user(SeedUser::Alice),
+            &id.to_string(),
+            "carol@acme.example",
+        )
+        .await
+        .unwrap();
+    // Mit Freigabe: lesen ja, schreiben nein (Update wird verworfen, Verbindung geschlossen).
+    let mut carol = desc_client(&e, "carol", "issue", id).await;
+    assert_eq!(carol.hello["canWrite"], false);
+    assert_eq!(carol.md(), "Beschreibung");
+    carol.add_paragraph("Vandalismus").await;
+    carol.pump(Duration::from_millis(500)).await;
+    assert_eq!(carol.closed, Some(4403));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let d: Option<String> = sqlx::query_scalar("SELECT description FROM issue WHERE id = $1")
+        .bind(id)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(d.as_deref(), Some("Beschreibung"));
+
+    // Freigaben werden während der offenen Sitzung ausgeschaltet: kein Zugriff mehr, Trennung.
+    let mut carol = desc_client(&e, "carol", "issue", id).await;
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": false}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    carol.pump(Duration::from_secs(3)).await;
+    assert!(
+        matches!(carol.closed, Some(4404) | Some(4403)),
+        "{:?}",
+        carol.closed
+    );
+    assert_eq!(
+        e.status(Some("carol"), &format!("/collab/issue/{id}"))
+            .await,
+        404
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn team_scoped_key_never_gets_access_outside_its_teams_not_even_via_share(pool: PgPool) {
+    let e = env(pool).await;
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": true}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    // Bobs Key ist auf WEB beschränkt; Bob ist auch ENG-Mitglied.
+    sqlx::query(
+        "INSERT INTO api_key (organization_id, user_id, label, key_prefix, key_hash, scopes, team_ids) \
+         VALUES ($1, $2, 'web only', 'lin_wo', $3, ARRAY['read','write'], ARRAY[$4::uuid])",
+    )
+    .bind(e.d.org.0)
+    .bind(e.d.bob.0)
+    .bind(lineal_app::usecases::auth::hash_token("lin_web_only_key"))
+    .bind(e.d.web.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let eng_doc = e.doc(SeedUser::Alice, "ENG", "Intern", "x").await;
+    let eng_issue = issue_for(&e, SeedUser::Alice, "ENG", "Intern").await;
+    // Auch eine Freigabe an Bob hilft dem team-beschränkten Key nicht.
+    e.app
+        .share_issue(
+            &user(SeedUser::Alice),
+            &eng_issue.to_string(),
+            "bob@acme.example",
+        )
+        .await
+        .unwrap();
+    for path in [
+        format!("/collab/document/{eng_doc}"),
+        format!("/collab/issue/{eng_issue}"),
+    ] {
+        assert_eq!(
+            e.status(Some("key:lin_web_only_key"), &path).await,
+            404,
+            "{path}"
+        );
+        // Dieselben Objekte sind mit Bobs Session erreichbar.
+        assert_eq!(e.status(Some("bob"), &path).await, 101, "{path}");
+    }
+    // Innerhalb des Scopes funktioniert der Key.
+    let web_doc = e.doc(SeedUser::Bob, "WEB", "Web", "x").await;
+    assert_eq!(
+        e.status(
+            Some("key:lin_web_only_key"),
+            &format!("/collab/document/{web_doc}")
+        )
+        .await,
+        101
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn suspended_user_trashed_and_archived_owner_objects_end_or_downgrade_access(pool: PgPool) {
+    let e = env(pool).await;
+    // Gesperrter User: Token gilt nicht mehr -> 4401.
+    let id = issue_for(&e, SeedUser::Alice, "ENG", "Sperre").await;
+    let mut bob = desc_client(&e, "bob", "issue", id).await;
+    sqlx::query(r#"UPDATE "user" SET active = false WHERE id = $1"#)
+        .bind(e.d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    bob.pump(Duration::from_secs(3)).await;
+    assert_eq!(bob.closed, Some(4401));
+    sqlx::query(r#"UPDATE "user" SET active = true WHERE id = $1"#)
+        .bind(e.d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+
+    // Archiviertes Issue: schreibgeschützt (Schreiber werden mit 4403 getrennt, Neubeitritt read-only).
+    let archived = issue_for(&e, SeedUser::Alice, "ENG", "Archiv").await;
+    let mut alice = desc_client(&e, "alice", "issue", archived).await;
+    assert_eq!(alice.hello["canWrite"], true);
+    e.app
+        .archive_issue(&user(SeedUser::Alice), &archived.to_string())
+        .await
+        .unwrap();
+    alice.pump(Duration::from_secs(3)).await;
+    assert_eq!(alice.closed, Some(4403));
+    let again = desc_client(&e, "alice", "issue", archived).await;
+    assert_eq!(again.hello["canWrite"], false);
+
+    // Gelöschtes (Papierkorb) Issue: nicht mehr vorhanden -> 4404, kein Beitritt.
+    let trashed = issue_for(&e, SeedUser::Alice, "ENG", "Papierkorb").await;
+    let mut alice = desc_client(&e, "alice", "issue", trashed).await;
+    e.app
+        .delete_issue(&user(SeedUser::Alice), &trashed.to_string(), false)
+        .await
+        .unwrap();
+    alice.pump(Duration::from_secs(3)).await;
+    assert_eq!(alice.closed, Some(4404));
+    assert_eq!(
+        e.status(Some("alice"), &format!("/collab/issue/{trashed}"))
+            .await,
+        404
+    );
+}
