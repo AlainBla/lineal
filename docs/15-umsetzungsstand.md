@@ -14,7 +14,7 @@ Dieses Kapitel beschreibt, was in der Implementierung (Rust-Workspace + `web/`) 
 | Sync (`lineal-sync`) | WebSocket-Delta-Strom `GET /sync?since=`, Gruppenfilter, Token-Re-Validierung |
 | Jobs (`lineal-jobs`) | Outbox-Konsumenten und periodische Jobs (siehe 3.3) |
 | Import (`lineal-import`) | Linear-API-Import (Scan, Lauf, Delta), CLI |
-| Web (`web/`) | Shell, Team-Issues (Liste/Board), Issue-Detail, Create-Modal, Views/Favoriten, Inbox, Suche, Planung, Dokumente, Einstellungen, Import |
+| Web (`web/`) | Shell, Team-Issues (Liste/Board), Issue-Detail, Create-Modal, Views/Favoriten (Filter-Chips aus `filterData`, Favoriten per Drag & Drop, View-Abos, Eigentümerwechsel), Inbox, Suche, Planung (Roadmap, Initiativen-Tabs), Dokumente, Einstellungen, Import |
 | Tests | Rust-Unit-/Integrationstests mit echter Datenbank (`#[sqlx::test]`), Vitest, Playwright-E2E (`scripts/e2e.sh`) |
 
 ## 2. Bekannte Lücken
@@ -27,8 +27,8 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 - **Notifications:** Kommentare an Initiativen/Dokumenten/Meilensteinen/Berichten, Dokument- und View-Abos, 1-Minuten-Bündelung, `issueUnassignedFromYou`/`issueReopened`/`issueUnblocked` (Events ohne alte Werte).
 - **Planung/Automationen:** Snooze-Wiedervorlage bei Aktivität, Auto-Archive-Benachrichtigung, Cycles/Projekte auto-archivieren, Kapazität, `cycleNumberBase`.
 - **Dokumente/Templates:** Dokument-Kaskade bei Issue-/Projekt-/Team-Löschen nur teilweise, Snapshot-Bündelung, Dokument-Mentions, CRDT, Form-Templates, `useDefaultTemplate`.
-- **Views/Suche:** Favoriten umsortieren, View-Abos, Eigentümerwechsel, Stemming (Volltext-Konfiguration `simple`).
-- **Web:** Filter-Chips aus `filterData` zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (SLA/Hierarchie/Webhooks/Recurring; Estimates, Automations und Templates sind vorhanden), Workspace-Settings (Limits; Teams, Members, Security, API, Labels und Templates sind vorhanden), Account-Settings.
+- **Views/Suche:** Das Auslösen der View-Abo-Benachrichtigung (`issueAddedToView` …) im Fan-out (WP32; Schnittstelle in docs/dev/schnittstellen.md), Stemming (Volltext-Konfiguration `simple`). Gespeicherte Project-/Initiative-Views haben noch keine Filterleiste im Web.
+- **Web:** Team-Settings (SLA/Hierarchie/Webhooks/Recurring; Estimates, Automations und Templates sind vorhanden), Workspace-Settings (Limits; Teams, Members, Security, API, Labels und Templates sind vorhanden), Account-Settings.
 - **Webhooks/Auth:** `client_credentials`, App-User und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (`UrlPolicy`) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.
 - **Import:** Abfragen sind gegen das öffentliche Linear-Schema validiert (WP28), die Antworten des echten API aber noch nie gelesen; Teilimport (Projektfilter, Zielteam) in docs/13 §10; Views/Favoriten/Issue-Reaktionen/Update-Kommentare werden nicht importiert; Dry-Run ohne Downloads; Sub-Issues anderer Projekte entfallen beim Projektfilter.
 - **Rate-Limit:** In-Process-Verteidigung in der Tiefe (siehe 4.4); weitere Feinheiten (u. a. Fehlversuchs-Zähler der Token-Prüfung ohne Reservierung, geteilter Überlauf-Bucket) sind als offene Punkte notiert.
@@ -80,7 +80,7 @@ Das Passwort wird nie als Argument übergeben: aus `LINEAL_OWNER_PASSWORD` oder 
 
 ### 3.2a End-to-End-Tests
 
-`scripts/e2e.sh` (nicht Teil von `check.sh`; Laufzeit ca. 1–2 Minuten) legt die Datenbank `lineal_e2e` im Container neu an, migriert, seedet (`lineal seed --demo`), legt zwei API-Keys für Bob an (frei und auf ENG beschränkt), baut das Web und startet über Playwright `lineal serve` (mit `LINEAL_DEV=1`), `lineal worker` und `vite preview` (Proxy auf den Server) auf freien Ports; Chromium läuft headless mit `chromiumSandbox: false`. Flows (`web/e2e/*.e2e.ts`): F3 Issue anlegen (Taste `c`, „Create more“, lückenlose Kennung), F5 Status-Picker `S` durch den Workflow, F12 Filter → View → Favorit, F13 Erwähnung → Inbox eines zweiten Users, F16 Einladung annehmen (Alice lädt ein, zweiter Browser-Kontext nimmt über `/invite/<token>` an), F7 Teamwechsel (`Strg+Umschalt+M`, alte Kennung bleibt auflösbar), F17 MCP-Agent per HTTP (`list_issues`, `save_issue`, team-beschränkter Key), F19 API-Key in der Oberfläche anlegen, mit `list_issues` über `/mcp` benutzen und widerrufen, Sichtbarkeit des privaten Teams DES. Einzelne Flows: `scripts/e2e.sh -g F3`.
+`scripts/e2e.sh` (nicht Teil von `check.sh`; Laufzeit ca. 1–2 Minuten) legt die Datenbank `lineal_e2e` im Container neu an, migriert, seedet (`lineal seed --demo`), legt zwei API-Keys für Bob an (frei und auf ENG beschränkt), baut das Web und startet über Playwright `lineal serve` (mit `LINEAL_DEV=1`), `lineal worker` und `vite preview` (Proxy auf den Server) auf freien Ports; Chromium läuft headless mit `chromiumSandbox: false`. Flows (`web/e2e/*.e2e.ts`): F3 Issue anlegen (Taste `c`, „Create more“, lückenlose Kennung), F5 Status-Picker `S` durch den Workflow, F12 Filter → View → Favorit, F13 Erwähnung → Inbox eines zweiten Users, F16 Einladung annehmen (Alice lädt ein, zweiter Browser-Kontext nimmt über `/invite/<token>` an), F7 Teamwechsel (`Strg+Umschalt+M`, alte Kennung bleibt auflösbar), F17 MCP-Agent per HTTP (`list_issues`, `save_issue`, team-beschränkter Key), F31 Projekt im Roadmap per Drag verschieben (Zieldatum ändert sich und bleibt), F19 API-Key in der Oberfläche anlegen, mit `list_issues` über `/mcp` benutzen und widerrufen, Sichtbarkeit des privaten Teams DES. Einzelne Flows: `scripts/e2e.sh -g F3`.
 
 ### 3.2b Docker
 
