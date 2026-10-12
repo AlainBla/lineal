@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
 import type { IssueLabel } from "@/gql/graphql";
 
+import { LabelBulkDialog, type LabelBulkMode } from "./label-bulk-dialog";
 import { useLabelMutations } from "./queries";
 import { useLabelRestore } from "./template-queries";
 import { Section, selectClass } from "./ui";
@@ -33,6 +34,7 @@ function LabelRow({
   onRetire,
   onRestore,
   onSave,
+  onBulk,
 }: {
   label: IssueLabel;
   indent: boolean;
@@ -40,6 +42,7 @@ function LabelRow({
   onRetire: () => void;
   onRestore: () => void;
   onSave: (input: { name?: string; color?: string }) => void;
+  onBulk?: (mode: LabelBulkMode) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(label.name);
@@ -100,6 +103,26 @@ function LabelRow({
           Edit
         </Button>
       )}
+      {onBulk && !label.isGroup && (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Merge ${label.name}`}
+          onClick={() => onBulk("merge")}
+        >
+          Merge
+        </Button>
+      )}
+      {onBulk && (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Delete ${label.name}`}
+          onClick={() => onBulk("delete")}
+        >
+          Delete
+        </Button>
+      )}
       {retired ? (
         <Button variant="ghost" size="sm" aria-label={`Restore ${label.name}`} onClick={onRestore}>
           Restore
@@ -144,6 +167,7 @@ export function LabelManager({
   const [group, setGroup] = useState(false);
   const [color, setColor] = useState("#5e6ad2");
   const [parentId, setParentId] = useState("");
+  const [bulk, setBulk] = useState<{ label: IssueLabel; mode: LabelBulkMode } | null>(null);
   const active = labels.filter((l) => !l.retiredAt);
   const retired = labels.filter((l) => l.retiredAt);
   const groups = active.filter((l) => l.isGroup);
@@ -164,6 +188,7 @@ export function LabelManager({
             onRetire={() => m.retire.mutate(label.id)}
             onRestore={() => undefined}
             onSave={(input) => m.update.mutate({ id: label.id, input })}
+            onBulk={(mode) => setBulk({ label, mode })}
           />
         ))}
       </ul>
@@ -239,10 +264,14 @@ export function LabelManager({
                 onRetire={() => undefined}
                 onRestore={() => restore.mutate(label.id)}
                 onSave={() => undefined}
+                onBulk={(mode) => setBulk({ label, mode })}
               />
             ))}
           </ul>
         </div>
+      )}
+      {bulk && (
+        <LabelBulkDialog label={bulk.label} mode={bulk.mode} onClose={() => setBulk(null)} />
       )}
     </Section>
   );

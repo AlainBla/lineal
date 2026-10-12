@@ -55,6 +55,16 @@ pub struct IssueLabelPayload {
     pub issue_label: Option<IssueLabelGql>,
 }
 
+/// Ergebnis von `issueLabelMerge`/`issueLabelDelete`.
+#[derive(SimpleObject)]
+pub struct IssueLabelBulkPayload {
+    pub success: bool,
+    /// Zusammenführen: das Ziel-Label.
+    pub issue_label: Option<IssueLabelGql>,
+    /// Anzahl der betroffenen Issues.
+    pub affected_issues: i32,
+}
+
 #[derive(InputObject)]
 pub struct IssueLabelCreateInput {
     pub name: String,
@@ -107,6 +117,16 @@ pub struct LabelQuery;
 
 #[Object]
 impl LabelQuery {
+    /// Anzahl der (für den Aufrufer sichtbaren) Issues mit diesem Label bzw. dieser Gruppe;
+    /// setzt das Recht zum Verwalten des Labels voraus (Bestätigung vor Merge/Delete).
+    async fn issue_label_usage(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<i32> {
+        let n = app(ctx)?
+            .issue_label_usage(request_ctx(ctx)?, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(i32::try_from(n).unwrap_or(i32::MAX))
+    }
+
     /// Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
     async fn issue_labels(
         &self,
@@ -216,5 +236,40 @@ impl LabelMutation {
                 .await
                 .map_err(gql_err)?,
         ))
+    }
+
+    /// Führt das Label `id` in `targetId` zusammen und löscht `id`.
+    async fn issue_label_merge(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        target_id: String,
+    ) -> async_graphql::Result<IssueLabelBulkPayload> {
+        let r = app(ctx)?
+            .merge_issue_label(request_ctx(ctx)?, &id, &target_id)
+            .await
+            .map_err(gql_err)?;
+        Ok(IssueLabelBulkPayload {
+            success: true,
+            issue_label: r.target.map(Into::into),
+            affected_issues: i32::try_from(r.affected_issues).unwrap_or(i32::MAX),
+        })
+    }
+
+    /// Löscht das Label (Gruppen samt Kindern) endgültig und entfernt es von allen Issues.
+    async fn issue_label_delete(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<IssueLabelBulkPayload> {
+        let r = app(ctx)?
+            .delete_issue_label(request_ctx(ctx)?, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(IssueLabelBulkPayload {
+            success: true,
+            issue_label: None,
+            affected_issues: i32::try_from(r.affected_issues).unwrap_or(i32::MAX),
+        })
     }
 }
