@@ -46,7 +46,10 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
     user: "carol@acme.example",
   });
   expect(shared.isError, JSON.stringify(shared.data)).toBe(false);
-  await expect(carol.getByText(title).first()).toBeVisible({ timeout: 20_000 });
+  // Der Titel steht im Eingabefeld der Detailseite (kein Textknoten, daher nicht über getByText).
+  await expect(carol.getByRole("textbox", { name: "Title" })).toHaveValue(title, {
+    timeout: 20_000,
+  });
 
   // Entzug: das Issue verschwindet bei Carol wieder.
   const unshared = await callTool(request, key, "unshare_issue", {
@@ -54,10 +57,9 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
     user: "carol@acme.example",
   });
   expect(unshared.isError, JSON.stringify(unshared.data)).toBe(false);
-  // Die Detailseite zeigt wieder „nicht gefunden“. Der Brotkrumen-Titel stammt aus dem URL-Slug
-  // (andere Schreibweise); deshalb exakt und zusätzlich über den Fehlerhinweis prüfen.
-  await expect(carol.getByRole("alert")).toBeVisible({ timeout: 20_000 });
-  await expect(carol.getByText(title, { exact: true })).toHaveCount(0);
+  // Die Detailseite zeigt wieder „nicht gefunden“ (Fehlerhinweis, Titelfeld verschwunden).
+  await expect(carol.getByRole("alert").first()).toBeVisible({ timeout: 20_000 });
+  await expect(carol.getByRole("textbox", { name: "Title" })).toHaveCount(0);
 
   await bobCtx.close();
   await carolCtx.close();
