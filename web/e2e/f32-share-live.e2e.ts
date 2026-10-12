@@ -54,7 +54,10 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
     user: "carol@acme.example",
   });
   expect(unshared.isError, JSON.stringify(unshared.data)).toBe(false);
-  await expect(carol.getByText(title)).toHaveCount(0, { timeout: 20_000 });
+  // Die Detailseite zeigt wieder „nicht gefunden“. Der Brotkrumen-Titel stammt aus dem URL-Slug
+  // (andere Schreibweise); deshalb exakt und zusätzlich über den Fehlerhinweis prüfen.
+  await expect(carol.getByRole("alert")).toBeVisible({ timeout: 20_000 });
+  await expect(carol.getByText(title, { exact: true })).toHaveCount(0);
 
   await bobCtx.close();
   await carolCtx.close();

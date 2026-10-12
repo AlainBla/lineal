@@ -368,7 +368,8 @@ export function IssueDetailPage({ ws, splat }: { ws: string; splat: string }) {
   const slug = parts[1];
   const issue = useIssue(reference);
   const navigate = useNavigate();
-  const data = issue.data;
+  // Nach einem Fehler (z. B. Freigabe entzogen) behält TanStack Query die alten Daten; sie gelten nicht mehr.
+  const data = issue.isError ? undefined : issue.data;
 
   useEffect(() => {
     if (!data) return;
