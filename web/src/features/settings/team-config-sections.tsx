@@ -187,7 +187,8 @@ export function AutomationsSection({ team }: { team: Team }) {
             ...(closePeriod !== (team.autoClosePeriod ?? 0)
               ? { autoClosePeriod: closePeriod }
               : {}),
-            ...(closePeriod !== 0 && closeState && closeState !== (team.autoCloseStateId ?? "")
+            // Leerer Wert = zurück auf den Default (erster „canceled“-Status).
+            ...(closePeriod !== 0 && closeState !== (team.autoCloseStateId ?? "")
               ? { autoCloseStateId: closeState }
               : {}),
             ...(archivePeriod !== team.autoArchivePeriod

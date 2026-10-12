@@ -7,7 +7,7 @@
 
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use lineal_domain::enums::SlaType;
 use lineal_domain::ids::{IssueId, OrgId, TeamId, UserId};
 use serde_json::Value;
@@ -149,6 +149,55 @@ pub struct SlaRule {
     pub start_mode: String,
 }
 
+/// Neue SLA-Regel (WP30).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewSlaRule {
+    pub id: Uuid,
+    pub team_id: TeamId,
+    pub position: f64,
+    pub name: String,
+    pub filter: Value,
+    pub removes_sla: bool,
+    pub duration: Option<String>,
+    pub sla_type: SlaType,
+    pub start_mode: String,
+    pub now: DateTime<Utc>,
+}
+
+/// Wiederkehrendes Issue (`recurring_issue`, WP30, docs/03 §13).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecurringIssue {
+    pub id: Uuid,
+    pub team_id: TeamId,
+    pub template_id: Uuid,
+    pub template_name: String,
+    /// `daily`, `weekly` oder `monthly`.
+    pub frequency: String,
+    pub interval_count: i32,
+    /// ISO-Wochentag 1..7 (nur `weekly`).
+    pub weekday: Option<i32>,
+    /// 1..31 (nur `monthly`).
+    pub day_of_month: Option<i32>,
+    /// Lokale Uhrzeit in Minuten seit Mitternacht (Team-Zeitzone).
+    pub minute_of_day: i32,
+    pub start_date: NaiveDate,
+    pub paused: bool,
+    pub next_run_at: DateTime<Utc>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<DateTime<Utc>>,
+    pub version: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Neues wiederkehrendes Issue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewRecurringIssue {
+    pub rec: RecurringIssue,
+    pub creator_id: Option<UserId>,
+    pub now: DateTime<Utc>,
+}
+
 /// Kandidat für Auto-Close mit den Angaben, die nur die Datenbank kennt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoCloseCandidate {
@@ -284,6 +333,89 @@ pub trait TriageRepo: Send {
     }
     /// Aktive Regeln eines Teams nach Position.
     async fn sla_rules(&mut self, _team: TeamId) -> AppResult<Vec<SlaRule>> {
+        unimplemented_repo()
+    }
+    // --- SLA-Regeln und Team-Einstellungen (WP30) ---
+    async fn insert_sla_rule(&mut self, _r: &NewSlaRule) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Ersetzt die änderbaren Felder einer Regel (`version + 1`); `false` = unbekannt.
+    async fn save_sla_rule(&mut self, _r: &SlaRule, _now: DateTime<Utc>) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Löscht die Regel; Issues verlieren nur den Verweis `sla_rule_id`.
+    async fn delete_sla_rule(&mut self, _team: TeamId, _id: Uuid) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    async fn set_team_sla(
+        &mut self,
+        _team: TeamId,
+        _enabled: Option<bool>,
+        _sun_thu: Option<bool>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+
+    // --- Wiederkehrende Issues (WP30) ---
+    async fn insert_recurring(&mut self, _r: &NewRecurringIssue) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Wiederkehrende Issues eines Teams (neueste zuletzt), mit Template-Name.
+    async fn list_recurring(&mut self, _team: TeamId) -> AppResult<Vec<RecurringIssue>> {
+        unimplemented_repo()
+    }
+    async fn get_recurring(&mut self, _id: Uuid) -> AppResult<Option<RecurringIssue>> {
+        unimplemented_repo()
+    }
+    /// Speichert Rhythmus, Pause und nächsten Lauf (`version + 1`); `false` = unbekannt.
+    async fn save_recurring(
+        &mut self,
+        _r: &RecurringIssue,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    async fn delete_recurring(&mut self, _id: Uuid) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Fällige, nicht pausierte Regeln (`next_run_at <= now`), gesperrt (`FOR UPDATE SKIP LOCKED`).
+    async fn due_recurring(
+        &mut self,
+        _now: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<RecurringIssue>> {
+        unimplemented_repo()
+    }
+    /// Reserviert die Erzeugung zu `occurrence`; `false` = bereits erzeugt.
+    async fn claim_recurring_run(
+        &mut self,
+        _id: Uuid,
+        _occurrence: DateTime<Utc>,
+        _issue: Option<IssueId>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    async fn finish_recurring_run(
+        &mut self,
+        _id: Uuid,
+        _ran_at: DateTime<Utc>,
+        _next: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Überspringt den fälligen Lauf: setzt den nächsten Lauf und vermerkt den Fehler.
+    async fn skip_recurring_run(
+        &mut self,
+        _id: Uuid,
+        _next: DateTime<Utc>,
+        _error: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Workspaces mit fälligen wiederkehrenden Issues (mandantenübergreifend).
+    async fn orgs_with_recurring_due(&mut self, _now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         unimplemented_repo()
     }
     /// Teams mit `autoClosePeriod` (mandantenübergreifend, ohne Teams im Import).

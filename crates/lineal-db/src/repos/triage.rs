@@ -7,11 +7,12 @@
 use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::TriageRepo;
 use lineal_app::ports::repos::triage::{
-    AutoCloseCandidate, IssueAutomation, NewResponsibility, NewScheduleEntry, ScheduleEntry,
-    SlaMarker, SlaRule, TeamRef, TeamSla, TimeSchedule, TriageAction, TriageResponsibility,
+    AutoCloseCandidate, IssueAutomation, NewRecurringIssue, NewResponsibility, NewScheduleEntry,
+    NewSlaRule, RecurringIssue, ScheduleEntry, SlaMarker, SlaRule, TeamRef, TeamSla, TimeSchedule,
+    TriageAction, TriageResponsibility,
 };
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::SlaType;
@@ -78,6 +79,56 @@ struct RuleRow {
     sla_type: String,
     start_mode: String,
 }
+
+#[derive(sqlx::FromRow)]
+struct RecRow {
+    id: Uuid,
+    team_id: Uuid,
+    template_id: Uuid,
+    template_name: String,
+    frequency: String,
+    interval_count: i32,
+    weekday: Option<i32>,
+    day_of_month: Option<i32>,
+    minute_of_day: i32,
+    start_date: NaiveDate,
+    paused: bool,
+    next_run_at: DateTime<Utc>,
+    last_run_at: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+    last_error_at: Option<DateTime<Utc>>,
+    version: i32,
+    created_at: DateTime<Utc>,
+}
+
+impl From<RecRow> for RecurringIssue {
+    fn from(r: RecRow) -> Self {
+        Self {
+            id: r.id,
+            team_id: TeamId(r.team_id),
+            template_id: r.template_id,
+            template_name: r.template_name,
+            frequency: r.frequency,
+            interval_count: r.interval_count,
+            weekday: r.weekday,
+            day_of_month: r.day_of_month,
+            minute_of_day: r.minute_of_day,
+            start_date: r.start_date,
+            paused: r.paused,
+            next_run_at: r.next_run_at,
+            last_run_at: r.last_run_at,
+            last_error: r.last_error,
+            last_error_at: r.last_error_at,
+            version: r.version,
+            created_at: r.created_at,
+        }
+    }
+}
+
+const REC_SELECT: &str = "SELECT r.id, r.team_id, r.template_id, t.name AS template_name, r.frequency, \
+    r.interval_count, r.weekday, r.day_of_month, r.minute_of_day, r.start_date, r.paused, \
+    r.next_run_at, r.last_run_at, r.last_error, r.last_error_at, r.version, r.created_at \
+    FROM recurring_issue r JOIN template t ON t.organization_id = r.organization_id AND t.id = r.template_id";
 
 #[async_trait]
 impl TriageRepo for PgTx {
@@ -492,6 +543,272 @@ impl TriageRepo for PgTx {
                 })
             })
             .collect()
+    }
+
+    async fn insert_sla_rule(&mut self, r: &NewSlaRule) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO sla_rule (id, organization_id, team_id, position, name, filter, action, \
+             duration, sla_type, start_mode, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+        )
+        .bind(r.id)
+        .bind(self.org.0)
+        .bind(r.team_id.0)
+        .bind(r.position)
+        .bind(&r.name)
+        .bind(&r.filter)
+        .bind(if r.removes_sla { "remove" } else { "set" })
+        .bind(&r.duration)
+        .bind(r.sla_type.as_str())
+        .bind(&r.start_mode)
+        .bind(r.now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn save_sla_rule(&mut self, r: &SlaRule, now: DateTime<Utc>) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE sla_rule SET position = $4, name = $5, filter = $6, action = $7, duration = $8, \
+             sla_type = $9, start_mode = $10, version = version + 1, updated_at = $11 \
+             WHERE organization_id = $1 AND team_id = $2 AND id = $3 AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(r.team_id.0)
+        .bind(r.id)
+        .bind(r.position)
+        .bind(&r.name)
+        .bind(&r.filter)
+        .bind(if r.removes_sla { "remove" } else { "set" })
+        .bind(&r.duration)
+        .bind(r.sla_type.as_str())
+        .bind(&r.start_mode)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn delete_sla_rule(&mut self, team: TeamId, id: Uuid) -> AppResult<bool> {
+        let res = sqlx::query(
+            "DELETE FROM sla_rule WHERE organization_id = $1 AND team_id = $2 AND id = $3",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .bind(id)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn set_team_sla(
+        &mut self,
+        team: TeamId,
+        enabled: Option<bool>,
+        sun_thu: Option<bool>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE team SET sla_enabled = COALESCE($3, sla_enabled), \
+             sla_work_week = CASE WHEN $4::boolean IS NULL THEN sla_work_week \
+               WHEN $4 THEN 'sunToThu' ELSE 'monToFri' END, \
+             version = version + 1, updated_at = $5 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .bind(enabled)
+        .bind(sun_thu)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn insert_recurring(&mut self, n: &NewRecurringIssue) -> AppResult<()> {
+        let r = &n.rec;
+        sqlx::query(
+            "INSERT INTO recurring_issue (id, organization_id, team_id, template_id, frequency, \
+             interval_count, weekday, day_of_month, minute_of_day, start_date, paused, next_run_at, \
+             creator_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)",
+        )
+        .bind(r.id)
+        .bind(self.org.0)
+        .bind(r.team_id.0)
+        .bind(r.template_id)
+        .bind(&r.frequency)
+        .bind(r.interval_count)
+        .bind(r.weekday)
+        .bind(r.day_of_month)
+        .bind(r.minute_of_day)
+        .bind(r.start_date)
+        .bind(r.paused)
+        .bind(r.next_run_at)
+        .bind(n.creator_id.map(|u| u.0))
+        .bind(n.now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_recurring(&mut self, team: TeamId) -> AppResult<Vec<RecurringIssue>> {
+        let rows = sqlx::query_as::<_, RecRow>(&format!(
+            "{REC_SELECT} WHERE r.organization_id = $1 AND r.team_id = $2 ORDER BY r.created_at, r.id"
+        ))
+        .bind(self.org.0)
+        .bind(team.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn get_recurring(&mut self, id: Uuid) -> AppResult<Option<RecurringIssue>> {
+        let row = sqlx::query_as::<_, RecRow>(&format!(
+            "{REC_SELECT} WHERE r.organization_id = $1 AND r.id = $2"
+        ))
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn save_recurring(&mut self, r: &RecurringIssue, now: DateTime<Utc>) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE recurring_issue SET template_id = $3, frequency = $4, interval_count = $5, \
+             weekday = $6, day_of_month = $7, minute_of_day = $8, start_date = $9, paused = $10, \
+             next_run_at = $11, version = version + 1, updated_at = $12 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(r.id)
+        .bind(r.template_id)
+        .bind(&r.frequency)
+        .bind(r.interval_count)
+        .bind(r.weekday)
+        .bind(r.day_of_month)
+        .bind(r.minute_of_day)
+        .bind(r.start_date)
+        .bind(r.paused)
+        .bind(r.next_run_at)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn delete_recurring(&mut self, id: Uuid) -> AppResult<bool> {
+        let res = sqlx::query("DELETE FROM recurring_issue WHERE organization_id = $1 AND id = $2")
+            .bind(self.org.0)
+            .bind(id)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn due_recurring(
+        &mut self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<RecurringIssue>> {
+        let rows = sqlx::query_as::<_, RecRow>(&format!(
+            "{REC_SELECT} WHERE r.organization_id = $1 AND NOT r.paused AND r.next_run_at <= $2 \
+             ORDER BY r.next_run_at, r.id LIMIT $3 FOR UPDATE OF r SKIP LOCKED"
+        ))
+        .bind(self.org.0)
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn claim_recurring_run(
+        &mut self,
+        id: Uuid,
+        occurrence: DateTime<Utc>,
+        issue: Option<IssueId>,
+    ) -> AppResult<bool> {
+        let res = sqlx::query(
+            "INSERT INTO recurring_issue_run (recurring_issue_id, occurrence_at, issue_id) \
+             SELECT r.id, $3, $4 FROM recurring_issue r WHERE r.organization_id = $1 AND r.id = $2 \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(occurrence)
+        .bind(issue.map(|i| i.0))
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn finish_recurring_run(
+        &mut self,
+        id: Uuid,
+        ran_at: DateTime<Utc>,
+        next: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE recurring_issue SET last_run_at = $3, next_run_at = $4, last_error = NULL, \
+             last_error_at = NULL, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(ran_at)
+        .bind(next)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn skip_recurring_run(
+        &mut self,
+        id: Uuid,
+        next: DateTime<Utc>,
+        error: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE recurring_issue SET next_run_at = $3, last_error = left($4, 500), \
+             last_error_at = $5, version = version + 1, updated_at = $5 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(next)
+        .bind(error)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn orgs_with_recurring_due(&mut self, now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT organization_id FROM recurring_issue \
+             WHERE NOT paused AND next_run_at <= $1 ORDER BY organization_id",
+        )
+        .bind(now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(OrgId).collect())
     }
 
     async fn teams_with_auto_close(&mut self, now: DateTime<Utc>) -> AppResult<Vec<TeamRef>> {

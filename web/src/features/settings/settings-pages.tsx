@@ -18,6 +18,7 @@ import {
   StatusesSection,
   TriageSection,
 } from "./team-sections";
+import { RecurringSection, SlaSection, WebhooksSection } from "./team-extra-sections";
 import { Field, Section, SettingsShell } from "./ui";
 
 export const TEAM_SECTIONS = [
@@ -30,6 +31,9 @@ export const TEAM_SECTIONS = [
   ["estimates", "Estimates"],
   ["automations", "Automations"],
   ["templates", "Templates"],
+  ["sla", "SLA"],
+  ["recurring", "Recurring issues"],
+  ["webhooks", "Webhooks"],
 ] as const;
 export type TeamSection = (typeof TEAM_SECTIONS)[number][0];
 export const isTeamSection = (v: string): v is TeamSection => TEAM_SECTIONS.some(([s]) => s === v);
@@ -71,6 +75,9 @@ export function TeamSettingsPage({
         {section === "estimates" && <EstimatesSection key={k} team={team} />}
         {section === "automations" && <AutomationsSection key={k} team={team} />}
         {section === "templates" && <TemplatesSection team={team} />}
+        {section === "sla" && <SlaSection team={team} />}
+        {section === "recurring" && <RecurringSection team={team} />}
+        {section === "webhooks" && <WebhooksSection team={team} />}
       </>
     );
   }

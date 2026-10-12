@@ -18,6 +18,7 @@ pub mod overview;
 pub mod project;
 pub mod state;
 pub mod team;
+pub mod team_extra;
 pub mod team_lifecycle;
 pub mod template;
 pub mod triage;

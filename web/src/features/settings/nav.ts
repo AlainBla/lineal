@@ -20,7 +20,7 @@ export function accountNavItems(ws: string, active?: AccountSection) {
 }
 
 type WorkspaceSection =
-  "workspace" | "members" | "teams" | "labels" | "templates" | "api" | "security" | "audit";
+  "workspace" | "members" | "teams" | "labels" | "templates" | "api" | "security" | "audit" | "webhooks";
 
 /**
  * Navigation der Settings (linke Spalte): Gruppe „Account“ (persönlich), dann die Workspace-Seiten,
@@ -51,6 +51,7 @@ export function workspaceSettingsNav(
       ? [
           { label: "Security", to: `/${ws}/settings/security`, active: section === "security" },
           { label: "Audit log", to: `/${ws}/settings/audit`, active: section === "audit" },
+          { label: "Webhooks", to: `/${ws}/settings/webhooks`, active: section === "webhooks" },
         ]
       : []),
     { label: "API", to: `/${ws}/settings/api`, active: section === "api" },
