@@ -1,5 +1,6 @@
 //! Subcommands des Binaries `lineal`. Gemeinsame Datei: nur S1 / Orchestrator.
 
+pub mod create_workspace;
 pub mod import;
 pub mod migrate;
 pub mod schema_export;
@@ -39,6 +40,9 @@ pub enum Command {
         #[arg(long)]
         demo: bool,
     },
+    /// Ersteinrichtung: Workspace und Owner anlegen (Passwort aus LINEAL_OWNER_PASSWORD oder
+    /// interaktiv ohne Echo).
+    CreateWorkspace(create_workspace::CreateWorkspaceArgs),
     /// Import aus Linear (API oder CSV-Export).
     Import(import::ImportArgs),
     /// GraphQL-Schema als SDL exportieren.
@@ -56,6 +60,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Worker => worker::run().await,
         Command::Migrate => migrate::run().await,
         Command::Seed { demo } => seed::run(demo).await,
+        Command::CreateWorkspace(args) => create_workspace::run(args).await,
         Command::Import(args) => import::run(args).await,
         Command::SchemaExport { out } => schema_export::run(&out),
     }
