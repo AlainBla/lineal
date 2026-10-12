@@ -122,6 +122,46 @@ type AttachmentPayload {
 	attachment: Attachment
 }
 
+type AuditLogConnection {
+	nodes: [AuditLogEntry!]!
+	pageInfo: AuditLogPageInfo!
+}
+
+"""
+Eintrag des Audit-Logs.
+"""
+type AuditLogEntry {
+	id: String!
+	occurredAt: String!
+	"""
+	`user`, `app` oder `system`.
+	"""
+	actorKind: String!
+	actorId: String
+	"""
+	Anzeigename des Akteurs (nur, solange der Akteur existiert).
+	"""
+	actorName: String
+	"""
+	`session`, `api_key`, `oauth`, `cli` oder `null`.
+	"""
+	credentialKind: String
+	action: String!
+	targetType: String!
+	targetId: String
+	"""
+	Details als JSON-Text (ohne Geheimnisse).
+	"""
+	details: String!
+	ip: String
+	requestId: String!
+}
+
+type AuditLogPageInfo {
+	hasNextPage: Boolean!
+	endCursor: String
+}
+
 input ChannelSettingInput {
 	category: String!
 	channel: String!
@@ -1876,6 +1916,10 @@ type Query {
 	Eigene API-Keys des Viewers (neueste zuerst, inkl. widerrufener).
 	"""
 	apiKeys: [ApiKey!]!
+	"""
+	Audit-Log des Workspaces, neueste zuerst. Nur Owner/Admin mit Scope `admin`.
+	"""
+	auditLog(first: Int, after: String, action: String, actorId: String, since: String, until: String): AuditLogConnection!
 }
 
 """
@@ -1958,6 +2002,10 @@ input SecuritySettingsUpdateInput {
 	pinnedViewManagementRole: String
 	importRole: String
 	allowedInviteDomains: [String!]
+	"""
+	Aufbewahrung des Audit-Logs in Tagen (30 bis 3650).
+	"""
+	auditLogRetentionDays: Int
 }
 
 type SuccessPayload {
@@ -2468,6 +2516,10 @@ type WorkspaceSecuritySettings {
 	Leer = Einladungen an alle Domains erlaubt.
 	"""
 	allowedInviteDomains: [String!]!
+	"""
+	Aufbewahrung des Audit-Logs in Tagen (Default 365, Minimum 30).
+	"""
+	auditLogRetentionDays: Int!
 }
 
 input WorkspaceUpdateInput {
