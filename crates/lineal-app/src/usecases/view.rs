@@ -21,7 +21,7 @@ use crate::ports::repos::user::{Page, PageRequest};
 use crate::ports::repos::view::{
     AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel,
     SearchHitRow, SearchKind, SearchOrder, SearchQuery, ViewAccess, ViewKey, ViewListFilter,
-    ViewModel,
+    ViewModel, ViewSubscription,
 };
 use crate::resolve;
 use crate::resolve::team::Visibility;
@@ -694,6 +694,7 @@ impl App {
         let now = self.clock.now();
         let mut view = resolve_view_in(&mut *tx, &access, &input.reference).await?;
         require_edit(&snap, access.user_id, &view)?;
+        let was_shared_before = view.shared;
         if let Some(v) = input.expected_version
             && v != view.version
         {
@@ -806,7 +807,14 @@ impl App {
         if let Some(a) = input.archived {
             view.archived_at = if a { Some(now) } else { None };
         }
+        let was_shared = was_shared_before;
         let saved = tx.views().save_view(&view, access.user_id, now).await?;
+        // Verliert die View ihre Sichtbarkeit für andere, werden deren Abos deaktiviert (docs/05 §4.4).
+        if was_shared && !saved.shared {
+            tx.views()
+                .deactivate_view_subscriptions_except(saved.id, saved.owner_id, now)
+                .await?;
+        }
         emit(
             &mut *tx,
             ctx,
@@ -1277,6 +1285,51 @@ impl App {
         Ok(fav)
     }
 
+    /// Verschiebt einen eigenen Favoriten (Sortierung per Drag & Drop, docs/05 §4.6).
+    /// `parent = None` legt ihn auf die oberste Ebene; Ordner sind eine Ebene tief.
+    pub async fn update_favorite(
+        &self,
+        ctx: &RequestCtx,
+        id: Uuid,
+        parent: Option<Uuid>,
+        sort_order: f64,
+    ) -> AppResult<Favorite> {
+        require_write(ctx)?;
+        if !sort_order.is_finite() {
+            return Err(invalid("sortOrder", "sortOrder must be a finite number"));
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let access = view_access(&snap, ctx)?;
+        let not_found = |r: Uuid, t: &str| {
+            AppError::not_found(format!("Could not find referenced {t}."))
+                .with_details(json!({ "reference": r.to_string(), "type": t }))
+        };
+        let fav = tx
+            .views()
+            .get_favorite(access.user_id, id)
+            .await?
+            .ok_or_else(|| not_found(id, "Favorite"))?;
+        if let Some(p) = parent {
+            let folder = tx
+                .views()
+                .get_favorite(access.user_id, p)
+                .await?
+                .filter(|f| f.kind == "folder")
+                .ok_or_else(|| not_found(p, "Favorite"))?;
+            if fav.kind == "folder" || folder.parent_id.is_some() || p == id {
+                return Err(invalid("parentId", "folders are only one level deep"));
+            }
+        }
+        let saved = tx
+            .views()
+            .update_favorite(access.user_id, id, parent, sort_order, self.clock.now())
+            .await?
+            .ok_or_else(|| not_found(id, "Favorite"))?;
+        tx.commit().await?;
+        Ok(saved)
+    }
+
     /// Entfernt einen eigenen Favoriten (fremde IDs → `not_found`).
     pub async fn delete_favorite(&self, ctx: &RequestCtx, id: Uuid) -> AppResult<()> {
         require_write(ctx)?;
@@ -1289,6 +1342,78 @@ impl App {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Use-Cases: View-Abos (docs/05 §4.7)
+// ---------------------------------------------------------------------------------------------
+
+/// Erlaubte Ereignistypen eines View-Abos.
+pub const VIEW_SUBSCRIPTION_TYPES: &[&str] = &[
+    "issueAddedToView",
+    "issueStatusChanged",
+    "issueStatusChangedAll",
+];
+
+impl App {
+    /// Eigenes Abo einer sichtbaren View (`None`, wenn noch keines besteht).
+    pub async fn view_subscription(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<Option<ViewSubscription>> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let access = view_access(&snap, ctx)?;
+        let view = resolve_view_in(&mut *tx, &access, reference).await?;
+        tx.views()
+            .get_view_subscription(access.user_id, view.id)
+            .await
+    }
+
+    /// Legt das Abo des Aufrufers auf eine sichtbare View an oder ändert es. Default der Typen:
+    /// `["issueAddedToView"]`. Das Auslösen der Benachrichtigung übernimmt der Fan-out (WP32).
+    pub async fn set_view_subscription(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+        active: bool,
+        types: Option<Vec<String>>,
+    ) -> AppResult<ViewSubscription> {
+        require_write(ctx)?;
+        if let Some(t) = &types
+            && (t.is_empty()
+                || t.iter()
+                    .any(|x| !VIEW_SUBSCRIPTION_TYPES.contains(&x.as_str())))
+        {
+            return Err(invalid(
+                "notificationSubscriptionTypes",
+                "types must be a non-empty list of issueAddedToView, issueStatusChanged, issueStatusChangedAll",
+            ));
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let access = view_access(&snap, ctx)?;
+        let view = resolve_view_in(&mut *tx, &access, reference).await?;
+        if view.model != ViewModel::Issue {
+            return Err(invalid("view", "only issue views can be subscribed to"));
+        }
+        let current = tx
+            .views()
+            .get_view_subscription(access.user_id, view.id)
+            .await?;
+        let mut types = types
+            .or_else(|| current.map(|c| c.types))
+            .unwrap_or_else(|| vec!["issueAddedToView".to_owned()]);
+        types.sort();
+        types.dedup();
+        let sub = tx
+            .views()
+            .upsert_view_subscription(access.user_id, view.id, &types, active, self.clock.now())
+            .await?;
+        tx.commit().await?;
+        Ok(sub)
     }
 }
 

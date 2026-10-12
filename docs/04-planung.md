@@ -565,6 +565,8 @@ Das Diagramm zeigt die typischen Übergänge; technisch ist jeder Wechsel zwisch
 
 Validierung: Sind beide gesetzt, muss `startDate <= targetDate` gelten (nach Normalisierung), sonst `invalid_request`. Filter und Sortierung arbeiten auf dem normalisierten Datum. Wird ein Datum auf `null` gesetzt, wird auch die Auflösung geleert.
 
+> **Umsetzung (Roadmap, WP31):** Die Zeitachsen-Ansicht (`/<ws>/roadmap`, `/<ws>/team/<key>/roadmap`, Tab „Roadmap“ der Initiative) zeigt Projekte (am Workspace auch Initiativen) als Balken von Start- bis Zieldatum, Meilensteine als Marker, eine „Heute“-Linie und gruppiert nach Initiative, Team oder Status. Zoom Woche/Monat/Quartal/Jahr (24, 7, 2,4 bzw. 0,8 px je Tag; Wochen beginnen am Montag). Ziehen verschiebt den Balken, die Griffe an den Enden ändern Start bzw. Ziel; bei einer Auflösung (`month`, `quarter`, `halfYear`, `year`) wandert das Datum in ganzen Perioden und bleibt normalisiert (Start = Periodenbeginn, Ziel = Periodenende). Gespeichert wird über `projectUpdate` bzw. `initiativeUpdate`; die Rechteprüfung liegt allein beim Server, bei Ablehnung springt der Balken zurück und der Fehler wird angezeigt. Tastatur: Pfeil links/rechts verschiebt, mit Umschalt nur das Zieldatum. Initiativen haben nur ein Zieldatum (4.1): der Balken beginnt bei `startedAt` (sonst der Anlage), Ziehen ändert nur das Zieldatum. Elemente ohne Termine stehen unter „Without dates“.
+
 ### 2.6 Priorität und Labels
 
 Die **Priorität** folgt dem Enum aus [00-konventionen.md](00-konventionen.md) (0–4, Ausgabe als `{ "value", "name" }`). Wird ein Projekt in einer nach Priorität gruppierten Ansicht in eine andere Gruppe gezogen, ändert sich `priority`; innerhalb der Gruppe ändert sich nur `prioritySortOrder`.

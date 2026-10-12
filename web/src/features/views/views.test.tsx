@@ -9,7 +9,7 @@ import {
   renderWithApp,
   TEAM_META,
 } from "@/features/issues/test-fixtures";
-import type { Favorite } from "@/gql/graphql";
+import type { CustomView, Favorite } from "@/gql/graphql";
 
 import { applyVisibility, groupIssues, mergeDisplay, DEFAULT_DISPLAY } from "./display-options";
 import { resolveFavorite } from "./favorites-section";
@@ -149,5 +149,204 @@ describe("resolveFavorite", () => {
       ),
     ).toEqual({ label: "Active · ENG", to: "/acme/team/ENG/active" });
     expect(resolveFavorite(fav({ targetId: "gone" }), "acme", ctx)).toBeNull();
+  });
+});
+
+describe("IssueView mit gespeicherter View (WP31)", () => {
+  const view = (filterData: unknown): CustomView =>
+    ({
+      id: "v-1",
+      slugId: "abc",
+      name: "My bugs",
+      description: null,
+      icon: null,
+      color: null,
+      modelName: "Issue",
+      filterData,
+      ownerId: "u-alice",
+      ownerName: "Alice",
+      shared: true,
+      teamId: "team-eng",
+      teamKey: "ENG",
+      projectId: null,
+      initiativeId: null,
+      sortOrder: 0,
+      version: 3,
+      canEdit: true,
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T00:00:00Z",
+      archivedAt: null,
+    }) as unknown as CustomView;
+
+  const handlers = (extra: Record<string, (v: Record<string, unknown>) => unknown> = {}) => ({
+    ViewIssuesList: () => ({
+      viewIssues: {
+        nodes: [makeIssue({ id: "i1", identifier: "ENG-1" })],
+        hasNextPage: false,
+        endCursor: null,
+      },
+    }),
+    ViewPrefs: () => ({ viewPreferences: { values: {}, hasPersonal: false, hasDefault: false } }),
+    ViewSubscriptionGet: () => ({ viewSubscription: null }),
+    IssueTeams: () => ({ teams: teamRows }),
+    TeamMeta: () => ({
+      team: TEAM_META.team,
+      workflowStates: TEAM_META.states,
+      issueLabels: TEAM_META.labels,
+      cycles: [],
+      projects: TEAM_META.projects,
+    }),
+    KnownUsers: () => ({
+      users: [{ id: "u-bob", name: "Bob", displayName: "Bob", avatarUrl: null }],
+    }),
+    ...extra,
+  });
+
+  it("zeigt filterData als Chips, wendet die View unverändert serverseitig an", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <IssueView
+        ws="acme"
+        title="My bugs"
+        view={view({ and: [{ assignee: { isMe: { eq: true } } }, { priority: { in: [1] } }] })}
+      />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    await screen.findByText("Issue ENG-1");
+    expect(screen.getByText(/Assignee is Current user/)).toBeInTheDocument();
+    expect(screen.getByText(/Priority is Urgent/)).toBeInTheDocument();
+    const last = gql.of("ViewIssuesList").at(-1)!.variables;
+    expect(last.customViewId).toBe("v-1");
+    expect(last.filter).toBeUndefined();
+  });
+
+  it("Chip entfernen: Chip-Filter ersetzt filterData, Team-Scope bleibt, Speichern möglich", async () => {
+    const saved: Array<Record<string, unknown>> = [];
+    const gql = mockGraphql(
+      handlers({
+        ViewUpdate: (v) => {
+          saved.push(v);
+          return { customViewUpdate: { success: true } };
+        },
+      }),
+    );
+    await renderWithApp(
+      <IssueView
+        ws="acme"
+        title="My bugs"
+        view={view({ and: [{ assignee: { isMe: { eq: true } } }, { priority: { in: [1] } }] })}
+      />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    const user = userEvent.setup();
+    await screen.findByText("Issue ENG-1");
+    await user.click(screen.getByRole("button", { name: "Remove filter Priority" }));
+    await waitFor(() => {
+      const v = gql.of("ViewIssuesList").at(-1)!.variables;
+      expect(v.customViewId).toBeUndefined();
+      expect(v.filter).toEqual({
+        and: [{ assignee: { isMe: { eq: true } } }, { team: { id: { in: ["team-eng"] } } }],
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({
+      id: "v-1",
+      input: { filterData: { assignee: { isMe: { eq: true } } }, expectedVersion: 3 },
+    });
+  });
+
+  it("Chip bearbeiten: Dialog mit vorbelegtem Wert", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <IssueView ws="acme" title="My bugs" view={view({ priority: { in: [1] } })} />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    const user = userEvent.setup();
+    await screen.findByText("Issue ENG-1");
+    await user.click(screen.getByRole("button", { name: "Edit filter Priority" }));
+    const urgent = await screen.findByLabelText("Urgent");
+    expect(urgent).toBeChecked();
+    await user.click(urgent);
+    await user.click(screen.getByLabelText("High"));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(gql.of("ViewIssuesList").at(-1)!.variables.filter).toEqual({
+        and: [{ priority: { in: [2] } }, { team: { id: { in: ["team-eng"] } } }],
+      }),
+    );
+  });
+
+  it("nicht darstellbare Bedingungen bleiben als erweiterter Filter erhalten", async () => {
+    const or = { or: [{ priority: { in: [1] } }, { estimate: { null: true } }] };
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <IssueView
+        ws="acme"
+        title="My bugs"
+        view={view({ and: [{ assignee: { isMe: { eq: true } } }, or] })}
+      />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    const user = userEvent.setup();
+    await screen.findByText("Issue ENG-1");
+    expect(screen.getByText(/Advanced filter \(1\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove filter Assignee" }));
+    await waitFor(() => {
+      const f = gql.of("ViewIssuesList").at(-1)!.variables.filter as { and: unknown[] };
+      expect(f.and).toContainEqual(or);
+      expect(f.and).not.toContainEqual({ assignee: { isMe: { eq: true } } });
+    });
+  });
+
+  it("Glocke: abonnieren mit Standardtyp", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    mockGraphql(
+      handlers({
+        ViewSubscriptionSet: (v) => {
+          calls.push(v);
+          return { viewSubscriptionUpdate: { active: true } };
+        },
+      }),
+    );
+    await renderWithApp(
+      <IssueView ws="acme" title="My bugs" view={view({ priority: { in: [1] } })} />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Set up notifications" }));
+    await user.click(await screen.findByLabelText("New issue in this view"));
+    await waitFor(() =>
+      expect(calls).toEqual([{ id: "v-1", active: true, types: ["issueAddedToView"] }]),
+    );
+  });
+
+  it("Eigentümerwechsel: customViewUpdate mit ownerId", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    mockGraphql(
+      handlers({
+        ViewUpdate: (v) => {
+          calls.push(v);
+          return { customViewUpdate: { success: true } };
+        },
+      }),
+    );
+    await renderWithApp(
+      <IssueView ws="acme" title="My bugs" view={view({ priority: { in: [1] } })} />,
+      newClient(),
+      "/acme/view/abc",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Transfer ownership" }));
+    await user.selectOptions(await screen.findByLabelText("New owner"), "u-bob");
+    await user.click(screen.getByRole("button", { name: "Transfer" }));
+    await waitFor(() =>
+      expect(calls).toEqual([{ id: "v-1", input: { ownerId: "u-bob", expectedVersion: 3 } }]),
+    );
   });
 });

@@ -11,7 +11,7 @@ use async_graphql::types::Json;
 use async_graphql::{Context, InputObject, Object, SimpleObject};
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::user::{OrderBy, PageCursor, PageRequest};
-use lineal_app::ports::repos::view::{Favorite, ViewModel};
+use lineal_app::ports::repos::view::{Favorite, ViewModel, ViewSubscription};
 use lineal_app::usecases::issue::ListIssuesInput;
 use lineal_app::usecases::view::{
     CreateFavoriteInput, CreateViewInput, ListViewsInput, UpdateViewInput, ViewInfo, ViewKeyInput,
@@ -187,6 +187,28 @@ pub struct FavoriteCreateInput {
     pub predefined_view_team_id: Option<String>,
 }
 
+/// Abo auf eine Custom View (docs/05 §4.7).
+#[derive(SimpleObject)]
+#[graphql(name = "ViewSubscription")]
+pub struct ViewSubscriptionGql {
+    pub id: String,
+    pub view_id: String,
+    /// `issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`.
+    pub notification_subscription_types: Vec<String>,
+    pub active: bool,
+}
+
+impl From<ViewSubscription> for ViewSubscriptionGql {
+    fn from(s: ViewSubscription) -> Self {
+        Self {
+            id: s.id.to_string(),
+            view_id: s.view_id.0.to_string(),
+            notification_subscription_types: s.types,
+            active: s.active,
+        }
+    }
+}
+
 /// Wirksame Anzeigeoptionen.
 #[derive(SimpleObject)]
 #[graphql(name = "ViewPreferencesValues")]
@@ -308,6 +330,19 @@ impl ViewQuery {
             .await
             .gql(ctx)?
             .into())
+    }
+
+    /// Eigenes Abo einer sichtbaren View (`null`, solange keines besteht).
+    async fn view_subscription(
+        &self,
+        ctx: &Context<'_>,
+        custom_view_id: String,
+    ) -> async_graphql::Result<Option<ViewSubscriptionGql>> {
+        Ok(app(ctx)?
+            .view_subscription(request_ctx(ctx)?, &custom_view_id)
+            .await
+            .gql(ctx)?
+            .map(Into::into))
     }
 
     /// Favoriten des Viewers (nur sichtbare Ziele).
@@ -511,6 +546,51 @@ impl ViewMutation {
             success: true,
             favorite: Some(f.into()),
         })
+    }
+
+    /// Verschiebt einen eigenen Favoriten (Reihenfolge per Drag & Drop): `sortOrder` ist die
+    /// Mittelwert-Position, `parentId` der Ordner (leer = oberste Ebene).
+    async fn favorite_update(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        sort_order: f64,
+        parent_id: Option<String>,
+    ) -> async_graphql::Result<FavoritePayload> {
+        let uuid = parse_uuid(&id, "id").gql(ctx)?;
+        let parent = parent_id
+            .as_deref()
+            .map(|p| parse_uuid(p, "parentId"))
+            .transpose()
+            .gql(ctx)?;
+        let f = app(ctx)?
+            .update_favorite(request_ctx(ctx)?, uuid, parent, sort_order)
+            .await
+            .gql(ctx)?;
+        Ok(FavoritePayload {
+            success: true,
+            favorite: Some(f.into()),
+        })
+    }
+
+    /// Abonniert eine sichtbare Issue-View oder ändert das Abo (Default `issueAddedToView`).
+    async fn view_subscription_update(
+        &self,
+        ctx: &Context<'_>,
+        custom_view_id: String,
+        active: bool,
+        notification_subscription_types: Option<Vec<String>>,
+    ) -> async_graphql::Result<ViewSubscriptionGql> {
+        Ok(app(ctx)?
+            .set_view_subscription(
+                request_ctx(ctx)?,
+                &custom_view_id,
+                active,
+                notification_subscription_types,
+            )
+            .await
+            .gql(ctx)?
+            .into())
     }
 
     async fn favorite_delete(

@@ -171,3 +171,211 @@ async fn search_and_overview_over_graphql(pool: sqlx::PgPool) {
     .await;
     assert_eq!(code(&res), "forbidden");
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn favorites_reorder_subscriptions_and_owner_transfer(pool: sqlx::PgPool) {
+    let (app, pool) = setup(pool).await;
+    let d = SeedData::acme();
+    let alice = ctx_for(SeedUser::Alice);
+    let bob = ctx_for(SeedUser::Bob);
+    let created = data(
+        run(
+            &app,
+            alice.clone(),
+            "mutation($i: CustomViewCreateInput!) { customViewCreate(input: $i) { customView { id } } }",
+            json!({"i": {"name": "Shared bugs", "modelName": "Issue", "filterData": {"priority": {"eq": 1}}, "shared": true}}),
+        )
+        .await,
+    );
+    let view = created["customViewCreate"]["customView"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Favoriten: Ordner + View, dann per favoriteUpdate umsortieren und in den Ordner legen.
+    let fav = |kind: &str, target: Option<&str>, name: Option<&str>| json!({"i": {"type": kind, "targetId": target, "folderName": name}});
+    let create = "mutation($i: FavoriteCreateInput!) { favoriteCreate(input: $i) { favorite { id sortOrder parentId } } }";
+    let folder = data(run(&app, bob.clone(), create, fav("folder", None, Some("Mine"))).await);
+    let folder_id = folder["favoriteCreate"]["favorite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let f1 = data(
+        run(
+            &app,
+            bob.clone(),
+            create,
+            fav("customView", Some(&view), None),
+        )
+        .await,
+    );
+    let f1_id = f1["favoriteCreate"]["favorite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let update = "mutation($id: String!, $s: Float!, $p: String) { favoriteUpdate(id: $id, sortOrder: $s, parentId: $p) { favorite { sortOrder parentId } } }";
+    let r = data(
+        run(
+            &app,
+            bob.clone(),
+            update,
+            json!({"id": f1_id, "s": -1.0, "p": null}),
+        )
+        .await,
+    );
+    assert_eq!(r["favoriteUpdate"]["favorite"]["sortOrder"], -1.0);
+    let r = data(
+        run(
+            &app,
+            bob.clone(),
+            update,
+            json!({"id": f1_id, "s": 5.0, "p": folder_id}),
+        )
+        .await,
+    );
+    assert_eq!(
+        r["favoriteUpdate"]["favorite"]["parentId"],
+        folder_id.as_str()
+    );
+    // Ordner in Ordner und fremde Favoriten sind verboten.
+    let res = run(
+        &app,
+        bob.clone(),
+        update,
+        json!({"id": folder_id, "s": 1.0, "p": folder_id}),
+    )
+    .await;
+    assert_eq!(code(&res), "invalid_request");
+    let res = run(
+        &app,
+        alice.clone(),
+        update,
+        json!({"id": f1_id, "s": 1.0, "p": null}),
+    )
+    .await;
+    assert_eq!(code(&res), "not_found");
+
+    // View-Abo: Default-Typ, Ändern, Lesen.
+    let sub = "mutation($v: String!, $a: Boolean!, $t: [String!]) { viewSubscriptionUpdate(customViewId: $v, active: $a, notificationSubscriptionTypes: $t) { active notificationSubscriptionTypes } }";
+    let r = data(
+        run(
+            &app,
+            bob.clone(),
+            sub,
+            json!({"v": view, "a": true, "t": null}),
+        )
+        .await,
+    );
+    assert_eq!(
+        r["viewSubscriptionUpdate"]["notificationSubscriptionTypes"],
+        json!(["issueAddedToView"])
+    );
+    let r = data(
+        run(
+            &app,
+            bob.clone(),
+            sub,
+            json!({"v": view, "a": true, "t": ["issueStatusChanged", "issueAddedToView"]}),
+        )
+        .await,
+    );
+    assert_eq!(
+        r["viewSubscriptionUpdate"]["notificationSubscriptionTypes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let res = run(
+        &app,
+        bob.clone(),
+        sub,
+        json!({"v": view, "a": true, "t": ["bogus"]}),
+    )
+    .await;
+    assert_eq!(code(&res), "invalid_request");
+    let q = "query($v: String!) { viewSubscription(customViewId: $v) { active } }";
+    let r = data(run(&app, bob.clone(), q, json!({"v": view})).await);
+    assert_eq!(r["viewSubscription"]["active"], true);
+
+    // Hook für den Fan-out (WP32): aktive Abos je Ereignistyp.
+    let mut tx = PgStore::new(pool.clone()).begin(d.org).await.unwrap();
+    let subs = tx
+        .views()
+        .subscribed_views("issueAddedToView")
+        .await
+        .unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].subscriber_id, d.bob);
+    assert_eq!(subs[0].view_id.0.to_string(), view);
+    assert!(
+        tx.views()
+            .subscribed_views("issueStatusChangedAll")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(tx);
+
+    // Eigentümerwechsel: neuer Owner muss die View sehen dürfen.
+    let upd = "mutation($id: String!, $i: CustomViewUpdateInput!) { customViewUpdate(id: $id, input: $i) { customView { ownerId canEdit } } }";
+    let r = data(
+        run(
+            &app,
+            alice.clone(),
+            upd,
+            json!({"id": view, "i": {"ownerId": d.bob.0.to_string()}}),
+        )
+        .await,
+    );
+    assert_eq!(
+        r["customViewUpdate"]["customView"]["ownerId"],
+        d.bob.0.to_string()
+    );
+    assert_eq!(r["customViewUpdate"]["customView"]["canEdit"], true);
+    let res = run(
+        &app,
+        alice.clone(),
+        upd,
+        json!({"id": view, "i": {"ownerId": d.carol.0.to_string()}}),
+    )
+    .await;
+    assert_eq!(
+        code(&res),
+        "invalid_request",
+        "guest cannot see a workspace view"
+    );
+
+    // Entzug der Sichtbarkeit deaktiviert die Abos anderer (der Owner behält seines).
+    data(
+        run(
+            &app,
+            alice.clone(),
+            sub,
+            json!({"v": view, "a": true, "t": null}),
+        )
+        .await,
+    );
+    data(
+        run(
+            &app,
+            alice.clone(),
+            upd,
+            json!({"id": view, "i": {"shared": false}}),
+        )
+        .await,
+    );
+    let sql = "SELECT active FROM notification_subscription WHERE target_type = 'customView' AND subscriber_id = $1";
+    let alices: Vec<bool> = sqlx::query_scalar(sql)
+        .bind(d.alice.0)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(alices, vec![false], "non-owner subscription deactivated");
+    let bobs: Vec<bool> = sqlx::query_scalar(sql)
+        .bind(d.bob.0)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bobs, vec![true], "owner keeps subscription");
+}

@@ -1085,6 +1085,8 @@ Favoriten sind **persönliche** Einträge in der Seitenleiste oberhalb von „Yo
 - **Sichtbarkeitsverlust:** Favoriten auf nicht mehr sichtbare oder gelöschte Ziele werden ausgeblendet; gelöschte Ziele entfernen den Favoriten endgültig, archivierte Ziele lassen ihn bestehen (Klick öffnet das Archivobjekt).
 - Ein Favorit (insbesondere eine View) kann als **Startseite** (`User.defaultHomeView`) gesetzt werden.
 
+> **Umsetzung (WP31):** Die Reihenfolge ändert `favoriteUpdate(id, sortOrder, parentId)`; die Sidebar sortiert per Drag & Drop (Maus oder Tastatur am Griff): auf einen Ordner ablegen = ans Ende des Ordners, auf den eigenen Ordner = zurück auf die oberste Ebene hinter den Ordner, sonst Mittelwert-Einfügen zwischen den Nachbarn. Ordner wandern nie in Ordner. Ordner anlegen/umbenennen gibt es nur per API.
+
 ### 4.7 View-Abonnements
 
 Über die Glocke im Kopf einer View („Setup … notifications“) legt ein User eine `NotificationSubscription` mit `targetType = customView` (bzw. `team` + `contextViewType` für Standard-Views) an. Wählbare Ereignisse:
@@ -1096,6 +1098,8 @@ Favoriten sind **persönliche** Einträge in der Seitenleiste oberhalb von „Yo
 | Jede Statusänderung | `issueStatusChangedAll` | jeder Statuswechsel eines Issues der View |
 
 Default bei Anlage: `["issueAddedToView"]`. Die Prüfung „erfüllt den Filter jetzt, vorher nicht“ erfolgt im Fan-out anhand der Vorher-/Nachher-Werte des Events (`updatedFrom`) gegen den View-Filter, ausgewertet mit den Rechten des Abonnenten. Eigene Aktionen lösen keine View-Benachrichtigung aus.
+
+> **Umsetzung (WP31):** Das Abo ist eine `notification_subscription`-Zeile (`target_type = customView`) und wird über `viewSubscriptionUpdate` gesetzt (Glocke im Kopf der View; nur Issue-Views). Typen: `issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`. Verliert eine geteilte View ihre Sichtbarkeit (`shared` → `false`), werden die Abos aller außer dem Owner deaktiviert. Das Auslösen der Benachrichtigung im Fan-out ist Sache von WP32 (Schnittstelle: docs/dev/schnittstellen.md). Gespeicherte Issue-Views werden im Web in Filter-Chips zurückgewandelt und sind dort bearbeitbar (Chip anklicken, entfernen, ergänzen, „Save changes“ schreibt `filterData`); Bedingungen, die die Leiste nicht darstellen kann (oberste `or`-Zweige, unbekannte Felder oder Operatoren), erscheinen als Chip „Advanced filter“ und bleiben beim Anwenden und Speichern unverändert erhalten. Der Eigentümerwechsel einer geteilten View steht im Kopf der View (Owner und Admins).
 
 ---
 

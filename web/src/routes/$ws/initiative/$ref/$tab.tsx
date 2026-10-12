@@ -1,11 +1,25 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { InitiativePage } from "@/features/planning/initiatives-page";
+import { InitiativeDetail, isInitiativeTab } from "@/features/planning/initiative-detail";
 
-// Tabs (overview|projects|updates) zeigen vorerst dieselbe Seite.
-export const Route = createFileRoute("/$ws/initiative/$ref/$tab")({ component: Page });
+// Tabs: overview | projects | updates | documents | sub-initiatives | roadmap.
+export const Route = createFileRoute("/$ws/initiative/$ref/$tab")({
+  beforeLoad: ({ params }) => {
+    if (!isInitiativeTab(params.tab)) {
+      throw redirect({ to: `/${params.ws}/initiative/${params.ref}/overview` as "/" });
+    }
+  },
+  component: Page,
+});
 
 function Page() {
-  const { ws, ref } = Route.useParams();
-  return <InitiativePage key={ref} ws={ws} initiativeRef={ref} />;
+  const { ws, ref, tab } = Route.useParams();
+  return (
+    <InitiativeDetail
+      key={ref}
+      ws={ws}
+      initiativeRef={ref}
+      tab={isInitiativeTab(tab) ? tab : "overview"}
+    />
+  );
 }

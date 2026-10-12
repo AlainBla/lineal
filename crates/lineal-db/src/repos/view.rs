@@ -15,7 +15,7 @@ use lineal_app::ports::repos::ViewRepo;
 use lineal_app::ports::repos::user::{OrderBy, Page, PageCursor, PageRequest};
 use lineal_app::ports::repos::view::{
     AnyFilter, CustomView, Favorite, FilterEval, NewCustomView, NewFavorite, PrefLevel, ViewAccess,
-    ViewKey, ViewListFilter, ViewModel,
+    ViewKey, ViewListFilter, ViewModel, ViewSubscription,
 };
 use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::{InitiativeId, ProjectId, TeamId, UserId, ViewId};
@@ -723,6 +723,193 @@ impl ViewRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(res.rows_affected() > 0)
+    }
+
+    async fn update_favorite(
+        &mut self,
+        owner: UserId,
+        id: Uuid,
+        parent: Option<Uuid>,
+        sort_order: f64,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<Favorite>> {
+        let sql = format!(
+            "UPDATE favorite SET parent_id = $4, sort_order = $5, updated_at = $6, version = version + 1 \
+             WHERE organization_id = $1 AND owner_id = $2 AND id = $3 RETURNING {FAV_COLS}"
+        );
+        Ok(sqlx::query_as::<_, FavRow>(&sql)
+            .bind(self.org.0)
+            .bind(owner.0)
+            .bind(id)
+            .bind(parent)
+            .bind(sort_order)
+            .bind(now)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?
+            .map(FavRow::into_favorite))
+    }
+
+    async fn upsert_view_subscription(
+        &mut self,
+        user: UserId,
+        view: ViewId,
+        types: &[String],
+        active: bool,
+        now: DateTime<Utc>,
+    ) -> AppResult<ViewSubscription> {
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
+             AND target_type = 'customView' AND custom_view_id = $3 AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(view.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let id = match existing {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE notification_subscription SET notification_subscription_types = $2, active = $3, \
+                     updated_at = $4, version = version + 1 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(types)
+                .bind(active)
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                id
+            }
+            None => {
+                let id = Uuid::now_v7();
+                sqlx::query(
+                    "INSERT INTO notification_subscription (id, organization_id, subscriber_id, target_type, \
+                     custom_view_id, notification_subscription_types, active, created_at, updated_at) \
+                     VALUES ($1,$2,$3,'customView',$4,$5,$6,$7,$7)",
+                )
+                .bind(id)
+                .bind(self.org.0)
+                .bind(user.0)
+                .bind(view.0)
+                .bind(types)
+                .bind(active)
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                id
+            }
+        };
+        Ok(ViewSubscription {
+            id,
+            subscriber_id: user,
+            view_id: view,
+            types: types.to_vec(),
+            active,
+        })
+    }
+
+    async fn get_view_subscription(
+        &mut self,
+        user: UserId,
+        view: ViewId,
+    ) -> AppResult<Option<ViewSubscription>> {
+        let row: Option<(Uuid, Vec<String>, bool)> = sqlx::query_as(
+            "SELECT id, notification_subscription_types, active FROM notification_subscription \
+             WHERE organization_id = $1 AND subscriber_id = $2 AND target_type = 'customView' \
+             AND custom_view_id = $3 AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(view.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(id, types, active)| ViewSubscription {
+            id,
+            subscriber_id: user,
+            view_id: view,
+            types,
+            active,
+        }))
+    }
+
+    async fn active_view_subscriptions(
+        &mut self,
+        view: ViewId,
+        ntype: &str,
+    ) -> AppResult<Vec<ViewSubscription>> {
+        let rows: Vec<(Uuid, Uuid, Vec<String>)> = sqlx::query_as(
+            "SELECT id, subscriber_id, notification_subscription_types FROM notification_subscription \
+             WHERE organization_id = $1 AND target_type = 'customView' AND custom_view_id = $2 \
+             AND active AND archived_at IS NULL AND $3 = ANY(notification_subscription_types) \
+             ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(view.0)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, user, types)| ViewSubscription {
+                id,
+                subscriber_id: UserId(user),
+                view_id: view,
+                types,
+                active: true,
+            })
+            .collect())
+    }
+
+    async fn subscribed_views(&mut self, ntype: &str) -> AppResult<Vec<ViewSubscription>> {
+        let rows: Vec<(Uuid, Uuid, Uuid, Vec<String>)> = sqlx::query_as(
+            "SELECT id, custom_view_id, subscriber_id, notification_subscription_types \
+             FROM notification_subscription \
+             WHERE organization_id = $1 AND target_type = 'customView' AND active \
+             AND archived_at IS NULL AND $2 = ANY(notification_subscription_types) \
+             ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, view, user, types)| ViewSubscription {
+                id,
+                subscriber_id: UserId(user),
+                view_id: ViewId(view),
+                types,
+                active: true,
+            })
+            .collect())
+    }
+
+    async fn deactivate_view_subscriptions_except(
+        &mut self,
+        view: ViewId,
+        keep: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE notification_subscription SET active = false, updated_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND target_type = 'customView' AND custom_view_id = $2 \
+             AND subscriber_id <> $3 AND active",
+        )
+        .bind(self.org.0)
+        .bind(view.0)
+        .bind(keep.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
     }
 
     async fn max_favorite_sort_order(
