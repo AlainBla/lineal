@@ -8,6 +8,7 @@ import type { Team } from "@/gql/graphql";
 
 import { useUpdateTeam, useWorkflowStates } from "./queries";
 import { SaveRow } from "./team-sections";
+import { TemplatesManager } from "./templates-manager";
 import { Field, Section, selectClass } from "./ui";
 
 // ---------- Estimates ----------
@@ -268,4 +269,10 @@ export function AutomationsSection({ team }: { team: Team }) {
       </form>
     </Section>
   );
+}
+
+// ---------- Templates ----------
+
+export function TemplatesSection({ team }: { team: Team }) {
+  return <TemplatesManager team={team} />;
 }
