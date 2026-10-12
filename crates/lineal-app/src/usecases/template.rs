@@ -14,6 +14,10 @@ pub(crate) use apply::{
     prepare_issue_template,
 };
 
+mod form;
+
+pub use form::{FormAnswer, RenderedForm, render_form};
+
 use crate::app::App;
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
