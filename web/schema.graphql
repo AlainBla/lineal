@@ -1952,6 +1952,10 @@ type Query {
 	"""
 	teamSla(teamId: String!): TeamSla!
 	"""
+	Projekt-Labels des Workspace (für Projekt-Templates); gleiche Form wie `IssueLabel`.
+	"""
+	projectLabels(includeGroups: Boolean, first: Int): [IssueLabel!]!
+	"""
 	Wiederkehrende Issues eines Teams.
 	"""
 	recurringIssues(teamId: String!): [RecurringIssue!]!

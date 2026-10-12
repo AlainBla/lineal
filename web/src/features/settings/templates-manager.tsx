@@ -2,7 +2,8 @@
  * Template-Verwaltung (docs/06 §2) für Team-Settings und Workspace-Settings: Liste je Typ, anlegen,
  * bearbeiten, löschen und – nur im Team – die Default-Templates. Geerbte Team-Templates und
  * Workspace-Templates sind im Team schreibgeschützt (bearbeitbar an ihrem Ursprung).
- * Felder, die der Editor nicht kennt (z. B. Sub-Issues), bleiben in `templateData` erhalten.
+ * Der Editor kennt Sub-Issues (Titel, Priorität, Fälligkeit), `dueIn`, bei Projekten Meilensteine,
+ * Projekt-Labels, Lead und Mitglieder; weitere Felder bleiben in `templateData` erhalten.
  */
 import { Plus } from "lucide-react";
 import { useState } from "react";
@@ -11,10 +12,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
 import { STATE_TYPE_LABEL, STATE_TYPE_ORDER } from "@/features/issues/model";
+import { RichEditor } from "@/features/issues/rich-editor";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { IssueLabel, Team, Template, WorkflowState } from "@/gql/graphql";
 
-import { useTeamLabels, useTeamMembers, useWorkflowStates, type Member } from "./queries";
+import {
+  useTeamLabels,
+  useTeamMembers,
+  useWorkflowStates,
+  useWorkspaceMembers,
+  type Member,
+} from "./queries";
+import { useProjectLabels } from "./team-extra-queries";
+import { relativeDays, relativeDaysToIso, relativeDaysValid } from "./team-extra-model";
 import {
   useTemplateDefaults,
   useTemplateMutations,
@@ -50,6 +60,54 @@ function put(data: Data, key: string, value: unknown): void {
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+/** Ein Sub-Issue im Editor; `raw` behält Felder, die der Editor nicht kennt (Beschreibung, Kinder …). */
+interface SubRow {
+  raw: Data;
+  title: string;
+  priority: string;
+  dueDays: string;
+  initialDueDays: string;
+}
+
+function subRowsOf(v: unknown): SubRow[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is Data => typeof x === "object" && x !== null)
+    .map((raw) => ({
+      raw,
+      title: str(raw.title),
+      priority: raw.priority === undefined ? "" : String(raw.priority),
+      dueDays: relativeDays(raw.dueIn),
+      initialDueDays: relativeDays(raw.dueIn),
+    }));
+}
+
+/** Ein Meilenstein im Projekt-Template. */
+interface MilestoneRow {
+  raw: Data;
+  name: string;
+  targetDays: string;
+  initialTargetDays: string;
+}
+
+function milestoneRowsOf(v: unknown): MilestoneRow[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is Data => typeof x === "object" && x !== null)
+    .map((raw) => ({
+      raw,
+      name: str(raw.name),
+      targetDays: relativeDays(raw.targetIn),
+      initialTargetDays: relativeDays(raw.targetIn),
+    }));
+}
+
+/** Setzt eine relative Frist nur, wenn der Nutzer sie geändert hat (sonst bleibt der Rohwert). */
+function putRelative(d: Data, key: string, days: string, initial: string) {
+  if (days === initial) return;
+  put(d, key, relativeDaysToIso(days));
+}
+
 function TemplateEditor({
   kind,
   template,
@@ -57,6 +115,7 @@ function TemplateEditor({
   labels,
   states,
   members,
+  projectMembers,
   onDone,
 }: {
   kind: TemplateKind;
@@ -65,8 +124,10 @@ function TemplateEditor({
   labels: IssueLabel[];
   states: WorkflowState[];
   members: Member[];
+  projectMembers: Member[];
   onDone: () => void;
 }) {
+  const projectLabels = useProjectLabels(kind === "project");
   const m = useTemplateMutations();
   const base = (template?.templateData ?? {}) as Data;
   const [name, setName] = useState(template?.name ?? "");
@@ -87,12 +148,25 @@ function TemplateEditor({
   const [estimate, setEstimate] = useState(
     typeof base.estimate === "number" ? String(base.estimate) : "",
   );
+  const [dueDays, setDueDays] = useState(relativeDays(base.dueIn));
+  const [subs, setSubs] = useState<SubRow[]>(() => subRowsOf(base.subIssues));
+  // Projekt: Lead, Mitglieder, Projekt-Labels, Meilensteine
+  const [lead, setLead] = useState(str(base.leadId));
+  const [memberIds, setMemberIds] = useState<string[]>(
+    Array.isArray(base.memberIds) ? (base.memberIds as string[]) : [],
+  );
+  const [projectLabelIds, setProjectLabelIds] = useState<string[]>(
+    kind === "project" && Array.isArray(base.labelIds) ? (base.labelIds as string[]) : [],
+  );
+  const [milestones, setMilestones] = useState<MilestoneRow[]>(() =>
+    milestoneRowsOf(base.milestones),
+  );
 
   function build(): Data {
     const d: Data = { ...base };
     if (kind === "issue") {
       put(d, "title", title.trim() ? title : undefined); // Präfixe wie „Bug: “ behalten ihr Leerzeichen
-      put(d, "description", body);
+      put(d, "description", body.trimEnd());
       put(d, "priority", priority === "" ? undefined : Number(priority));
       if (stateRef !== (str(base.stateId) || str(base.stateType))) {
         delete d.stateId;
@@ -103,27 +177,66 @@ function TemplateEditor({
       put(d, "labelIds", labelIds);
       put(d, "assigneeId", assignee);
       put(d, "estimate", estimate.trim() === "" ? undefined : Number(estimate));
+      if (dueDays !== relativeDays(base.dueIn)) {
+        put(d, "dueIn", relativeDaysToIso(dueDays));
+        if (dueDays !== "") delete d.dueDate; // dueIn und dueDate schließen sich aus
+      }
+      put(
+        d,
+        "subIssues",
+        subs
+          .filter((r) => r.title.trim() !== "")
+          .map((r) => {
+            const o: Data = { ...r.raw, title: r.title.trim() };
+            put(o, "priority", r.priority === "" ? undefined : Number(r.priority));
+            putRelative(o, "dueIn", r.dueDays, r.initialDueDays);
+            return o;
+          }),
+      );
     } else if (kind === "project") {
       put(d, "name", title.trim());
       put(d, "summary", summary.trim());
-      put(d, "description", body);
+      put(d, "description", body.trimEnd());
       put(d, "priority", priority === "" ? undefined : Number(priority));
       if (statusType !== str(base.statusType)) {
         delete d.statusId;
         put(d, "statusType", statusType);
       }
+      put(d, "leadId", lead);
+      put(d, "memberIds", memberIds);
+      put(d, "labelIds", projectLabelIds);
+      put(
+        d,
+        "milestones",
+        milestones
+          .filter((r) => r.name.trim() !== "")
+          .map((r) => {
+            const o: Data = { ...r.raw, name: r.name.trim() };
+            putRelative(o, "targetIn", r.targetDays, r.initialTargetDays);
+            return o;
+          }),
+      );
     } else {
       put(d, "title", title.trim() ? title : undefined); // Präfixe wie „Bug: “ behalten ihr Leerzeichen
-      put(d, "content", body);
+      put(d, "content", body.trimEnd());
     }
     return d;
   }
 
   const estimateBad = estimate.trim() !== "" && !Number.isFinite(Number(estimate));
-  const valid = name.trim() !== "" && !estimateBad;
+  const relativeBad =
+    !relativeDaysValid(dueDays) ||
+    subs.some((r) => !relativeDaysValid(r.dueDays)) ||
+    milestones.some((r) => !relativeDaysValid(r.targetDays));
+  const valid = name.trim() !== "" && !estimateBad && !relativeBad;
   const error = m.create.error ?? m.update.error;
-  const toggleLabel = (id: string) =>
-    setLabelIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  const toggleIn = (set: (f: (c: string[]) => string[]) => void, id: string) =>
+    set((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  const toggleLabel = (id: string) => toggleIn(setLabelIds, id);
+  const patchSub = (i: number, patch: Partial<SubRow>) =>
+    setSubs((cur) => cur.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+  const patchMilestone = (i: number, patch: Partial<MilestoneRow>) =>
+    setMilestones((cur) => cur.map((r, k) => (k === i ? { ...r, ...patch } : r)));
 
   return (
     <form
@@ -177,13 +290,13 @@ function TemplateEditor({
           />
         </Field>
       )}
-      <Field label={kind === "document" ? "Content (Markdown)" : "Description (Markdown)"}>
-        <textarea
-          aria-label="Body"
-          rows={6}
-          className="rounded-md border border-input bg-transparent px-2 py-1.5 font-mono text-sm"
+      <Field label={kind === "document" ? "Content" : "Description"}>
+        <RichEditor
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          ariaLabel="Body"
+          placeholder={kind === "document" ? "Write the content…" : "Add description…"}
+          onChange={setBody}
+          className="max-h-72 min-h-24 overflow-y-auto rounded-md border border-input px-2 py-1.5"
         />
       </Field>
       {kind !== "document" && (
@@ -251,6 +364,73 @@ function TemplateEditor({
               className="w-24"
             />
           </Field>
+          <Field label="Due in (days after creation)">
+            <Input
+              aria-label="Due in days"
+              inputMode="numeric"
+              className="w-24"
+              value={dueDays}
+              onChange={(e) => setDueDays(e.target.value)}
+            />
+          </Field>
+          <fieldset className="flex flex-col gap-2 text-sm">
+            <legend className="text-xs text-muted-foreground">Sub-issues</legend>
+            {subs.map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Input
+                  aria-label={`Sub-issue ${i + 1} title`}
+                  className="min-w-40 flex-1"
+                  value={r.title}
+                  onChange={(e) => patchSub(i, { title: e.target.value })}
+                />
+                <select
+                  aria-label={`Sub-issue ${i + 1} priority`}
+                  className={selectClass}
+                  value={r.priority}
+                  onChange={(e) => patchSub(i, { priority: e.target.value })}
+                >
+                  <option value="">No priority preset</option>
+                  {PRIORITIES.map((p, k) => (
+                    <option key={p} value={k}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  aria-label={`Sub-issue ${i + 1} due in days`}
+                  inputMode="numeric"
+                  placeholder="Due in (days)"
+                  className="w-32"
+                  value={r.dueDays}
+                  onChange={(e) => patchSub(i, { dueDays: e.target.value })}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove sub-issue ${i + 1}`}
+                  onClick={() => setSubs((cur) => cur.filter((_, k) => k !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setSubs((cur) => [
+                    ...cur,
+                    { raw: {}, title: "", priority: "", dueDays: "", initialDueDays: "" },
+                  ])
+                }
+              >
+                <Plus /> Add sub-issue
+              </Button>
+            </div>
+          </fieldset>
           <fieldset className="flex flex-col gap-1 text-sm">
             <legend className="text-xs text-muted-foreground">Labels</legend>
             {labels.length === 0 && <span className="text-muted-foreground">No labels yet.</span>}
@@ -286,6 +466,113 @@ function TemplateEditor({
             ))}
           </select>
         </Field>
+      )}
+      {kind === "project" && (
+        <>
+          <Field label="Lead">
+            <select
+              aria-label="Lead"
+              className={selectClass}
+              value={lead}
+              onChange={(e) => setLead(e.target.value)}
+            >
+              <option value="">Not preset</option>
+              <option value="creator">Creator of the project</option>
+              {projectMembers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.displayName || u.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <fieldset className="flex flex-col gap-1 text-sm">
+            <legend className="text-xs text-muted-foreground">Members</legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {projectMembers.map((u) => (
+                <label key={u.id} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    aria-label={`Member ${u.displayName || u.name}`}
+                    checked={memberIds.includes(u.id)}
+                    onChange={() => toggleIn(setMemberIds, u.id)}
+                  />
+                  {u.displayName || u.name}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="flex flex-col gap-1 text-sm">
+            <legend className="text-xs text-muted-foreground">Project labels</legend>
+            {projectLabels.isError && (
+              <span role="alert" className="text-xs text-destructive">
+                {errorText(projectLabels.error)}
+              </span>
+            )}
+            {projectLabels.data?.length === 0 && (
+              <span className="text-muted-foreground">No project labels yet.</span>
+            )}
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {(projectLabels.data ?? [])
+                .filter((l) => !l.isGroup && !l.retiredAt)
+                .map((l) => (
+                  <label key={l.id} className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      aria-label={`Project label ${l.name}`}
+                      checked={projectLabelIds.includes(l.id)}
+                      onChange={() => toggleIn(setProjectLabelIds, l.id)}
+                    />
+                    {l.name}
+                  </label>
+                ))}
+            </div>
+          </fieldset>
+          <fieldset className="flex flex-col gap-2 text-sm">
+            <legend className="text-xs text-muted-foreground">Milestones</legend>
+            {milestones.map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Input
+                  aria-label={`Milestone ${i + 1} name`}
+                  className="min-w-40 flex-1"
+                  value={r.name}
+                  onChange={(e) => patchMilestone(i, { name: e.target.value })}
+                />
+                <Input
+                  aria-label={`Milestone ${i + 1} target in days`}
+                  inputMode="numeric"
+                  placeholder="Target in (days)"
+                  className="w-36"
+                  value={r.targetDays}
+                  onChange={(e) => patchMilestone(i, { targetDays: e.target.value })}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove milestone ${i + 1}`}
+                  onClick={() => setMilestones((cur) => cur.filter((_, k) => k !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setMilestones((cur) => [
+                    ...cur,
+                    { raw: {}, name: "", targetDays: "", initialTargetDays: "" },
+                  ])
+                }
+              >
+                <Plus /> Add milestone
+              </Button>
+            </div>
+          </fieldset>
+        </>
       )}
       <div className="flex items-center gap-3">
         <Button
@@ -452,8 +739,10 @@ function useEditorData(team?: Team) {
   const wsLabels = useWorkspaceLabels();
   const states = useWorkflowStates(team?.id);
   const members = useTeamMembers(team?.key ?? "");
+  const wsMembers = useWorkspaceMembers(!team);
   const all = team ? teamLabels.data : wsLabels.data;
   return {
+    projectMembers: (team ? members.data : wsMembers.data) ?? [],
     labels: (all ?? []).filter((l) => !l.isGroup && !l.retiredAt),
     states: states.data ?? [],
     members: team ? (members.data ?? []) : [],

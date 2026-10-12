@@ -10,9 +10,20 @@ import {
   TEAM_META,
 } from "@/features/issues/test-fixtures";
 import type { Template } from "@/gql/graphql";
+import "@/app/test-polyfills";
 
 import { TeamSettingsPage } from "./settings-pages";
 import { WorkspaceTemplatesPage } from "./workspace-config-pages";
+
+// ProseMirror misst Textbereiche; jsdom liefert dafür keine Geometrie.
+Range.prototype.getClientRects ??= () =>
+  ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: [][Symbol.iterator],
+  }) as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+document.elementFromPoint ??= () => null;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -80,6 +91,15 @@ const handlers = (over: Record<string, (v: Record<string, unknown>) => unknown> 
   SettingsStates: () => ({ workflowStates: STATES }),
   SettingsTeamMembers: () => ({ users: [{ id: "user-bob", name: "Bob", displayName: "Bob" }] }),
   SettingsWorkspaceLabels: () => ({ issueLabels: LABELS }),
+  SettingsProjectLabels: () => ({
+    projectLabels: [
+      { id: "pl-launch", name: "Launch", color: "#fff", isGroup: false, retiredAt: null },
+      { id: "pl-old", name: "Old", color: "#fff", isGroup: false, retiredAt: "2026-01-01" },
+    ],
+  }),
+  SettingsWorkspaceMembers: () => ({
+    users: [{ id: "user-ws", name: "Wanda", displayName: "Wanda" }],
+  }),
   SettingsTemplateCreate: () => ({ templateCreate: { success: true } }),
   SettingsTemplateUpdate: () => ({ templateUpdate: { success: true } }),
   SettingsTemplateDelete: () => ({ templateDelete: { success: true } }),
@@ -172,6 +192,155 @@ describe("Team templates section", () => {
         },
       },
     });
+  });
+
+  it("edits sub-issues and the due date of an issue template", async () => {
+    const gql = mockGraphql(
+      handlers({
+        SettingsTemplates: () => ({
+          templates: [
+            tpl({
+              id: "t-bug",
+              name: "Bug report",
+              type: "issue",
+              templateData: {
+                title: "Bug: ",
+                dueIn: "P2W",
+                subIssues: [
+                  {
+                    title: "Repro",
+                    description: "Steps",
+                    dueIn: "P1W",
+                    subIssues: [{ title: "x" }],
+                  },
+                  { title: "Fix" },
+                ],
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+    await openTeam();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit Bug report" }));
+    expect(screen.getByLabelText("Due in days")).toHaveValue("14");
+    expect(screen.getByLabelText("Sub-issue 1 title")).toHaveValue("Repro");
+    expect(screen.getByLabelText("Sub-issue 1 due in days")).toHaveValue("7");
+    // Unveränderte Fristen bleiben im Original (P2W/P1W), unbekannte Felder bleiben erhalten.
+    await user.clear(screen.getByLabelText("Sub-issue 1 title"));
+    await user.type(screen.getByLabelText("Sub-issue 1 title"), "Reproduce");
+    await user.selectOptions(screen.getByLabelText("Sub-issue 2 priority"), "2");
+    await user.click(screen.getByRole("button", { name: "Remove sub-issue 2" }));
+    await user.click(screen.getByRole("button", { name: /Add sub-issue/ }));
+    await user.type(screen.getByLabelText("Sub-issue 2 title"), "Verify");
+    await user.type(screen.getByLabelText("Sub-issue 2 due in days"), "3");
+    await user.click(screen.getByRole("button", { name: "Save template" }));
+    await waitFor(() => expect(gql.of("SettingsTemplateUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsTemplateUpdate")[0]!.variables).toMatchObject({
+      input: {
+        templateData: {
+          title: "Bug: ",
+          dueIn: "P2W",
+          subIssues: [
+            { title: "Reproduce", description: "Steps", dueIn: "P1W", subIssues: [{ title: "x" }] },
+            { title: "Verify", dueIn: "P3D" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("sets and clears dueIn and ignores empty sub-issue rows", async () => {
+    const gql = mockGraphql(handlers());
+    await openTeam();
+    const user = userEvent.setup();
+    await screen.findByRole("group", { name: "Issue templates" });
+    await user.click(screen.getByRole("button", { name: /New template/ }));
+    await user.type(screen.getByLabelText("Template name"), "Chore");
+    await user.type(screen.getByLabelText("Due in days"), "5");
+    await user.click(screen.getByRole("button", { name: /Add sub-issue/ }));
+    await user.click(screen.getByRole("button", { name: "Save template" }));
+    await waitFor(() => expect(gql.of("SettingsTemplateCreate")).toHaveLength(1));
+    expect(gql.of("SettingsTemplateCreate")[0]!.variables).toEqual({
+      input: { type: "issue", name: "Chore", teamId: "team-eng", templateData: { dueIn: "P5D" } },
+    });
+  });
+
+  it("blocks saving an invalid due date", async () => {
+    mockGraphql(handlers());
+    await openTeam();
+    const user = userEvent.setup();
+    await screen.findByRole("group", { name: "Issue templates" });
+    await user.click(screen.getByRole("button", { name: /New template/ }));
+    await user.type(screen.getByLabelText("Template name"), "Chore");
+    await user.type(screen.getByLabelText("Due in days"), "-2");
+    expect(screen.getByRole("button", { name: "Save template" })).toBeDisabled();
+  });
+
+  it("edits project templates with milestones, project labels, lead and members", async () => {
+    const gql = mockGraphql(
+      handlers({
+        SettingsTemplates: () => ({
+          templates: [
+            tpl({
+              id: "t-proj",
+              name: "Launch",
+              type: "project",
+              templateData: {
+                name: "Launch",
+                milestones: [{ name: "Beta", targetIn: "P2W", description: "Invite users" }],
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+    await openTeam();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit Launch" }));
+    expect(screen.getByLabelText("Milestone 1 name")).toHaveValue("Beta");
+    expect(screen.getByLabelText("Milestone 1 target in days")).toHaveValue("14");
+    // Zurückgezogene Projekt-Labels stehen nicht zur Wahl.
+    expect(await screen.findByLabelText("Project label Launch")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Project label Old")).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Lead"), "creator");
+    await user.click(screen.getByLabelText("Member Bob"));
+    await user.click(screen.getByLabelText("Project label Launch"));
+    await user.click(screen.getByRole("button", { name: /Add milestone/ }));
+    await user.type(screen.getByLabelText("Milestone 2 name"), "GA");
+    await user.type(screen.getByLabelText("Milestone 2 target in days"), "30");
+    await user.click(screen.getByRole("button", { name: "Save template" }));
+    await waitFor(() => expect(gql.of("SettingsTemplateUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsTemplateUpdate")[0]!.variables).toMatchObject({
+      id: "t-proj",
+      input: {
+        templateData: {
+          name: "Launch",
+          leadId: "creator",
+          memberIds: ["user-bob"],
+          labelIds: ["pl-launch"],
+          milestones: [
+            { name: "Beta", targetIn: "P2W", description: "Invite users" },
+            { name: "GA", targetIn: "P30D" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("uses workspace members for project templates in the workspace", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(
+      <WorkspaceTemplatesPage ws="acme" />,
+      newClient(),
+      "/acme/settings/templates",
+    );
+    const user = userEvent.setup();
+    await screen.findByRole("group", { name: "Issue templates" });
+    await user.selectOptions(screen.getByLabelText("New template type"), "project");
+    await user.click(screen.getByRole("button", { name: /New template/ }));
+    expect(await screen.findByLabelText("Member Wanda")).toBeInTheDocument();
   });
 
   it("shows the server error when saving fails", async () => {

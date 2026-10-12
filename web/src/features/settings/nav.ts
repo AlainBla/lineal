@@ -4,7 +4,16 @@ import type { Session } from "@/app/auth";
 export function workspaceSettingsNav(
   ws: string,
   session: Session | null | undefined,
-  active: "workspace" | "members" | "teams" | "labels" | "templates" | "api" | "security" | "audit",
+  active:
+    | "workspace"
+    | "members"
+    | "teams"
+    | "labels"
+    | "templates"
+    | "api"
+    | "security"
+    | "audit"
+    | "webhooks",
 ) {
   const role = session?.user.role;
   const admin = role === "owner" || role === "admin";
@@ -18,6 +27,7 @@ export function workspaceSettingsNav(
       ? [
           { label: "Security", to: `/${ws}/settings/security`, active: active === "security" },
           { label: "Audit log", to: `/${ws}/settings/audit`, active: active === "audit" },
+          { label: "Webhooks", to: `/${ws}/settings/webhooks`, active: active === "webhooks" },
         ]
       : []),
     { label: "API", to: `/${ws}/settings/api`, active: active === "api" },

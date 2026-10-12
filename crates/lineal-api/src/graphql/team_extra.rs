@@ -2,13 +2,16 @@
 //!
 //! Rechte und Sichtbarkeit prüft `App` (private Teams → `not_found`, Lese-Scope → `forbidden`).
 
+use super::label::IssueLabelGql;
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
 use async_graphql::types::Json;
 use async_graphql::{Context, InputObject, Object, SimpleObject};
 use chrono::NaiveDate;
 use lineal_app::AppError;
+use lineal_app::ports::repos::label::LabelKind;
 use lineal_app::ports::repos::triage::{RecurringIssue, SlaRule};
+use lineal_app::usecases::label::ListLabelsInput;
 use lineal_app::usecases::team_extra::{
     CreateRecurringInput, CreateSlaRuleInput, SetTeamSlaInput, TeamSlaView, UpdateRecurringInput,
     UpdateSlaRuleInput,
@@ -215,6 +218,28 @@ impl TeamExtraQuery {
             .await
             .map_err(gql_err)?
             .into())
+    }
+
+    /// Projekt-Labels des Workspace (für Projekt-Templates); gleiche Form wie `IssueLabel`.
+    async fn project_labels(
+        &self,
+        ctx: &Context<'_>,
+        include_groups: Option<bool>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<IssueLabelGql>> {
+        let page = app(ctx)?
+            .list_labels(
+                request_ctx(ctx)?,
+                LabelKind::Project,
+                ListLabelsInput {
+                    include_groups: include_groups.unwrap_or(true),
+                    limit: i64::from(first.unwrap_or(100).clamp(1, 250)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(page.items.into_iter().map(Into::into).collect())
     }
 
     /// Wiederkehrende Issues eines Teams.

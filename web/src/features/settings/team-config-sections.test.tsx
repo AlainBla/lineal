@@ -111,6 +111,22 @@ describe("AutomationsSection", () => {
     });
   });
 
+  it("resets the auto-close status to the team default", async () => {
+    const gql = mockGraphql(baseHandlers({ autoClosePeriod: 6, autoCloseStateId: "s-canceled" }));
+    await open("automations");
+    const user = userEvent.setup();
+    const status = await screen.findByLabelText("Auto-close status");
+    await screen.findByRole("option", { name: "Canceled" });
+    await waitFor(() => expect(status).toHaveValue("s-canceled"));
+    await user.selectOptions(status, "");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("SettingsTeamUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsTeamUpdate")[0]!.variables).toEqual({
+      id: "team-eng",
+      input: { autoCloseStateId: "" },
+    });
+  });
+
   it("switches auto-close off with 0", async () => {
     const gql = mockGraphql(baseHandlers({ autoClosePeriod: 6, autoCloseStateId: "s-canceled" }));
     await open("automations");
