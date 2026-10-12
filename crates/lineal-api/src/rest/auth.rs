@@ -6,6 +6,7 @@
 
 use crate::auth_failures::AuthFailures;
 use crate::client_ip::ClientIp;
+use crate::middleware::request_id::RequestId;
 use axum::Extension;
 use axum::Json;
 use axum::extract::State;
@@ -81,12 +82,14 @@ pub async fn login(
     State(app): State<Arc<App>>,
     fails: Option<Extension<Arc<AuthFailures>>>,
     client: Option<Extension<ClientIp>>,
+    request_id: Option<Extension<RequestId>>,
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
     // Brute-Force-Schutz: Zähler je IP, je Paar (Account, IP) und je Account werden VOR der
     // Passwortprüfung atomar reserviert und bei Erfolg zurückgegeben.
     let now_ms = app.clock.now().timestamp_millis();
+    let client_ip = client.as_ref().map(|Extension(c)| c.0.to_string());
     let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
     let reservation = match &fails {
         Some(Extension(f)) => match f.reserve_login(&body.email, ip_key.as_deref(), now_ms) {
@@ -107,7 +110,8 @@ pub async fn login(
             password: body.password,
             workspace: body.workspace,
             user_agent,
-            ip_address: None,
+            ip_address: client_ip,
+            request_id: request_id.map(|Extension(r)| r.0),
         })
         .await;
     match result {
@@ -194,9 +198,16 @@ pub async fn accept_invite(
 }
 
 /// `POST /auth/logout`: widerruft die Session serverseitig und löscht das Cookie.
-pub async fn logout(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+pub async fn logout(
+    State(app): State<Arc<App>>,
+    client: Option<Extension<ClientIp>>,
+    request_id: Option<Extension<RequestId>>,
+    headers: HeaderMap,
+) -> Response {
+    let client_ip = client.map(|Extension(c)| c.0.to_string());
+    let request_id = request_id.map(|Extension(r)| r.0);
     if let Some(token) = cookie_value(&headers, SESSION_COOKIE)
-        && let Err(e) = app.logout(&token).await
+        && let Err(e) = app.logout(&token, client_ip, request_id).await
     {
         return error_response(e);
     }
@@ -234,6 +245,8 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         team_scope: principal.team_scope.clone(),
 
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     let (user, org) = match (
         app.get_user(&ctx, &user_id.to_string()).await,

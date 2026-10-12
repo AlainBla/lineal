@@ -548,6 +548,8 @@ pub(crate) mod fixtures {
             scopes: crate::context::Scopes::all(),
             team_scope: None,
             via_session: false,
+            client_ip: None,
+            credential_kind: None,
         }
     }
 }

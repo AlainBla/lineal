@@ -82,6 +82,8 @@ pub struct SecuritySettingsGql {
     pub import_role: String,
     /// Leer = Einladungen an alle Domains erlaubt.
     pub allowed_invite_domains: Vec<String>,
+    /// Aufbewahrung des Audit-Logs in Tagen (Default 365, Minimum 30).
+    pub audit_log_retention_days: i32,
 }
 
 impl From<OrgPolicy> for SecuritySettingsGql {
@@ -99,6 +101,7 @@ impl From<OrgPolicy> for SecuritySettingsGql {
             pinned_view_management_role: r(p.pinned_view_management_role),
             import_role: r(p.import_role),
             allowed_invite_domains: p.allowed_invite_domains,
+            audit_log_retention_days: i32::try_from(p.audit_log_retention_days).unwrap_or(365),
         }
     }
 }
@@ -117,6 +120,8 @@ pub struct SecuritySettingsUpdateInput {
     pub pinned_view_management_role: Option<String>,
     pub import_role: Option<String>,
     pub allowed_invite_domains: Option<Vec<String>>,
+    /// Aufbewahrung des Audit-Logs in Tagen (30 bis 3650).
+    pub audit_log_retention_days: Option<i32>,
 }
 
 impl SecuritySettingsUpdateInput {
@@ -145,6 +150,7 @@ impl SecuritySettingsUpdateInput {
         Ok(SecuritySettingsPatch {
             roles,
             allowed_invite_domains: self.allowed_invite_domains,
+            audit_log_retention_days: self.audit_log_retention_days.map(i64::from),
         })
     }
 }

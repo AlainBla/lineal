@@ -9,6 +9,7 @@
 //! Team (neues Lead-Team: das mit den meisten Issues im Projekt, bei Gleichstand das älteste).
 //! Offen: `openIssuesOnRetirement` (`cancel`/`moveToTeam`) – nur `keep`.
 
+use super::audit::AuditEvent;
 use super::team::{NestOptions, TeamView, emit};
 use crate::app::App;
 use crate::context::RequestCtx;
@@ -150,6 +151,12 @@ impl App {
             tx.webhooks().set_team_retired(t, Some(now), now).await?;
             emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: t }).await?;
         }
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new("team.archived", "team", Some(team_id.0), json!({})),
+        )
+        .await?;
         let tree = TeamTree::new(tx.teams().list_all().await?);
         let v = view(&tree, team_id)?;
         tx.commit().await?;
@@ -234,6 +241,12 @@ impl App {
             self.trash_team_in(&mut *tx, ctx, &snap.tree, t, now)
                 .await?;
         }
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new("team.deleted", "team", Some(team_id.0), json!({})),
+        )
+        .await?;
         let tree = TeamTree::new(tx.teams().list_all().await?);
         let v = view(&tree, team_id)?;
         tx.commit().await?;

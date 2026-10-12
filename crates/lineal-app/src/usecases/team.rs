@@ -3,6 +3,7 @@
 //!
 //! Stilllegen/Löschen/Wiederherstellen (`team_lifecycle`) liegt bei WP16.
 
+use super::audit::AuditEvent;
 use super::state::{
     WorkflowPointers, copy_states, create_default_workflow, detach_from_parent,
     ensure_triage_state, normalize_to_parent, pointers_of,
@@ -639,6 +640,12 @@ impl App {
             }
         }
         emit(tx, ctx, DomainEvent::TeamCreated { team_id: id }).await?;
+        self.record_audit(
+            tx,
+            ctx,
+            AuditEvent::new("team.created", "team", Some(id.0), json!({})),
+        )
+        .await?;
         Ok(id)
     }
 }

@@ -89,6 +89,7 @@ async fn admins_rejects_unlisted_role_user_suspended_and_same_email_elsewhere(po
             owner_name: "Mallory".into(),
             owner_email: "alice@acme.example".into(),
             owner_password: Some("lineal-dev".into()),
+            credential_kind: None,
         })
         .await
         .unwrap();
@@ -102,6 +103,8 @@ async fn admins_rejects_unlisted_role_user_suspended_and_same_email_elsewhere(po
         scopes: Scopes::all(),
         team_scope: None,
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     assert!(is_forbidden(
         app.create_workspace_for_account(&ctx, "Stolen", None).await

@@ -312,6 +312,8 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, Str
         team_scope: principal.team_scope.clone(),
 
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     Ok((ctx, token_hash))
 }

@@ -62,6 +62,10 @@ pub struct RequestCtx {
     /// `true`, wenn die Anfrage mit einer Web-Session (Cookie) authentifiziert wurde – nicht mit
     /// API-Key oder OAuth-Token. Nur dann dürfen z. B. neue API-Keys angelegt werden.
     pub via_session: bool,
+    /// Client-IP des Requests (Audit-Log). `None` ohne Netzwerkkontext (Jobs, CLI, MCP-Transport).
+    pub client_ip: Option<String>,
+    /// Art der Zugangsdaten für den Audit-Log: `session`, `api_key`, `oauth`, `cli`; `None` ohne.
+    pub credential_kind: Option<&'static str>,
 }
 
 impl RequestCtx {
@@ -74,6 +78,18 @@ impl RequestCtx {
             scopes: Scopes::all(),
             team_scope: None,
             via_session: false,
+            client_ip: None,
+            credential_kind: None,
         }
+    }
+}
+
+/// Bezeichnung einer Token-Art im Audit-Log (`credential_kind`).
+pub const fn credential_label(kind: crate::ports::repos::auth::CredentialKind) -> &'static str {
+    use crate::ports::repos::auth::CredentialKind;
+    match kind {
+        CredentialKind::Session => "session",
+        CredentialKind::ApiKey => "api_key",
+        CredentialKind::OAuth => "oauth",
     }
 }

@@ -20,6 +20,7 @@ struct FakeState {
     principals: Mutex<HashMap<String, Principal>>,
     events: Mutex<Vec<NewEvent>>,
     jobs: Mutex<Vec<NewJob>>,
+    audit: Mutex<Vec<NewAuditEntry>>,
     sync_seq: AtomicI64,
 }
 
@@ -52,6 +53,11 @@ impl FakeStore {
     /// Alle bisher eingeplanten Jobs.
     pub fn enqueued_jobs(&self) -> Vec<NewJob> {
         lock(&self.state.jobs).clone()
+    }
+
+    /// Alle bisher geschriebenen Audit-Einträge (aller Workspaces, in Schreibreihenfolge).
+    pub fn audit_entries(&self) -> Vec<NewAuditEntry> {
+        lock(&self.state.audit).clone()
     }
 }
 
@@ -99,6 +105,53 @@ empty_repos!(
     OverviewRepo,
     ImportRepo,
 );
+
+#[async_trait]
+impl AuditRepo for FakeTx {
+    async fn append(&mut self, entry: &NewAuditEntry) -> AppResult<()> {
+        lock(&self.state.audit).push(entry.clone());
+        Ok(())
+    }
+    async fn list(
+        &mut self,
+        filter: &AuditFilter,
+        cursor: Option<AuditCursor>,
+        limit: i64,
+    ) -> AppResult<Vec<AuditEntry>> {
+        let mut rows: Vec<AuditEntry> = lock(&self.state.audit)
+            .iter()
+            .filter(|e| e.organization_id == self.org)
+            .filter(|e| filter.action.as_deref().is_none_or(|a| a == e.action))
+            .filter(|e| {
+                filter
+                    .actor_user_id
+                    .is_none_or(|u| Some(u) == e.actor_user_id)
+            })
+            .filter(|e| filter.since.is_none_or(|t| e.occurred_at >= t))
+            .filter(|e| filter.until.is_none_or(|t| e.occurred_at < t))
+            .map(|e| AuditEntry {
+                id: e.id,
+                organization_id: e.organization_id,
+                occurred_at: e.occurred_at,
+                actor_user_id: e.actor_user_id,
+                actor_kind: e.actor_kind.as_str().to_owned(),
+                credential_kind: e.credential_kind.map(str::to_owned),
+                action: e.action.clone(),
+                target_type: e.target_type.clone(),
+                target_id: e.target_id,
+                details: e.details.clone(),
+                ip: e.ip.map(|i| i.to_string()),
+                request_id: e.request_id.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| (b.occurred_at, b.id).cmp(&(a.occurred_at, a.id)));
+        if let Some(c) = cursor {
+            rows.retain(|r| (r.occurred_at, r.id) < (c.occurred_at, c.id));
+        }
+        rows.truncate(usize::try_from(limit).unwrap_or(0));
+        Ok(rows)
+    }
+}
 
 #[async_trait]
 impl AuthRepo for FakeTx {
@@ -239,6 +292,9 @@ impl Tx for FakeTx {
         self
     }
     fn imports(&mut self) -> &mut dyn ImportRepo {
+        self
+    }
+    fn audit(&mut self) -> &mut dyn AuditRepo {
         self
     }
     async fn commit(self: Box<Self>) -> AppResult<()> {

@@ -1,6 +1,7 @@
 //! Repository-Implementierungen für `PgTx`, je Bereich eine Datei. Gemeinsame Datei: nur S1 / Orchestrator.
 
 mod attachment;
+mod audit;
 mod auth;
 mod comment;
 mod cycle;

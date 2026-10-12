@@ -5,6 +5,7 @@
 //! die reinen Hilfen dieses Moduls (`sign`, `UrlPolicy`, `resolve_target`, `retry_delay`) und die
 //! Use-Cases `claim_due_webhook_deliveries` / `record_webhook_attempt`.
 
+use super::audit::AuditEvent;
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
@@ -656,6 +657,11 @@ impl App {
                 .with_details(json!({ "limit": "maxWebhooks" })));
         }
         let url = self.check_webhook_target(&input.url).await?;
+        // Nur der Host landet im Audit-Log: Pfad und Query können Zugangsdaten enthalten.
+        let audit_host = url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned));
+        let audit_team_scoped = team_id.is_some();
         let secret = generate_secret();
         let now = self.clock.now();
         let id = WebhookId(self.ids.new_uuid());
@@ -678,6 +684,17 @@ impl App {
             .get_webhook(id)
             .await?
             .ok_or_else(|| AppError::internal("webhook vanished after insert"))?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "webhook.created",
+                "webhook",
+                Some(id.0),
+                json!({ "host": audit_host, "team_scoped": audit_team_scoped }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(WebhookView {
             webhook,
@@ -788,6 +805,12 @@ impl App {
             .ok_or_else(webhook_not_found)?;
         Self::authorize_webhook(&snap, ctx, &w).map_err(|e| hide_forbidden(e, &w, &snap))?;
         tx.webhooks().archive_webhook(id, self.clock.now()).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new("webhook.deleted", "webhook", Some(id.0), json!({})),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }

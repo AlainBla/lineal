@@ -727,6 +727,7 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
             owner_name: "Zed Example".into(),
             owner_email: "zed@globex.example".into(),
             owner_password: Some("lineal-dev".into()),
+            credential_kind: None,
         })
         .await
         .unwrap();
@@ -756,6 +757,7 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
             owner_name: "A".into(),
             owner_email: "a@x.example".into(),
             owner_password: None,
+            credential_kind: None,
         })
         .await;
     assert_eq!(kind(r), ErrorKind::Conflict);
@@ -766,6 +768,7 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
             owner_name: "Y".into(),
             owner_email: "zed@globex.example".into(),
             owner_password: None,
+            credential_kind: None,
         })
         .await
         .unwrap();
@@ -782,6 +785,8 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
         team_scope: None,
 
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     let org = app
         .update_workspace(
@@ -852,7 +857,7 @@ async fn login_logout_and_enumeration_resistance(pool: PgPool) {
         .unwrap();
     assert_ne!(login.token, login2.token);
     // Logout invalidiert serverseitig
-    assert!(app.logout(&login.token).await.unwrap());
+    assert!(app.logout(&login.token, None, None).await.unwrap());
     assert_eq!(
         kind(app.principal_for_token(&login.token).await),
         ErrorKind::Unauthenticated

@@ -74,6 +74,8 @@ pub fn ctx_for(user: SeedUser) -> RequestCtx {
         team_scope: None,
         // Wie ein Browser-Aufruf mit Session-Cookie (Tests für session-only Use-Cases).
         via_session: true,
+        client_ip: None,
+        credential_kind: None,
     }
 }
 

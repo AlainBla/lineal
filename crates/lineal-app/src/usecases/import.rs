@@ -7,6 +7,7 @@
 //!
 //! Das Token verlässt diese Datei nur als [`Secret`], dessen `Debug`/`Display` nichts preisgeben.
 
+use super::audit::AuditEvent;
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
@@ -354,6 +355,17 @@ impl App {
                 },
             )
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "import.started",
+                "import_run",
+                Some(run.id),
+                json!({ "source": run.source, "delta": input.delta }),
+            ),
+        )
+        .await?;
         let run = tx
             .imports()
             .get_import_run(run.id)

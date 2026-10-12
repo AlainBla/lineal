@@ -20,6 +20,7 @@ use lineal_app::ports::repos::NewEvent;
 use lineal_app::ports::repos::webhook::{
     ClientRegistration, NewAuthCode, NewOauthToken, TokenRotation,
 };
+use lineal_app::usecases::audit::AuditEvent;
 use lineal_app::{Actor, App, AppResult};
 use lineal_domain::enums::UserRole;
 use lineal_domain::events::{DomainEvent, EventOrigin};
@@ -520,6 +521,17 @@ async fn authorize_inner(
                 now,
             })
             .await?;
+        app.record_audit(
+            &mut *tx,
+            &ctx,
+            AuditEvent::new(
+                "oauth_app.authorized",
+                "oauth_app",
+                Some(application),
+                serde_json::json!({ "client_name": client.client_name, "scopes": scopes }),
+            ),
+        )
+        .await?;
         tx.commit().await
     }
     .await;
@@ -752,10 +764,25 @@ pub async fn revoke(
                 let mut tx = app.store.begin(org).await?;
                 tx.outbox()
                     .push(NewEvent::new(
-                        DomainEvent::OAuthAuthorizationRevoked { client_id },
+                        DomainEvent::OAuthAuthorizationRevoked {
+                            client_id: client_id.clone(),
+                        },
                         EventOrigin::System,
                     ))
                     .await?;
+                let mut audit_ctx = lineal_app::RequestCtx::system(org, "");
+                audit_ctx.credential_kind = Some("oauth");
+                app.record_audit(
+                    &mut *tx,
+                    &audit_ctx,
+                    AuditEvent::new(
+                        "oauth_app.revoked",
+                        "oauth_app",
+                        None,
+                        serde_json::json!({ "client_id": client_id.to_string() }),
+                    ),
+                )
+                .await?;
                 tx.commit().await?;
             }
             Ok(())

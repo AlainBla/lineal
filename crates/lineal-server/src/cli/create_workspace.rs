@@ -35,6 +35,7 @@ pub async fn execute(app: &App, args: &CreateWorkspaceArgs, password: String) ->
             owner_name: args.owner_name.clone(),
             owner_email: args.owner_email.clone(),
             owner_password: Some(password),
+            credential_kind: Some("cli"),
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;

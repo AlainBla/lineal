@@ -49,6 +49,8 @@ pub trait Tx: Send {
     fn overview(&mut self) -> &mut dyn OverviewRepo;
     /// Zusatz gegenüber docs/11: Import-Repository (WP18).
     fn imports(&mut self) -> &mut dyn ImportRepo;
+    /// Zusatz gegenüber docs/11: Audit-Log (WP25, append-only).
+    fn audit(&mut self) -> &mut dyn AuditRepo;
 
     async fn commit(self: Box<Self>) -> AppResult<()>;
 }

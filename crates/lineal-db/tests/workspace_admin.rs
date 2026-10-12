@@ -51,6 +51,7 @@ fn patch(roles: &[(&str, UserRole)], domains: Option<&[&str]>) -> SecuritySettin
     SecuritySettingsPatch {
         roles: roles.iter().map(|(k, r)| ((*k).to_owned(), *r)).collect(),
         allowed_invite_domains: domains.map(|d| d.iter().map(|s| (*s).to_owned()).collect()),
+        audit_log_retention_days: None,
     }
 }
 
@@ -136,6 +137,7 @@ async fn security_settings_read_write_and_validation(pool: PgPool) {
             SecuritySettingsPatch {
                 roles: vec![],
                 allowed_invite_domains: Some(too_many),
+                audit_log_retention_days: None,
             },
         )
         .await

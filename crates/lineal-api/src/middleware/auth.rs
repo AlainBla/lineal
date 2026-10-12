@@ -178,6 +178,13 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                             scopes: principal.scopes,
                             team_scope: principal.team_scope,
                             via_session: principal.kind == CredentialKind::Session,
+                            client_ip: req
+                                .extensions()
+                                .get::<crate::client_ip::ClientIp>()
+                                .map(|c| c.0.to_string()),
+                            credential_kind: Some(lineal_app::context::credential_label(
+                                principal.kind,
+                            )),
                         },
                         class,
                     }

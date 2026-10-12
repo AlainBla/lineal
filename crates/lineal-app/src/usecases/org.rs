@@ -1,5 +1,6 @@
 //! usecases – Workspace (docs/02 §1): anlegen mit Grundgerüst, lesen, Settings ändern.
 
+use super::audit::{AUDIT_RETENTION_MIN_DAYS, AuditEvent};
 use super::team::{CreateTeamInput, TeamView, emit};
 use super::user::display_name_from_email;
 use crate::app::App;
@@ -24,6 +25,9 @@ pub struct CreateWorkspaceInput {
     pub owner_email: String,
     /// Klartext-Passwort des Owners (mindestens 8 Zeichen); `None` = kein Passwort-Login.
     pub owner_password: Option<String>,
+    /// Herkunft für den Audit-Log: `Some("cli")` beim CLI, `Some("session")` bei einer Konto-Session,
+    /// `None` ohne Zugangsdaten.
+    pub credential_kind: Option<&'static str>,
 }
 
 /// Ergebnis von `create_workspace`.
@@ -178,6 +182,7 @@ impl App {
         };
 
         let now = self.clock.now();
+        let url_key_for_audit = url_key.clone();
         tx.orgs()
             .insert(&NewOrg {
                 id: org_id,
@@ -234,8 +239,10 @@ impl App {
             request_id: "req_create_workspace".into(),
             scopes: Scopes::all(),
             team_scope: None,
+            credential_kind: input.credential_kind,
 
             via_session: false,
+            client_ip: None,
         };
         emit(
             &mut *tx,
@@ -262,6 +269,17 @@ impl App {
             display_name: tree.display_name(team_id),
             team,
         };
+        self.record_audit(
+            &mut *tx,
+            &ctx,
+            AuditEvent::new(
+                "workspace.created",
+                "workspace",
+                Some(org_id.0),
+                json!({ "url_key": url_key_for_audit, "owner_id": owner_id.0 }),
+            ),
+        )
+        .await?;
         let org = tx
             .orgs()
             .get()
@@ -388,6 +406,10 @@ pub const SECURITY_ROLE_KEYS: [&str; 10] = [
 
 /// Höchstzahl erlaubter Einladungs-Domains.
 pub const MAX_INVITE_DOMAINS: usize = 50;
+/// Schlüssel der Audit-Log-Aufbewahrung in `securitySettings`.
+pub const AUDIT_RETENTION_KEY: &str = "auditLogRetentionDays";
+/// Höchstwert der Aufbewahrung (zehn Jahre).
+pub const AUDIT_RETENTION_MAX_DAYS: i64 = 3650;
 
 /// Änderung der Security-Settings (`None` = unverändert).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -396,6 +418,8 @@ pub struct SecuritySettingsPatch {
     pub roles: Vec<(String, UserRole)>,
     /// Erlaubte Domains für Einladungen; leere Liste = alle.
     pub allowed_invite_domains: Option<Vec<String>>,
+    /// Aufbewahrung des Audit-Logs in Tagen (`AUDIT_RETENTION_MIN_DAYS`..=`AUDIT_RETENTION_MAX_DAYS`).
+    pub audit_log_retention_days: Option<i64>,
 }
 
 /// Normalisiert und prüft eine Domain (`Acme.Example`, `@acme.example` -> `acme.example`).
@@ -450,6 +474,14 @@ impl App {
                 "Security settings cannot be changed by system contexts.",
             ));
         }
+        if let Some(days) = patch.audit_log_retention_days
+            && !(AUDIT_RETENTION_MIN_DAYS..=AUDIT_RETENTION_MAX_DAYS).contains(&days)
+        {
+            return Err(AppError::invalid_request(format!(
+                "auditLogRetentionDays must be between {AUDIT_RETENTION_MIN_DAYS} and {AUDIT_RETENTION_MAX_DAYS}"
+            ))
+            .with_details(json!({ "field": "auditLogRetentionDays" })));
+        }
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
@@ -501,10 +533,11 @@ impl App {
             .get()
             .await?
             .ok_or_else(|| AppError::not_found("Could not find referenced Workspace."))?;
-        let mut merged = merge_object(
+        let before = merge_object(
             &default_security_settings_json(),
             &current.security_settings,
         );
+        let mut merged = before.clone();
         if let Some(obj) = merged.as_object_mut() {
             for (k, r) in &new_roles {
                 obj.insert((*k).to_owned(), json!(r.as_str()));
@@ -512,6 +545,26 @@ impl App {
             if let Some(d) = &domains {
                 obj.insert("allowedInviteDomains".into(), json!(d));
             }
+            if let Some(days) = patch.audit_log_retention_days {
+                obj.insert(AUDIT_RETENTION_KEY.into(), json!(days));
+            }
+        }
+        // Audit-Log: vorher/nachher je geänderter Einstellung (nur Werte, keine Geheimnisse).
+        let mut changes = serde_json::Map::new();
+        let mut change = |key: &str, to: Value| {
+            changes.insert(
+                key.to_owned(),
+                json!({ "from": before.get(key).cloned().unwrap_or(Value::Null), "to": to }),
+            );
+        };
+        for (k, r) in &new_roles {
+            change(k, json!(r.as_str()));
+        }
+        if let Some(d) = &domains {
+            change("allowedInviteDomains", json!(d));
+        }
+        if let Some(days) = patch.audit_log_retention_days {
+            change(AUDIT_RETENTION_KEY, json!(days));
         }
         let org = tx
             .orgs()
@@ -522,6 +575,17 @@ impl App {
             })
             .await?;
         emit(&mut *tx, ctx, DomainEvent::OrganizationUpdated {}).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "workspace.security_settings_updated",
+                "workspace",
+                Some(ctx.org_id.0),
+                json!({ "changes": changes }),
+            ),
+        )
+        .await?;
         tracing::info!(
             actor = ?ctx.actor,
             changed_roles = ?new_roles.iter().map(|(k, _)| *k).collect::<Vec<_>>(),

@@ -1,6 +1,7 @@
 //! usecases: Bereichsmodule (Eigentümer laut docs/12). Gemeinsame Datei: nur S1 / Orchestrator.
 
 pub mod attachment;
+pub mod audit;
 pub mod auth;
 pub mod comment;
 pub mod cycle;

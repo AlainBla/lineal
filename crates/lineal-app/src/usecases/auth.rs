@@ -4,11 +4,15 @@
 //! `lin_api_` + 96 Hex-Zeichen. Gespeichert wird nur `hash_token` = SHA-256 (hex, Kleinbuchstaben)
 //! über das **komplette** Token inklusive Präfix; Adapter hashen genauso vor dem Lookup.
 
+use super::audit::AuditEvent;
+use super::audit::user_ctx;
 use crate::app::App;
+use crate::context::Actor;
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::repos::Principal;
+use crate::ports::repos::auth::LoginCandidate;
 use crate::ports::repos::auth::{ApiKeyRecord, NewApiKey, NewSession};
 use crate::resolve;
 use crate::resolve::team::Visibility;
@@ -54,6 +58,8 @@ pub struct LoginInput {
     pub workspace: Option<String>,
     pub user_agent: Option<String>,
     pub ip_address: Option<String>,
+    /// Request-ID für den Audit-Log (`None` = leer).
+    pub request_id: Option<String>,
 }
 
 /// Ergebnis von `login`.
@@ -104,24 +110,51 @@ impl App {
             .await?;
         drop(tx);
         let mut matched = Vec::new();
+        let mut failures: Vec<(&LoginCandidate, &'static str)> = Vec::new();
         if candidates.is_empty() {
             // Zeitverhalten angleichen; das Ergebnis wird verworfen.
             self.burn_verify(&input.password);
         }
         for c in &candidates {
-            let ok = match &c.password_hash {
-                Some(h) => self.hasher.verify(&input.password, h).unwrap_or(false),
+            let verdict: Result<(), &'static str> = match &c.password_hash {
+                Some(h) => {
+                    if !self.hasher.verify(&input.password, h).unwrap_or(false) {
+                        Err("invalid_password")
+                    } else if !c.active {
+                        Err("inactive")
+                    } else {
+                        Ok(())
+                    }
+                }
                 None => {
                     self.burn_verify(&input.password);
-                    false
+                    Err("no_password")
                 }
             };
-            if ok && c.active {
-                matched.push(c);
+            match verdict {
+                Ok(()) => matched.push(c),
+                Err(reason) => failures.push((c, reason)),
             }
         }
         let chosen = match matched.as_slice() {
-            [] => return Err(invalid_credentials()),
+            [] => {
+                // Fehlversuch protokollieren, je Konto (Workspace) das existiert. Ein Fehler
+                // beim Protokollieren ändert die Antwort nicht.
+                for (c, reason) in &failures {
+                    if let Err(e) = self
+                        .record_failed_login(
+                            c,
+                            reason,
+                            input.ip_address.clone(),
+                            input.request_id.clone(),
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = %e, "audit entry for failed login not written");
+                    }
+                }
+                return Err(invalid_credentials());
+            }
             [one] => *one,
             _ => {
                 return Err(AppError::invalid_request(
@@ -147,6 +180,25 @@ impl App {
                 now,
             })
             .await?;
+        let login_ctx = user_ctx(
+            chosen.org_id,
+            chosen.user_id,
+            chosen.role,
+            input.ip_address.clone(),
+            input.request_id.clone().unwrap_or_default(),
+            Some("session"),
+        );
+        self.record_audit(
+            &mut *tx,
+            &login_ctx,
+            AuditEvent::new(
+                "auth.login_succeeded",
+                "user",
+                Some(chosen.user_id.0),
+                json!({}),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(Login {
             token,
@@ -157,13 +209,73 @@ impl App {
         })
     }
 
+    /// Schreibt einen fehlgeschlagenen Login in den Workspace des Kontos (ohne Passwort, ohne E-Mail).
+    async fn record_failed_login(
+        &self,
+        c: &LoginCandidate,
+        reason: &str,
+        ip: Option<String>,
+        request_id: Option<String>,
+    ) -> AppResult<()> {
+        let ctx = user_ctx(
+            c.org_id,
+            c.user_id,
+            c.role,
+            ip,
+            request_id.unwrap_or_default(),
+            None,
+        );
+        let mut tx = self.store.begin(c.org_id).await?;
+        self.record_audit(
+            &mut *tx,
+            &ctx,
+            AuditEvent::new(
+                "auth.login_failed",
+                "user",
+                Some(c.user_id.0),
+                json!({ "reason": reason }),
+            ),
+        )
+        .await?;
+        tx.commit().await
+    }
+
     /// Beendet die Session serverseitig; `true`, wenn eine aktive Session widerrufen wurde.
-    pub async fn logout(&self, token: &str) -> AppResult<bool> {
+    /// Der Logout wird im Audit-Log des Workspaces der Session festgehalten.
+    pub async fn logout(
+        &self,
+        token: &str,
+        client_ip: Option<String>,
+        request_id: Option<String>,
+    ) -> AppResult<bool> {
+        let hash = hash_token(token);
         let mut tx = self.store.begin_system().await?;
-        let revoked = tx
-            .auth()
-            .revoke_session(&hash_token(token), self.clock.now())
+        let principal = tx.auth().find_principal_by_token_hash(&hash).await?;
+        let revoked = tx.auth().revoke_session(&hash, self.clock.now()).await?;
+        if let (
+            true,
+            Some(Principal {
+                org_id,
+                actor: Actor::User { id, role },
+                ..
+            }),
+        ) = (revoked, principal)
+        {
+            let ctx = user_ctx(
+                org_id,
+                id,
+                role,
+                client_ip,
+                request_id.unwrap_or_default(),
+                Some("session"),
+            );
+            self.record_audit(
+                &mut *tx,
+                &ctx,
+                AuditEvent::new("auth.logout", "user", Some(id.0), json!({})),
+            )
             .await?;
+        }
         tx.commit().await?;
         Ok(revoked)
     }
@@ -294,6 +406,17 @@ impl App {
             .get_api_key(id)
             .await?
             .ok_or_else(|| AppError::internal("api key vanished after insert"))?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "api_key.created",
+                "api_key",
+                Some(record.id.0),
+                json!({ "key_prefix": record.key_prefix, "scopes": record.scopes }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(CreatedApiKey { record, key })
     }
@@ -326,6 +449,17 @@ impl App {
             ));
         }
         tx.auth().revoke_api_key(id, self.clock.now()).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "api_key.revoked",
+                "api_key",
+                Some(id.0),
+                json!({ "key_prefix": key.key_prefix, "by_owner": own }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
