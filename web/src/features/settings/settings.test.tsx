@@ -42,6 +42,27 @@ describe("TeamSettingsPage", () => {
     });
   });
 
+  it("sends an explicit null when icon and color are emptied", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsTeam: () => ({ team: { ...TEAM_META.team, icon: "rocket", color: "#112233" } }),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="general" />,
+      newClient(),
+      "/acme/settings/teams/ENG/general",
+    );
+    const user = userEvent.setup();
+    await user.clear(await screen.findByLabelText("Icon"));
+    await user.clear(screen.getByLabelText("Color"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("SettingsTeamUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsTeamUpdate")[0]!.variables).toEqual({
+      id: "team-eng",
+      input: { icon: null, color: null },
+    });
+  });
+
   it("workflow editor groups by category and creates a status", async () => {
     const gql = mockGraphql(handlers());
     await renderWithApp(

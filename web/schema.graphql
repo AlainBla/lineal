@@ -2141,7 +2141,13 @@ input TeamUpdateInput {
 	name: String
 	key: String
 	description: String
+	"""
+	`null` entfernt das Icon, ein fehlendes Feld lässt es unverändert.
+	"""
 	icon: String
+	"""
+	`null` entfernt die Farbe, ein fehlendes Feld lässt sie unverändert.
+	"""
 	color: String
 	timezone: String
 	visibility: String

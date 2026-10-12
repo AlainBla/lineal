@@ -65,3 +65,40 @@ async fn create_and_update_expose_join_flag_and_member_count(pool: sqlx::PgPool)
     let v = res.data.into_json().unwrap();
     assert_eq!(v["teamUpdate"]["team"]["allMembersCanJoin"], true);
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn explicit_null_clears_icon_and_color_but_absent_keeps_them(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let q = "mutation($i: TeamUpdateInput!) { teamUpdate(id: \"ENG\", input: $i) { team { icon color name } } }";
+    let alice = || ctx_for(SeedUser::Alice);
+    let res = run(
+        &schema,
+        alice(),
+        q,
+        json!({"i": {"icon": "Rocket", "color": "#112233"}}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    // Feld fehlt: unverändert.
+    let res = run(
+        &schema,
+        alice(),
+        q,
+        json!({"i": {"timezone": "Europe/Berlin"}}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let t = res.data.into_json().unwrap()["teamUpdate"]["team"].clone();
+    assert_eq!(t["icon"], "Rocket");
+    assert_eq!(t["color"], "#112233");
+    // Nur das Icon auf null: die Farbe bleibt.
+    let res = run(&schema, alice(), q, json!({"i": {"icon": null}})).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let t = res.data.into_json().unwrap()["teamUpdate"]["team"].clone();
+    assert!(t["icon"].is_null());
+    assert_eq!(t["color"], "#112233");
+    let res = run(&schema, alice(), q, json!({"i": {"color": null}})).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let t = res.data.into_json().unwrap()["teamUpdate"]["team"].clone();
+    assert!(t["color"].is_null());
+}

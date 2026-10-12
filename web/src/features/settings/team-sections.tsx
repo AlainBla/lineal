@@ -93,9 +93,9 @@ export function GeneralSection({ team }: { team: Team }) {
         ...(name !== team.name ? { name } : {}),
         ...(key !== team.key ? { key } : {}),
         ...(description !== (team.description ?? "") ? { description } : {}),
-        // Leeren von Icon/Farbe kennt die API nicht; nur gesetzte Werte senden.
-        ...(icon !== (team.icon ?? "") && icon !== "" ? { icon } : {}),
-        ...(color !== (team.color ?? "") && color !== "" ? { color } : {}),
+        // Leeres Feld = explizites null: entfernt Icon bzw. Farbe.
+        ...(icon !== (team.icon ?? "") ? { icon: icon === "" ? null : icon } : {}),
+        ...(color !== (team.color ?? "") ? { color: color === "" ? null : color } : {}),
         ...(timezone !== team.timezone ? { timezone } : {}),
       },
       {

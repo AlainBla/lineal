@@ -3,7 +3,7 @@
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
-use async_graphql::{Context, InputObject, Object, SimpleObject};
+use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::usecases::state::{CreateStateInput, StateView, UpdateStateInput};
 use lineal_app::usecases::team::{
@@ -150,8 +150,10 @@ pub struct TeamUpdateInput {
     pub name: Option<String>,
     pub key: Option<String>,
     pub description: Option<String>,
-    pub icon: Option<String>,
-    pub color: Option<String>,
+    /// `null` entfernt das Icon, ein fehlendes Feld lässt es unverändert.
+    pub icon: MaybeUndefined<String>,
+    /// `null` entfernt die Farbe, ein fehlendes Feld lässt sie unverändert.
+    pub color: MaybeUndefined<String>,
     pub timezone: Option<String>,
     pub visibility: Option<String>,
     pub all_members_can_join: Option<bool>,
@@ -213,6 +215,15 @@ pub struct WorkflowStatePayload {
 #[derive(SimpleObject)]
 pub struct SuccessPayload {
     pub success: bool,
+}
+
+/// Fehlend = unverändert, `null` = leeren, Wert = setzen.
+fn patch_value<T>(v: MaybeUndefined<T>) -> Option<Option<T>> {
+    match v {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(v) => Some(Some(v)),
+    }
 }
 
 fn visibility(s: &str) -> async_graphql::Result<TeamVisibility> {
@@ -338,8 +349,8 @@ impl TeamMutation {
                     name: input.name,
                     key: input.key,
                     description: input.description.map(Some),
-                    icon: input.icon.map(Some),
-                    color: input.color.map(Some),
+                    icon: patch_value(input.icon),
+                    color: patch_value(input.color),
                     timezone: input.timezone,
                     visibility: vis,
                     all_members_can_join: input.all_members_can_join,
