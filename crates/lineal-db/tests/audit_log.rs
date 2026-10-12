@@ -154,6 +154,7 @@ async fn exercise_all_actions(fx: &Fx) -> (String, String) {
         })
         .await
         .expect_err("unknown account");
+    wait_for_failed_login(app).await;
 
     // Security-Settings (vorher/nachher, Aufbewahrung).
     app.update_security_settings(
@@ -411,6 +412,17 @@ async fn only_admins_with_admin_scope_can_read(pool: PgPool) {
         kind(
             fx.app
                 .list_audit_log(&no_admin, ListAuditInput::default())
+                .await
+        ),
+        ErrorKind::Forbidden
+    );
+    // Team-beschränkter Key (auch mit Admin-Scope): forbidden, das Log ist workspaceweit.
+    let mut team_scoped = alice();
+    team_scoped.team_scope = Some(vec![fx.data.eng]);
+    assert_eq!(
+        kind(
+            fx.app
+                .list_audit_log(&team_scoped, ListAuditInput::default())
                 .await
         ),
         ErrorKind::Forbidden
@@ -742,4 +754,23 @@ async fn filter_by_store_uses_org(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Der Fehlversuch wird im Hintergrund protokolliert (Timing-Schutz): warten, bis er da ist.
+async fn wait_for_failed_login(app: &lineal_app::App) {
+    use lineal_app::ports::repos::audit::AuditFilter;
+    let org = lineal_testkit::SeedData::acme().org;
+    for _ in 0..100 {
+        let mut tx = app.store.begin(org).await.unwrap();
+        let filter = AuditFilter {
+            action: Some("auth.login_failed".into()),
+            ..Default::default()
+        };
+        if !tx.audit().list(&filter, None, 1).await.unwrap().is_empty() {
+            return;
+        }
+        drop(tx);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("failed login was not written to the audit log");
 }

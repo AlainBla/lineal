@@ -171,7 +171,12 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         // Eigene Prüfung statt `require_workspace`: Lesen braucht keinen Schreib-Scope.
-        if !snap.actor.is_admin() || !ctx.scopes.read || !ctx.scopes.admin {
+        // Team-beschränkte Keys sehen nur ihre Teams; das Audit-Log ist workspaceweit.
+        if !snap.actor.is_admin()
+            || !ctx.scopes.read
+            || !ctx.scopes.admin
+            || ctx.team_scope.is_some()
+        {
             return Err(AppError::forbidden(
                 "The audit log is only available to workspace owners and admins.",
             ));

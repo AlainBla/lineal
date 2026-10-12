@@ -138,21 +138,15 @@ impl App {
         }
         let chosen = match matched.as_slice() {
             [] => {
-                // Fehlversuch protokollieren, je Konto (Workspace) das existiert. Ein Fehler
-                // beim Protokollieren ändert die Antwort nicht.
-                for (c, reason) in &failures {
-                    if let Err(e) = self
-                        .record_failed_login(
-                            c,
-                            reason,
-                            input.ip_address.clone(),
-                            input.request_id.clone(),
-                        )
-                        .await
-                    {
-                        tracing::warn!(error = %e, "audit entry for failed login not written");
-                    }
-                }
+                // Fehlversuch protokollieren, je Konto (Workspace) das existiert. Geschrieben wird
+                // in einer eigenen Task: Die Antwortzeit darf nicht davon abhängen, ob es ein
+                // Konto gibt (sonst Konto-Erkennung über das Timing). Ein Fehler beim
+                // Protokollieren ändert die Antwort nicht.
+                self.record_failed_logins(
+                    &failures,
+                    input.ip_address.clone(),
+                    input.request_id.clone(),
+                );
                 return Err(invalid_credentials());
             }
             [one] => *one,
@@ -210,34 +204,55 @@ impl App {
     }
 
     /// Schreibt einen fehlgeschlagenen Login in den Workspace des Kontos (ohne Passwort, ohne E-Mail).
-    async fn record_failed_login(
+    /// Schreibt die Audit-Einträge fehlgeschlagener Logins im Hintergrund (je Konto eine
+    /// eigene Transaktion im Workspace des Kontos).
+    fn record_failed_logins(
         &self,
-        c: &LoginCandidate,
-        reason: &str,
+        failures: &[(&LoginCandidate, &'static str)],
         ip: Option<String>,
         request_id: Option<String>,
-    ) -> AppResult<()> {
-        let ctx = user_ctx(
-            c.org_id,
-            c.user_id,
-            c.role,
-            ip,
-            request_id.unwrap_or_default(),
-            None,
-        );
-        let mut tx = self.store.begin(c.org_id).await?;
-        self.record_audit(
-            &mut *tx,
-            &ctx,
-            AuditEvent::new(
-                "auth.login_failed",
-                "user",
-                Some(c.user_id.0),
-                json!({ "reason": reason }),
-            ),
-        )
-        .await?;
-        tx.commit().await
+    ) {
+        if failures.is_empty() {
+            return;
+        }
+        let entries: Vec<_> = failures
+            .iter()
+            .map(|(c, reason)| {
+                let ctx = user_ctx(
+                    c.org_id,
+                    c.user_id,
+                    c.role,
+                    ip.clone(),
+                    request_id.clone().unwrap_or_default(),
+                    None,
+                );
+                super::audit::entry_from_ctx(
+                    self.ids.new_uuid(),
+                    self.clock.now(),
+                    &ctx,
+                    AuditEvent::new(
+                        "auth.login_failed",
+                        "user",
+                        Some(c.user_id.0),
+                        json!({ "reason": reason }),
+                    ),
+                )
+            })
+            .collect();
+        let store = std::sync::Arc::clone(&self.store);
+        tokio::spawn(async move {
+            for entry in entries {
+                let res = async {
+                    let mut tx = store.begin(entry.organization_id).await?;
+                    tx.audit().append(&entry).await?;
+                    tx.commit().await
+                }
+                .await;
+                if let Err(e) = res {
+                    tracing::warn!(error = %e, "audit entry for failed login not written");
+                }
+            }
+        });
     }
 
     /// Beendet die Session serverseitig; `true`, wenn eine aktive Session widerrufen wurde.

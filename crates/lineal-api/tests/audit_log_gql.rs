@@ -61,6 +61,7 @@ async fn sign_in_twice(app: &App) -> String {
         })
         .await
         .expect_err("wrong password");
+    wait_for_failed_login(app).await;
     let ok = app
         .login(LoginInput {
             email: "alice@acme.example".into(),
@@ -167,4 +168,23 @@ async fn audit_response_has_no_secrets_or_emails(pool: sqlx::PgPool) {
     assert!(!text.contains(PASSWORD));
     assert!(!text.contains(WRONG_PASSWORD));
     assert!(!text.contains("alice@acme.example"), "e-mail leaked");
+}
+
+/// Der Fehlversuch wird im Hintergrund protokolliert (Timing-Schutz): warten, bis er da ist.
+async fn wait_for_failed_login(app: &lineal_app::App) {
+    use lineal_app::ports::repos::audit::AuditFilter;
+    let org = lineal_testkit::SeedData::acme().org;
+    for _ in 0..100 {
+        let mut tx = app.store.begin(org).await.unwrap();
+        let filter = AuditFilter {
+            action: Some("auth.login_failed".into()),
+            ..Default::default()
+        };
+        if !tx.audit().list(&filter, None, 1).await.unwrap().is_empty() {
+            return;
+        }
+        drop(tx);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("failed login was not written to the audit log");
 }
