@@ -17,6 +17,6 @@ uuid.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 thiserror.workspace = true
-ammonia = "4.2.1"
+ammonia = "4.2.3"
 pulldown-cmark = "0.13.4"
 serde_path_to_error = "0.1.20"
