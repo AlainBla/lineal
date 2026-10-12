@@ -2,7 +2,7 @@
 //! Nicht implementierte Pfade antworten `501`.
 
 use crate::graphql::{LinealSchema, build_schema};
-use crate::middleware::auth::MaybeAuth;
+use crate::middleware::auth::{CurrentSession, MaybeAuth};
 use crate::middleware::{self, gql};
 use crate::rate_limit::RateHandle;
 use crate::{blob, oauth, rest};
@@ -68,10 +68,23 @@ async fn graphql_post(
     State(state): State<ApiState>,
     MaybeAuth(auth): MaybeAuth,
     rate: Option<Extension<RateHandle>>,
+    session: Option<Extension<CurrentSession>>,
+    fails: Option<Extension<std::sync::Arc<crate::auth_failures::AuthFailures>>>,
+    client: Option<Extension<crate::client_ip::ClientIp>>,
     request: Result<Json<async_graphql::Request>, JsonRejection>,
 ) -> Response {
     match request {
-        Ok(Json(request)) => {
+        Ok(Json(mut request)) => {
+            // Kontext für Resolver des persönlichen Accounts (aktuelle Session, Fehlversuchs-Zähler).
+            if let Some(Extension(s)) = session {
+                request = request.data(s);
+            }
+            if let Some(Extension(f)) = fails {
+                request = request.data(f);
+            }
+            if let Some(Extension(c)) = client {
+                request = request.data(c);
+            }
             gql::execute(&state.schema, &auth, rate.map(|Extension(r)| r), request).await
         }
         Err(rejection) => gql::bad_body(&rejection),

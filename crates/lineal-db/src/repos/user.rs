@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::UserRepo;
 use lineal_app::ports::repos::user::{
-    NewUser, OrderBy, Page, PageCursor, PageRequest, User, UserFilter,
+    NewUser, OrderBy, Page, PageCursor, PageRequest, ProfilePatch, User, UserFilter,
 };
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::UserRole;
@@ -232,6 +232,53 @@ impl UserRepo for PgTx {
             .map(|r| r.user.into_user())
             .collect::<AppResult<Vec<_>>>()?;
         Ok(Page { items, next })
+    }
+
+    async fn get_password_hash(&mut self, id: UserId) -> AppResult<Option<String>> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT password_hash FROM \"user\" WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        row.map(|r| r.0)
+            .ok_or_else(|| AppError::not_found("Could not find referenced User."))
+    }
+
+    async fn update_profile(
+        &mut self,
+        id: UserId,
+        p: &ProfilePatch,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut qb: QueryBuilder<Postgres> =
+            QueryBuilder::new("UPDATE \"user\" SET version = version + 1, updated_at = ");
+        qb.push_bind(now);
+        if let Some(v) = &p.name {
+            qb.push(", name = ").push_bind(v.clone());
+        }
+        if let Some(v) = &p.display_name {
+            qb.push(", display_name = ").push_bind(v.clone());
+        }
+        if let Some(v) = &p.avatar_url {
+            qb.push(", avatar_url = ").push_bind(v.clone());
+        }
+        if let Some(v) = &p.timezone {
+            qb.push(", timezone = ").push_bind(v.clone());
+        }
+        qb.push(" WHERE organization_id = ").push_bind(self.org.0);
+        qb.push(" AND id = ").push_bind(id.0);
+        let res = qb
+            .build()
+            .execute(&mut *self.tx)
+            .await
+            .map_err(|e| conflict_or_internal(e, "This display name is already taken"))?;
+        if res.rows_affected() == 0 {
+            return Err(AppError::not_found("Could not find referenced User."));
+        }
+        Ok(())
     }
 
     async fn set_password_hash(

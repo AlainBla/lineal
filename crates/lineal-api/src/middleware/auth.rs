@@ -68,6 +68,11 @@ impl AuthState {
     }
 }
 
+/// Kennung der Web-Session dieser Anfrage (SHA-256 des Cookie-Tokens, nie das Token selbst).
+/// Die Middleware setzt sie nur für Sessions; Resolver für „aktuelle Session“ lesen sie daraus.
+#[derive(Debug, Clone)]
+pub struct CurrentSession(pub String);
+
 /// SHA-256 des Tokens als Hex (Format des Lookups, 09 §2.2).
 pub use lineal_app::usecases::auth::hash_token;
 
@@ -145,6 +150,7 @@ pub(crate) fn blocked_response(path: &str, retry_after_secs: u64) -> Response {
 pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next) -> Response {
     let now_ms = p.app.clock.now().timestamp_millis();
     let ip_key = crate::rate_limit::client_ip(&req);
+    let mut session_hash: Option<String> = None;
     let state = match extract_token(req.headers()) {
         None => AuthState::Anonymous,
         Some((token, class)) => {
@@ -164,6 +170,9 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                     AuthState::Invalid
                 }
                 Ok(Some(principal)) => {
+                    if principal.kind == CredentialKind::Session {
+                        session_hash = Some(hash_token(&token));
+                    }
                     let class = class_of(principal.kind);
                     let request_id = req
                         .extensions()
@@ -200,6 +209,11 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
         }
     };
     req.extensions_mut().insert(state);
+    // Nie ein von außen eingeschleuster Wert: ohne Session bleibt die Kennung leer.
+    req.extensions_mut().remove::<CurrentSession>();
+    if let Some(h) = session_hash {
+        req.extensions_mut().insert(CurrentSession(h));
+    }
     next.run(req).await
 }
 

@@ -79,6 +79,15 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Änderung des eigenen Profils (`None` = unverändert; `Some(None)` leert).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfilePatch {
+    pub name: Option<String>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<Option<String>>,
+    pub timezone: Option<Option<String>>,
+}
+
 /// Neuer Benutzer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewUser {
@@ -129,6 +138,20 @@ pub trait UserRepo: Send {
     /// Aktive User, gefiltert und paginiert. Ein `query`, das exakt eine E-Mail trifft,
     /// liefert zusätzlich den deaktivierten User mit dieser E-Mail.
     async fn list(&mut self, _filter: &UserFilter, _page: &PageRequest) -> AppResult<Page<User>> {
+        unimplemented_repo()
+    }
+    /// Argon2-Hash des Passworts (`None` = kein Passwort-Login); nur für die Prüfung des alten
+    /// Passworts, nie ausgeben.
+    async fn get_password_hash(&mut self, _id: UserId) -> AppResult<Option<String>> {
+        unimplemented_repo()
+    }
+    /// Ändert das eigene Profil (nur gesetzte Felder).
+    async fn update_profile(
+        &mut self,
+        _id: UserId,
+        _patch: &ProfilePatch,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
         unimplemented_repo()
     }
     /// Setzt den Passwort-Hash.

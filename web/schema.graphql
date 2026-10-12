@@ -1392,6 +1392,24 @@ type Mutation {
 	Widerruft einen eigenen Key (fremde IDs → `not_found`, auch für Admins).
 	"""
 	apiKeyRevoke(id: String!): ApiKeyRevokePayload!
+	"""
+	Ändert das eigene Profil.
+	"""
+	viewerUpdate(input: ViewerUpdateInput!): ViewerPayload!
+	"""
+	Ändert das eigene Passwort (altes Passwort nötig) und meldet alle anderen Sessions ab.
+	Nur mit Browser-Session. Falsche alte Passwörter zählen als Fehlversuche (Sperre mit
+	`rate_limited`).
+	"""
+	passwordChange(currentPassword: String!, newPassword: String!): PasswordChangePayload!
+	"""
+	Meldet eine eigene Session ab (fremde IDs: `not_found`).
+	"""
+	sessionRevoke(id: String!): SessionRevokePayload!
+	"""
+	Meldet alle eigenen Sessions außer der aktuellen ab.
+	"""
+	sessionsRevokeOthers: SessionRevokePayload!
 }
 
 input NestTeamOptions {
@@ -1578,6 +1596,14 @@ Sortierfeld, Default `updatedAt` absteigend (00 §5).
 enum PaginationOrderBy {
 	createdAt
 	updatedAt
+}
+
+type PasswordChangePayload {
+	success: Boolean!
+	"""
+	Zahl der dabei abgemeldeten anderen Sessions.
+	"""
+	revokedSessions: Int!
 }
 
 type PlanningRef {
@@ -1979,6 +2005,14 @@ type Query {
 	Audit-Log des Workspaces, neueste zuerst. Nur Owner/Admin mit Scope `admin`.
 	"""
 	auditLog(first: Int, after: String, action: String, actorId: String, since: String, until: String): AuditLogConnection!
+	"""
+	Der angemeldete User.
+	"""
+	viewer: Viewer!
+	"""
+	Eigene aktive Web-Sessions (nur mit Browser-Session), neueste zuerst.
+	"""
+	sessions: [UserSession!]!
 }
 
 """
@@ -2065,6 +2099,14 @@ input SecuritySettingsUpdateInput {
 	Aufbewahrung des Audit-Logs in Tagen (30 bis 3650).
 	"""
 	auditLogRetentionDays: Int
+}
+
+type SessionRevokePayload {
+	success: Boolean!
+	"""
+	Zahl der abgemeldeten Sessions.
+	"""
+	count: Int!
 }
 
 input StateMappingInput {
@@ -2433,12 +2475,69 @@ type UserRef {
 }
 
 """
+Eine aktive Web-Session des Users.
+"""
+type UserSession {
+	id: String!
+	userAgent: String
+	ipAddress: String
+	createdAt: String!
+	lastUsedAt: String
+	expiresAt: String!
+	"""
+	Die Session dieser Anfrage.
+	"""
+	current: Boolean!
+}
+
+"""
 Wirksame Anzeigeoptionen.
 """
 type ViewPreferencesValues {
 	values: JSON!
 	hasPersonal: Boolean!
 	hasDefault: Boolean!
+}
+
+"""
+Der angemeldete User mit seinem Profil.
+"""
+type Viewer {
+	id: String!
+	name: String!
+	displayName: String!
+	email: String!
+	role: String!
+	"""
+	Anzeige-URL des Avatars (hochgeladene Bilder als kurzlebige signierte URL).
+	"""
+	avatarUrl: String
+	"""
+	IANA-Zeitzone; `null` = die Zeitzone des Browsers.
+	"""
+	timezone: String
+	createdAt: String!
+}
+
+type ViewerPayload {
+	success: Boolean!
+	viewer: Viewer!
+}
+
+"""
+Fehlend = unverändert, `null` = leeren.
+"""
+input ViewerUpdateInput {
+	name: String
+	"""
+	Handle für `@`-Erwähnungen (`a-z`, `0-9`, `.`, `_`, `-`; höchstens 40 Zeichen).
+	"""
+	displayName: String
+	"""
+	`assetUrl` eines Bild-Uploads (`fileUpload`).
+	"""
+	avatarUrl: String
+	timezone: String
 }
 
 """

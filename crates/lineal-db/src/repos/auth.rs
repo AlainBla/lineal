@@ -5,7 +5,9 @@ use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use lineal_app::ports::repos::auth::{ApiKeyRecord, LoginCandidate, NewApiKey, NewSession};
+use lineal_app::ports::repos::auth::{
+    ApiKeyRecord, LoginCandidate, NewApiKey, NewSession, SessionRecord,
+};
 use lineal_app::ports::repos::{AuthRepo, CredentialKind, Principal};
 use lineal_app::{Actor, AppResult, Scopes};
 use lineal_domain::enums::UserRole;
@@ -211,6 +213,91 @@ impl AuthRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(res.rows_affected() > 0)
+    }
+
+    async fn list_sessions(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<SessionRecord>> {
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(
+            Uuid,
+            String,
+            Option<String>,
+            Option<String>,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            DateTime<Utc>,
+        )> = sqlx::query_as(
+            "SELECT id, token_hash, user_agent, ip_address, created_at, last_used_at, expires_at \
+             FROM user_session \
+             WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL \
+               AND archived_at IS NULL AND expires_at > $3 \
+             ORDER BY created_at DESC, id DESC LIMIT 100",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, token_hash, user_agent, ip_address, created_at, last_used_at, expires_at)| {
+                    SessionRecord {
+                        id,
+                        token_hash,
+                        user_agent,
+                        ip_address,
+                        created_at,
+                        last_used_at,
+                        expires_at,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    async fn revoke_session_by_id(
+        &mut self,
+        user_id: UserId,
+        id: Uuid,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE user_session SET revoked_at = $4, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND user_id = $2 AND id = $3 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(id)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn revoke_other_sessions(
+        &mut self,
+        user_id: UserId,
+        keep_token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE user_session SET revoked_at = $4, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND user_id = $2 AND token_hash <> $3 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(keep_token_hash)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
     }
 
     async fn insert_api_key(&mut self, k: &NewApiKey) -> AppResult<()> {

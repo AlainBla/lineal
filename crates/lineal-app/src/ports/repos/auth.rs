@@ -56,6 +56,19 @@ pub struct NewSession {
     pub now: DateTime<Utc>,
 }
 
+/// Aktive Web-Session eines Users (für „Active sessions“).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRecord {
+    pub id: Uuid,
+    /// SHA-256 des Tokens; nur intern zum Erkennen der aktuellen Session, nie ausgeben.
+    pub token_hash: String,
+    pub user_agent: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Neuer persönlicher API-Key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewApiKey {
@@ -110,6 +123,34 @@ pub trait AuthRepo: Send {
     }
     /// Widerruft die Session zum Token-Hash; `true`, wenn eine aktive Session betroffen war.
     async fn revoke_session(&mut self, _token_hash: &str, _now: DateTime<Utc>) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Aktive (nicht widerrufene, nicht abgelaufene) Sessions des Users, neueste zuerst.
+    async fn list_sessions(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<SessionRecord>> {
+        unimplemented_repo()
+    }
+    /// Widerruft die Session `id` **des Users**; `false`, wenn sie nicht existiert, einem anderen
+    /// User gehört oder schon widerrufen ist.
+    async fn revoke_session_by_id(
+        &mut self,
+        _user_id: UserId,
+        _id: Uuid,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Widerruft alle aktiven Sessions des Users außer der mit `keep_token_hash`; liefert die Zahl.
+    async fn revoke_other_sessions(
+        &mut self,
+        _user_id: UserId,
+        _keep_token_hash: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
         unimplemented_repo()
     }
 

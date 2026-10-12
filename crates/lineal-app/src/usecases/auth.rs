@@ -93,7 +93,7 @@ pub struct CreatedApiKey {
 
 impl App {
     /// Eine Passwortprüfung gegen einen frisch erzeugten Hash (gleicher Aufwand wie eine echte).
-    fn burn_verify(&self, password: &str) {
+    pub(crate) fn burn_verify(&self, password: &str) {
         if let Ok(h) = self.hasher.hash("lineal-dummy-password") {
             let _ = self.hasher.verify(password, &h);
         }

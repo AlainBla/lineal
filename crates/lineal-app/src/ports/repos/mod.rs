@@ -27,7 +27,7 @@ pub mod webhook;
 
 pub use attachment::AttachmentRepo;
 pub use audit::{AuditActorKind, AuditCursor, AuditEntry, AuditFilter, AuditRepo, NewAuditEntry};
-pub use auth::{AuthRepo, CredentialKind, Principal};
+pub use auth::{AuthRepo, CredentialKind, Principal, SessionRecord};
 pub use comment::CommentRepo;
 pub use cycle::CycleRepo;
 pub use document::DocumentRepo;

@@ -154,7 +154,7 @@ fn validate_team_name(name: &str) -> AppResult<String> {
     Ok(n.to_string())
 }
 
-fn validate_timezone(tz: &str) -> AppResult<()> {
+pub(crate) fn validate_timezone(tz: &str) -> AppResult<()> {
     chrono_tz::Tz::from_str(tz)
         .map(|_| ())
         .map_err(|_| invalid("timezone", "must be an IANA time zone"))
