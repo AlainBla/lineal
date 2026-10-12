@@ -26,12 +26,15 @@ while True:
 PY
 }
 
-E2E_DB_URL="postgres://lineal:lineal@127.0.0.1:5440/lineal_e2e"
+# Eigene Datenbank für parallele Läufe: LINEAL_E2E_DB=lineal_e2e_wp22 scripts/e2e.sh
+E2E_DB="${LINEAL_E2E_DB:-lineal_e2e}"
+E2E_DB_URL="postgres://lineal:lineal@127.0.0.1:5440/$E2E_DB"
+export LINEAL_E2E_PSQL="docker compose exec -T postgres psql -U lineal -d $E2E_DB"
 
-step "PostgreSQL starten und Datenbank lineal_e2e neu anlegen"
+step "PostgreSQL starten und Datenbank $E2E_DB neu anlegen"
 docker compose up -d --wait
 docker compose exec -T postgres psql -U lineal -d postgres -v ON_ERROR_STOP=1 \
-  -c "DROP DATABASE IF EXISTS lineal_e2e WITH (FORCE)" -c "CREATE DATABASE lineal_e2e"
+  -c "DROP DATABASE IF EXISTS $E2E_DB WITH (FORCE)" -c "CREATE DATABASE $E2E_DB"
 
 step "lineal bauen, migrieren, Demo-Daten anlegen"
 cargo build -p lineal-server
@@ -55,7 +58,7 @@ key_sql() { # $1 Token, $2 Label, $3 team_ids-Ausdruck
 {
   key_sql "$LINEAL_E2E_API_KEY" "e2e full" "NULL"
   key_sql "$LINEAL_E2E_API_KEY_ENG" "e2e eng only" "ARRAY(SELECT id FROM team WHERE key = 'ENG')"
-} | docker compose exec -T postgres psql -U lineal -d lineal_e2e -v ON_ERROR_STOP=1
+} | docker compose exec -T postgres psql -U lineal -d "$E2E_DB" -v ON_ERROR_STOP=1
 
 export LINEAL_E2E_API_PORT="$(free_port 18741)"
 export LINEAL_E2E_WEB_PORT="$(free_port 4173)"
