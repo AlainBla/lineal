@@ -10,7 +10,7 @@ test("WP31: drag a project bar on the roadmap to move its dates", async ({ page 
       "target_date = '2026-12-18', target_date_resolution = NULL " +
       "WHERE name = 'Marketing-Site Relaunch'",
   );
-  await login(page, "alice");
+  await login(page, "bob");
   await page.goto("/acme/roadmap");
 
   const bar = page.getByRole("button", {
@@ -29,7 +29,8 @@ test("WP31: drag a project bar on the roadmap to move its dates", async ({ page 
   await page.mouse.move(box.x + box.width / 2 + 35, box.y + box.height / 2, { steps: 5 });
   await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2, { steps: 5 });
   await page.mouse.up();
-  expect((await saved).ok()).toBe(true);
+  const body = (await (await saved).json()) as { errors?: unknown };
+  expect(body.errors).toBeUndefined();
 
   const moved = page.getByRole("button", {
     name: /^Marketing-Site Relaunch, Nov 12, 2026 – Dec 28, 2026/,
