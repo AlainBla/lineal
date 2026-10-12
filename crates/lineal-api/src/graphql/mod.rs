@@ -16,6 +16,7 @@ pub mod overview;
 pub mod project;
 pub mod search;
 pub mod team;
+pub mod team_extra;
 pub mod template;
 pub mod triage;
 pub mod view;
@@ -40,6 +41,7 @@ use overview::{OverviewMutation, OverviewQuery};
 use project::{ProjectMutation, ProjectQuery};
 use search::{SearchMutation, SearchQuery};
 use team::{TeamMutation, TeamQuery};
+use team_extra::{TeamExtraMutation, TeamExtraQuery};
 use template::{TemplateMutation, TemplateQuery};
 use triage::{TriageMutation, TriageQuery};
 use view::{ViewMutation, ViewQuery};
@@ -67,6 +69,7 @@ pub struct QueryRoot(
     ImportQuery,
     ApiKeyQuery,
     AuditQuery,
+    TeamExtraQuery,
 );
 
 #[derive(MergedObject, Default)]
@@ -90,6 +93,7 @@ pub struct MutationRoot(
     WebhookMutation,
     ImportMutation,
     ApiKeyMutation,
+    TeamExtraMutation,
 );
 
 /// Das Lineal-Schema (ohne Subscriptions; Echtzeit läuft über `/sync`).

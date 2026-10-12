@@ -164,7 +164,7 @@ pub struct TeamUpdateInput {
     pub default_issue_estimate: Option<i32>,
     /// Monate (1, 3, 6, 9, 12); `0` schaltet das automatische Schließen aus.
     pub auto_close_period: Option<i32>,
-    /// Zielstatus (Id oder Name) der Kategorie `canceled`.
+    /// Zielstatus (Id oder Name) der Kategorie `canceled`; leerer Text setzt auf den Default zurück.
     pub auto_close_state_id: Option<String>,
     pub auto_archive_period: Option<i32>,
     pub auto_close_parent_issues: Option<bool>,

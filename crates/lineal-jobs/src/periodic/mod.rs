@@ -9,6 +9,7 @@ pub mod email_digest;
 pub mod import_runner;
 pub mod notification_cap;
 pub mod purge;
+pub mod recurring_issues;
 pub mod sla;
 pub mod snooze;
 pub mod sync_purge;

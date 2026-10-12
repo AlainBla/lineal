@@ -40,7 +40,7 @@ fn week_of(sun_thu: bool) -> WorkWeek {
 }
 
 /// Dauer einer Regel: Millisekunden (`all`) bzw. Arbeitstage (`onlyBusinessDays`, eine Woche = 5).
-fn amount_of(rule: &SlaRule) -> Option<i64> {
+pub(crate) fn amount_of(rule: &SlaRule) -> Option<i64> {
     let d = IsoDuration::parse(rule.duration.as_deref()?)?;
     if d.negative {
         return None;

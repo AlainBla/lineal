@@ -1378,6 +1378,19 @@ type Mutation {
 	Widerruft einen eigenen Key (fremde IDs → `not_found`, auch für Admins).
 	"""
 	apiKeyRevoke(id: String!): ApiKeyRevokePayload!
+	"""
+	SLA ein-/ausschalten und Arbeitswoche setzen (legt beim ersten Aktivieren Standardregeln an).
+	"""
+	teamSlaUpdate(teamId: String!, input: TeamSlaUpdateInput!): TeamSla!
+	slaRuleCreate(input: SlaRuleCreateInput!): SlaRule!
+	slaRuleUpdate(teamId: String!, id: String!, input: SlaRuleUpdateInput!): SlaRule!
+	slaRuleDelete(teamId: String!, id: String!): TeamExtraSuccessPayload!
+	recurringIssueCreate(input: RecurringIssueCreateInput!): RecurringIssue!
+	"""
+	Rhythmus, Template oder Pause ändern.
+	"""
+	recurringIssueUpdate(id: String!, input: RecurringIssueUpdateInput!): RecurringIssue!
+	recurringIssueDelete(id: String!): TeamExtraSuccessPayload!
 }
 
 input NestTeamOptions {
@@ -1934,6 +1947,14 @@ type Query {
 	Audit-Log des Workspaces, neueste zuerst. Nur Owner/Admin mit Scope `admin`.
 	"""
 	auditLog(first: Int, after: String, action: String, actorId: String, since: String, until: String): AuditLogConnection!
+	"""
+	SLA-Einstellungen und Regeln eines Teams.
+	"""
+	teamSla(teamId: String!): TeamSla!
+	"""
+	Wiederkehrende Issues eines Teams.
+	"""
+	recurringIssues(teamId: String!): [RecurringIssue!]!
 }
 
 """
@@ -1980,6 +2001,67 @@ type ReactionPayload {
 }
 
 """
+Ein wiederkehrendes Issue.
+"""
+type RecurringIssue {
+	id: String!
+	teamId: String!
+	templateId: String!
+	templateName: String!
+	"""
+	`daily`, `weekly` oder `monthly`.
+	"""
+	frequency: String!
+	interval: Int!
+	"""
+	ISO-Wochentag 1 (Montag) bis 7 (Sonntag).
+	"""
+	weekday: Int
+	dayOfMonth: Int
+	"""
+	Lokale Uhrzeit in Minuten seit Mitternacht (Team-Zeitzone).
+	"""
+	minuteOfDay: Int!
+	startDate: String!
+	paused: Boolean!
+	nextRunAt: String!
+	lastRunAt: String
+	"""
+	Fehler des letzten fehlgeschlagenen Laufs (z. B. Template gelöscht).
+	"""
+	lastError: String
+	lastErrorAt: String
+	createdAt: String!
+}
+
+input RecurringIssueCreateInput {
+	teamId: String!
+	"""
+	Issue-Template (UUID oder Name).
+	"""
+	templateId: String!
+	frequency: String!
+	interval: Int
+	weekday: Int
+	dayOfMonth: Int
+	minuteOfDay: Int!
+	"""
+	`YYYY-MM-DD`; Default heute in der Team-Zeitzone.
+	"""
+	startDate: String
+}
+
+input RecurringIssueUpdateInput {
+	templateId: String
+	frequency: String
+	interval: Int
+	weekday: Int
+	dayOfMonth: Int
+	minuteOfDay: Int
+	paused: Boolean
+}
+
+"""
 Verwandtes Issue (Kennung und Titel).
 """
 type RelatedIssue {
@@ -2020,6 +2102,55 @@ input SecuritySettingsUpdateInput {
 	Aufbewahrung des Audit-Logs in Tagen (30 bis 3650).
 	"""
 	auditLogRetentionDays: Int
+}
+
+"""
+Eine SLA-Regel.
+"""
+type SlaRule {
+	id: String!
+	name: String!
+	position: Float!
+	"""
+	`IssueFilter` (Priorität, Status, Assignee, Creator, Team, Projekt, Labels).
+	"""
+	filter: JSON!
+	"""
+	`true` = die Regel entfernt ein SLA.
+	"""
+	removesSla: Boolean!
+	"""
+	ISO-8601-Dauer (Millisekunden-Dauer bei `all`, Arbeitstage bei `onlyBusinessDays`).
+	"""
+	duration: String
+	slaType: String!
+	"""
+	`issueCreation` oder `ruleMatch`.
+	"""
+	startMode: String!
+}
+
+input SlaRuleCreateInput {
+	teamId: String!
+	name: String!
+	filter: JSON!
+	removesSla: Boolean! = false
+	duration: String
+	"""
+	`all` (Default) oder `onlyBusinessDays`.
+	"""
+	slaType: String
+	startMode: String
+}
+
+input SlaRuleUpdateInput {
+	name: String
+	filter: JSON
+	removesSla: Boolean
+	duration: String
+	slaType: String
+	startMode: String
+	position: Float
 }
 
 type SuccessPayload {
@@ -2115,6 +2246,10 @@ type TeamDefaultTemplates {
 	projectId: String
 }
 
+type TeamExtraSuccessPayload {
+	success: Boolean!
+}
+
 type TeamLifecyclePayload {
 	success: Boolean!
 	team: Team
@@ -2135,6 +2270,24 @@ type TeamMetrics {
 type TeamPayload {
 	success: Boolean!
 	team: Team
+}
+
+"""
+SLA-Einstellungen eines Teams.
+"""
+type TeamSla {
+	teamId: String!
+	enabled: Boolean!
+	"""
+	`monToFri` oder `sunToThu`.
+	"""
+	workWeek: String!
+	rules: [SlaRule!]!
+}
+
+input TeamSlaUpdateInput {
+	enabled: Boolean
+	workWeek: String
 }
 
 input TeamUpdateInput {
@@ -2160,7 +2313,7 @@ input TeamUpdateInput {
 	"""
 	autoClosePeriod: Int
 	"""
-	Zielstatus (Id oder Name) der Kategorie `canceled`.
+	Zielstatus (Id oder Name) der Kategorie `canceled`; leerer Text setzt auf den Default zurück.
 	"""
 	autoCloseStateId: String
 	autoArchivePeriod: Int

@@ -232,7 +232,7 @@ pub struct UpdateTeamInput {
     pub require_priority_to_leave_triage: Option<bool>,
     /// Status-Referenz (`backlog`/`unstarted`).
     pub default_issue_state: Option<String>,
-    /// Status-Referenz (`canceled`).
+    /// Status-Referenz (`canceled`); leerer Text = Default (erster `canceled`-Status).
     pub auto_close_state: Option<String>,
     pub auto_close_period: Option<Option<i32>>,
     pub auto_archive_period: Option<i32>,
@@ -881,11 +881,16 @@ impl App {
             patch.default_issue_state_id = Some(Some(s.id));
         }
         if let Some(r) = &input.auto_close_state {
-            let s = resolve::state::resolve(&mut *tx, &team, r).await?;
-            if s.state_type != StateType::Canceled {
-                return Err(invalid("autoCloseState", "must be a canceled status"));
+            if r.trim().is_empty() {
+                // Leere Referenz = zurück auf den Default (erster Status der Kategorie `canceled`).
+                patch.auto_close_state_id = Some(None);
+            } else {
+                let s = resolve::state::resolve(&mut *tx, &team, r).await?;
+                if s.state_type != StateType::Canceled {
+                    return Err(invalid("autoCloseState", "must be a canceled status"));
+                }
+                patch.auto_close_state_id = Some(Some(s.id));
             }
-            patch.auto_close_state_id = Some(Some(s.id));
         }
 
         // Sichtbarkeit (docs/02 §5.2, §4.5)
