@@ -10,12 +10,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { showToast } from "@/features/issues/toast-store";
 import { errorText } from "@/features/issues/error-text";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Invitation } from "@/gql/graphql";
 import { GraphQLRequestError } from "@/lib/graphql";
+import { useShortcutContext } from "@/lib/shortcuts";
 
-import { useInvitationMutations, useInvitations, useMemberList } from "./members-queries";
+import {
+  useAdminMembers,
+  useInvitationMutations,
+  useInvitations,
+  useMemberAdminMutations,
+  useMemberList,
+  type AdminMember,
+} from "./members-queries";
+import { useSecuritySettings } from "./security-queries";
 import { MAX_EMAILS, parseEmails } from "./invite-emails";
 import { workspaceSettingsNav } from "./nav";
 import { Field, Section, selectClass, SettingsShell } from "./ui";
@@ -39,6 +49,8 @@ function InviteDialog({
 }) {
   const id = useId();
   const { invite } = useInvitationMutations();
+  const security = useSecuritySettings(open);
+  const domains = security.data?.allowedInviteDomains ?? [];
   const [text, setText] = useState("");
   const [role, setRole] = useState("user");
   const [teamIds, setTeamIds] = useState<string[]>([]);
@@ -93,6 +105,11 @@ function InviteDialog({
           <DialogDescription>
             They receive an email with a link that is valid for 7 days.
           </DialogDescription>
+          {domains.length > 0 && (
+            <p className="px-4 text-xs text-muted-foreground" data-testid="invite-domains-hint">
+              Only these email domains can be invited: {domains.join(", ")}
+            </p>
+          )}
         </DialogHeader>
         <form onSubmit={onSubmit} className="flex flex-col gap-3 p-4" aria-label="Invite people">
           <Field label="Email addresses">
@@ -266,39 +283,219 @@ function InvitationsSection({ session }: { session: Session }) {
   );
 }
 
+function AdminMemberRow({
+  m,
+  session,
+  onSuspend,
+  onError,
+}: {
+  m: AdminMember;
+  session: Session;
+  onSuspend: (m: AdminMember) => void;
+  onError: (err: unknown) => void;
+}) {
+  const { setRole, unsuspend } = useMemberAdminMutations();
+  const self = m.id === session.user.id;
+  const actorIsOwner = session.user.role === "owner";
+  const suspended = m.status === "suspended";
+  const protectedOwner = m.role === "owner" && !actorIsOwner;
+  const roleLocked = self || protectedOwner || m.role === "app" || setRole.isPending;
+  return (
+    <tr className="border-b border-border last:border-b-0">
+      <td className="px-3 py-1.5">
+        {m.displayName || m.name}
+        {self && <span className="ml-1 text-xs text-muted-foreground">(you)</span>}
+      </td>
+      <td className="px-3 py-1.5 text-muted-foreground">{m.email}</td>
+      <td className="px-3 py-1.5">
+        <select
+          aria-label={`Role of ${m.email}`}
+          className={selectClass}
+          disabled={roleLocked}
+          value={m.role}
+          onChange={(e) => setRole.mutate({ userId: m.id, role: e.target.value }, { onError })}
+        >
+          {["user", "guest", "admin", ...(actorIsOwner || m.role === "owner" ? ["owner"] : [])].map(
+            (r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r] ?? r}
+              </option>
+            ),
+          )}
+          {m.role === "app" && <option value="app">App</option>}
+        </select>
+      </td>
+      <td className="px-3 py-1.5">
+        <span
+          className="rounded bg-surface-hover px-1.5 py-0.5 text-xs capitalize"
+          aria-label={`Status of ${m.email}`}
+        >
+          {m.status}
+        </span>
+      </td>
+      <td className="px-3 py-1.5 text-right">
+        {suspended ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Unsuspend ${m.email}`}
+            disabled={unsuspend.isPending || protectedOwner}
+            onClick={() => unsuspend.mutate(m.id, { onError })}
+          >
+            Unsuspend
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Suspend ${m.email}`}
+            disabled={self || protectedOwner || m.status === "imported"}
+            onClick={() => onSuspend(m)}
+          >
+            Suspend
+          </Button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function SuspendDialog({ member, onClose }: { member: AdminMember | null; onClose: () => void }) {
+  const { suspend } = useMemberAdminMutations();
+  useShortcutContext("modal", member !== null);
+  return (
+    <Dialog open={member !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <div className="flex flex-col gap-3 p-4">
+          <DialogTitle className="text-base font-semibold">Suspend {member?.email}?</DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            They are signed out immediately, and their sessions, API keys and OAuth tokens stop
+            working for good. You can unsuspend them later; they then have to sign in again.
+          </DialogDescription>
+          {suspend.isError && (
+            <p role="alert" className="text-xs text-destructive">
+              {errorText(suspend.error)}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={suspend.isPending}
+              onClick={() =>
+                member &&
+                suspend.mutate(member.id, {
+                  onSuccess: () => {
+                    showToast({ message: `${member.email} suspended` });
+                    onClose();
+                  },
+                })
+              }
+            >
+              Suspend member
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Admin-Sicht: alle Mitglieder mit E-Mail, Rolle (änderbar), Status und Sperren/Entsperren. */
+function AdminMembersSection({ session }: { session: Session }) {
+  const q = useAdminMembers(true);
+  const [suspending, setSuspending] = useState<AdminMember | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  return (
+    <Section title="Members" description="Everyone in this workspace, including suspended members.">
+      {q.isLoading && <ListSkeleton rows={3} />}
+      {q.isError && (
+        <ErrorState
+          error={q.error}
+          title="Could not load members"
+          onRetry={() => void q.refetch()}
+        />
+      )}
+      {q.data && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table aria-label="Members" className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                <th className="px-3 py-1.5 font-normal">Name</th>
+                <th className="px-3 py-1.5 font-normal">Email</th>
+                <th className="px-3 py-1.5 font-normal">Role</th>
+                <th className="px-3 py-1.5 font-normal">Status</th>
+                <th className="px-3 py-1.5 font-normal">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.map((m) => (
+                <AdminMemberRow
+                  key={m.id}
+                  m={m}
+                  session={session}
+                  onSuspend={(x) => {
+                    setActionError(null);
+                    setSuspending(x);
+                  }}
+                  onError={setActionError}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {actionError != null && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(actionError)}
+        </p>
+      )}
+      <SuspendDialog member={suspending} onClose={() => setSuspending(null)} />
+    </Section>
+  );
+}
+
 /** Workspace-Mitglieder und Einladungen (`/{ws}/settings/members`, docs/08 F1/F16). */
 export function MembersSettingsPage({ ws }: { ws: string }) {
   const session = useSession();
-  const members = useMemberList();
+  const admin = isAdmin(session?.user.role);
+  const members = useMemberList(!admin);
   return (
     <SettingsShell title="Settings" nav={workspaceSettingsNav(ws, session, "members")}>
-      <Section title="Members" description="People in this workspace you can see.">
-        {members.isLoading && <ListSkeleton rows={3} />}
-        {members.isError && (
-          <ErrorState
-            error={members.error}
-            title="Could not load members"
-            onRetry={() => void members.refetch()}
-          />
-        )}
-        {members.data && (
-          <ul
-            aria-label="Members"
-            className="divide-y divide-border rounded-lg border border-border"
-          >
-            {members.data.map((m) => (
-              <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-                <span className="min-w-0 flex-1 truncate">{m.displayName || m.name}</span>
-                {m.id === session?.user.id && session.user.role && (
-                  <span className="text-xs text-muted-foreground">
-                    You · {ROLE_LABEL[session.user.role] ?? session.user.role}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+      {session && admin && <AdminMembersSection session={session} />}
+      {!admin && (
+        <Section title="Members" description="People in this workspace you can see.">
+          {members.isLoading && <ListSkeleton rows={3} />}
+          {members.isError && (
+            <ErrorState
+              error={members.error}
+              title="Could not load members"
+              onRetry={() => void members.refetch()}
+            />
+          )}
+          {members.data && (
+            <ul
+              aria-label="Members"
+              className="divide-y divide-border rounded-lg border border-border"
+            >
+              {members.data.map((m) => (
+                <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{m.displayName || m.name}</span>
+                  {m.id === session?.user.id && session.user.role && (
+                    <span className="text-xs text-muted-foreground">
+                      You · {ROLE_LABEL[session.user.role] ?? session.user.role}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      )}
       {session && <InvitationsSection session={session} />}
     </SettingsShell>
   );

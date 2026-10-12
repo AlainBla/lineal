@@ -8,14 +8,28 @@ import type { Member } from "./queries";
 
 const INVITATION_FIELDS = "id email role teamIds inviterId status expiresAt lastSentAt createdAt";
 
+export interface AdminMember {
+  id: string;
+  name: string;
+  displayName: string;
+  email: string;
+  role: string;
+  status: string;
+  lastSeenAt: string | null;
+  createdAt: string;
+  teams: Array<{ key: string }>;
+}
+
 export const memberKeys = {
   members: ["settings", "workspace-member-list"] as const,
+  adminMembers: ["settings", "workspace-admin-members"] as const,
   invitations: ["settings", "invitations"] as const,
 };
 
-export function useMemberList() {
+export function useMemberList(enabled = true) {
   return useQuery({
     queryKey: memberKeys.members,
+    enabled,
     queryFn: async ({ signal }) =>
       (
         await gqlRequest<{ users: Member[] }>(
@@ -77,6 +91,67 @@ export function useInvitationMutations() {
         gqlRequest(
           `mutation SettingsInvitationRevoke($id: String!) { invitationRevoke(id: $id) { success } }`,
           { id },
+        ),
+      onSuccess: done,
+    }),
+  };
+}
+
+/** Admin-Mitgliederliste mit E-Mail, Rolle und Status (nur Owner/Admin; sonst `forbidden`). */
+export function useAdminMembers(enabled: boolean) {
+  return useQuery({
+    queryKey: memberKeys.adminMembers,
+    enabled,
+    retry: false,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ workspaceMembers: AdminMember[] }>(
+          `query SettingsAdminMembers {
+            workspaceMembers(includeSuspended: true) {
+              id name displayName email role status lastSeenAt createdAt teams { key }
+            }
+          }`,
+          undefined,
+          { signal },
+        )
+      ).workspaceMembers,
+  });
+}
+
+export function useMemberAdminMutations() {
+  const qc = useQueryClient();
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: memberKeys.adminMembers });
+    void qc.invalidateQueries({ queryKey: memberKeys.members });
+  };
+  return {
+    setRole: useMutation({
+      mutationFn: async (v: { userId: string; role: string }) =>
+        gqlRequest(
+          `mutation SettingsUserRoleUpdate($userId: String!, $role: String!) {
+            userRoleUpdate(userId: $userId, role: $role) { success member { id role } }
+          }`,
+          v,
+        ),
+      onSuccess: done,
+    }),
+    suspend: useMutation({
+      mutationFn: async (userId: string) =>
+        gqlRequest(
+          `mutation SettingsUserSuspend($userId: String!) {
+            userSuspend(userId: $userId) { success member { id status } }
+          }`,
+          { userId },
+        ),
+      onSuccess: done,
+    }),
+    unsuspend: useMutation({
+      mutationFn: async (userId: string) =>
+        gqlRequest(
+          `mutation SettingsUserUnsuspend($userId: String!) {
+            userUnsuspend(userId: $userId) { success member { id status } }
+          }`,
+          { userId },
         ),
       onSuccess: done,
     }),

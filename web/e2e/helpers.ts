@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+
 import { expect, type Page } from "@playwright/test";
 
 /** Erfundene Seed-User (`lineal seed`), alle mit dem Seed-Passwort. */
@@ -38,4 +41,18 @@ export async function createIssue(page: Page, team: string, title: string): Prom
   if (!identifier) throw new Error("no identifier in toast");
   await expect(dialog).toBeHidden();
   return identifier;
+}
+
+/**
+ * Führt SQL gegen die E2E-Datenbank aus (wie `scripts/e2e.sh`, über den Postgres-Container).
+ * `LINEAL_E2E_PSQL` überschreibt den Befehl (das Skript setzt ihn passend zur gewählten Datenbank).
+ */
+export function sql(statement: string): void {
+  const cmd = (
+    process.env.LINEAL_E2E_PSQL ?? "docker compose exec -T postgres psql -U lineal -d lineal_e2e"
+  ).split(/\s+/);
+  execFileSync(cmd[0]!, [...cmd.slice(1), "-v", "ON_ERROR_STOP=1", "-c", statement], {
+    cwd: path.resolve(import.meta.dirname, "../.."),
+    stdio: "pipe",
+  });
 }
