@@ -2025,6 +2025,7 @@ type Team {
 	icon: String
 	color: String
 	visibility: String!
+	allMembersCanJoin: Boolean!
 	timezone: String!
 	triageEnabled: Boolean!
 	cyclesEnabled: Boolean!
@@ -2033,6 +2034,10 @@ type Team {
 	retiredAt: String
 	createdAt: String!
 	updatedAt: String!
+	"""
+	Anzahl der Mitglieder; `null`, wenn der Aufrufer die Mitglieder nicht sehen darf.
+	"""
+	memberCount: Int
 }
 
 input TeamCreateInput {
@@ -2043,6 +2048,7 @@ input TeamCreateInput {
 	color: String
 	parentId: String
 	visibility: String
+	allMembersCanJoin: Boolean
 	timezone: String
 	triageEnabled: Boolean
 	copySettingsFromTeamId: String
@@ -2101,6 +2107,7 @@ input TeamUpdateInput {
 	color: String
 	timezone: String
 	visibility: String
+	allMembersCanJoin: Boolean
 	triageEnabled: Boolean
 	cyclesEnabled: Boolean
 }

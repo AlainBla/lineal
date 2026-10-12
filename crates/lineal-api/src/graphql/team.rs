@@ -15,7 +15,7 @@ use std::str::FromStr;
 
 /// `Team`.
 #[derive(SimpleObject)]
-#[graphql(name = "Team")]
+#[graphql(name = "Team", complex)]
 pub struct TeamGql {
     pub id: String,
     pub key: String,
@@ -26,6 +26,7 @@ pub struct TeamGql {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub visibility: String,
+    pub all_members_can_join: bool,
     pub timezone: String,
     pub triage_enabled: bool,
     pub cycles_enabled: bool,
@@ -49,6 +50,7 @@ impl From<TeamView> for TeamGql {
             icon: t.icon,
             color: t.color,
             visibility: t.visibility.as_str().into(),
+            all_members_can_join: t.all_members_can_join,
             timezone: t.timezone,
             triage_enabled: t.triage_enabled,
             cycles_enabled: t.cycles_enabled,
@@ -58,6 +60,20 @@ impl From<TeamView> for TeamGql {
             created_at: t.created_at.to_rfc3339(),
             updated_at: t.updated_at.to_rfc3339(),
         }
+    }
+}
+
+#[async_graphql::ComplexObject]
+impl TeamGql {
+    /// Anzahl der Mitglieder; `null`, wenn der Aufrufer die Mitglieder nicht sehen darf.
+    async fn member_count(&self, ctx: &Context<'_>) -> Option<i32> {
+        let ctx_req = request_ctx(ctx).ok()?;
+        let members = app(ctx)
+            .ok()?
+            .list_team_members(ctx_req, &self.id)
+            .await
+            .ok()?;
+        i32::try_from(members.len()).ok()
     }
 }
 
@@ -103,6 +119,7 @@ pub struct TeamCreateInput {
     pub color: Option<String>,
     pub parent_id: Option<String>,
     pub visibility: Option<String>,
+    pub all_members_can_join: Option<bool>,
     pub timezone: Option<String>,
     pub triage_enabled: Option<bool>,
     pub copy_settings_from_team_id: Option<String>,
@@ -117,6 +134,7 @@ pub struct TeamUpdateInput {
     pub color: Option<String>,
     pub timezone: Option<String>,
     pub visibility: Option<String>,
+    pub all_members_can_join: Option<bool>,
     pub triage_enabled: Option<bool>,
     pub cycles_enabled: Option<bool>,
 }
@@ -249,6 +267,7 @@ impl TeamMutation {
                     color: input.color,
                     parent: input.parent_id,
                     visibility: vis,
+                    all_members_can_join: input.all_members_can_join,
                     timezone: input.timezone,
                     triage_enabled: input.triage_enabled,
                     copy_settings_from: input.copy_settings_from_team_id,
@@ -282,6 +301,7 @@ impl TeamMutation {
                     color: input.color.map(Some),
                     timezone: input.timezone,
                     visibility: vis,
+                    all_members_can_join: input.all_members_can_join,
                     triage_enabled: input.triage_enabled,
                     cycles_enabled: input.cycles_enabled,
                     ..Default::default()
