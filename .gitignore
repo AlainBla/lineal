@@ -6,6 +6,7 @@ web/src/routeTree.gen.ts
 web/src/gql/
 .env
 var/
+backups/
 .playwright-mcp/
 .worktrees/
 *.log
