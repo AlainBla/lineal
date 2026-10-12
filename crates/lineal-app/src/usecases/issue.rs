@@ -5,7 +5,7 @@
 
 pub(crate) mod fields;
 pub(crate) mod history;
-mod mentions;
+pub(crate) mod mentions;
 mod relations;
 
 pub use fields::MAX_SUB_ISSUE_DEPTH;
@@ -17,6 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
+use crate::ports::repos::document::DocParent;
 use crate::ports::repos::issue::{
     HistoryEntry, HistorySource, Issue, IssueExtras, IssueListFilter, IssueShare,
 };
@@ -1382,6 +1383,9 @@ impl App {
         )
         .await?;
         let _ = old;
+        // Dokumente des Issues wandern mit in den Papierkorb (docs/06 §1.10).
+        self.trash_documents_of(&mut *tx, DocParent::Issue(saved.id))
+            .await?;
         emit(
             &mut *tx,
             ctx,
@@ -1435,6 +1439,10 @@ impl App {
         issue.trashed_at = None;
         issue.archived_at = None;
         let saved = tx.issues().save(&issue, now).await?;
+        if was_trashed {
+            self.restore_documents_of(&mut *tx, DocParent::Issue(saved.id))
+                .await?;
+        }
         let mut d = Delta::default();
         d.flag(if was_trashed {
             "restored"

@@ -114,6 +114,48 @@ pub(crate) async fn wake_snoozed_issue(
 }
 
 impl App {
+    /// Endgültiges Löschen aus dem Papierkorb (docs/06 §1.10, docs/04 §2.12): Dokumente und
+    /// Projekte, die länger als `limits.trashRetentionDays` im Papierkorb liegen, samt Inhalt und
+    /// Snapshots; außerdem Inhalte von Dokumenten, die per Fremdschlüssel mit ihrem Elternobjekt
+    /// (Issue-Purge, Team-Purge, Projekt-Purge) gelöscht wurden. Liefert die Zahl gelöschter
+    /// Dokumente und Projekte.
+    pub async fn run_trash_purge(&self, now: DateTime<Utc>) -> AppResult<JobStats> {
+        let mut sys = self.store.begin_system().await?;
+        let orgs = sys.notifications().list_org_ids().await?;
+        drop(sys);
+        let mut stats = JobStats::default();
+        for org in orgs {
+            match self.trash_purge_org(OrgId(org), now).await {
+                Ok(n) => stats.processed += n,
+                Err(e) => fail(&mut stats, &format!("trash_purge org {org}"), e),
+            }
+        }
+        Ok(stats)
+    }
+
+    async fn trash_purge_org(&self, org: OrgId, now: DateTime<Utc>) -> AppResult<u64> {
+        let ctx = system_ctx(org, "trash-purge");
+        let mut total = 0;
+        for _ in 0..MAX_BATCHES {
+            let mut tx = self.store.begin(org).await?;
+            let snap = PolicySnapshot::load(&mut *tx, &ctx).await?;
+            let days = snap.org.limits.trash_retention_days.clamp(1, 3650);
+            let Some(cutoff) = now.checked_sub_signed(Duration::days(days)) else {
+                return Ok(total);
+            };
+            let projects = tx.triage().purge_trashed_projects(cutoff, BATCH).await?;
+            let docs = tx.documents().purge_trashed(cutoff, BATCH).await?;
+            let swept = tx.documents().sweep_orphan_contents(BATCH * 4).await?;
+            tx.commit().await?;
+            total += (projects.len() + docs.len()) as u64;
+            let full = projects.len() as i64 == BATCH || docs.len() as i64 == BATCH || swept > 0;
+            if !full {
+                return Ok(total);
+            }
+        }
+        Ok(total)
+    }
+
     /// Auto-Archiv von Cycles und Projekten: abgeschlossene Cycles, deren `completedAt` länger als
     /// `autoArchivePeriod` Monate zurückliegt, und Projekte nach docs/04 §2.12. Liefert die Zahl
     /// archivierter Cycles und Projekte.

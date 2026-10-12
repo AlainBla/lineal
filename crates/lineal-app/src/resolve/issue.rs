@@ -56,7 +56,7 @@ pub async fn can_see(
     }
 }
 
-async fn lookup(tx: &mut dyn Tx, reference: &str) -> AppResult<IssueId> {
+pub(crate) async fn lookup(tx: &mut dyn Tx, reference: &str) -> AppResult<IssueId> {
     if let Ok(uuid) = Uuid::parse_str(reference) {
         return Ok(IssueId(uuid));
     }

@@ -347,6 +347,16 @@ pub trait TriageRepo: Send {
     ) -> AppResult<Vec<IssueId>> {
         unimplemented_repo()
     }
+    /// Löscht Projekte im Papierkorb mit `trashed_at <= cutoff` endgültig (Meilensteine, Updates,
+    /// Dokumente und Abos fallen per Fremdschlüssel mit; Issues verlieren Projekt und Meilenstein,
+    /// docs/04 §2.12). Liefert die gelöschten IDs.
+    async fn purge_trashed_projects(
+        &mut self,
+        _cutoff: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<lineal_domain::ids::ProjectId>> {
+        unimplemented_repo()
+    }
     /// Issues im Papierkorb seit vor `cutoff`.
     async fn purge_candidates(
         &mut self,

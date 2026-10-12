@@ -656,6 +656,43 @@ impl TriageRepo for PgTx {
         Ok(rows.into_iter().map(IssueId).collect())
     }
 
+    async fn purge_trashed_projects(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<lineal_domain::ids::ProjectId>> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM project WHERE organization_id = $1 AND trashed AND trashed_at IS NOT NULL \
+             AND trashed_at <= $2 ORDER BY trashed_at, id LIMIT $3",
+        )
+        .bind(self.org.0)
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query(
+            "UPDATE issue SET project_id = NULL, project_milestone_id = NULL, added_to_project_at = NULL, \
+               version = version + 1, updated_at = now() \
+             WHERE organization_id = $1 AND project_id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(&ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query("DELETE FROM project WHERE organization_id = $1 AND id = ANY($2)")
+            .bind(self.org.0)
+            .bind(&ids)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(ids.into_iter().map(lineal_domain::ids::ProjectId).collect())
+    }
+
     async fn purge_candidates(
         &mut self,
         cutoff: DateTime<Utc>,

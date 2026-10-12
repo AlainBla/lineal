@@ -160,6 +160,7 @@ pub fn render(v: &NotificationView, base: &str) -> Rendered {
         "issueStatusChanged" | "issueStatusChangedAll" => {
             format!("{who} changed the status of {ident}")
         }
+        "documentMention" => format!("{who} mentioned you in a document"),
         "issueReopened" => format!("{who} reopened {ident}"),
         "issuePriorityUrgent" => format!("{ident} was marked as urgent"),
         "issueBlocking" => format!("{ident} is blocked by another issue"),

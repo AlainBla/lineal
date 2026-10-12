@@ -265,6 +265,12 @@ impl App {
         tx.documents()
             .cascade_trash(DocParent::Team(team), now)
             .await?;
+        // Cycle-Dokumente des Teams (docs/06 §1.10).
+        for c in tx.cycles().list_for_team(team, true).await? {
+            tx.documents()
+                .cascade_trash(DocParent::Cycle { cycle: c.id, team }, now)
+                .await?;
+        }
         // Projekte nur dieses Teams wandern in den Papierkorb.
         for pid in tx.webhooks().trash_sole_projects(team, now).await? {
             let id = ProjectId(pid);
@@ -386,6 +392,14 @@ impl App {
             tx.documents()
                 .cascade_restore(DocParent::Team(t.id))
                 .await?;
+            for c in tx.cycles().list_for_team(t.id, true).await? {
+                tx.documents()
+                    .cascade_restore(DocParent::Cycle {
+                        cycle: c.id,
+                        team: t.id,
+                    })
+                    .await?;
+            }
             if let Some(at) = t.trashed_at {
                 for pid in tx.webhooks().restore_sole_projects(t.id, at, now).await? {
                     let id = ProjectId(pid);

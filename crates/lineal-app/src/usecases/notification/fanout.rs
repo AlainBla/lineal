@@ -33,6 +33,7 @@ pub(crate) struct Refs {
     pub comment_id: Option<CommentId>,
     pub parent_comment_id: Option<CommentId>,
     pub reaction_emoji: Option<String>,
+    pub document_id: Option<Uuid>,
 }
 
 /// Sammelt Kandidaten für genau ein Event bzw. eine Erinnerung.
@@ -117,6 +118,18 @@ impl<'a> Fan<'a> {
             ..Refs::default()
         };
         self.teams = vec![team];
+        self.cands.clear();
+    }
+
+    /// Bereitet eine Benachrichtigung zu einem Dokument vor (Erwähnungen, WP34); sichtbar für
+    /// Empfänger, die mindestens eines der Teams des Elternobjekts sehen (leer = alle aktiven).
+    pub fn reset_for_document(&mut self, document: Uuid, teams: Vec<TeamId>) {
+        self.refs = Refs {
+            target_type: "document",
+            document_id: Some(document),
+            ..Refs::default()
+        };
+        self.teams = teams;
         self.cands.clear();
     }
 
@@ -592,7 +605,7 @@ impl<'a> Fan<'a> {
                 project_milestone_id: None,
                 initiative_id: None,
                 initiative_update_id: None,
-                document_id: None,
+                document_id: self.refs.document_id,
                 comment_id: self.refs.comment_id,
                 parent_comment_id: self.refs.parent_comment_id,
                 reaction_emoji: self.refs.reaction_emoji.clone(),
