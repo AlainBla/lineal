@@ -49,6 +49,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bootstrap::bootstrap;
 use lineal_app::policy::PolicySnapshot;
+use lineal_app::ports::repos::auth::CredentialKind;
 use lineal_app::ports::repos::outbox::SyncActionRow;
 use lineal_app::usecases::auth::hash_token;
 use lineal_app::{Actor, App, AppError, ErrorKind, RequestCtx};
@@ -278,7 +279,9 @@ fn app_error_response(e: &AppError) -> Response {
 }
 
 /// Token aus `Authorization` (Bearer oder roh) oder dem Session-Cookie.
-fn extract_token(headers: &HeaderMap) -> Option<String> {
+/// Liefert zusätzlich, ob das Token aus dem Cookie stammt (Token-Art-Regel: Cookie nur für
+/// Sessions, `Authorization` nur für API-Keys/OAuth, wie in der API).
+fn extract_token(headers: &HeaderMap) -> Option<(String, bool)> {
     if let Some(value) = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         let value = value.trim();
         let raw = match value.split_once(' ') {
@@ -286,7 +289,7 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
             _ => value,
         };
         if !raw.is_empty() {
-            return Some(raw.to_owned());
+            return Some((raw.to_owned(), false));
         }
     }
     for header in headers.get_all(COOKIE) {
@@ -298,7 +301,7 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
                 && name == SESSION_COOKIE
                 && !value.is_empty()
             {
-                return Some(value.to_owned());
+                return Some((value.to_owned(), true));
             }
         }
     }
@@ -315,7 +318,7 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, Str
         );
         res
     };
-    let Some(token) = extract_token(headers) else {
+    let Some((token, from_cookie)) = extract_token(headers) else {
         return Err(unauthenticated("Authentication required."));
     };
     if token.len() > MAX_TOKEN_LEN {
@@ -326,6 +329,10 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, Str
         .await
         .map_err(|e| app_error_response(&e))?
         .ok_or_else(|| unauthenticated("Invalid or expired token."))?;
+    // Token-Art passt nicht zum Transport (z. B. API-Key im Cookie, Session im Header).
+    if from_cookie != (principal.kind == CredentialKind::Session) {
+        return Err(unauthenticated("Invalid or expired token."));
+    }
     let ctx = RequestCtx {
         org_id: principal.org_id,
         actor: principal.actor,
@@ -333,9 +340,9 @@ async fn authenticate(app: &App, headers: &HeaderMap) -> Result<(RequestCtx, Str
         scopes: principal.scopes,
         team_scope: principal.team_scope.clone(),
 
-        via_session: false,
+        via_session: principal.kind == CredentialKind::Session,
         client_ip: None,
-        credential_kind: None,
+        credential_kind: Some(lineal_app::context::credential_label(principal.kind)),
     };
     Ok((ctx, token_hash))
 }
@@ -352,9 +359,14 @@ async fn lookup(
 /// Rollenwechsel) und übernimmt Rolle/Scopes. `Unauthorized`, wenn es nicht mehr gilt.
 async fn revalidate(shared: &Shared, token_hash: &str, ctx: &mut RequestCtx) -> Result<(), End> {
     match lookup(&shared.app, token_hash).await? {
-        Some(p) if p.org_id == ctx.org_id && p.scopes.read => {
+        Some(p)
+            if p.org_id == ctx.org_id
+                && p.scopes.read
+                && (p.kind == CredentialKind::Session) == ctx.via_session =>
+        {
             ctx.actor = p.actor;
             ctx.scopes = p.scopes;
+            ctx.team_scope = p.team_scope;
             Ok(())
         }
         _ => Err(End::Unauthorized),

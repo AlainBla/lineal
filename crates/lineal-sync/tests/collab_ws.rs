@@ -581,6 +581,93 @@ async fn foreign_origin_is_rejected(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn token_kind_must_match_the_transport(pool: PgPool) {
+    let e = env(pool).await;
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", "x").await;
+    let path = format!("/collab/document/{doc}");
+    // Session-Token im Authorization-Header: abgelehnt.
+    let session = token("alice");
+    assert_eq!(
+        match e
+            .try_connect(
+                None,
+                &path,
+                &[("authorization", &format!("Bearer {session}"))]
+            )
+            .await
+        {
+            Err(tokio_tungstenite::tungstenite::Error::Http(res)) => res.status().as_u16(),
+            _ => 101,
+        },
+        401
+    );
+    // API-Key im Session-Cookie: abgelehnt.
+    sqlx::query(
+        "INSERT INTO api_key (organization_id, user_id, label, key_prefix, key_hash) \
+         VALUES ($1, $2, 'rw', 'lin_rw', $3)",
+    )
+    .bind(e.d.org.0)
+    .bind(e.d.alice.0)
+    .bind(lineal_app::usecases::auth::hash_token("lin_key_in_cookie"))
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        match e
+            .try_connect(
+                None,
+                &path,
+                &[("cookie", "lineal_session=lin_key_in_cookie")]
+            )
+            .await
+        {
+            Err(tokio_tungstenite::tungstenite::Error::Http(res)) => res.status().as_u16(),
+            _ => 101,
+        },
+        401
+    );
+    // Richtig transportiert: ok.
+    assert_eq!(e.status(Some("key:lin_key_in_cookie"), &path).await, 101);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn revoked_api_key_is_disconnected_and_gets_no_further_updates(pool: PgPool) {
+    let e = env(pool).await;
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", "x").await;
+    sqlx::query(
+        "INSERT INTO api_key (organization_id, user_id, label, key_prefix, key_hash) \
+         VALUES ($1, $2, 'rw', 'lin_rw', $3)",
+    )
+    .bind(e.d.org.0)
+    .bind(e.d.alice.0)
+    .bind(lineal_app::usecases::auth::hash_token("lin_revoke_me"))
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let ws = e
+        .try_connect(
+            Some("key:lin_revoke_me"),
+            &format!("/collab/document/{doc}"),
+            &[],
+        )
+        .await
+        .unwrap();
+    let mut keyed = Client::start(ws).await;
+    let mut bob = e.join("bob", doc).await;
+    sqlx::query("UPDATE api_key SET revoked_at = now() WHERE key_hash = $1")
+        .bind(lineal_app::usecases::auth::hash_token("lin_revoke_me"))
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    keyed.pump(Duration::from_secs(3)).await;
+    assert_eq!(keyed.closed, Some(4401));
+    // Spätere Änderungen erreichen den getrennten Client nicht mehr.
+    bob.add_paragraph("danach").await;
+    keyed.pump(Duration::from_millis(500)).await;
+    assert!(!keyed.md().contains("danach"));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn broken_and_oversized_updates_close_the_connection(pool: PgPool) {
     let e = env_with(
         pool,

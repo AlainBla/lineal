@@ -10,6 +10,9 @@
 # See Cargo.toml.orig for the original contents.
 
 
+# LINEAL-PATCH: eigene Workspace-Wurzel (nicht Teil des Lineal-Workspaces, siehe PATCH.md).
+[workspace]
+
 [package]
 edition = "2018"
 name = "yrs"

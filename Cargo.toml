@@ -1,5 +1,7 @@
 [workspace]
 resolver = "3"
+# Vendored yrs mit Korrektur-Patches (vendor/yrs/PATCH.md): kein Mitglied, wird nicht gelintet/getestet.
+exclude = ["vendor/yrs"]
 members = [
     "crates/lineal-domain",
     "crates/lineal-app",

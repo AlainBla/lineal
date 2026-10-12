@@ -106,7 +106,7 @@ impl Default for CollabConfig {
             persist_max: Duration::from_secs(10),
             poll_interval: Duration::from_secs(1),
             idle_unload: Duration::from_secs(60),
-            revalidate_interval: Duration::from_secs(30),
+            revalidate_interval: Duration::from_secs(10),
             recheck_throttle: Duration::from_secs(2),
             ping_interval: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(90),
