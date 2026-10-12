@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 mod bootstrap;
+pub mod collab;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
