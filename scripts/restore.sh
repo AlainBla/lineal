@@ -151,7 +151,9 @@ dc run --rm migrate \
   || die "migrate ist fehlgeschlagen. server/worker/web bleiben gestoppt (siehe Warnung oben, falls der Stand neuer ist)."
 
 info "server, worker, web starten"
-dc up -d --wait server worker web
+# worker hat keinen Healthcheck (--wait würde scheitern); server und web werden geprüft.
+dc up -d worker
+dc up -d --wait server web
 
 echo
 echo "Restore abgeschlossen. Backup: $BACKUP_DIR"
