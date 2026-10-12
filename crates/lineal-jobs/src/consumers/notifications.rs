@@ -1,9 +1,9 @@
 //! Outbox-Konsument `notifications` (WP08/WP32): Fan-out der Domain-Events in Inbox-Notifications
 //! (docs/10 §4). Die Logik steht in `lineal_app::usecases::notification::fanout`.
 //!
-//! View-Abos (docs/05 §4.7) braucht eine [`ViewSubscriptionSource`] (WP31):
-//! [`NotificationsWithViewsConsumer`] ist derselbe Konsument (Name `notifications`) mit dieser
-//! Quelle. Beim Zusammenführen mit WP31 den Eintrag in `registry::consumers()` darauf umstellen.
+//! View-Abos (docs/05 §4.7): [`NotificationsWithViewsConsumer`] ist derselbe Konsument (Name
+//! `notifications`) mit einer [`ViewSubscriptionSource`]; `registry::consumers()` trägt ihn mit
+//! `ViewSubscriptions` (WP35) ein. [`NotificationsConsumer`] (ohne Quelle) bleibt für Tests.
 
 use crate::EventConsumer;
 use async_trait::async_trait;
