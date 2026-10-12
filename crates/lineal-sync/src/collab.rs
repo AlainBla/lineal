@@ -935,17 +935,22 @@ fn sanitize_awareness(json: &str, name: &str, user: Uuid) -> Option<Arc<str>> {
     // Nur der Cursor des Editors wird übernommen; alles andere ist Sache des Servers.
     if let Some(c) = obj.get("cursor") {
         // Relative Positionen: genau `anchor`/`head`, je klein und ein Objekt (keine Nutzlast).
-        let cursor = c.as_object()?;
-        let mut clean = serde_json::Map::new();
-        for key in ["anchor", "head"] {
-            if let Some(p) = cursor.get(key) {
-                if !p.is_object() || p.to_string().len() > 512 {
-                    return None;
+        // `null` = kein Cursor (Editor ohne Fokus).
+        if c.is_null() {
+            out.insert("cursor".into(), Value::Null);
+        } else {
+            let cursor = c.as_object()?;
+            let mut clean = serde_json::Map::new();
+            for key in ["anchor", "head"] {
+                if let Some(p) = cursor.get(key) {
+                    if !p.is_object() || p.to_string().len() > 512 {
+                        return None;
+                    }
+                    clean.insert(key.into(), p.clone());
                 }
-                clean.insert(key.into(), p.clone());
             }
+            out.insert("cursor".into(), Value::Object(clean));
         }
-        out.insert("cursor".into(), Value::Object(clean));
     }
     Some(Value::Object(out).to_string().into())
 }

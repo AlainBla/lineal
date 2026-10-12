@@ -794,6 +794,17 @@ async fn awareness_is_rewritten_to_the_authenticated_identity(pool: PgPool) {
     assert!(v.get("payload").is_none());
     assert!(v["cursor"].get("extra").is_none());
 
+    // Cursor `null` (Editor ohne Fokus) ist normal und wird nicht abgelehnt.
+    alice
+        .send(&aw(
+            43,
+            1,
+            json!({"user": {"name": "x"}, "cursor": null}).to_string(),
+        ))
+        .await;
+    alice.pump(Duration::from_millis(300)).await;
+    assert_eq!(alice.closed, None);
+
     // Fremde Client-ID übernehmen: Verbindung wird getrennt.
     bob.send(&aw(42, 9, "{}".into())).await;
     bob.pump(Duration::from_millis(500)).await;
