@@ -3,11 +3,13 @@
 //!
 //! Jede Schreiboperation läuft in genau einer Transaktion inkl. History und Outbox-Event.
 
+mod batch;
 pub(crate) mod fields;
 pub(crate) mod history;
-mod mentions;
+pub(crate) mod mentions;
 mod relations;
 
+pub use batch::{BatchFailure, BatchPatch, BatchResult, BatchUpdateInput, MAX_BATCH};
 pub use fields::MAX_SUB_ISSUE_DEPTH;
 pub use relations::{RelatedIssue, RelationChanges, RelationsView};
 
@@ -139,6 +141,8 @@ pub struct UpdateIssueInput {
     pub sla_breaches_at: Option<Option<DateTime<Utc>>>,
     pub sla_type: Option<Option<SlaType>>,
     pub relations: RelationChanges,
+    /// Bei einem Teamwechsel auch alle Nachfahren verschieben (docs/02 §7.2 Nr. 14).
+    pub move_sub_issues: bool,
     pub source: HistorySource,
 }
 
@@ -709,6 +713,20 @@ impl App {
                 .subscribe(self.ids.new_uuid(), stored.id, *u, "mention", now)
                 .await?;
         }
+        if let Some(d) = &stored.description {
+            Box::pin(mentions::link_issue_mentions(
+                tx,
+                &snap,
+                ctx,
+                self.ids.as_ref(),
+                now,
+                input.source,
+                &stored,
+                d,
+                None,
+            ))
+            .await?;
+        }
         emit(
             tx,
             ctx,
@@ -736,6 +754,75 @@ impl App {
 
     /// Wie [`App::update_issue`] in einer vorhandenen Transaktion.
     pub async fn update_issue_in(
+        &self,
+        tx: &mut dyn Tx,
+        ctx: &RequestCtx,
+        input: UpdateIssueInput,
+    ) -> AppResult<IssueView> {
+        let move_subs = input.move_sub_issues && input.team.is_some();
+        let source = input.source;
+        let view = Box::pin(self.update_issue_core(tx, ctx, input)).await?;
+        if move_subs {
+            self.move_descendants(tx, ctx, &view.issue, source).await?;
+        }
+        Ok(view)
+    }
+
+    /// Verschiebt alle Nachfahren von `root` ins Team von `root` (gleiche Transaktion, docs/02
+    /// §7.2 Nr. 14). Für den Aufrufer nicht sichtbare Nachfahren bleiben unberührt.
+    async fn move_descendants(
+        &self,
+        tx: &mut dyn Tx,
+        ctx: &RequestCtx,
+        root: &Issue,
+        source: HistorySource,
+    ) -> AppResult<()> {
+        const MAX_MOVED: usize = 500;
+        let mut queue = vec![(root.id, 0_i64)];
+        let mut seen = std::collections::HashSet::from([root.id]);
+        let mut handled = 0_usize;
+        while let Some((id, depth)) = queue.pop() {
+            if depth >= MAX_SUB_ISSUE_DEPTH {
+                continue;
+            }
+            for child in tx.issues().children(id).await? {
+                if !seen.insert(child.id) {
+                    continue;
+                }
+                queue.push((child.id, depth + 1));
+                if child.trashed || child.archived_at.is_some() || child.team_id == root.team_id {
+                    continue;
+                }
+                handled += 1;
+                if handled > MAX_MOVED {
+                    return Err(AppError::limit_exceeded(
+                        "too many sub-issues to move in one call",
+                    )
+                    .with_details(json!({ "limit": "moveSubIssues", "max": MAX_MOVED })));
+                }
+                let moved = Box::pin(self.update_issue_core(
+                    tx,
+                    ctx,
+                    UpdateIssueInput {
+                        id: child.id.to_string(),
+                        team: Some(root.team_id.to_string()),
+                        source,
+                        ..Default::default()
+                    },
+                ))
+                .await;
+                match moved {
+                    Ok(_) => {}
+                    // Unsichtbare Sub-Issues verraten wir nicht und verschieben sie nicht.
+                    Err(e) if e.kind == crate::error::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn update_issue_core(
         &self,
         tx: &mut dyn Tx,
         ctx: &RequestCtx,
@@ -984,6 +1071,18 @@ impl App {
                     .subscribe(self.ids.new_uuid(), saved.id, *u, "mention", now)
                     .await?;
             }
+            Box::pin(mentions::link_issue_mentions(
+                tx,
+                &snap,
+                ctx,
+                self.ids.as_ref(),
+                now,
+                input.source,
+                &saved,
+                &text,
+                old.description.as_deref(),
+            ))
+            .await?;
         }
         if saved.assignee_id != old.assignee_id
             && let Some(a) = saved.assignee_id

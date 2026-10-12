@@ -1,4 +1,5 @@
 import { Bell, BellOff, SmilePlus } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
@@ -12,7 +13,7 @@ import { Avatar } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { describeHistory, type HistoryResolver } from "./history";
 import { relativeTime } from "./model";
-import { setSubscription } from "./queries";
+import { keys, setSubscription } from "./queries";
 import { RichEditor } from "./rich-editor";
 import { ErrorState } from "./states";
 import { errorMessage, showToast } from "./toast-store";
@@ -278,9 +279,11 @@ export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: Issue
   const comments = useComments(issue.id);
   const users = useKnownUsers();
   const myReactions = useRef(new Map<string, string>());
-  const [subscribed, setSubscribed] = useState(false);
-
   const extras = useIssueExtras(issue.id);
+  const qc = useQueryClient();
+  // Optimistischer Zwischenstand; sonst gilt der Abo-Zustand des Servers (`Issue.subscribed`).
+  const [override, setOverride] = useState<boolean | null>(null);
+  const subscribed = override ?? extras.data?.subscribed ?? false;
   const session = useSession();
 
   const resolver = useMemo<HistoryResolver>(
@@ -318,11 +321,14 @@ export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: Issue
 
   const toggleSub = () => {
     const next = !subscribed;
-    setSubscribed(next);
-    setSubscription(issue.id, next).catch((e: unknown) => {
-      setSubscribed(!next);
-      showToast({ message: errorMessage(e, "Could not change subscription."), tone: "error" });
-    });
+    setOverride(next);
+    setSubscription(issue.id, next)
+      .then(() => qc.invalidateQueries({ queryKey: keys.issueDetails }))
+      .then(() => setOverride(null))
+      .catch((e: unknown) => {
+        setOverride(null);
+        showToast({ message: errorMessage(e, "Could not change subscription."), tone: "error" });
+      });
   };
 
   return (
@@ -335,6 +341,7 @@ export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: Issue
           className="ml-auto"
           onClick={toggleSub}
           aria-pressed={subscribed}
+          aria-label={subscribed ? "Unsubscribe from this issue" : "Subscribe to this issue"}
         >
           {subscribed ? <BellOff /> : <Bell />} {subscribed ? "Unsubscribe" : "Subscribe"}
         </Button>

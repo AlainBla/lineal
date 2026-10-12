@@ -127,13 +127,14 @@ export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Iss
   return res.issue;
 }
 
-/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 3). */
-export type IssueExtras = Pick<Issue, "children" | "relations" | "history">;
+/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 4). */
+export type IssueExtras = Pick<Issue, "children" | "relations" | "history" | "subscribed">;
 
 const RELATED = "id identifier title";
 const EXTRAS_QUERY = `query IssueExtras($id: String!) {
   issue(id: $id) {
     id
+    subscribed
     children(first: 100) { ${ISSUE_FIELDS} }
     relations {
       blocks { ${RELATED} } blockedBy { ${RELATED} } relatedTo { ${RELATED} }
@@ -193,6 +194,41 @@ export async function updateIssue(id: string, input: IssueUpdateVars): Promise<I
   );
   if (!res.issueUpdate.success || !res.issueUpdate.issue) throw new Error("Update failed");
   return res.issueUpdate.issue;
+}
+
+/** Eingabe von `issueBatchUpdate` (ids plus dieselbe Änderung für alle). */
+export interface IssueBatchVars {
+  [key: string]: unknown;
+  ids: string[];
+  stateId?: string;
+  priority?: number;
+  assigneeId?: string | null;
+  addedLabelIds?: string[];
+  removedLabelIds?: string[];
+  projectId?: string | null;
+  cycleId?: string | null;
+  estimate?: number | null;
+  teamId?: string;
+  moveSubIssues?: boolean;
+  archive?: boolean;
+  delete?: boolean;
+}
+
+export interface IssueBatchResult {
+  issues: Issue[];
+  failures: Array<{ id: string; code: string; message: string }>;
+}
+
+export async function batchUpdateIssues(input: IssueBatchVars): Promise<IssueBatchResult> {
+  const res = await gqlRequest<{ issueBatchUpdate: IssueBatchResult }, { input: IssueBatchVars }>(
+    `mutation IssueBatchUpdate($input: IssueBatchUpdateInput!) {
+      issueBatchUpdate(input: $input) {
+        issues { ${ISSUE_FIELDS} } failures { id code message }
+      }
+    }`,
+    { input },
+  );
+  return res.issueBatchUpdate;
 }
 
 export interface IssueCreateVars {

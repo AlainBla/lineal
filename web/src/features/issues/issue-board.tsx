@@ -22,8 +22,9 @@ import { cn } from "@/lib/cn";
 
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { IssueCardBody } from "./issue-row";
+import { IssueCardBody, SelectBox } from "./issue-row";
 import { applyDrop, COLUMN_PREFIX, issuePath, type BoardColumn, type DropResult } from "./model";
+import type { Selection } from "./selection";
 
 interface BoardProps {
   columns: BoardColumn[];
@@ -34,6 +35,7 @@ interface BoardProps {
   /** Wird mit dem Ergebnis eines gültigen Drops aufgerufen (Statuswechsel und/oder neue Reihenfolge). */
   onDrop: (result: DropResult & { issue: Issue }) => void;
   onCreateInColumn?: (stateId: string) => void;
+  selection?: Selection;
 }
 
 function Card({
@@ -42,13 +44,16 @@ function Card({
   lookup,
   focused,
   onFocus,
+  selection,
 }: {
   issue: Issue;
   ws: string;
   lookup: IssueLookup;
   focused: boolean;
   onFocus: (id: string) => void;
+  selection?: Selection;
 }) {
+  const selected = selection?.has(issue.id) ?? false;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: issue.id,
   });
@@ -61,14 +66,24 @@ function Card({
       {...attributes}
       role="link"
       {...listeners}
+      data-selected={selected || undefined}
       onFocus={() => onFocus(issue.id)}
+      onClick={(e) => {
+        if (selection?.handleClick(issue.id, e)) e.preventDefault();
+      }}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
-        "block rounded-lg border border-border bg-card p-2.5 text-card-foreground outline-none hover:border-border-strong focus-visible:border-ring",
+        "group relative block rounded-lg border border-border bg-card p-2.5 text-card-foreground outline-none hover:border-border-strong focus-visible:border-ring",
         focused && "border-border-strong",
+        selected && "border-primary bg-surface-active",
         isDragging && "opacity-40",
       )}
     >
+      {selection && (
+        <span className="absolute right-2 bottom-2">
+          <SelectBox issue={issue} selection={selection} />
+        </span>
+      )}
       <IssueCardBody issue={issue} lookup={lookup} />
     </Link>
   );
@@ -81,6 +96,7 @@ function Column({
   focusedId,
   onFocus,
   onCreate,
+  selection,
 }: {
   column: BoardColumn;
   ws: string;
@@ -88,6 +104,7 @@ function Column({
   focusedId: string | null;
   onFocus: (id: string) => void;
   onCreate?: (stateId: string) => void;
+  selection?: Selection;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: COLUMN_PREFIX + column.state.id });
   const { state, issues } = column;
@@ -129,6 +146,7 @@ function Column({
               lookup={lookup}
               focused={focusedId === issue.id}
               onFocus={onFocus}
+              selection={selection}
             />
           ))}
         </SortableContext>
@@ -149,6 +167,7 @@ export function IssueBoard({
   onFocus,
   onDrop,
   onCreateInColumn,
+  selection,
 }: BoardProps) {
   const [dragging, setDragging] = useState<Issue | null>(null);
   const sensors = useSensors(
@@ -187,6 +206,7 @@ export function IssueBoard({
             focusedId={focusedId}
             onFocus={onFocus}
             onCreate={onCreateInColumn}
+            selection={selection}
           />
         ))}
       </div>

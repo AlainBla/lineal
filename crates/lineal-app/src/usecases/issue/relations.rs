@@ -8,6 +8,7 @@ use crate::policy::PolicySnapshot;
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
 use crate::ports::repos::issue::{HistorySource, Issue, Relation};
+use crate::ports::repos::notification::{SubscribeOutcome, SubscriptionReason};
 use crate::ports::repos::team::Team;
 use crate::resolve;
 use crate::resolve::user::actor_user_id;
@@ -151,6 +152,64 @@ async fn add(
     Ok(())
 }
 
+/// Legt bei einer Erwähnung (`ENG-123` im Text) eine `related`-Relation an, sofern das
+/// Gegenstück sichtbar und beschreibbar ist und noch keine Relation zwischen beiden besteht
+/// (docs/03 §4.2). Unsichtbare oder unbekannte Kennungen werden stillschweigend übergangen.
+pub(super) async fn link_mention(
+    tx: &mut dyn Tx,
+    env: &Env<'_>,
+    issue: &Issue,
+    reference: &str,
+) -> AppResult<bool> {
+    let other = match resolve::issue::resolve_in(tx, env.snap, env.ctx, reference).await {
+        Ok(o) => o,
+        Err(e) if e.kind == crate::error::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if other.id == issue.id
+        || other.trashed
+        || env
+            .snap
+            .require_team(env.ctx, crate::policy::Action::UpdateIssue, other.team_id)
+            .is_err()
+    {
+        return Ok(false);
+    }
+    let existing = tx.issues().relations_of(issue.id).await?;
+    if existing
+        .iter()
+        .any(|r| r.issue_id == other.id || r.related_issue_id == other.id)
+    {
+        return Ok(false);
+    }
+    let mut own = Delta::default();
+    add(
+        tx,
+        env,
+        issue,
+        &other,
+        issue.id,
+        RelationType::Related,
+        "relatedTo",
+        "relatedTo",
+        &mut own,
+    )
+    .await?;
+    if !own.is_empty() {
+        history::record(
+            tx,
+            env.ids.new_uuid(),
+            issue,
+            actor_user_id(env.ctx),
+            env.source,
+            &own,
+            env.now,
+        )
+        .await?;
+    }
+    Ok(true)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn remove(
     tx: &mut dyn Tx,
@@ -273,6 +332,7 @@ async fn mark_duplicate(
         own,
     )
     .await?;
+    transfer_subscribers(tx, env, issue, &canonical).await?;
     if issue.state_type != StateType::Duplicate {
         let dup_state = first_state_of(tx, team.id, StateType::Duplicate)
             .await?
@@ -288,6 +348,54 @@ async fn mark_duplicate(
             true,
         )
         .await?;
+    }
+    Ok(())
+}
+
+/// Abonnenten des Duplikats werden zusätzlich Abonnenten des Originals (docs/03 §4.3), sofern
+/// sie das Original sehen dürfen; am Duplikat behalten sie ihr Abo.
+async fn transfer_subscribers(
+    tx: &mut dyn Tx,
+    env: &Env<'_>,
+    dup: &Issue,
+    canonical: &Issue,
+) -> AppResult<()> {
+    let subs = tx.notifications().issue_subscribers(dup.id).await?;
+    if subs.is_empty() {
+        return Ok(());
+    }
+    let mut allowed = Vec::new();
+    {
+        let mut fan =
+            crate::usecases::notification::fanout::Fan::new(&mut *tx, env.now, None).await?;
+        for s in subs {
+            if fan.can_see_any(s, &[canonical.team_id]).await? {
+                allowed.push(s);
+            }
+        }
+    }
+    for s in allowed {
+        let outcome = tx
+            .notifications()
+            .subscribe_issue(
+                canonical.id,
+                s,
+                None,
+                SubscriptionReason::AddedByOther,
+                env.now,
+            )
+            .await?;
+        if outcome != SubscribeOutcome::Unchanged {
+            tx.outbox()
+                .push(NewEvent::from_ctx(
+                    DomainEvent::IssueSubscriptionCreated {
+                        issue_id: canonical.id,
+                        user_id: s,
+                    },
+                    env.ctx,
+                ))
+                .await?;
+        }
     }
     Ok(())
 }

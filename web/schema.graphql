@@ -864,9 +864,56 @@ type Issue {
 	"""
 	relations: IssueRelations!
 	"""
+	Ob der Aufrufer dieses Issue abonniert hat.
+	"""
+	subscribed: Boolean!
+	"""
 	Aktivitätsverlauf, älteste zuerst (höchstens 1000 Einträge).
 	"""
 	history: [IssueHistoryEntry!]!
+}
+
+"""
+Fehler eines einzelnen Issues in `issueBatchUpdate`.
+"""
+type IssueBatchFailure {
+	id: String!
+	code: String!
+	message: String!
+}
+
+type IssueBatchPayload {
+	"""
+	`true`, wenn mindestens ein Issue geändert wurde.
+	"""
+	success: Boolean!
+	issues: [Issue!]!
+	failures: [IssueBatchFailure!]!
+}
+
+"""
+Mehrfachaktion (`issueBatchUpdate`): dieselbe Änderung für bis zu 250 Issues.
+"""
+input IssueBatchUpdateInput {
+	ids: [String!]!
+	stateId: String
+	priority: Int
+	assigneeId: String
+	addedLabelIds: [String!]
+	removedLabelIds: [String!]
+	projectId: String
+	cycleId: String
+	estimate: Float
+	"""
+	Zielteam (Bulk-Move).
+	"""
+	teamId: String
+	moveSubIssues: Boolean
+	archive: Boolean
+	"""
+	In den Papierkorb legen.
+	"""
+	delete: Boolean
 }
 
 type IssueConnection {
@@ -927,6 +974,21 @@ type IssueLabel {
 	archivedAt: String
 	createdAt: String!
 	updatedAt: String!
+}
+
+"""
+Ergebnis von `issueLabelMerge`/`issueLabelDelete`.
+"""
+type IssueLabelBulkPayload {
+	success: Boolean!
+	"""
+	Zusammenführen: das Ziel-Label.
+	"""
+	issueLabel: IssueLabel
+	"""
+	Anzahl der betroffenen Issues.
+	"""
+	affectedIssues: Int!
 }
 
 input IssueLabelCreateInput {
@@ -1026,6 +1088,10 @@ input IssueUpdateInput {
 	cycleId: String
 	dueDate: String
 	sortOrder: Float
+	"""
+	Bei einem Teamwechsel auch alle Sub-Issues verschieben (Default `false`).
+	"""
+	moveSubIssues: Boolean
 }
 
 """
@@ -1082,6 +1148,10 @@ type Mutation {
 	issueCreate(input: IssueCreateInput!): IssuePayload!
 	issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
 	"""
+	Wendet eine Änderung auf mehrere Issues an (je Issue transaktional, Teilerfolge möglich).
+	"""
+	issueBatchUpdate(input: IssueBatchUpdateInput!): IssueBatchPayload!
+	"""
 	Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
 	"""
 	issueArchive(id: String!, trash: Boolean): IssuePayload!
@@ -1092,6 +1162,14 @@ type Mutation {
 	issueLabelUpdate(id: String!, input: IssueLabelUpdateInput!): IssueLabelPayload!
 	issueLabelRetire(id: String!): IssueLabelPayload!
 	issueLabelRestore(id: String!): IssueLabelPayload!
+	"""
+	Führt das Label `id` in `targetId` zusammen und löscht `id`.
+	"""
+	issueLabelMerge(id: String!, targetId: String!): IssueLabelBulkPayload!
+	"""
+	Löscht das Label (Gruppen samt Kindern) endgültig und entfernt es von allen Issues.
+	"""
+	issueLabelDelete(id: String!): IssueLabelBulkPayload!
 	"""
 	Neuer Thread, Antwort (`parentId`) oder Inline-Kommentar (`quotedText`).
 	"""
@@ -1753,6 +1831,11 @@ type Query {
 	Issues der sichtbaren Teams.
 	"""
 	issues(teamId: String, assigneeId: String, state: String, label: String, projectId: String, cycleId: String, priority: Int, includeArchived: Boolean, first: Int, after: String): IssueConnection!
+	"""
+	Anzahl der (für den Aufrufer sichtbaren) Issues mit diesem Label bzw. dieser Gruppe;
+	setzt das Recht zum Verwalten des Labels voraus (Bestätigung vor Merge/Delete).
+	"""
+	issueLabelUsage(id: String!): Int!
 	"""
 	Sichtbare Issue-Labels (Workspace und Teams, optional für ein Team samt Vorfahren).
 	"""

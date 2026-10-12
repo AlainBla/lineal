@@ -485,6 +485,7 @@ fn update_input(id: &str, args: &Value) -> AppResult<UpdateIssueInput> {
         sla_breaches_at: args.get("slaBreachesAt").map(sla_at_arg).transpose()?,
         sla_type: args.get("slaType").map(sla_type_arg).transpose()?,
         relations: relation_changes(args)?,
+        move_sub_issues: false,
         source: HistorySource::Mcp,
     })
 }

@@ -594,6 +594,22 @@ impl App {
                     .await?;
             }
         }
+        if let ParentRef::Issue(issue_id) = parent
+            && let Some(issue) = tx.issues().get(issue_id, false).await?
+        {
+            Box::pin(super::issue::mentions::link_issue_mentions(
+                &mut *tx,
+                &snap,
+                ctx,
+                self.ids.as_ref(),
+                now,
+                crate::ports::repos::issue::HistorySource::User,
+                &issue,
+                &comment.body,
+                None,
+            ))
+            .await?;
+        }
         tx.outbox()
             .push(NewEvent::from_ctx(
                 DomainEvent::CommentCreated {
@@ -645,6 +661,22 @@ impl App {
             .comments()
             .update_body(comment.id, &body, self.clock.now())
             .await?;
+        if let ParentRef::Issue(issue_id) = updated.parent
+            && let Some(issue) = tx.issues().get(issue_id, false).await?
+        {
+            Box::pin(super::issue::mentions::link_issue_mentions(
+                &mut *tx,
+                &snap,
+                ctx,
+                self.ids.as_ref(),
+                self.clock.now(),
+                crate::ports::repos::issue::HistorySource::User,
+                &issue,
+                &updated.body,
+                Some(&comment.body),
+            ))
+            .await?;
+        }
         tx.outbox()
             .push(NewEvent::from_ctx(
                 DomainEvent::CommentUpdated {
