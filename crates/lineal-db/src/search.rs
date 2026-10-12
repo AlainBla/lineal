@@ -1,7 +1,7 @@
 //! Volltextsuche (WP11, docs/05 §5, docs/10 §5).
 //!
-//! Die Suche läuft über generierte `tsvector`-Spalten (Konfiguration `simple`, Migration
-//! 0015/1100); es gibt keinen separaten Index, den der Outbox-Konsument pflegen müsste, und die
+//! Die Suche läuft über generierte `tsvector`-Spalten (Konfiguration je Workspace
+//! `organization.fulltext_config`, Migration 3100; Trigger pflegen sie); es gibt keinen separaten Index, den der Outbox-Konsument pflegen müsste, und die
 //! Berechtigung wird zur Abfragezeit als UND angehängt (docs/10 §5.3).
 
 use lineal_app::ports::repos::view::{SearchHitRow, SearchKind, SearchOrder, SearchQuery};
@@ -119,7 +119,7 @@ pub fn push_issue_search<'q>(qb: &mut QueryBuilder<'q, Postgres>, alias: &str, t
     match tsquery(text) {
         Some(q) => {
             qb.push(format!(
-                " AND {alias}.search_vector @@ to_tsquery('simple', "
+                " AND {alias}.search_vector @@ to_tsquery(lineal_ts_config({alias}.organization_id), "
             ));
             qb.push_bind(q);
             qb.push(")");
@@ -227,7 +227,12 @@ fn status_boost_sql(col: &str, kind: SearchKind) -> String {
     }
 }
 
-fn begin_query<'q>(qb: &mut QueryBuilder<'q, Postgres>, q: &SearchQuery, tsq: &Option<String>) {
+fn begin_query<'q>(
+    qb: &mut QueryBuilder<'q, Postgres>,
+    org: Uuid,
+    q: &SearchQuery,
+    tsq: &Option<String>,
+) {
     match &q.eval {
         Some(ev) => {
             crate::filter_sql::push_cte_prefix(qb, ev);
@@ -237,7 +242,9 @@ fn begin_query<'q>(qb: &mut QueryBuilder<'q, Postgres>, q: &SearchQuery, tsq: &O
             qb.push("WITH ");
         }
     }
-    qb.push("sq AS (SELECT to_tsquery('simple', ");
+    qb.push("sq AS (SELECT to_tsquery(lineal_ts_config(");
+    qb.push_bind(org);
+    qb.push("), ");
     qb.push_bind(tsq.clone());
     qb.push("::text) AS q) ");
 }
@@ -309,7 +316,7 @@ pub(crate) async fn search_all(
 
     for kind in &q.kinds {
         let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("");
-        begin_query(&mut qb, q, &tsq);
+        begin_query(&mut qb, org, q, &tsq);
         match kind {
             SearchKind::Issue => {
                 qb.push(
@@ -568,7 +575,7 @@ async fn add_highlights(
         }
         for (label, expr) in fields {
             let sql = format!(
-                "SELECT id, ts_headline('simple', coalesce({expr}, ''), to_tsquery('simple', $3), $4) \
+                "SELECT id, ts_headline(lineal_ts_config($1), coalesce({expr}, ''), to_tsquery(lineal_ts_config($1), $3), $4) \
                  FROM {table} WHERE organization_id = $1 AND id = ANY($2)"
             );
             let rows: Vec<(Uuid, String)> = sqlx::query_as(&sql)
@@ -597,9 +604,9 @@ async fn add_highlights(
         if !ids.is_empty() {
             let rows: Vec<(Uuid, String)> = sqlx::query_as(
                 "SELECT DISTINCT ON (c.issue_id) c.issue_id, \
-                 ts_headline('simple', left(c.body, 20000), to_tsquery('simple', $3), $4) \
+                 ts_headline(lineal_ts_config($1), left(c.body, 20000), to_tsquery(lineal_ts_config($1), $3), $4) \
                  FROM comment c WHERE c.organization_id = $1 AND c.issue_id = ANY($2) \
-                 AND c.archived_at IS NULL AND c.search_vector @@ to_tsquery('simple', $3) \
+                 AND c.archived_at IS NULL AND c.search_vector @@ to_tsquery(lineal_ts_config($1), $3) \
                  ORDER BY c.issue_id, c.created_at",
             )
             .bind(org)
