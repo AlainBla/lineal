@@ -213,3 +213,27 @@ sequenceDiagram
 6. Der Token erscheint in keiner Log-Zeile (Test durchsucht Logs).
 
 Für automatisierte Tests gibt es eine **Fake-Quelle** (`ImportSource` aus JSON-Fixtures mit erfundenen Daten), damit Tests nie gegen das echte Linear laufen.
+
+## 10. Umsetzungshinweise Teilimport (WP28)
+
+### 10.1 Abgleich mit dem Linear-Schema
+
+Alle Abfragen des Adapters werden im Test `crates/lineal-import/tests/linear_schema.rs` gegen das öffentliche Schema (`tests/data/linear-schema.graphql`, aus `github.com/linear/linear`, MIT-Lizenz, Lizenztext daneben) validiert: Feldnamen, Argumente, Typen, Verbindungsform, Filter. Dieselbe Prüfung schätzt die Komplexität (Feld 0,1 Punkte, Objekt 1 Punkt, Verbindung × `first`) und verlangt höchstens 5 000 Punkte je Abfrage (Linear lehnt ab 10 000 ab). Folgen: kleinere Seiten je Entität (`max_first`: Issues 25, Projekte 15, History 10, Abos 20, sonst 100) und niedrigere `first`-Werte in verschachtelten Verbindungen (History 30 je Issue). Gefundene Abweichungen: `Team.autoCloseState` gibt es nicht (nur `autoCloseStateId`), `Team.private` ist veraltet (Ersatz `visibility`: `public`/`private`/`restricted`, `restricted` wird vorsichtig als privat übernommen), `IssueLabel.groupType` wurde gelesen, aber nicht abgefragt. Neu abgefragt: `Issue.url/identifier/delegate`, Relationen mit `identifier url`. Ein Test der Antwortform gegen die echte API bleibt dem ersten echten Lauf vorbehalten.
+
+### 10.2 Teilimport
+
+`importScan` liefert je Team `projects: [{id, name, status, issueCount, teamIds}]` (ein Projekt über mehrere Teams erscheint bei jedem). `importStart` nimmt zusätzlich `projects: [linearProjectId]` und `targetTeams: {linearTeamKey: linealTeamId}`; die CLI `--projects "Name,ID"` und `--target-team KOL=KP`.
+
+- **Projektfilter:** übernommen werden nur Issues der gewählten Projekte, deren Team importiert wird. **Sub-Issues anderer Projekte (oder ohne Projekt) bleiben draußen**; ein Sub-Issue, dessen Elternteil fehlt, verliert den Eltern-Bezug (Bericht). Projekte, Meilensteine, Status-Updates, Dokumente folgen über das Mapping; Cycles werden vollständig übernommen. Personen und (bei Zielteam) Labels werden erst beim ersten Bezug angelegt bzw. zugeordnet. Initiativen werden nicht über den Projektfilter gezogen (Verknüpfungen entfallen, wenn die Initiative nicht importiert wurde). Ohne Filter (alle Projekte angehakt) kommen auch Issues ohne Projekt mit.
+- **Relationen nach außen:** ist nur ein Ende importiert, entsteht stattdessen ein Anhang `Linear: blocks KOL-33` mit Link in den Quell-Workspace (und eine Warnung im Bericht).
+- **Abfragen** werden auf die gewählten Teams/Projekte eingeschränkt (`team.id in`, `project.id in`, Kommentare über `issue.team`); Anhänge, Relationen und Dokumente lassen sich nicht so einschränken und werden gelesen und über das Mapping gefiltert.
+
+### 10.3 Ziel = bestehendes Lineal-Team
+
+Das Linear-Team wird nur auf das Lineal-Team gemappt; dessen Einstellungen, Standard-/Triage-Status und Mitglieder bleiben unverändert. Status werden per (Typ, Name ohne Beachtung der Schreibweise) zugeordnet, fehlende angelegt (Name, Typ, Farbe, Position übernommen; `Duplicate` wird zum Typ `duplicate`). Labels: Team-Label → Label des Zielteams, sonst Workspace-Label gleichen Namens, sonst neu als Team-Label; Linear-**Workspace**-Labels → gleichnamiges Workspace-Label, sonst neu als Workspace-Label (zurückgezogene bleiben zurückgezogen). Issue-Nummern und Cycle-Nummern werden aus den Zählern des Zielteams neu vergeben; die Linear-Kennung bleibt als Alias in `issue_identifier_alias` auflösbar (nicht, wenn Linear-Key und Key des Zielteams übereinstimmen) und immer als Anhang `Linear: KOL-12` mit Link. Delta-Läufe ändern weder Nummern noch zugeordnete Status/Labels.
+
+Rechte: Beim Start prüft `importStart` Sichtbarkeit (sonst `not_found`) sowie ViewTeam, CreateIssue und UpdateTeamSettings auf dem Zielteam; **bei jeder Ausführung** (Start, Fortsetzen, Delta, Probelauf) prüft `import_verify_targets` erneut: Team im Workspace, nicht stillgelegt/gelöscht, eigene Status, Starter (`options.startedBy`) aktiv, mit Import-Recht und obigen Rechten; sonst bricht der Lauf vor jedem Schreiben ab. Importierte Personen werden nur auf aktive Benutzer gematcht; Platzhalter sind nie Admin.
+
+### 10.4 Dry-Run-Bericht
+
+`stats.plan` enthält `teamsMapped`, `statesMapped/statesNew`, `labelsMapped/labelsNew`, `usersMatched/usersPlaceholder`, `aliasesCreated`, `relationsOutside`; dazu die Zähler je Entität und die Warnungen im Bericht. Die Web-Seite und `lineal import --dry-run` zeigen ihn an.

@@ -30,7 +30,7 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 - **Views/Suche:** Favoriten umsortieren, View-Abos, Eigentümerwechsel, Stemming (Volltext-Konfiguration `simple`).
 - **Web:** Filter-Chips aus `filterData` zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (Templates/SLA/Hierarchie/Webhooks/Access/Recurring), Workspace-Settings (Teams/Limits; Members, Security und API sind vorhanden), Account-Settings.
 - **Webhooks/Auth:** `client_credentials`, App-User und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (`UrlPolicy`) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.
-- **Import:** Linear-Feldnamen nur gegen Mock getestet; Views/Favoriten/Issue-Reaktionen/Update-Kommentare werden nicht importiert; Dry-Run ohne Downloads.
+- **Import:** Abfragen sind gegen das öffentliche Linear-Schema validiert (WP28), die Antworten des echten API aber noch nie gelesen; Teilimport (Projektfilter, Zielteam) in docs/13 §10; Views/Favoriten/Issue-Reaktionen/Update-Kommentare werden nicht importiert; Dry-Run ohne Downloads; Sub-Issues anderer Projekte entfallen beim Projektfilter.
 - **Rate-Limit:** In-Process-Verteidigung in der Tiefe (siehe 4.4); weitere Feinheiten (u. a. Fehlversuchs-Zähler der Token-Prüfung ohne Reservierung, geteilter Überlauf-Bucket) sind als offene Punkte notiert.
 
 ## 3. Betrieb
