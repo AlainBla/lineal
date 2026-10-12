@@ -46,6 +46,30 @@ pub struct CycleView {
     pub is_future: bool,
     pub is_next: bool,
     pub is_previous: bool,
+    /// Kapazitätsschätzung (docs/04 §1.9): Velocity der drei zuletzt abgeschlossenen Cycles, sonst
+    /// `Mitglieder × defaultIssueEstimate × cycleDuration`. Nur für laufende und künftige Cycles.
+    pub capacity: Option<f64>,
+}
+
+/// Kapazitätsschätzung eines Teams (docs/04 §1.9): Mittel von `completedScopeHistory[last]` der
+/// (bis zu) drei zuletzt abgeschlossenen Cycles mit Historie; ohne Historie die grobe Schätzung
+/// `Mitglieder × defaultIssueEstimate × cycleDuration` (Wochen). `None`, wenn beides 0 ergibt.
+pub fn capacity_estimate(cycles: &[Cycle], members: usize, team: &Team) -> Option<f64> {
+    let mut past: Vec<&Cycle> = cycles
+        .iter()
+        .filter(|c| c.is_past() && !c.completed_scope_history.is_empty())
+        .collect();
+    past.sort_by_key(|c| std::cmp::Reverse(c.completed_at));
+    past.truncate(3);
+    let est = if past.is_empty() {
+        members as f64 * f64::from(team.default_issue_estimate) * f64::from(team.cycle_duration)
+    } else {
+        past.iter()
+            .filter_map(|c| c.completed_scope_history.last().copied())
+            .sum::<f64>()
+            / past.len() as f64
+    };
+    (est > 0.0).then_some(est)
 }
 
 /// `existingActiveIssues` beim Aktivieren von „Active issues“.
@@ -123,11 +147,26 @@ async fn build_views(
     now: DateTime<Utc>,
 ) -> AppResult<Vec<CycleView>> {
     let mut out = Vec::with_capacity(selection.len());
+    let mut members: Option<usize> = None;
     for c in selection {
         let rows = tx.cycles().issue_rows(c.id).await?;
         let scope = ProjectScope::from_rows(&rows);
         let (is_active, is_past, is_future, is_next, is_previous) = flags(cycles, c, now);
+        let capacity = if c.is_past() {
+            None
+        } else {
+            let m = match members {
+                Some(m) => m,
+                None => {
+                    let m = tx.teams().list_memberships(team.id).await?.len();
+                    members = Some(m);
+                    m
+                }
+            };
+            capacity_estimate(cycles, m, team)
+        };
         out.push(CycleView {
+            capacity,
             progress: if c.is_past() {
                 c.progress.unwrap_or(scope.progress)
             } else {
@@ -406,6 +445,9 @@ impl App {
             tx.cycles()
                 .update_meta(c.id, input.name.clone(), input.description.clone(), now)
                 .await?;
+        }
+        if let Some(Some(name)) = &input.name {
+            renumber_after_rename(&mut *tx, &c, name, now).await?;
         }
         if input.starts_at.is_some() || input.ends_at.is_some() {
             if c.inherited_from_id.is_some() {
@@ -808,5 +850,114 @@ impl App {
                 .await?;
         }
         tx.commit().await
+    }
+}
+
+/// Zahl am Ende eines Cycle-Namens (`Sprint 40` → 40, docs/04 §1.3).
+pub fn trailing_number(name: &str) -> Option<i32> {
+    let t = name.trim_end();
+    let digits: String = t
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    // Länger als neun Ziffern passt nicht in eine Cycle-Nummer.
+    if digits.is_empty() || digits.len() > 9 {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// `onCycleRenamed` (docs/04 §1.3): Endet der neue Name auf eine Zahl, werden die nicht
+/// gestarteten, späteren Cycles des Teams ab dieser Zahl neu nummeriert; `Team.cycleNumberBase`
+/// und der Zähler für neu erzeugte Cycles folgen. Namen der Form `Cycle <n>` werden geleert.
+/// Kollidiert eine neue Nummer mit einem Cycle, der seine Nummer behält → `invalid_request`.
+async fn renumber_after_rename(
+    tx: &mut dyn Tx,
+    cycle: &Cycle,
+    new_name: &str,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    let Some(base) = trailing_number(new_name) else {
+        return Ok(());
+    };
+    let all = tx.cycles().list_for_team(cycle.team_id, true).await?;
+    let mut future: Vec<&Cycle> = all
+        .iter()
+        .filter(|f| {
+            f.id != cycle.id
+                && f.starts_at > cycle.starts_at
+                && f.starts_at > now
+                && f.completed_at.is_none()
+                && f.archived_at.is_none()
+        })
+        .collect();
+    future.sort_by_key(|f| f.starts_at);
+    let moved: HashSet<_> = future.iter().map(|f| f.id).collect();
+    let mut kept: HashSet<i32> = all
+        .iter()
+        .filter(|x| !moved.contains(&x.id))
+        .map(|x| x.number)
+        .collect();
+    // Der umbenannte Cycle behält seine Nummer.
+    kept.insert(cycle.number);
+    let mut n = base;
+    let mut plan = Vec::with_capacity(future.len());
+    for f in &future {
+        n = n
+            .checked_add(1)
+            .ok_or_else(|| invalid("name", "Cycle number out of range."))?;
+        if kept.contains(&n) {
+            return Err(invalid(
+                "name",
+                "The following cycles cannot be renumbered because a cycle with that number already exists.",
+            ));
+        }
+        plan.push((f, n));
+    }
+    // Zweiphasig, damit die Eindeutigkeit (Team, Nummer) zwischendurch nicht verletzt wird.
+    const OFFSET: i32 = 1_000_000_000;
+    for (f, _) in &plan {
+        tx.cycles().set_number(f.id, OFFSET + f.number, now).await?;
+    }
+    for (f, number) in &plan {
+        tx.cycles().set_number(f.id, *number, now).await?;
+        if f.name.as_deref().is_none_or(is_default_cycle_name) {
+            tx.cycles().update_meta(f.id, Some(None), None, now).await?;
+        }
+    }
+    let highest_kept = kept.iter().copied().max().unwrap_or(0);
+    tx.cycles()
+        .set_team_number_base(cycle.team_id, base, n.max(highest_kept))
+        .await
+}
+
+/// `Cycle <n>` – ein Name, der der Nummer folgt und deshalb entfällt.
+fn is_default_cycle_name(name: &str) -> bool {
+    name.strip_prefix("Cycle ")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn trailing_numbers() {
+        assert_eq!(trailing_number("Sprint 40"), Some(40));
+        assert_eq!(trailing_number("Sprint 40  "), Some(40));
+        assert_eq!(trailing_number("Sprint"), None);
+        assert_eq!(trailing_number("Q4 plan"), None);
+        assert_eq!(trailing_number("12345678901"), None);
+    }
+
+    #[test]
+    fn default_names() {
+        assert!(is_default_cycle_name("Cycle 7"));
+        assert!(!is_default_cycle_name("Cycle x"));
+        assert!(!is_default_cycle_name("Sprint 7"));
     }
 }

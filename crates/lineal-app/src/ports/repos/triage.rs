@@ -307,6 +307,16 @@ pub trait TriageRepo: Send {
         unimplemented_repo()
     }
 
+    /// Wie `auto_archive_candidates`, aber nur Issues, für die seit der letzten Änderung noch keine
+    /// Vorwarnung (`issueAutoArchiveWarning`) erzeugt wurde (WP34).
+    async fn auto_archive_unwarned_candidates(
+        &mut self,
+        _team: TeamId,
+        _cutoff: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<IssueId>> {
+        unimplemented_repo()
+    }
     // --- Kandidatenabfragen (je Workspace) ---
     /// Offene Issues (`triage`/`backlog`/`unstarted`) des Teams ohne Aktualisierung seit `cutoff`,
     /// aufsteigend nach ID, ab `after`.

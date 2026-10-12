@@ -3,6 +3,7 @@
 pub mod attachment;
 pub mod audit;
 pub mod auth;
+pub mod automation;
 pub mod comment;
 pub mod cycle;
 pub mod document;

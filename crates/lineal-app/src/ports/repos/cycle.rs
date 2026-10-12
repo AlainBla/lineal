@@ -290,4 +290,60 @@ pub trait CycleRepo: Send {
     ) -> AppResult<Vec<IssueId>> {
         unimplemented_repo()
     }
+
+    /// Setzt die Cycle-Nummer (Umnummerierung nach `cycleNumberBase`, docs/04 §1.3).
+    async fn set_number(
+        &mut self,
+        _id: CycleId,
+        _number: i32,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Speichert `Team.cycleNumberBase` und setzt den Zähler (`last_cycle_number`) auf `last`.
+    async fn set_team_number_base(
+        &mut self,
+        _team: TeamId,
+        _base: i32,
+        _last: i32,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// `Team.cycleNumberBase` (docs/04 §1.3).
+    async fn team_number_base(&mut self, _team: TeamId) -> AppResult<Option<i32>> {
+        unimplemented_repo()
+    }
+    /// Abgeschlossene, nicht archivierte Cycles des Teams, deren `completed_at` bei oder vor
+    /// `cutoff` liegt (Auto-Archiv, docs/04 §1.8).
+    async fn auto_archive_cycle_candidates(
+        &mut self,
+        _team: TeamId,
+        _cutoff: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<CycleId>> {
+        unimplemented_repo()
+    }
+    /// Archiviert automatisch (`archived_at` und `auto_archived_at`).
+    async fn auto_archive(&mut self, _id: CycleId, _now: DateTime<Utc>) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Projekte mit dem Lead-Team `team`, die nach docs/04 §2.12 auto-archivierbar sind: Status
+    /// `completed|canceled`, seit `cutoff` unverändert, alle Issues archiviert oder geschlossen und
+    /// seit `cutoff` unverändert.
+    async fn auto_archive_project_candidates(
+        &mut self,
+        _team: TeamId,
+        _cutoff: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<lineal_domain::ids::ProjectId>> {
+        unimplemented_repo()
+    }
+    /// Archiviert das Projekt automatisch; `false`, wenn es nicht (mehr) archivierbar ist.
+    async fn auto_archive_project(
+        &mut self,
+        _id: lineal_domain::ids::ProjectId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
 }

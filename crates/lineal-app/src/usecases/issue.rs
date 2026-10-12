@@ -266,6 +266,11 @@ fn diff_issue(old: &Issue, new: &Issue) -> (Delta, Vec<String>) {
         json!(old.sla_type.map(|t| t.as_str())),
         json!(new.sla_type.map(|t| t.as_str())),
     );
+    d.set(
+        "snoozedUntilAt",
+        val_ts(old.snoozed_until_at),
+        val_ts(new.snoozed_until_at),
+    );
     let mut changed: Vec<String> = d.changes.keys().cloned().collect();
     changed.retain(|k| k != "identifier");
     if old.description != new.description {
@@ -941,6 +946,11 @@ impl App {
         let labels_changed = !plan.added.is_empty() || !plan.removed.is_empty();
         if issue == old && !labels_changed && own.is_empty() {
             return load_view(tx, issue, true).await;
+        }
+        // Aktivität eines anderen als des Snoozenden beendet das Triage-Snooze (docs/03 §10).
+        if issue != old && issue.snoozed_until_at.is_some() && issue.snoozed_by_id != actor {
+            issue.snoozed_until_at = None;
+            issue.snoozed_by_id = None;
         }
         let saved = if issue != old {
             tx.issues().save(&issue, now).await?

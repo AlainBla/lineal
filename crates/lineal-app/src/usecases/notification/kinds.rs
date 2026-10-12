@@ -165,6 +165,10 @@ pub fn render(v: &NotificationView, base: &str) -> Rendered {
         "issueBlocking" => format!("{ident} is blocked by another issue"),
         "issueUnblocked" => format!("{ident} is no longer blocked"),
         "issueDue" => format!("{ident} is due soon"),
+        "issueAutoArchiveWarning" => {
+            format!("{ident} will be archived automatically within a week")
+        }
+        "issueAutoArchived" => format!("{ident} was archived automatically"),
         "issueSlaHighRisk" => format!("{ident} is at risk of breaching its SLA"),
         "issueSlaBreached" => format!("{ident} breached its SLA"),
         "issueReminder" => format!("Reminder for {ident}"),
