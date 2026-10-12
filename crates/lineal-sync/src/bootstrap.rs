@@ -193,9 +193,12 @@ async fn run(
 ) -> Result<String, lineal_app::AppError> {
     let mut tx = shared.app.store.begin(ctx.org_id).await?;
     // Stand des Logs vor dem Lesen der Daten (siehe Moduldoku); bei Folgepaketen aus dem Cursor.
+    let current = tx.outbox().sync_head().await?.head;
     let head = match &cursor {
-        Some(c) => c.head,
-        None => tx.outbox().sync_head().await?.head,
+        // Ein manipulierter Cursor darf keinen Stand in der Zukunft melden (der Client würde
+        // Änderungen überspringen).
+        Some(c) => c.head.min(current),
+        None => current,
     };
     let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
     let groups = allowed_groups(&snap, ctx);

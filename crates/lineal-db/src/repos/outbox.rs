@@ -426,13 +426,16 @@ fn bootstrap_source(model: &str) -> Option<(&'static str, &'static str)> {
         "WorkflowState" => ("workflow_state", ""),
         "IssueLabel" => ("issue_label", ""),
         "Issue" => ("issue", "AND NOT x.trashed AND x.archived_at IS NULL"),
-        "Cycle" => ("cycle", ""),
-        "Project" => ("project", ""),
-        "ProjectMilestone" => ("project_milestone", ""),
-        "Initiative" => ("initiative", ""),
-        "CustomView" => ("custom_view", ""),
-        "Template" => ("template", ""),
-        "Document" => ("document", "AND NOT x.trashed"),
+        "Cycle" => ("cycle", "AND x.archived_at IS NULL"),
+        "Project" => ("project", "AND x.archived_at IS NULL"),
+        "ProjectMilestone" => ("project_milestone", "AND x.archived_at IS NULL"),
+        "Initiative" => ("initiative", "AND x.archived_at IS NULL"),
+        "CustomView" => ("custom_view", "AND x.archived_at IS NULL"),
+        "Template" => ("template", "AND x.archived_at IS NULL"),
+        "Document" => (
+            "document",
+            "AND NOT x.trashed AND x.archived_at IS NULL AND x.hidden_at IS NULL",
+        ),
         _ => return None,
     })
 }

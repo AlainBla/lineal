@@ -317,7 +317,7 @@ impl NotificationRepo for PgTx {
         sqlx::query(
             "UPDATE notification SET unsnoozed_at = $3, updated_at = $3, version = version + 1 \
              WHERE organization_id = $1 AND user_id = $2 AND id <> $4 \
-               AND group_key = (SELECT group_key FROM notification WHERE id = $4) \
+               AND group_key = (SELECT g.group_key FROM notification g WHERE g.id = $4 AND g.organization_id = $1 AND g.user_id = $2) \
                AND snoozed_until_at > $3 AND unsnoozed_at IS NULL AND archived_at IS NULL",
         )
         .bind(self.org.0)
@@ -332,9 +332,12 @@ impl NotificationRepo for PgTx {
 
     async fn dedup_seen(&mut self, user: UserId, dedup_key: &str) -> AppResult<bool> {
         sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM notification WHERE user_id = $1 AND dedup_key = $2) \
-                 OR EXISTS (SELECT 1 FROM notification_merge WHERE user_id = $1 AND dedup_key = $2)",
+            "SELECT EXISTS (SELECT 1 FROM notification WHERE organization_id = $1 AND user_id = $2 \
+                            AND dedup_key = $3) \
+                 OR EXISTS (SELECT 1 FROM notification_merge m JOIN notification n ON n.id = m.notification_id \
+                            WHERE n.organization_id = $1 AND m.user_id = $2 AND m.dedup_key = $3)",
         )
+        .bind(self.org.0)
         .bind(user.0)
         .bind(dedup_key)
         .fetch_one(&mut *self.tx)
@@ -371,13 +374,18 @@ impl NotificationRepo for PgTx {
     }
 
     async fn merge_notification(&mut self, n: &NewNotification, m: &BundleMerge) -> AppResult<()> {
+        // Nur in eine Notification desselben Empfängers und Workspace zusammenführen: die Zeile
+        // wird nur vermerkt, wenn das Ziel (org, user) gehört; sonst (oder bei Wiederholung) No-op.
         let claimed = sqlx::query(
-            "INSERT INTO notification_merge (user_id, dedup_key, notification_id) VALUES ($1,$2,$3) \
+            "INSERT INTO notification_merge (user_id, dedup_key, notification_id) \
+             SELECT t.user_id, $2, t.id FROM notification t \
+             WHERE t.id = $3 AND t.organization_id = $4 AND t.user_id = $1 \
              ON CONFLICT DO NOTHING",
         )
         .bind(n.user_id.0)
         .bind(&n.dedup_key)
         .bind(m.target.0)
+        .bind(self.org.0)
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -401,7 +409,7 @@ impl NotificationRepo for PgTx {
                reaction_emoji = CASE WHEN $8 THEN $11 ELSE reaction_emoji END, \
                unsnoozed_at = CASE WHEN snoozed_until_at > $7 AND unsnoozed_at IS NULL THEN $7 \
                                    ELSE unsnoozed_at END \
-             WHERE organization_id = $1 AND id = $2",
+             WHERE organization_id = $1 AND id = $2 AND user_id = $12",
         )
         .bind(self.org.0)
         .bind(m.target.0)
@@ -414,6 +422,7 @@ impl NotificationRepo for PgTx {
         .bind(comment)
         .bind(parent)
         .bind(emoji)
+        .bind(n.user_id.0)
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -421,7 +430,7 @@ impl NotificationRepo for PgTx {
         sqlx::query(
             "UPDATE notification SET unsnoozed_at = $3, updated_at = $3, version = version + 1 \
              WHERE organization_id = $1 AND user_id = $2 AND id <> $4 \
-               AND group_key = (SELECT group_key FROM notification WHERE id = $4) \
+               AND group_key = (SELECT g.group_key FROM notification g WHERE g.id = $4 AND g.organization_id = $1 AND g.user_id = $2) \
                AND snoozed_until_at > $3 AND unsnoozed_at IS NULL AND archived_at IS NULL",
         )
         .bind(self.org.0)
@@ -1070,11 +1079,13 @@ impl NotificationRepo for PgTx {
             Some((id, false)) if reason.reactivates() => {
                 sqlx::query(
                     "UPDATE document_subscription SET active = true, reason = $2, updated_at = $3, \
-                     version = version + 1 WHERE id = $1",
+                     version = version + 1 WHERE id = $1 AND organization_id = $4 AND user_id = $5",
                 )
                 .bind(id)
                 .bind(reason.as_str())
                 .bind(now)
+                .bind(self.org.0)
+                .bind(user.0)
                 .execute(&mut *self.tx)
                 .await
                 .map_err(db_err)?;

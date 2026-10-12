@@ -923,3 +923,163 @@ async fn view_subscribers_get_notifications_with_visibility_and_self_suppression
     .await;
     assert_eq!(e.kinds(bob).await.len(), 2);
 }
+
+// --- Mandanten-/Empfänger-Isolation der Repo-Abfragen ----------------------------------------
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bundling_never_touches_other_recipients_or_foreign_notifications(pool: PgPool) {
+    use lineal_app::ports::repos::notification::{BundleMerge, NewNotification};
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 980, alice, Some(alice), 1).await;
+    e.subscribe(issue, alice).await;
+    e.subscribe(issue, bob).await;
+    // Eine Notification für Alice (Akteur Bob) und eine für Bob (Akteur Alice).
+    let c = e.comment_on("issue_id", issue.0, bob, None).await;
+    e.handle(&e.ev(bob, comment_created(c, vec![]))).await;
+    let c2 = e.comment_on("issue_id", issue.0, alice, None).await;
+    e.handle(&e.ev(alice, comment_created(c2, vec![]))).await;
+    let alice_n: Uuid = sqlx::query_scalar("SELECT id FROM notification WHERE user_id = $1")
+        .bind(alice.0)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    let before: (String, Vec<String>) =
+        sqlx::query_as("SELECT type, bundled_types FROM notification WHERE id = $1")
+            .bind(alice_n)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+
+    // Versuch, ein Ereignis für BOB in Alices Notification zusammenzuführen: wirkungslos.
+    let n = NewNotification {
+        id: NotificationId::new_v7(),
+        user_id: bob,
+        kind: "issueMention".into(),
+        category: "mentions".into(),
+        target_type: "issue".into(),
+        actor_id: Some(alice),
+        issue_id: Some(issue),
+        team_id: Some(e.d.eng),
+        project_id: None,
+        project_update_id: None,
+        project_milestone_id: None,
+        initiative_id: None,
+        initiative_update_id: None,
+        document_id: None,
+        comment_id: None,
+        parent_comment_id: None,
+        reaction_emoji: None,
+        is_priority: true,
+        dedup_key: "attack:1".into(),
+        now: e.app.clock.now(),
+    };
+    let merge = BundleMerge {
+        target: NotificationId(alice_n),
+        kind: "issueMention".into(),
+        category: "mentions".into(),
+        take_refs: true,
+        bundled_types: vec!["x".into(), "y".into()],
+        is_priority: true,
+    };
+    let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+    tx.notifications()
+        .merge_notification(&n, &merge)
+        .await
+        .unwrap();
+    assert!(
+        !tx.notifications()
+            .dedup_seen(bob, "attack:1")
+            .await
+            .unwrap(),
+        "kein Merge-Vermerk für ein fremdes Ziel"
+    );
+    tx.commit().await.unwrap();
+    let after: (String, Vec<String>) =
+        sqlx::query_as("SELECT type, bundled_types FROM notification WHERE id = $1")
+            .bind(alice_n)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after, "Alices Notification blieb unverändert");
+
+    // Auch der Lookup ist je Empfänger: Bob findet nur eigene Notifications.
+    let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+    let found = tx
+        .notifications()
+        .find_bundle_target(
+            bob,
+            &format!("issue:{}", issue.0),
+            bob,
+            e.app.clock.now() - Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    assert!(found.is_none(), "Bob hat keine eigene Notification von Bob");
+    // Ein Workspace-fremder Zugriff (andere Org) sieht nichts.
+    let mut other = e.app.store.begin(OrgId::new_v7()).await.unwrap();
+    assert!(
+        !other
+            .notifications()
+            .dedup_seen(alice, "attack:1")
+            .await
+            .unwrap()
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn document_subscription_loses_effect_when_visibility_is_lost(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    // Dokument im privaten Team DES: Bob ist Mitglied und abonniert.
+    let doc = e.document(None, Some(e.d.des), None, bob).await;
+    assert!(
+        e.app
+            .subscribe_document(&ctx_for(SeedUser::Bob), doc)
+            .await
+            .unwrap()
+            .changed
+    );
+    // Alice (kein DES) kann weder abonnieren noch den Zustand abfragen: not_found.
+    let a = ctx_for(SeedUser::Alice);
+    assert_eq!(
+        e.app.subscribe_document(&a, doc).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        e.app
+            .is_document_subscribed(&a, doc)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::NotFound
+    );
+
+    let c = e.comment_on("document_id", doc, alice, None).await;
+    e.handle(&e.ev(alice, comment_created(c, vec![]))).await;
+    assert_eq!(e.kinds(bob).await, vec!["documentNewComment"]);
+
+    // Bob verliert den Zugriff auf DES: das Abo bleibt in der Tabelle, bewirkt aber nichts mehr.
+    sqlx::query("DELETE FROM team_membership WHERE team_id = $1 AND user_id = $2")
+        .bind(e.d.des.0)
+        .bind(bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.advance(120);
+    let c2 = e.comment_on("document_id", doc, alice, None).await;
+    e.handle(&e.ev(alice, comment_created(c2, vec![]))).await;
+    assert_eq!(
+        e.kinds(bob).await.len(),
+        1,
+        "keine Notification nach Zugriffsverlust"
+    );
+    assert_eq!(
+        e.app
+            .is_document_subscribed(&ctx_for(SeedUser::Bob), doc)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::NotFound
+    );
+}
