@@ -20,10 +20,6 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-# CRDT (Yjs-kompatibel, MIT) für die Echtzeit-Mitbearbeitung (WP36).
-yrs = "0.25"
-pulldown-cmark = "0.13.4"
-base64 = "0.22"
 uuid.workspace = true
 # Nur für den LISTEN-Kanal (`PgListener`); alle Daten laufen über die Ports von `lineal-app`.
 sqlx.workspace = true

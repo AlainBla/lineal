@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod collab;
 pub mod context;
 pub mod error;
 pub mod policy;

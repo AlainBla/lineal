@@ -28,6 +28,9 @@ chacha20poly1305 = "0.10"
 tokio = { workspace = true, features = ["net", "time"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
+# CRDT (Yjs-kompatibel, MIT) für die Echtzeit-Mitbearbeitung (WP36); Pure-Rust, keine Netzwerkabhängigkeit.
+yrs = "0.25"
+pulldown-cmark = "0.13.4"
 
 [dev-dependencies]
 tokio.workspace = true

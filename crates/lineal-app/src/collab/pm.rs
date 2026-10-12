@@ -23,9 +23,9 @@ use yrs::{
 /// Name des Fragments, an das TipTap `Collaboration` standardmäßig bindet.
 pub const FRAGMENT: &str = "default";
 /// Tiefenlimit beim Lesen (ProseMirror-Bäume sind flach; tiefere gelten als Angriff/Defekt).
-const MAX_DEPTH: usize = 32;
+pub const MAX_DEPTH: usize = 64;
 /// Knotenlimit beim Lesen.
-const MAX_NODES: usize = 400_000;
+pub const MAX_NODES: usize = 200_000;
 
 /// Textmarke (Reihenfolge = Verschachtelung von außen nach innen).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,7 +38,7 @@ pub enum Mark {
 }
 
 impl Mark {
-    fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Self::Link(_) => "link",
             Self::Bold => "bold",
@@ -48,7 +48,7 @@ impl Mark {
         }
     }
 
-    fn attrs(&self) -> Any {
+    pub fn attrs(&self) -> Any {
         let mut m: HashMap<String, Any> = HashMap::new();
         if let Self::Link(href) = self {
             m.insert("href".into(), Any::String(href.as_str().into()));
@@ -116,6 +116,9 @@ struct Frame {
 struct Builder {
     stack: Vec<Frame>,
     marks: Vec<Mark>,
+    /// Zahl der wegen Tiefen-/Knotenlimit nicht geöffneten Rahmen (deren `End` wird verschluckt).
+    overflow: usize,
+    opened: usize,
 }
 
 impl Builder {
@@ -128,6 +131,8 @@ impl Builder {
                 implicit: false,
             }],
             marks: vec![],
+            overflow: 0,
+            opened: 0,
         }
     }
 
@@ -136,6 +141,15 @@ impl Builder {
     }
 
     fn open(&mut self, tag: &'static str, attrs: Vec<(String, Any)>, implicit: bool) {
+        // Tiefe und Knotenzahl sind hart begrenzt: tiefer Verschachteltes wird flach in den
+        // letzten Rahmen übernommen (kein rekursiver Aufbau, kein Stack-Überlauf).
+        self.opened += 1;
+        if self.stack.len() >= MAX_DEPTH || self.opened > MAX_NODES {
+            if !implicit {
+                self.overflow += 1;
+            }
+            return;
+        }
         self.stack.push(Frame {
             tag,
             attrs,
@@ -145,6 +159,10 @@ impl Builder {
     }
 
     fn close(&mut self) {
+        if self.overflow > 0 {
+            self.overflow -= 1;
+            return;
+        }
         if self.stack.len() <= 1 {
             return;
         }
@@ -183,7 +201,7 @@ impl Builder {
         let marks = if self.top().tag == "codeBlock" {
             vec![]
         } else {
-            let mut m = self.marks.clone();
+            let mut m: Vec<Mark> = self.marks.iter().rev().take(16).cloned().collect();
             m.sort();
             m.dedup();
             m
