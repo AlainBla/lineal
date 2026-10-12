@@ -18,6 +18,31 @@ services:
       timeout: 3s
       retries: 30
 
+  # Eigene Datenbank für den App-Stack (nicht die Entwicklungs-DB oben): Passwort Pflicht,
+  # eigenes Volume, kein veröffentlichter Port. Das Passwort steht in DATABASE_URL, daher nur
+  # URL-sichere Zeichen verwenden (z. B. `openssl rand -hex 24`).
+  app-db:
+    profiles: [app]
+    image: postgres:16
+    # Ohne Passwort klar scheitern (Compose-Interpolation `:?` würde auch `docker compose up`
+    # ohne Profil blockieren).
+    entrypoint:
+      - sh
+      - -c
+      - 'test -n "$$POSTGRES_PASSWORD" || { echo "LINEAL_DB_PASSWORD must be set for the app stack (see .env.example)" >&2; exit 1; }; exec docker-entrypoint.sh postgres'
+    environment:
+      POSTGRES_USER: lineal
+      POSTGRES_PASSWORD: ${LINEAL_DB_PASSWORD:-}
+      POSTGRES_DB: lineal
+    volumes:
+      - appdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lineal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
   # Einmalig vor Server/Worker: Migrationen anwenden.
   migrate:
     profiles: [app]
@@ -25,15 +50,18 @@ services:
     image: lineal-server:latest
     command: ["migrate"]
     environment: &server-env
-      DATABASE_URL: postgres://lineal:lineal@postgres:5432/lineal
+      DATABASE_URL: postgres://lineal:${LINEAL_DB_PASSWORD:-}@app-db:5432/lineal
       LINEAL_BASE_URL: ${LINEAL_BASE_URL:-http://localhost:8088}
       LINEAL_SESSION_SECRET: ${LINEAL_SESSION_SECRET:-}  # Pflicht, mind. 32 Zeichen: openssl rand -hex 32
       # Nur der nginx-Container (feste Adresse) darf X-Forwarded-For setzen – nicht das ganze
       # Subnetz, sonst zählte auch das Gateway (Host) als vertrauenswürdiger Proxy.
       LINEAL_TRUSTED_PROXIES: 172.31.88.10/32
+      # Wer per GraphQL weitere Workspaces anlegen darf: disabled (Default) | admins | all.
+      LINEAL_WORKSPACE_CREATION: ${LINEAL_WORKSPACE_CREATION:-disabled}
+      LINEAL_INSTANCE_ADMINS: ${LINEAL_INSTANCE_ADMINS:-}
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
-      postgres: { condition: service_healthy }
+      app-db: { condition: service_healthy }
     restart: "no"
     healthcheck: { disable: true }
 
@@ -83,4 +111,5 @@ networks:
 
 volumes:
   pgdata:
+  appdata:
   blobs:
