@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub enum WorkspaceCreation {
     /// Niemand.
     Disabled,
-    /// Nur Konten, deren E-Mail in `instance_admins` steht.
+    /// Nur Owner/Admins eines Workspaces, der mit ihrer E-Mail in `instance_admins` steht.
     Admins,
     /// Jeder angemeldete User.
     #[default]
@@ -42,7 +42,7 @@ pub struct AppConfig {
     /// Betreiber-Policy für `createWorkspace` (Default `All`; der Server setzt außerhalb des
     /// Dev-Modus `Disabled`).
     pub workspace_creation: WorkspaceCreation,
-    /// Instanz-Admins (E-Mails, kleingeschrieben) für `WorkspaceCreation::Admins`.
+    /// Instanz-Admins (`<url_key>:<email>`, kleingeschrieben) für `WorkspaceCreation::Admins`.
     pub instance_admins: Vec<String>,
 }
 

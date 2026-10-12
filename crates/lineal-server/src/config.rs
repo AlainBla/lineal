@@ -25,7 +25,7 @@ pub struct Config {
     /// `LINEAL_WORKSPACE_CREATION=disabled|admins|all`; Default `all` im Dev-Modus, sonst
     /// `disabled`. Gilt für GraphQL `createWorkspace`, nicht für das CLI.
     pub workspace_creation: WorkspaceCreation,
-    /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste E-Mails, kleingeschrieben) für `admins`.
+    /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste `<url_key>:<email>`, kleingeschrieben) für `admins`.
     pub instance_admins: Vec<String>,
 }
 
@@ -95,6 +95,16 @@ impl Config {
             .into_iter()
             .map(|e| e.to_lowercase())
             .collect();
+        for entry in &instance_admins {
+            let ok = entry
+                .split_once(':')
+                .is_some_and(|(k, e)| !k.is_empty() && !e.is_empty() && !e.contains(':'));
+            if !ok {
+                bail!(
+                    "LINEAL_INSTANCE_ADMINS: entry {entry:?} must have the form <url_key>:<email>"
+                );
+            }
+        }
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -213,15 +223,18 @@ mod tests {
         let cfg = with(
             false,
             Some("admins"),
-            Some(" Alice@Acme.example, bob@acme.example ,"),
+            Some(" Acme:Alice@Acme.example, acme:bob@acme.example ,"),
         )
         .unwrap();
         assert_eq!(cfg.workspace_creation, WorkspaceCreation::Admins);
         assert_eq!(
             cfg.instance_admins,
-            ["alice@acme.example", "bob@acme.example"]
+            ["acme:alice@acme.example", "acme:bob@acme.example"]
         );
         assert!(with(false, Some("maybe"), None).is_err());
+        assert!(with(false, Some("admins"), Some("alice@acme.example")).is_err());
+        assert!(with(false, Some("admins"), Some(":alice@acme.example")).is_err());
+        assert!(with(false, Some("admins"), Some("acme:")).is_err());
     }
 
     #[test]
