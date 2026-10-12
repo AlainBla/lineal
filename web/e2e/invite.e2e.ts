@@ -87,7 +87,12 @@ test("F16: an invited person accepts via /invite/<token> and lands in the worksp
   // Alice sieht die Einladung nicht mehr als offen.
   await alice.reload();
   await expect(alice.getByRole("heading", { name: "Invitations" })).toBeVisible();
-  await expect(alice.getByText(email)).toHaveCount(0);
+  // Seit WP22 sieht ein Admin die E-Mail der neuen Person in der Mitgliederliste; geprüft wird
+  // daher nur die Liste der offenen Einladungen.
+  await expect(
+    alice.getByRole("list", { name: "Pending invitations" }).getByText(email),
+  ).toHaveCount(0);
+  await expect(alice.getByLabel(`Role of ${email}`)).toBeVisible();
 
   await aliceCtx.close();
   await doraCtx.close();
