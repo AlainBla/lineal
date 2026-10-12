@@ -126,6 +126,24 @@ fn require_manage(snap: &PolicySnapshot, ctx: &RequestCtx, label: &Label) -> App
     Ok(())
 }
 
+/// Endgültiges Löschen (auch als Teil von Merge) nur für Admins bzw. Team-Owner (docs/03 §5.4).
+fn require_destroy(snap: &PolicySnapshot, label: &Label) -> AppResult<()> {
+    let allowed = snap.actor.is_admin()
+        || snap.actor.is_system()
+        || label
+            .team_id
+            .and_then(|t| snap.view(t).ok())
+            .is_some_and(|v| v.is_team_owner);
+    if allowed {
+        Ok(())
+    } else {
+        Err(
+            AppError::forbidden("Only admins or team owners can delete or merge labels.")
+                .with_details(json!({ "reason": "role" })),
+        )
+    }
+}
+
 async fn view_of(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
@@ -646,7 +664,7 @@ impl App {
     }
 }
 
-/// Ergebnis von Merge/Delete: betroffene Issues (Anzahl).
+/// Ergebnis von Merge/Delete: Anzahl betroffener Issues (nur in für den Aufrufer sichtbaren Teams).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelBulkResult {
     /// Das (verbleibende) Ziel-Label beim Merge, sonst `None`.
@@ -698,6 +716,7 @@ impl App {
             .await?;
         require_manage(&snap, ctx, &src)?;
         require_manage(&snap, ctx, &dst)?;
+        require_destroy(&snap, &src)?;
         if src.id == dst.id {
             return Err(invalid(
                 "target",
@@ -772,10 +791,12 @@ impl App {
             .await?
             .ok_or_else(|| AppError::internal("label vanished"))?;
         let view = view_of(&mut *tx, &snap, saved, Vec::new()).await?;
+        let visible = snap.visible_team_ids();
+        let visible_count = issues.iter().filter(|(_, t)| visible.contains(t)).count();
         tx.commit().await?;
         Ok(LabelBulkResult {
             target: Some(view),
-            affected_issues: issues.len(),
+            affected_issues: visible_count,
         })
     }
 
@@ -793,6 +814,7 @@ impl App {
             .find_label(&mut *tx, &snap, LabelKind::Issue, reference, None)
             .await?;
         require_manage(&snap, ctx, &label)?;
+        require_destroy(&snap, &label)?;
         let mut ids = vec![label.id];
         if label.is_group {
             ids.extend(
@@ -804,6 +826,8 @@ impl App {
             );
         }
         let issues = tx.labels().issues_with_issue_labels(&ids).await?;
+        let visible = snap.visible_team_ids();
+        let visible_count = issues.iter().filter(|(_, t)| visible.contains(t)).count();
         for (issue_id, _) in &issues {
             let present = tx.issues().label_ids(*issue_id).await?;
             let removed: Vec<LabelId> = ids
@@ -825,7 +849,7 @@ impl App {
         tx.commit().await?;
         Ok(LabelBulkResult {
             target: None,
-            affected_issues: issues.len(),
+            affected_issues: visible_count,
         })
     }
 }

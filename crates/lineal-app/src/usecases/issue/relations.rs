@@ -166,8 +166,14 @@ pub(super) async fn link_mention(
         Err(e) if e.kind == crate::error::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
     };
+    // Auch das Quell-Issue wird verändert (Relation, History): Schreibrecht nötig, sonst
+    // könnte ein Kommentator ohne Änderungsrecht Relationen erzeugen.
     if other.id == issue.id
         || other.trashed
+        || env
+            .snap
+            .require_team(env.ctx, crate::policy::Action::UpdateIssue, issue.team_id)
+            .is_err()
         || env
             .snap
             .require_team(env.ctx, crate::policy::Action::UpdateIssue, other.team_id)

@@ -402,11 +402,10 @@ impl LabelRepo for PgTx {
         .map_err(db_err)?;
         // IDs sind UUID-Strings und damit eindeutig: Textersetzung im JSON ist sicher.
         sqlx::query(
-            "UPDATE template SET template_data = replace(template_data::text, $3, $4)::jsonb \
-             WHERE organization_id = $1 AND type = 'issue' AND template_data::text LIKE '%' || $3 || '%'",
+            "UPDATE template SET template_data = replace(template_data::text, $2, $3)::jsonb \
+             WHERE organization_id = $1 AND type = 'issue' AND template_data::text LIKE '%' || $2 || '%'",
         )
         .bind(self.org.0)
-        .bind(source.0.to_string())
         .bind(source.0.to_string())
         .bind(target.0.to_string())
         .execute(&mut *self.tx)

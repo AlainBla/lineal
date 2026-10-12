@@ -922,6 +922,8 @@ Ergebnis im Beispiel: Kennung `DES-41`; `previousIdentifiers = ["WEB-12"]`; Stat
 - Für jedes Issue entsteht ein eigener History-Eintrag und ein eigenes Event; Benachrichtigungen werden pro Empfänger gebündelt ([05](05-views-suche-inbox.md)).
 - Die Rechteprüfung auf die Quellteams erfolgt pro Issue; ist ein Quell-Issue nicht zugänglich, schlägt der ganze Aufruf mit `not_found` fehl.
 
+> Umsetzung: `issueBatchUpdate` (GraphQL) wendet auch den Bulk-Move je Issue in einer eigenen Transaktion an. Teilerfolge sind erlaubt: `failures` listet je Issue `id`, `code` und `message`, ein nicht zugängliches Quell-Issue erscheint dort als `not_found`, ohne die anderen zu verhindern. Nummern werden je Issue vergeben (kein gemeinsamer Zähler-Block), die Limitprüfung läuft je Issue. `moveSubIssues` zieht alle sichtbaren Nachfahren (höchstens 500) in derselben Transaktion des jeweiligen Issues mit. Siehe docs/15 §2.1.
+
 ---
 
 ## 8. Multi-Team-Projekte

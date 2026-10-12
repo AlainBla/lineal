@@ -24,6 +24,9 @@ async fn setup(pool: PgPool) -> (Arc<App>, SeedData) {
     (test_app(Arc::new(store)), data)
 }
 
+fn alice_id() -> lineal_domain::ids::UserId {
+    SeedData::acme().alice
+}
 fn alice() -> RequestCtx {
     ctx_for(SeedUser::Alice)
 }
@@ -425,6 +428,26 @@ async fn issue_mentions_create_related_relations_without_leaks(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn comment_mention_links_issues_for_members_with_edit_right(pool: PgPool) {
+    let (app, _) = setup(pool).await;
+    let a = issue(&app, &alice(), "WEB", "Eins").await;
+    let b = issue(&app, &alice(), "WEB", "Zwei").await;
+    // Carol ist Gast mit Mitgliedschaft in WEB und darf dort bearbeiten: Relation entsteht.
+    app.create_comment(
+        &ctx_for(SeedUser::Carol),
+        CreateCommentInput {
+            parent: Some(ParentSpec::Issue(a.clone())),
+            body: format!("siehe {b}"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let d = app.get_issue(&alice(), &a).await.unwrap();
+    assert_eq!(d.relations.related_to.len(), 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn duplicate_transfers_subscribers_and_subscribed_reflects_state(pool: PgPool) {
     let (app, _) = setup(pool).await;
     let orig = issue(&app, &alice(), "ENG", "Original").await;
@@ -522,10 +545,17 @@ async fn label_merge_moves_issues_and_deletes_source(pool: PgPool) {
         .unwrap();
     }
     assert_eq!(app.issue_label_usage(&alice(), &src).await.unwrap(), 2);
-    // Ein Gast darf Workspace-Labels nicht verwalten.
+    // Ein Gast darf Workspace-Labels nicht verwalten, ein normales Mitglied nicht zusammenführen.
     let carol = ctx_for(SeedUser::Carol);
     assert!(app.merge_issue_label(&carol, &src, "Bug").await.is_err());
     assert!(app.issue_label_usage(&carol, &src).await.is_err());
+    assert_eq!(
+        app.merge_issue_label(&bob(), &src, "Bug")
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::Forbidden
+    );
     assert_eq!(
         app.merge_issue_label(&alice(), &src, &src)
             .await
@@ -553,9 +583,9 @@ async fn label_merge_moves_issues_and_deletes_source(pool: PgPool) {
 async fn label_delete_removes_from_issues_and_checks_rights(pool: PgPool) {
     let (app, _) = setup(pool).await;
     let l = save_label(&app, &alice(), "Weg damit", None).await;
-    let a = issue(&app, &alice(), "ENG", "Eins").await;
+    let a = issue(&app, &bob(), "ENG", "Eins").await;
     app.update_issue(
-        &alice(),
+        &bob(),
         UpdateIssueInput {
             id: a.clone(),
             add_labels: vec!["Weg damit".into()],
@@ -570,10 +600,22 @@ async fn label_delete_removes_from_issues_and_checks_rights(pool: PgPool) {
             .await
             .is_err()
     );
+    // Löschen ist Admins/Team-Owner vorbehalten, auch wenn Mitglieder Labels verwalten dürfen.
+    assert_eq!(
+        app.delete_issue_label(&bob(), &l).await.unwrap_err().kind,
+        ErrorKind::Forbidden
+    );
     let r = app.delete_issue_label(&alice(), &l).await.unwrap();
     assert_eq!(r.affected_issues, 1);
     let v = app.get_issue(&alice(), &a).await.unwrap();
     assert!(v.view.extras.label_ids.is_empty());
+    // Eintrag des löschenden Users (anderer Akteur: nicht mit der Erstellung verrechnet).
+    let h = app.issue_history(&alice(), &a).await.unwrap();
+    assert!(
+        h.iter()
+            .any(|e| e.actor_id == Some(alice_id()) && e.removed_label_ids.is_some()),
+        "history of the delete: {h:?}"
+    );
     assert_eq!(
         app.delete_issue_label(&alice(), &l).await.unwrap_err().kind,
         ErrorKind::NotFound
