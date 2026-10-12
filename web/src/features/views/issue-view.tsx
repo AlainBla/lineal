@@ -197,7 +197,7 @@ export function IssueView({
               Could not save the view.
             </span>
           )}
-          {view && <ViewSubscriptionButton view={view} />}
+          {view && view.modelName === "Issue" && <ViewSubscriptionButton view={view} />}
           {view && <TransferOwnerButton view={view} />}
           {chips.length > 0 && !view && (
             <Button variant="ghost" size="sm" onClick={() => setSaveOpen(true)}>

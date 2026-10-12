@@ -97,11 +97,18 @@ export function ProjectsPage({
       <PageHeader
         title="Projects"
         docTitle={teamKey ? `${teamKey} · Projects` : "Projects"}
-        tabs={(["all", "active", "backlog"] as const).map((t) => ({
-          label: t === "all" ? "All projects" : t === "active" ? "Active" : "Backlog",
-          to: `${base}/${t}`,
-          active: t === tab,
-        }))}
+        tabs={[
+          ...(["all", "active", "backlog"] as const).map((t) => ({
+            label: t === "all" ? "All projects" : t === "active" ? "Active" : "Backlog",
+            to: `${base}/${t}`,
+            active: t === tab,
+          })),
+          {
+            label: "Roadmap",
+            to: teamKey ? `/${ws}/team/${teamKey}/roadmap` : `/${ws}/roadmap`,
+            active: false,
+          },
+        ]}
       />
       <div className="min-h-0 flex-1 overflow-auto">{body}</div>
     </div>

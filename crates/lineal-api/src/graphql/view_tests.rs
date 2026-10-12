@@ -298,6 +298,25 @@ async fn favorites_reorder_subscriptions_and_owner_transfer(pool: sqlx::PgPool) 
     let r = data(run(&app, bob.clone(), q, json!({"v": view})).await);
     assert_eq!(r["viewSubscription"]["active"], true);
 
+    // Hook für den Fan-out (WP32): aktive Abos je Ereignistyp.
+    let mut tx = PgStore::new(pool.clone()).begin(d.org).await.unwrap();
+    let subs = tx
+        .views()
+        .subscribed_views("issueAddedToView")
+        .await
+        .unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].subscriber_id, d.bob);
+    assert_eq!(subs[0].view_id.0.to_string(), view);
+    assert!(
+        tx.views()
+            .subscribed_views("issueStatusChangedAll")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(tx);
+
     // Eigentümerwechsel: neuer Owner muss die View sehen dürfen.
     let upd = "mutation($id: String!, $i: CustomViewUpdateInput!) { customViewUpdate(id: $id, input: $i) { customView { ownerId canEdit } } }";
     let r = data(

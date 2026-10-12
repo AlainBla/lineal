@@ -866,6 +866,31 @@ impl ViewRepo for PgTx {
             .collect())
     }
 
+    async fn subscribed_views(&mut self, ntype: &str) -> AppResult<Vec<ViewSubscription>> {
+        let rows: Vec<(Uuid, Uuid, Uuid, Vec<String>)> = sqlx::query_as(
+            "SELECT id, custom_view_id, subscriber_id, notification_subscription_types \
+             FROM notification_subscription \
+             WHERE organization_id = $1 AND target_type = 'customView' AND active \
+             AND archived_at IS NULL AND $2 = ANY(notification_subscription_types) \
+             ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, view, user, types)| ViewSubscription {
+                id,
+                subscriber_id: UserId(user),
+                view_id: ViewId(view),
+                types,
+                active: true,
+            })
+            .collect())
+    }
+
     async fn deactivate_view_subscriptions_except(
         &mut self,
         view: ViewId,

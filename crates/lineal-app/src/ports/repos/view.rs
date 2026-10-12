@@ -440,6 +440,11 @@ pub trait ViewRepo: Send {
     ) -> AppResult<Vec<ViewSubscription>> {
         unimplemented_repo()
     }
+    /// Alle aktiven Abos des Workspace, die den Ereignistyp `ntype` enthalten (Einstieg des
+    /// Fan-outs: je Abo `get_view` mit den Rechten des Abonnenten, dann Filter prüfen).
+    async fn subscribed_views(&mut self, _ntype: &str) -> AppResult<Vec<ViewSubscription>> {
+        unimplemented_repo()
+    }
     /// Deaktiviert alle Abos außer dem des genannten Users (View verliert Sichtbarkeit).
     async fn deactivate_view_subscriptions_except(
         &mut self,

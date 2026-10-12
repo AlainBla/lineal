@@ -277,7 +277,10 @@ export function FilterBar({
             {chips.length === 0 ? <FilterIcon /> : <Plus />} Filter
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent
+          align="start"
+          className="max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+        >
           {FIELDS.map((f) => (
             <DropdownMenuItem key={f} onSelect={() => setAdding(f)}>
               {FIELD_LABEL[f]}

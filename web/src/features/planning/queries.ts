@@ -7,7 +7,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ISSUE_FIELDS, type IssueList } from "@/features/issues/queries";
 import type {
   Cycle,
+  DocumentConnection,
   Initiative,
+  InitiativeUpdate,
   IssueConnection,
   Project,
   ProjectMilestone,
@@ -187,9 +189,10 @@ export function useInitiatives() {
   });
 }
 
-export function useInitiative(ref: string) {
+export function useInitiative(ref: string, enabled = true) {
   return useQuery({
     queryKey: planningKeys.initiative(ref),
+    enabled,
     queryFn: async ({ signal }) =>
       (
         await gqlRequest<{ initiative: Initiative }, { id: string }>(
@@ -263,5 +266,72 @@ export function useScopedIssues(scope: { projectId?: string; cycleId?: string } 
         truncated: res.issues.hasNextPage,
       };
     },
+  });
+}
+
+/** Ändert Felder einer Initiative (z. B. `targetDate`); Rechte prüft der Server. */
+export function useUpdateInitiative() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; input: Record<string, unknown> }) =>
+      gqlRequest(
+        `mutation PlanningInitiativeUpdate($id: String!, $input: InitiativeInput!) {
+          initiativeUpdate(id: $id, input: $input) { success }
+        }`,
+        v,
+      ),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["planning"] }),
+  });
+}
+
+export function useInitiativeUpdates(initiativeId: string | undefined) {
+  return useQuery({
+    queryKey: ["planning", "initiative-updates", initiativeId ?? ""] as const,
+    enabled: !!initiativeId,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ initiativeUpdates: InitiativeUpdate[] }, { initiativeId: string }>(
+          `query PlanningInitiativeUpdates($initiativeId: String) {
+            initiativeUpdates(initiativeId: $initiativeId, first: 50) {
+              id body health isStale editedAt createdAt user { ${REF} }
+            }
+          }`,
+          { initiativeId: initiativeId! },
+          { signal },
+        )
+      ).initiativeUpdates,
+  });
+}
+
+export function usePostInitiativeUpdate(initiativeId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { body: string; health: Health }) =>
+      gqlRequest(
+        `mutation PlanningInitiativeUpdateCreate($initiativeId: String!, $body: String!, $health: String) {
+          initiativeUpdateCreate(initiativeId: $initiativeId, body: $body, health: $health) { success }
+        }`,
+        { initiativeId, ...v },
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["planning"] }),
+  });
+}
+
+export function useInitiativeDocuments(initiativeId: string | undefined) {
+  return useQuery({
+    queryKey: ["planning", "initiative-documents", initiativeId ?? ""] as const,
+    enabled: !!initiativeId,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ documents: DocumentConnection }, { initiativeId: string }>(
+          `query PlanningInitiativeDocuments($initiativeId: String) {
+            documents(initiativeId: $initiativeId, first: 100) {
+              nodes { id slugId title icon updatedAt }
+            }
+          }`,
+          { initiativeId: initiativeId! },
+          { signal },
+        )
+      ).documents.nodes,
   });
 }
