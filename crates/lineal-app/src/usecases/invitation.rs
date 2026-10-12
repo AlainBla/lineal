@@ -589,27 +589,15 @@ impl App {
             .await?
             .filter(|u| u.active && u.status == "active")
             .ok_or_else(|| AppError::forbidden("Only active users can create workspaces."))?;
-        let org_key = tx
-            .orgs()
-            .get()
-            .await?
-            .map(|o| o.url_key)
-            .unwrap_or_default();
         drop(tx);
         let allowed = match self.config.workspace_creation {
             WorkspaceCreation::All => true,
             WorkspaceCreation::Disabled => false,
             WorkspaceCreation::Admins => {
-                // E-Mail allein beweist nichts (Konten gibt es je Workspace; jeder Admin kann
-                // beliebige Adressen anlegen): Eintrag `<url_key>:<email>`, aktives Konto mit
-                // Rolle Owner/Admin in genau diesem Workspace.
-                let entry = format!("{}:{}", org_key, account.email.trim());
+                // Nur unveränderliche User-IDs zählen (E-Mail und url_key lassen sich ändern
+                // bzw. in fremden Workspaces anlegen): aktives Konto mit Rolle Owner/Admin.
                 matches!(account.role, UserRole::Owner | UserRole::Admin)
-                    && self
-                        .config
-                        .instance_admins
-                        .iter()
-                        .any(|a| a.eq_ignore_ascii_case(&entry))
+                    && self.config.instance_admins.contains(&me.0)
             }
         };
         if !allowed {

@@ -39,10 +39,13 @@ pub async fn execute(app: &App, args: &CreateWorkspaceArgs, password: String) ->
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(format!(
-        "Workspace {:?} (urlKey {}) created with owner {}.\nLogin: {}/login",
+        "Workspace {:?} (urlKey {}) created with owner {} (user id {}).\nLogin: {}/login\n\
+         To let this user create further workspaces via GraphQL, set \
+         LINEAL_WORKSPACE_CREATION=admins and add the user id to LINEAL_INSTANCE_ADMINS.",
         created.org.name,
         created.org.url_key,
         created.owner.email,
+        created.owner.id.0,
         app.config.base_url.trim_end_matches('/')
     ))
 }

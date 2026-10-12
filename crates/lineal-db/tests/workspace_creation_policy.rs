@@ -10,8 +10,9 @@ use lineal_domain::enums::UserRole;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
+use uuid::Uuid;
 
-async fn setup(pool: PgPool, mode: WorkspaceCreation, admins: &[&str]) -> App {
+async fn setup(pool: PgPool, mode: WorkspaceCreation, admins: &[Uuid]) -> App {
     let store = PgStore::new(pool);
     let data = SeedData::acme();
     let mut tx = store.begin(data.org).await.unwrap();
@@ -19,18 +20,21 @@ async fn setup(pool: PgPool, mode: WorkspaceCreation, admins: &[&str]) -> App {
     tx.commit().await.unwrap();
     let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
     app.config.workspace_creation = mode;
-    app.config.instance_admins = admins.iter().map(|s| (*s).to_string()).collect();
+    app.config.instance_admins = admins.to_vec();
     app
+}
+
+fn alice() -> Uuid {
+    SeedData::acme().alice.0
+}
+
+fn is_forbidden<T>(r: Result<T, lineal_app::AppError>) -> bool {
+    r.err().map(|e| e.kind) == Some(ErrorKind::Forbidden)
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn disabled_forbids_everyone(pool: PgPool) {
-    let app = setup(
-        pool,
-        WorkspaceCreation::Disabled,
-        &["acme:alice@acme.example"],
-    )
-    .await;
+    let app = setup(pool, WorkspaceCreation::Disabled, &[alice()]).await;
     let err = app
         .create_workspace_for_account(&ctx_for(SeedUser::Alice), "Second", None)
         .await
@@ -43,27 +47,41 @@ async fn disabled_forbids_everyone(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn admins_requires_listed_workspace_email_and_admin_role(pool: PgPool) {
-    // Auch eine nicht normalisierte Liste trifft (Vergleich ohne Beachtung der Schreibweise).
+async fn admins_allows_listed_owner_and_survives_url_key_rename(pool: PgPool) {
+    let app = setup(pool.clone(), WorkspaceCreation::Admins, &[alice()]).await;
+    // Der urlKey ist veränderlich und spielt keine Rolle.
+    sqlx::query("UPDATE organization SET url_key = 'renamed-acme'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let created = app
+        .create_workspace_for_account(&ctx_for(SeedUser::Alice), "Alices", None)
+        .await
+        .unwrap();
+    assert_eq!(created.org.url_key, "alices");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn admins_rejects_unlisted_role_user_suspended_and_same_email_elsewhere(pool: PgPool) {
+    let data = SeedData::acme();
+    // Bob (Rolle User) und Carol stehen in der Liste, Alice nicht.
     let app = setup(
-        pool,
+        pool.clone(),
         WorkspaceCreation::Admins,
-        &["ACME:Alice@ACME.example", "acme:bob@acme.example"],
+        &[data.bob.0, data.carol.0],
     )
     .await;
-    // Bob steht in der Liste, hat im Workspace aber nur die Rolle User.
-    let bob = app
-        .create_workspace_for_account(&ctx_for(SeedUser::Bob), "Bobs", None)
-        .await
-        .unwrap_err();
-    assert_eq!(bob.kind, ErrorKind::Forbidden);
-    // Carol steht nicht in der Liste.
-    let carol = app
-        .create_workspace_for_account(&ctx_for(SeedUser::Carol), "Carols", None)
-        .await
-        .unwrap_err();
-    assert_eq!(carol.kind, ErrorKind::Forbidden);
-    // Gleiche Adresse als Owner eines fremden Workspaces: kein Instanz-Admin.
+    // Nicht in der Liste (Alice ist Owner, aber nicht eingetragen).
+    assert!(is_forbidden(
+        app.create_workspace_for_account(&ctx_for(SeedUser::Alice), "A", None)
+            .await
+    ));
+    // In der Liste, aber Rolle User.
+    assert!(is_forbidden(
+        app.create_workspace_for_account(&ctx_for(SeedUser::Bob), "B", None)
+            .await
+    ));
+    // Gleiche E-Mail wie Alice als Owner eines fremden Workspaces: andere User-ID.
     let foreign = app
         .create_workspace(CreateWorkspaceInput {
             name: "Evil".into(),
@@ -85,17 +103,28 @@ async fn admins_requires_listed_workspace_email_and_admin_role(pool: PgPool) {
         team_scope: None,
         via_session: false,
     };
-    let err = app
-        .create_workspace_for_account(&ctx, "Stolen", None)
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Forbidden);
-    // Richtiger Workspace + Owner: erlaubt.
-    let created = app
-        .create_workspace_for_account(&ctx_for(SeedUser::Alice), "Alices", None)
+    assert!(is_forbidden(
+        app.create_workspace_for_account(&ctx, "Stolen", None).await
+    ));
+    // Carol: in der Liste, Admin, aber suspendiert -> verboten.
+    sqlx::query(r#"UPDATE "user" SET role = 'admin', active = false WHERE id = $1"#)
+        .bind(data.carol.0)
+        .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(created.org.url_key, "alices");
+    assert!(is_forbidden(
+        app.create_workspace_for_account(&ctx_for(SeedUser::Carol), "C", None)
+            .await
+    ));
+    // Als aktiver Admin erlaubt.
+    sqlx::query(r#"UPDATE "user" SET active = true WHERE id = $1"#)
+        .bind(data.carol.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    app.create_workspace_for_account(&ctx_for(SeedUser::Carol), "C", None)
+        .await
+        .unwrap();
 }
 
 #[sqlx::test(migrations = "./migrations")]

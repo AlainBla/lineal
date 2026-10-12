@@ -25,8 +25,8 @@ pub struct Config {
     /// `LINEAL_WORKSPACE_CREATION=disabled|admins|all`; Default `all` im Dev-Modus, sonst
     /// `disabled`. Gilt für GraphQL `createWorkspace`, nicht für das CLI.
     pub workspace_creation: WorkspaceCreation,
-    /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste `<url_key>:<email>`, kleingeschrieben) für `admins`.
-    pub instance_admins: Vec<String>,
+    /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste von User-UUIDs) für `admins`.
+    pub instance_admins: Vec<uuid::Uuid>,
 }
 
 fn csv(value: Option<String>) -> Vec<String> {
@@ -91,20 +91,13 @@ impl Config {
             _ if dev => WorkspaceCreation::All,
             _ => WorkspaceCreation::Disabled,
         };
-        let instance_admins: Vec<String> = csv(get("LINEAL_INSTANCE_ADMINS"))
+        let instance_admins = csv(get("LINEAL_INSTANCE_ADMINS"))
             .into_iter()
-            .map(|e| e.to_lowercase())
-            .collect();
-        for entry in &instance_admins {
-            let ok = entry
-                .split_once(':')
-                .is_some_and(|(k, e)| !k.is_empty() && !e.is_empty() && !e.contains(':'));
-            if !ok {
-                bail!(
-                    "LINEAL_INSTANCE_ADMINS: entry {entry:?} must have the form <url_key>:<email>"
-                );
-            }
-        }
+            .map(|id| {
+                uuid::Uuid::parse_str(&id)
+                    .with_context(|| format!("LINEAL_INSTANCE_ADMINS: {id:?} is not a user UUID"))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -199,12 +192,13 @@ mod tests {
 
     #[test]
     fn workspace_creation_defaults_and_admins() {
-        let with = |dev: bool, mode: Option<&'static str>, admins: Option<&'static str>| {
+        let with = |dev: bool, mode: Option<&str>, admins: Option<&str>| {
+            let (mode, admins) = (mode.map(str::to_owned), admins.map(str::to_owned));
             Config::from_lookup(move |k| match k {
                 "LINEAL_DEV" => dev.then(|| "1".into()),
                 "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
-                "LINEAL_WORKSPACE_CREATION" => mode.map(Into::into),
-                "LINEAL_INSTANCE_ADMINS" => admins.map(Into::into),
+                "LINEAL_WORKSPACE_CREATION" => mode.clone(),
+                "LINEAL_INSTANCE_ADMINS" => admins.clone(),
                 _ => None,
             })
         };
@@ -220,21 +214,13 @@ mod tests {
             with(false, Some("All"), None).unwrap().workspace_creation,
             WorkspaceCreation::All
         );
-        let cfg = with(
-            false,
-            Some("admins"),
-            Some(" Acme:Alice@Acme.example, acme:bob@acme.example ,"),
-        )
-        .unwrap();
+        let id = "0190f1c2-7b1e-7c3a-9d2e-5a4b6c7d8e9f";
+        let cfg = with(false, Some("admins"), Some(&format!(" {id} ,"))).unwrap();
         assert_eq!(cfg.workspace_creation, WorkspaceCreation::Admins);
-        assert_eq!(
-            cfg.instance_admins,
-            ["acme:alice@acme.example", "acme:bob@acme.example"]
-        );
+        assert_eq!(cfg.instance_admins, [uuid::Uuid::parse_str(id).unwrap()]);
         assert!(with(false, Some("maybe"), None).is_err());
         assert!(with(false, Some("admins"), Some("alice@acme.example")).is_err());
-        assert!(with(false, Some("admins"), Some(":alice@acme.example")).is_err());
-        assert!(with(false, Some("admins"), Some("acme:")).is_err());
+        assert!(with(false, Some("admins"), Some("not-a-uuid")).is_err());
     }
 
     #[test]
