@@ -29,7 +29,7 @@ tokio = { workspace = true, features = ["net", "time"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
 # CRDT (Yjs-kompatibel, MIT) für die Echtzeit-Mitbearbeitung (WP36); Pure-Rust, keine Netzwerkabhängigkeit.
-yrs = { path = "../../vendor/yrs" }
+yrs = { path = "../../vendor/yrs", features = ["sync"] }
 pulldown-cmark = "0.13.4"
 
 [dev-dependencies]

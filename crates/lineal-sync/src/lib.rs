@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 mod bootstrap;
+pub mod collab;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -105,6 +106,8 @@ pub struct SyncConfig {
     pub listen_pool: Option<PgPool>,
     /// Zusätzlich erlaubte `Origin`-Werte (z. B. Dev-Server); gleicher Host/`base_url` ist immer erlaubt.
     pub extra_origins: Vec<String>,
+    /// Echtzeit-Mitbearbeitung (`/collab/...`, WP36).
+    pub collab: collab::CollabConfig,
 }
 
 impl Default for SyncConfig {
@@ -121,6 +124,7 @@ impl Default for SyncConfig {
             revalidate_interval: Duration::from_secs(60),
             listen_pool: None,
             extra_origins: vec![],
+            collab: collab::CollabConfig::default(),
         }
     }
 }
@@ -147,6 +151,7 @@ struct Shared {
     wake: broadcast::Sender<()>,
     users: Mutex<HashMap<Uuid, usize>>,
     listener: OnceLock<()>,
+    rooms: collab::Rooms,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -240,10 +245,12 @@ pub fn router_with(app: Arc<App>, cfg: SyncConfig) -> Router {
         wake,
         users: Mutex::new(HashMap::new()),
         listener: OnceLock::new(),
+        rooms: collab::Rooms::default(),
     });
     Router::new()
         .route("/sync", get(sync_socket))
         .route("/sync/bootstrap", get(bootstrap))
+        .route("/collab/{kind}/{id}", get(collab::collab_socket))
         .with_state(shared)
 }
 
@@ -461,6 +468,8 @@ enum End {
     Unauthorized,
     /// Fehler beim Zustellen.
     Error(AppError),
+    /// Beenden mit eigenem Schließcode (Echtzeit-Mitbearbeitung).
+    Code(u16, &'static str),
 }
 
 impl From<AppError> for End {
@@ -494,6 +503,14 @@ async fn connection(
                 .send(Message::Close(Some(CloseFrame {
                     code: 1001,
                     reason: "idle timeout".into(),
+                })))
+                .await;
+        }
+        Err(End::Code(code, reason)) => {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code,
+                    reason: reason.into(),
                 })))
                 .await;
         }

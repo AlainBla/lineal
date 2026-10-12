@@ -21,6 +21,8 @@ pub struct CollabAccess {
     pub title: String,
     /// Bearbeitungsrecht (sonst nur Lesen: Updates des Clients werden verworfen).
     pub can_write: bool,
+    /// Anzeigename des Akteurs (für Cursor-Anzeige; der Server setzt ihn, nicht der Client).
+    pub user_name: String,
 }
 
 /// Geladener Inhalt eines Raums.
@@ -129,10 +131,16 @@ impl App {
                 let can_write = scope_ok
                     && require_write(snap, ctx, parent, &scope).is_ok()
                     && require_writable_parent(&scope).is_ok();
+                let user_name = match actor_user_id(ctx) {
+                    Some(u) => tx.users().get(u).await?.map(|u| u.name),
+                    None => None,
+                }
+                .unwrap_or_else(|| "Unknown".to_owned());
                 Ok(CollabAccess {
                     content_id: doc.content_id,
                     title: doc.title,
                     can_write,
+                    user_name,
                 })
             }
         }
