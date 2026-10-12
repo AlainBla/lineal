@@ -407,7 +407,7 @@ impl ImportEngine<'_> {
                 conflicts.push(json!({ "key": key, "reason": "key_exists" }));
             }
             team_out.push(json!({
-                "id": id, "key": key, "name": n.text("name"), "private": n.bool("private").unwrap_or(false),
+                "id": id, "key": key, "name": n.text("name"), "private": super::people::is_private(n),
                 "parentId": n.ref_id("parent"), "issueCount": issues_per_team.get(id).copied().unwrap_or(0),
                 "conflict": conflict,
             }));

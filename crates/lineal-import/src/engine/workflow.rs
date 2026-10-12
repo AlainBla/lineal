@@ -177,7 +177,11 @@ impl Session<'_, '_> {
                     .await?;
             }
             let close = self
-                .target_opt("WorkflowState", n.ref_id("autoCloseState"))
+                .target_opt(
+                    "WorkflowState",
+                    n.ref_id("autoCloseState")
+                        .or_else(|| n.str("autoCloseStateId")),
+                )
                 .await?;
             self.tx()?
                 .imports()

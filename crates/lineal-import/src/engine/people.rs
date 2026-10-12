@@ -14,6 +14,13 @@ const ESTIMATION: &[&str] = &["notUsed", "exponential", "fibonacci", "linear", "
 const SORT_ON_STATE: &[&str] = &["top", "bottom", "none"];
 const PERIODS: &[i64] = &[1, 3, 6, 9, 12];
 
+/// Linear: `visibility` (`public`/`private`/`restricted`; `restricted` liegt in einem privaten
+/// Team und wird vorsichtig als privat übernommen), ältere Quellen liefern `private`.
+pub(crate) fn is_private(n: N<'_>) -> bool {
+    n.bool("private").unwrap_or(false)
+        || matches!(n.str("visibility"), Some("private" | "restricted"))
+}
+
 impl Session<'_, '_> {
     /// Freier Anzeigename (`alice`, `alice2`, …).
     async fn free_display_name(&mut self, email: &str) -> AppResult<String> {
@@ -224,11 +231,7 @@ impl Session<'_, '_> {
                 ("parent_id", json!(parent)),
                 (
                     "visibility",
-                    json!(if n.bool("private").unwrap_or(false) {
-                        "private"
-                    } else {
-                        "public"
-                    }),
+                    json!(if is_private(n) { "private" } else { "public" }),
                 ),
                 ("timezone", json!(tz)),
                 (

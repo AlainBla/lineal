@@ -36,3 +36,4 @@ lineal-jobs.workspace = true
 axum.workspace = true
 sqlx.workspace = true
 tracing-subscriber.workspace = true
+apollo-compiler = "1.33.0"
