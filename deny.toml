@@ -7,7 +7,11 @@ all-features = true
 [advisories]
 # Bekannte Sicherheitslücken (RustSec). Begründete Ausnahmen mit `ignore = [{ id, reason }]`.
 version = 2
-ignore = []
+ignore = [
+    # smallstr: nur „unmaintained“, keine Sicherheitslücke; transitive Abhängigkeit des
+    # gepatchten yrs (vendor/yrs). Entfällt mit der Rückkehr auf ein offizielles yrs-Release.
+    { id = "RUSTSEC-2026-0215", reason = "transitiv über vendor/yrs, nur unmaintained" },
+]
 
 [licenses]
 version = 2
