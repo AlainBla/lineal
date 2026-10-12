@@ -249,6 +249,14 @@ impl OrgQuery {
         Ok(p.into())
     }
 
+    /// Volltextkonfiguration der Suche (`simple`, `german`, `english`). Nur für Owner/Admin.
+    async fn workspace_fulltext_config(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        app(ctx)?
+            .get_fulltext_config(request_ctx(ctx)?)
+            .await
+            .map_err(gql_err)
+    }
+
     /// Mitglieder mit E-Mail, Rolle und Status. Nur für Owner/Admin.
     async fn workspace_members(
         &self,
@@ -365,6 +373,19 @@ impl OrgMutation {
             success: true,
             security_settings: p.into(),
         })
+    }
+
+    /// Setzt die Volltextkonfiguration der Suche (`simple`, `german`, `english`; Admin/Owner).
+    /// Die Suchvektoren des Workspace werden dabei neu aufgebaut.
+    async fn workspace_fulltext_config_update(
+        &self,
+        ctx: &Context<'_>,
+        config: String,
+    ) -> async_graphql::Result<String> {
+        app(ctx)?
+            .set_fulltext_config(request_ctx(ctx)?, &config)
+            .await
+            .map_err(gql_err)
     }
 
     /// Ändert die Rolle eines Users (`admin`, `user`, `guest`, `owner`; Regeln siehe docs/02 §6.4).

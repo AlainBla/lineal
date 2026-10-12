@@ -6,6 +6,7 @@ pub mod auth;
 pub mod comment;
 pub mod cycle;
 pub mod document;
+pub mod fulltext;
 pub mod import;
 pub mod initiative;
 pub mod invitation;

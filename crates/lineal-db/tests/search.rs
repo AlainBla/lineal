@@ -444,3 +444,94 @@ async fn search_filter_is_anded_and_comments_are_opt_in(pool: PgPool) {
         lineal_app::ErrorKind::NotFound
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn fulltext_config_per_workspace_stems_and_rebuilds(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = fx.data;
+    let a = fx.issue(d.eng, 101, "Running tests", 1).await;
+    fx.set(a, "description = 'Die Häuser sind groß'").await;
+    sqlx::query(
+        "INSERT INTO document (organization_id, title, content, team_id) VALUES ($1,'Handbook','The runners are ready',$2)",
+    )
+    .bind(d.org.0)
+    .bind(d.eng.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    let status: Uuid = sqlx::query_scalar(
+        "SELECT id FROM project_status WHERE organization_id = $1 AND type = 'started'",
+    )
+    .bind(d.org.0)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    let project = Uuid::now_v7();
+    sqlx::query("INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id) VALUES ($1,$2,'Jumping project',$3,101,$4)")
+        .bind(project)
+        .bind(d.org.0)
+        .bind(d.eng.0)
+        .bind(status)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+    )
+    .bind(d.org.0)
+    .bind(project)
+    .bind(d.eng.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+
+    let n = |term: &'static str| {
+        let fx = &fx;
+        async move { search(fx, &alice(), term).await.hits.len() }
+    };
+    // Default simple: nur Präfix-Treffer, keine Wortstämme.
+    assert_eq!(
+        fx.app.get_fulltext_config(&alice()).await.unwrap(),
+        "simple"
+    );
+    assert_eq!(n("jumped").await, 0);
+    assert_eq!(n("haus").await, 0);
+    assert_eq!(n("running").await, 1);
+
+    // english: Wortstämme für Issues, Dokumente und Projekte.
+    assert_eq!(
+        fx.app
+            .set_fulltext_config(&alice(), "english")
+            .await
+            .unwrap(),
+        "english"
+    );
+    assert_eq!(n("jumped").await, 1);
+    assert_eq!(n("runs").await, 2); // Issue „Running“ und Dokument „runners“ haben Stamm run/runner
+    assert_eq!(n("running").await, 2); // „run“ ist Präfix von „runner“
+
+    // german: „Haus“ findet „Häuser“ (Stamm), Neuaufbau ohne Datenverlust.
+    fx.app
+        .set_fulltext_config(&alice(), "german")
+        .await
+        .unwrap();
+    assert_eq!(n("haus").await, 1);
+
+    // Zurück auf simple.
+    fx.app
+        .set_fulltext_config(&alice(), "simple")
+        .await
+        .unwrap();
+    assert_eq!(n("haus").await, 0);
+    assert_eq!(n("running").await, 1);
+
+    // Ungültiger Wert und fehlende Rechte.
+    assert_eq!(
+        kind(fx.app.set_fulltext_config(&alice(), "french").await),
+        lineal_app::ErrorKind::InvalidRequest
+    );
+    assert_eq!(
+        kind(fx.app.set_fulltext_config(&carol(), "german").await),
+        lineal_app::ErrorKind::Forbidden
+    );
+}
