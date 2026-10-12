@@ -196,6 +196,12 @@ pub trait ImportSource: Send + Sync {
     /// Datei herunterladen (nur https-Hosts der Quelle, keine privaten IPs, Größen-/Typlimit).
     async fn download(&self, url: &str) -> SourceResult<Downloaded>;
 
+    /// Größe einer Datei in Bytes, **ohne sie zu laden** (z. B. `HEAD`); `None` = unbekannt.
+    /// Für den Dry-Run (Anzahl/Größe der geplanten Downloads). Gleiche Regeln wie `download`.
+    async fn probe(&self, _url: &str) -> SourceResult<Option<u64>> {
+        Ok(None)
+    }
+
     /// Alle Seiten einer Entität lesen (Hilfsfunktion für kleine Mengen und den Scan).
     async fn collect(
         &self,

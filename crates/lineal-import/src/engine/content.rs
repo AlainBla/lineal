@@ -95,18 +95,32 @@ impl Session<'_, '_> {
     // --------------------------------------------------------------------------------------
 
     pub(crate) async fn step_comments(&mut self, cursor: Option<String>) -> HResult<()> {
+        self.comments_step(Step::Comments, cursor).await
+    }
+
+    /// Kommentare an Projekt-Updates: erst nach den Updates (Phase 7), deshalb ein eigener Schritt.
+    pub(crate) async fn step_update_comments(&mut self, cursor: Option<String>) -> HResult<()> {
+        self.comments_step(Step::UpdateComments, cursor).await
+    }
+
+    async fn comments_step(&mut self, step: Step, cursor: Option<String>) -> HResult<()> {
+        let on_updates = step == Step::UpdateComments;
         let mut cursor = cursor;
         loop {
             let page = self.fetch(SourceEntity::Comments, cursor).await?;
             self.begin_unit().await?;
             for v in &page.items {
                 let n = N(v);
-                let r = self.comment(n).await;
+                // Jeder Kommentar gehört genau einem der beiden Schritte.
+                let for_update = n.ref_id("projectUpdate").is_some();
+                if for_update != on_updates {
+                    continue;
+                }
+                let r = self.comment(n, on_updates).await;
                 self.item_result("Comment", n.id(), r)?;
             }
             let next = page.next_cursor;
-            self.end_unit(Some(self.cp(Step::Comments, next.clone())))
-                .await?;
+            self.end_unit(Some(self.cp(step, next.clone()))).await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
@@ -114,25 +128,42 @@ impl Session<'_, '_> {
         }
     }
 
-    async fn comment(&mut self, n: N<'_>) -> AppResult<()> {
+    async fn comment(&mut self, n: N<'_>, on_update: bool) -> AppResult<()> {
         let src = n
             .id()
             .ok_or_else(|| AppError::invalid_request("comment without id"))?
             .to_owned();
-        if n.ref_id("projectUpdate").is_some() || n.ref_id("initiativeUpdate").is_some() {
+        if n.ref_id("initiativeUpdate").is_some() {
             self.counters("Comment").skipped += 1;
             self.note(
                 "info",
                 "Comment",
                 Some(&src),
-                "comments on project/initiative updates are not imported",
+                "comments on initiative updates are not imported",
             );
             return Ok(());
         }
-        let Some(issue) = self.target_opt("Issue", n.ref_id("issue")).await? else {
-            self.counters("Comment").skipped += 1;
-            return Ok(());
+        let (issue, update) = if on_update {
+            (
+                None,
+                self.target_opt("ProjectUpdate", n.ref_id("projectUpdate"))
+                    .await?,
+            )
+        } else {
+            (self.target_opt("Issue", n.ref_id("issue")).await?, None)
         };
+        if issue.is_none() && update.is_none() {
+            self.counters("Comment").skipped += 1;
+            if on_update {
+                self.note(
+                    "info",
+                    "Comment",
+                    Some(&src),
+                    "the project update of the comment was not imported; skipped",
+                );
+            }
+            return Ok(());
+        }
         let parent = match n.ref_id("parent") {
             Some(p) => {
                 let t = self.target("Comment", p).await?;
@@ -160,6 +191,7 @@ impl Session<'_, '_> {
             ("body", json!(body)),
             ("user_id", json!(user)),
             ("issue_id", json!(issue)),
+            ("project_update_id", json!(update)),
             ("parent_id", json!(parent)),
             (
                 "quoted_text",
@@ -191,32 +223,7 @@ impl Session<'_, '_> {
                 .delete_rows_where(ImportTable::Reaction, "comment_id", up.id)
                 .await?;
         }
-        for r in n.array("reactions") {
-            let rn = N(r);
-            let Some(emoji) = rn
-                .text("emoji")
-                .map(|e| clean_text(e, 64, false))
-                .filter(|e| !e.is_empty())
-            else {
-                continue;
-            };
-            let Some(uid) = self.target_opt("User", rn.ref_id("user")).await? else {
-                continue;
-            };
-            let rc = rn.ts("createdAt").unwrap_or(created).min(now);
-            let rrow = row(vec![
-                ("emoji", json!(emoji)),
-                ("user_id", json!(uid)),
-                ("comment_id", json!(up.id)),
-                ("created_at", jts(Some(rc))),
-                ("updated_at", jts(Some(rc))),
-            ]);
-            self.tx()?
-                .imports()
-                .insert_row_ignore(ImportTable::Reaction, &Value::Object(rrow))
-                .await?;
-            self.counters("Reaction").created += 1;
-        }
+        self.reactions(n, "comment_id", up.id, created).await?;
         let ev = if up.outcome == Outcome::Created {
             DomainEvent::CommentCreated {
                 comment_id: CommentId(up.id),
@@ -229,6 +236,49 @@ impl Session<'_, '_> {
             }
         };
         self.event(ev).await?;
+        Ok(())
+    }
+
+    /// Reaktionen eines Quellobjekts (`reactions: [{ emoji, user, createdAt }]`) an das Ziel
+    /// (`column` = `issue_id`/`comment_id`) schreiben. Reaktionen unbekannter Nutzer entfallen;
+    /// doppelte (Nutzer, Emoji) schützt der Unique-Index.
+    pub(crate) async fn reactions(
+        &mut self,
+        n: N<'_>,
+        column: &'static str,
+        target: Uuid,
+        fallback: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let now = self.now;
+        for r in n.array("reactions").iter().take(500) {
+            let rn = N(r);
+            let Some(emoji) = rn
+                .text("emoji")
+                .map(|e| clean_text(e, 64, false))
+                .filter(|e| !e.is_empty())
+            else {
+                continue;
+            };
+            let Some(uid) = self.target_opt("User", rn.ref_id("user")).await? else {
+                continue;
+            };
+            let rc = rn.ts("createdAt").unwrap_or(fallback).min(now);
+            let rrow = row(vec![
+                ("emoji", json!(emoji)),
+                ("user_id", json!(uid)),
+                (column, json!(target)),
+                ("created_at", jts(Some(rc))),
+                ("updated_at", jts(Some(rc))),
+            ]);
+            if self
+                .tx()?
+                .imports()
+                .insert_row_ignore(ImportTable::Reaction, &Value::Object(rrow))
+                .await?
+            {
+                self.counters("Reaction").created += 1;
+            }
+        }
         Ok(())
     }
 
@@ -254,6 +304,49 @@ impl Session<'_, '_> {
             .await
     }
 
+    /// Dry-Run: zählt die geplanten Downloads (`plan.downloadFiles`, `downloadBytes`,
+    /// `downloadSizeUnknown`, `downloadRejected`), ohne den Inhalt zu laden. Jede URL zählt einmal.
+    async fn probe_files(&mut self, urls: Vec<String>) {
+        let fresh: Vec<String> = urls
+            .into_iter()
+            .filter(|u| self.dl_seen.insert(u.clone()))
+            .collect();
+        let eng = self.eng;
+        let results: Vec<(String, crate::port::SourceResult<Option<u64>>)> =
+            futures_util::stream::iter(fresh)
+                .map(|u| async move {
+                    let r = eng.source.probe(&u).await;
+                    (u, r)
+                })
+                .buffer_unordered(4)
+                .collect()
+                .await;
+        for (url, r) in results {
+            match r {
+                Ok(size) => {
+                    self.plan_add_n("downloadFiles", 1);
+                    match size {
+                        Some(b) => self.plan_add_n("downloadBytes", b),
+                        None => self.plan_add_n("downloadSizeUnknown", 1),
+                    }
+                }
+                Err(e) => {
+                    self.plan_add_n("downloadRejected", 1);
+                    let host = url::Url::parse(&url)
+                        .ok()
+                        .and_then(|u| u.host_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    self.note(
+                        "warning",
+                        "Attachment",
+                        None,
+                        format!("a file on {host} would not be downloaded ({e})"),
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) async fn step_attachments(&mut self, cursor: Option<String>) -> HResult<()> {
         let mut cursor = cursor;
         loop {
@@ -267,6 +360,8 @@ impl Session<'_, '_> {
                 .map(str::to_owned)
                 .collect();
             let stored = if self.dry {
+                // Dry-Run: nur zählen (Anzahl, Größe per HEAD), nichts laden.
+                self.probe_files(urls).await;
                 HashMap::new()
             } else {
                 Self::store_files(self.eng, self.org, urls).await
@@ -404,13 +499,7 @@ impl Session<'_, '_> {
     /// ablegen, URL umschreiben, als Anhang des Issues führen (damit die Datei lesbar bleibt).
     pub(crate) async fn step_embedded_files(&mut self, cursor: Option<String>) -> HResult<()> {
         if self.dry {
-            self.note(
-                "info",
-                "Attachment",
-                None,
-                "embedded files are not downloaded in a dry run",
-            );
-            return Ok(());
+            return self.count_embedded_files().await;
         }
         // Cursor: `<tabelle>:<uuid>`; Tabelle 0 = Issues, 1 = Kommentare.
         let (mut stage, mut after): (usize, Option<Uuid>) =
@@ -506,6 +595,38 @@ impl Session<'_, '_> {
             }
             stage += 1;
             after = None;
+        }
+        Ok(())
+    }
+
+    /// Dry-Run von Phase 6: sucht eingebettete Uploads in den (in der Dry-Run-Transaktion
+    /// geschriebenen) Issue-Beschreibungen und Kommentaren und zählt sie.
+    async fn count_embedded_files(&mut self) -> HResult<()> {
+        self.begin_unit().await?;
+        for (table, col, owner_col) in [
+            (ImportTable::Issue, "description", "id"),
+            (ImportTable::Comment, "body", "issue_id"),
+        ] {
+            let mut after: Option<Uuid> = None;
+            loop {
+                let rows = self
+                    .tx()?
+                    .imports()
+                    .find_rows_containing(table, col, owner_col, UPLOAD_HOST, after, 100)
+                    .await?;
+                if rows.is_empty() {
+                    break;
+                }
+                let urls: Vec<String> = rows
+                    .iter()
+                    .flat_map(|(_, _, body)| {
+                        UPLOAD_URL.find_iter(body).map(|m| m.as_str().to_owned())
+                    })
+                    .filter(|u| is_upload_url(u))
+                    .collect();
+                self.probe_files(urls).await;
+                after = rows.last().map(|(id, _, _)| *id);
+            }
         }
         Ok(())
     }
