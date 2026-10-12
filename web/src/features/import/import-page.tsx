@@ -13,13 +13,16 @@ import {
   fetchReport,
   fetchRun,
   fetchRuns,
+  fetchTargetTeams,
   handled,
   keys,
   progressPercent,
   scan,
   start,
   type ImportRunView,
+  type ImportPlan,
   type ScanTeam,
+  type TargetTeam,
 } from "./api";
 
 function errorText(err: unknown): string {
@@ -134,20 +137,39 @@ function PlanStep({
   const [selected, setSelected] = useState<Set<string>>(() => new Set(teams.map((t) => t.key)));
   const [keyMap, setKeyMap] = useState<Record<string, string>>({});
   const [delta, setDelta] = useState(false);
+  // Je Linear-Team: Lineal-Team, in das importiert wird (fehlt = neues Team anlegen).
+  const [targets, setTargets] = useState<Record<string, string>>({});
+  // Abgewählte Projekte (Standard: alle übernehmen).
+  const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
+  const targetTeams = useQuery({ queryKey: keys.targets, queryFn: fetchTargetTeams });
   const m = useMutation({
-    mutationFn: (dryRun: boolean) =>
-      start({
+    mutationFn: (dryRun: boolean) => {
+      const chosen = teams.filter((t) => selected.has(t.key));
+      const projects = projectIds(chosen);
+      return start({
         runId: run.id,
-        teams: teams.filter((t) => selected.has(t.key)).map((t) => t.key),
-        keyMapping: Object.fromEntries(Object.entries(keyMap).filter(([, v]) => v.trim())),
+        teams: chosen.map((t) => t.key),
+        keyMapping: Object.fromEntries(
+          Object.entries(keyMap).filter(([k, v]) => v.trim() && !targets[k]),
+        ),
         dryRun,
         delta,
-      }),
+        // Nichts abgewählt: kein Filter (dann kommen auch Issues ohne Projekt mit).
+        projects: projects.every((id) => !skipped.has(id))
+          ? []
+          : projects.filter((id) => !skipped.has(id)),
+        targetTeams: Object.fromEntries(
+          chosen.filter((t) => targets[t.key]).map((t) => [t.key, targets[t.key] as string]),
+        ),
+      });
+    },
     onSuccess: onChanged,
   });
   const unresolved = teams.filter(
-    (t) => selected.has(t.key) && t.conflict && !(keyMap[t.key] ?? "").trim(),
+    (t) => selected.has(t.key) && t.conflict && !targets[t.key] && !(keyMap[t.key] ?? "").trim(),
   );
+  const allProjects = projectIds(teams.filter((t) => selected.has(t.key)));
+  const noProjects = allProjects.length > 0 && allProjects.every((id) => skipped.has(id));
   const users = scanData?.users ?? [];
   const matched = users.filter((u) => u.matchedUserId).length;
   const counts = scanData?.counts ?? {};
@@ -156,7 +178,7 @@ function PlanStep({
       <Card title={`Teams in ${scanData?.workspace?.name ?? "Linear"}`}>
         <ul className="flex flex-col divide-y divide-border">
           {teams.map((t: ScanTeam) => (
-            <li key={t.id} className="flex items-center gap-3 py-2 text-sm">
+            <li key={t.id} className="flex flex-wrap items-center gap-3 py-2 text-sm">
               <input
                 type="checkbox"
                 aria-label={`Import team ${t.key}`}
@@ -174,7 +196,13 @@ function PlanStep({
                 <span className="text-xs text-muted-foreground">private, stays private</span>
               ) : null}
               <span className="text-xs text-muted-foreground">{t.issueCount} issues</span>
-              {t.conflict ? (
+              <TargetChoice
+                team={t}
+                options={targetTeams.data ?? []}
+                value={targets[t.key] ?? ""}
+                onChange={(v) => setTargets({ ...targets, [t.key]: v })}
+              />
+              {t.conflict && !targets[t.key] ? (
                 <label className="flex items-center gap-1.5 text-xs text-destructive">
                   <ShieldAlert className="size-3.5" />
                   Key exists, new key:
@@ -198,6 +226,51 @@ function PlanStep({
           </p>
         ) : null}
       </Card>
+      {allProjects.length > 0 ? (
+        <Card title="Projects">
+          <p className="mb-3 text-sm text-muted-foreground">
+            All projects are imported by default, together with all issues of the selected teams.
+            Deselect projects to import only the checked ones: then only their issues come along
+            (issues without a project are left out), plus the milestones, updates, documents,
+            labels, statuses, cycles, people, comments and attachments they need.
+          </p>
+          {teams
+            .filter((t) => selected.has(t.key) && (t.projects ?? []).length > 0)
+            .map((t) => (
+              <fieldset key={t.id} className="mb-3">
+                <legend className="mb-1 text-xs font-medium text-muted-foreground">
+                  {t.key} · {t.name}
+                </legend>
+                <ul className="flex flex-col">
+                  {(t.projects ?? []).map((p) => (
+                    <li key={p.id} className="flex items-center gap-2 py-0.5 text-sm">
+                      <input
+                        type="checkbox"
+                        aria-label={`Import project ${p.name ?? p.id} of ${t.key}`}
+                        checked={!skipped.has(p.id)}
+                        onChange={(e) => {
+                          const next = new Set(skipped);
+                          if (e.target.checked) next.delete(p.id);
+                          else next.add(p.id);
+                          setSkipped(next);
+                        }}
+                      />
+                      <span className="flex-1">{p.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {p.status ?? "–"} · {p.issueCount} issues
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            ))}
+          {noProjects ? (
+            <p role="alert" className="text-sm text-destructive">
+              Select at least one project or leave all projects checked.
+            </p>
+          ) : null}
+        </Card>
+      ) : null}
       <Card title="People">
         <p className="text-sm text-muted-foreground">
           {users.length} people found, {matched} matched to existing users by e-mail address. The
@@ -219,13 +292,13 @@ function PlanStep({
         <span className="flex-1" />
         <Button
           variant="outline"
-          disabled={m.isPending || selected.size === 0 || unresolved.length > 0}
+          disabled={m.isPending || selected.size === 0 || unresolved.length > 0 || noProjects}
           onClick={() => m.mutate(true)}
         >
           Dry run
         </Button>
         <Button
-          disabled={m.isPending || selected.size === 0 || unresolved.length > 0}
+          disabled={m.isPending || selected.size === 0 || unresolved.length > 0 || noProjects}
           onClick={() => m.mutate(false)}
         >
           Start import
@@ -238,8 +311,103 @@ function PlanStep({
       ) : null}
       {run.dryRun && run.stats.entities ? (
         <Card title="Result of the dry run">
-          <Counters run={run} />
+          <PlanReport run={run} />
+          <div className="mt-4">
+            <Counters run={run} />
+          </div>
         </Card>
+      ) : null}
+    </div>
+  );
+}
+
+/** Alle Projekt-IDs der Teams (ein Projekt über mehrere Teams nur einmal). */
+function projectIds(teams: ScanTeam[]): string[] {
+  return [...new Set(teams.flatMap((t) => (t.projects ?? []).map((p) => p.id)))];
+}
+
+/** „Als neues Team (Key …)“ oder „in bestehendes Team …“ je Linear-Team. */
+function TargetChoice({
+  team,
+  options,
+  value,
+  onChange,
+}: {
+  team: ScanTeam;
+  options: TargetTeam[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs">
+      <select
+        aria-label={`Target for ${team.key}`}
+        className="h-7 rounded-md border border-border bg-surface px-1.5"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">As new team (key {team.key})</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            Into existing team {o.key} · {o.name}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+const PLAN_LINES: Array<[keyof ImportPlan, string]> = [
+  ["teamsMapped", "Linear teams mapped to existing Lineal teams"],
+  ["statesMapped", "Statuses mapped to existing statuses"],
+  ["statesNew", "Statuses to be created"],
+  ["labelsMapped", "Labels mapped to existing labels"],
+  ["labelsNew", "Labels to be created"],
+  ["usersMatched", "People matched to existing users"],
+  ["usersPlaceholder", "People created as placeholders"],
+  ["aliasesCreated", "Linear identifiers kept as aliases"],
+  ["relationsOutside", "Relations to issues outside the import (kept as links)"],
+];
+
+/** Plan des Dry-Runs: Zuordnungen, Mengen und Warnungen. */
+function PlanReport({ run }: { run: ImportRunView }) {
+  const plan = run.stats.plan ?? {};
+  const entities = run.stats.entities ?? {};
+  const created = (k: string) => (entities[k] ? handled(entities[k]) : 0);
+  const warnings = useQuery({
+    queryKey: keys.report(run.id, "warning"),
+    queryFn: () => fetchReport(run.id, "warning"),
+  });
+  return (
+    <div data-testid="plan-report" className="flex flex-col gap-3">
+      <ul className="grid grid-cols-1 gap-x-6 text-sm sm:grid-cols-2">
+        {PLAN_LINES.filter(([k]) => (plan[k] ?? 0) > 0).map(([k, label]) => (
+          <li key={k} className="flex justify-between gap-2 py-0.5">
+            <span className="text-muted-foreground">{label}</span>
+            <span className="tabular-nums">{plan[k]}</span>
+          </li>
+        ))}
+        {(["Issue", "Comment", "Attachment"] as const).map((k) => (
+          <li key={k} className="flex justify-between gap-2 py-0.5">
+            <span className="text-muted-foreground">{k}s planned</span>
+            <span className="tabular-nums">{created(k)}</span>
+          </li>
+        ))}
+      </ul>
+      {warnings.data && warnings.data.entries.length > 0 ? (
+        <div>
+          <h3 className="mb-1 text-xs font-medium text-muted-foreground">
+            Warnings ({warnings.data.warningCount})
+          </h3>
+          <ul className="flex max-h-48 flex-col divide-y divide-border overflow-auto text-sm">
+            {warnings.data.entries.map((e, i) => (
+              <li key={i} className="flex items-start gap-2 py-1">
+                <AlertTriangle className="mt-0.5 size-3.5 text-warning" />
+                <span className="flex-1">{e.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   );

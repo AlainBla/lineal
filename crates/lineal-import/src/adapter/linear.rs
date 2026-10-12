@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 /// Standard-Endpunkt.
 pub const LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 
+/// Abfrage von Token-Inhaber und Workspace.
+pub const WORKSPACE_QUERY: &str = "query { viewer { id email } organization { id name urlKey } }";
+
 /// Wie eine Entität abgefragt wird.
 #[derive(Debug, Clone, Copy)]
 enum Kind {
@@ -44,12 +47,15 @@ struct QuerySpec {
     args: &'static str,
     /// Unterstützt `filter: { updatedAt: { gt: … } }`.
     filter: bool,
+    /// Höchste Seitengröße: Linear lehnt Abfragen über 10 000 Komplexitätspunkte ab
+    /// (Objekt 1, Feld 0,1, Verbindung × `first`), große Auswahlen brauchen kleinere Seiten.
+    max_first: u32,
 }
 
 const ISSUE_FIELDS: &str = "id number identifier title description priority estimate sortOrder dueDate \
     createdAt updatedAt archivedAt startedAt completedAt canceledAt autoClosedAt autoArchivedAt triagedAt \
     snoozedUntilAt slaStartedAt slaMediumRiskAt slaHighRiskAt slaBreachesAt slaType trashed previousIdentifiers \
-    team { id key } state { id } assignee { id } creator { id } parent { id } project { id } \
+    url team { id key } state { id } assignee { id } delegate { id } creator { id } parent { id } project { id } \
     projectMilestone { id } cycle { id } labels(first: 50) { nodes { id } }";
 
 fn spec(entity: SourceEntity) -> QuerySpec {
@@ -60,6 +66,11 @@ fn spec(entity: SourceEntity) -> QuerySpec {
         kind: Kind::Connection,
         args,
         filter,
+        max_first: 100,
+    };
+    let small = |max_first: u32, mut q: QuerySpec| {
+        q.max_first = max_first;
+        q
     };
     match entity {
         Users => conn(
@@ -70,12 +81,12 @@ fn spec(entity: SourceEntity) -> QuerySpec {
         ),
         Teams => conn(
             "teams",
-            "id key name description icon color private timezone createdAt updatedAt archivedAt \
+            "id key name description icon color visibility timezone createdAt updatedAt archivedAt \
              parent { id } cyclesEnabled cycleDuration cycleCooldownTime cycleStartDay upcomingCycleCount \
              issueEstimationType issueEstimationExtended issueEstimationAllowZero defaultIssueEstimate \
              triageEnabled requirePriorityToLeaveTriage autoClosePeriod autoArchivePeriod \
              groupIssueHistory setIssueSortOrderOnStateChange defaultIssueState { id } \
-             triageIssueState { id } autoCloseState { id }",
+             triageIssueState { id } autoCloseStateId",
             "includeArchived: true",
             true,
         ),
@@ -93,7 +104,7 @@ fn spec(entity: SourceEntity) -> QuerySpec {
         ),
         IssueLabels => conn(
             "issueLabels",
-            "id name color description isGroup retiredAt createdAt updatedAt team { id } parent { id } creator { id }",
+            "id name color description isGroup groupType retiredAt createdAt updatedAt team { id } parent { id } creator { id }",
             "includeArchived: true",
             true,
         ),
@@ -115,6 +126,7 @@ fn spec(entity: SourceEntity) -> QuerySpec {
             kind: Kind::List,
             args: "",
             filter: false,
+            max_first: 100,
         },
         Cycles => conn(
             "cycles",
@@ -130,14 +142,17 @@ fn spec(entity: SourceEntity) -> QuerySpec {
             "includeArchived: true",
             true,
         ),
-        Projects => conn(
-            "projects",
-            "id name description content color icon priority sortOrder slugId startDate targetDate startedAt \
-             completedAt canceledAt health createdAt updatedAt archivedAt status { id } lead { id } creator { id } \
-             teams(first: 50) { nodes { id } } members(first: 100) { nodes { id } } \
-             labels(first: 50) { nodes { id } } initiatives(first: 20) { nodes { id } }",
-            "includeArchived: true",
-            true,
+        Projects => small(
+            15,
+            conn(
+                "projects",
+                "id name description content color icon priority sortOrder slugId startDate targetDate startedAt \
+             completedAt canceledAt health createdAt updatedAt archivedAt status { id name } lead { id } creator { id } \
+             teams(first: 20) { nodes { id } } members(first: 50) { nodes { id } } \
+             labels(first: 20) { nodes { id } } initiatives(first: 10) { nodes { id } }",
+                "includeArchived: true",
+                true,
+            ),
         ),
         ProjectMilestones => conn(
             "projectMilestones",
@@ -145,16 +160,19 @@ fn spec(entity: SourceEntity) -> QuerySpec {
             "includeArchived: true",
             false,
         ),
-        Issues => conn("issues", ISSUE_FIELDS, "includeArchived: true", true),
+        Issues => small(
+            25,
+            conn("issues", ISSUE_FIELDS, "includeArchived: true", true),
+        ),
         IssueRelations => conn(
             "issueRelations",
-            "id type createdAt updatedAt issue { id } relatedIssue { id }",
+            "id type createdAt updatedAt issue { id identifier url } relatedIssue { id identifier url }",
             "includeArchived: true",
             false,
         ),
         IssueHistory => QuerySpec {
             field: "issues",
-            selection: "id history(first: 50) { nodes { id createdAt actor { id } \
+            selection: "id history(first: 30) { nodes { id createdAt actor { id } \
                 fromState { id } toState { id } fromAssignee { id } toAssignee { id } fromPriority toPriority \
                 fromTeam { id } toTeam { id } fromProject { id } toProject { id } fromCycle { id } toCycle { id } } }",
             kind: Kind::ViaIssues {
@@ -163,6 +181,7 @@ fn spec(entity: SourceEntity) -> QuerySpec {
             },
             args: "includeArchived: true",
             filter: true,
+            max_first: 10,
         },
         IssueSubscriptions => QuerySpec {
             field: "issues",
@@ -173,6 +192,7 @@ fn spec(entity: SourceEntity) -> QuerySpec {
             },
             args: "includeArchived: true",
             filter: true,
+            max_first: 20,
         },
         Comments => conn(
             "comments",
@@ -256,6 +276,38 @@ pub fn flatten_connections(v: Value) -> Value {
     }
 }
 
+/// IDs als GraphQL-Liste; nur UUID-artige Zeichen (keine Einschleusung von Abfrage-Text).
+fn id_list(ids: &[String]) -> Option<String> {
+    let ok: Vec<String> = ids
+        .iter()
+        .filter(|i| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .map(|i| format!("\"{i}\""))
+        .collect();
+    (!ok.is_empty() && ok.len() == ids.len()).then(|| format!("[{}]", ok.join(", ")))
+}
+
+/// Filter, die die Abfrage auf die gewählten Teams/Projekte einschränken (Linear liefert dann nur
+/// diese Objekte; ohne Einschränkung wird der ganze Workspace gelesen).
+fn scope_filters(entity: SourceEntity, scope: &crate::port::Scope) -> Vec<String> {
+    use SourceEntity::*;
+    let mut out = Vec::new();
+    if let Some(list) = id_list(&scope.teams) {
+        match entity {
+            Issues | IssueHistory | IssueSubscriptions | WorkflowStates | Cycles => {
+                out.push(format!("team: {{ id: {{ in: {list} }} }}"));
+            }
+            Comments => out.push(format!("issue: {{ team: {{ id: {{ in: {list} }} }} }}")),
+            _ => {}
+        }
+    }
+    if matches!(entity, Issues | IssueHistory | IssueSubscriptions)
+        && let Some(list) = id_list(&scope.projects)
+    {
+        out.push(format!("project: {{ id: {{ in: {list} }} }}"));
+    }
+    out
+}
+
 /// Der GraphQL-Request (Query-Text und Variablen) für eine Seite.
 pub fn build_query(q: &PageQuery) -> Value {
     let s = spec(q.entity);
@@ -267,11 +319,16 @@ pub fn build_query(q: &PageQuery) -> Value {
     if !s.args.is_empty() {
         args.push(s.args.to_owned());
     }
+    let mut parts: Vec<String> = Vec::new();
     if let (true, Some(after)) = (s.filter, q.updated_after) {
-        args.push(format!(
-            "filter: {{ updatedAt: {{ gt: \"{}\" }} }}",
+        parts.push(format!(
+            "updatedAt: {{ gt: \"{}\" }}",
             after.to_rfc3339_opts(SecondsFormat::Millis, true)
         ));
+    }
+    parts.extend(scope_filters(q.entity, &q.scope));
+    if !parts.is_empty() {
+        args.push(format!("filter: {{ {} }}", parts.join(", ")));
     }
     let arg_list = if args.is_empty() {
         String::new()
@@ -287,7 +344,7 @@ pub fn build_query(q: &PageQuery) -> Value {
     };
     json!({
         "query": query,
-        "variables": { "first": q.limit.clamp(1, 100), "after": q.cursor },
+        "variables": { "first": q.limit.clamp(1, s.max_first), "after": q.cursor },
     })
 }
 
@@ -525,8 +582,7 @@ impl ImportSource for LinearSource {
     }
 
     async fn workspace(&self) -> SourceResult<SourceWorkspace> {
-        let body =
-            json!({ "query": "query { viewer { id email } organization { id name urlKey } }" });
+        let body = json!({ "query": WORKSPACE_QUERY });
         let data = self.execute(&body).await?;
         let org = &data["organization"];
         let text = |v: &Value| v.as_str().map(str::to_owned);
@@ -620,6 +676,7 @@ mod tests {
             cursor: Some("abc".into()),
             updated_after: Some(after),
             limit: 50,
+            scope: Default::default(),
         });
         let q = body["query"].as_str().unwrap();
         assert!(
@@ -630,8 +687,49 @@ mod tests {
         assert!(q.contains("issues(first: $first, after: $after, includeArchived: true"));
         assert!(q.contains("filter: { updatedAt: { gt: \"2026-03-01T10:00:00.000Z\" } }"));
         assert!(q.contains("pageInfo { hasNextPage endCursor }"));
-        assert_eq!(body["variables"]["first"], 50);
+        assert_eq!(
+            body["variables"]["first"], 25,
+            "issues use smaller pages (complexity limit)"
+        );
         assert_eq!(body["variables"]["after"], "abc");
+    }
+
+    #[test]
+    fn scope_limits_issue_and_comment_queries_to_teams_and_projects() {
+        let scope = crate::port::Scope {
+            teams: vec!["t-1".into(), "t-2".into()],
+            projects: vec!["p-1".into()],
+        };
+        let q = |entity| {
+            build_query(&PageQuery {
+                entity,
+                cursor: None,
+                updated_after: None,
+                limit: 100,
+                scope: scope.clone(),
+            })["query"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let issues = q(SourceEntity::Issues);
+        assert!(issues.contains("team: { id: { in: [\"t-1\", \"t-2\"] } }"));
+        assert!(issues.contains("project: { id: { in: [\"p-1\"] } }"));
+        assert!(q(SourceEntity::Comments).contains("issue: { team: { id: { in: [\"t-1\""));
+        // Ungültige IDs werden nicht in den Abfragetext übernommen.
+        let evil = crate::port::Scope {
+            teams: vec!["x\" } } ) { id } #".into()],
+            projects: vec![],
+        };
+        let body = build_query(&PageQuery {
+            entity: SourceEntity::Issues,
+            cursor: None,
+            updated_after: None,
+            limit: 10,
+            scope: evil,
+        });
+        assert!(!body["query"].as_str().unwrap().contains("x\\\""));
+        assert!(!body["query"].as_str().unwrap().contains("team: {"));
     }
 
     #[test]
@@ -642,11 +740,13 @@ mod tests {
                 cursor: None,
                 updated_after: None,
                 limit: 1000,
+                scope: Default::default(),
             });
             let q = body["query"].as_str().unwrap();
             assert!(q.starts_with("query"), "{e:?}");
             assert!(!q.to_lowercase().contains("mutation"), "{e:?}");
-            assert_eq!(body["variables"]["first"], 100, "page size is clamped");
+            let first = body["variables"]["first"].as_u64().unwrap();
+            assert!((1..=100).contains(&first), "page size is clamped: {e:?}");
         }
     }
 

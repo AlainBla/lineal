@@ -7,6 +7,13 @@ import { gqlRequest } from "@/lib/graphql";
 export type RunStatus =
   "scanning" | "planned" | "running" | "paused" | "failed" | "completed" | "canceled";
 
+export interface ScanProject {
+  id: string;
+  name: string | null;
+  status: string | null;
+  issueCount: number;
+}
+
 export interface ScanTeam {
   id: string;
   key: string;
@@ -15,6 +22,28 @@ export interface ScanTeam {
   parentId: string | null;
   issueCount: number;
   conflict: boolean;
+  /** Projekte des Teams; ein Projekt über mehrere Teams erscheint bei jedem. */
+  projects?: ScanProject[];
+}
+
+/** Bestehendes Lineal-Team als Importziel. */
+export interface TargetTeam {
+  id: string;
+  key: string;
+  name: string;
+}
+
+/** Geplante Zuordnungen (`stats.plan`), Zähler des Dry-Runs. */
+export interface ImportPlan {
+  teamsMapped?: number;
+  statesMapped?: number;
+  statesNew?: number;
+  labelsMapped?: number;
+  labelsNew?: number;
+  usersMatched?: number;
+  usersPlaceholder?: number;
+  relationsOutside?: number;
+  aliasesCreated?: number;
 }
 
 export interface ScanUser {
@@ -52,7 +81,7 @@ export interface ImportRunView {
   step: string | null;
   dryRun: boolean;
   scan: Scan | null;
-  stats: { entities?: Record<string, EntityStats> };
+  stats: { entities?: Record<string, EntityStats>; plan?: ImportPlan };
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -77,6 +106,7 @@ export const keys = {
   runs: ["import", "runs"] as const,
   run: (id: string) => ["import", "run", id] as const,
   report: (id: string, severity: string | null) => ["import", "report", id, severity] as const,
+  targets: ["import", "targets"] as const,
 };
 
 const RUN_FIELDS = `id source status phase step dryRun scan stats error startedAt finishedAt createdAt`;
@@ -124,6 +154,18 @@ export interface StartInput {
   keyMapping: Record<string, string>;
   dryRun: boolean;
   delta: boolean;
+  /** Linear-Projekt-IDs; leer = alle. */
+  projects: string[];
+  /** Linear-Team-Key -> ID eines bestehenden Lineal-Teams. */
+  targetTeams: Record<string, string>;
+}
+
+/** Sichtbare Lineal-Teams (mögliche Importziele). */
+export async function fetchTargetTeams(): Promise<TargetTeam[]> {
+  const d = await gqlRequest<{ teams: TargetTeam[] }>(
+    `query ImportTargetTeams { teams(first: 200) { id key name } }`,
+  );
+  return d.teams;
 }
 
 export async function start(input: StartInput): Promise<ImportRunView> {

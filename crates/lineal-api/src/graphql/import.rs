@@ -143,6 +143,39 @@ pub struct ImportStartInputGql {
     /// Nur Änderungen seit dem letzten erfolgreichen Lauf übernehmen.
     #[graphql(default)]
     pub delta: bool,
+    /// Linear-Projekt-IDs (aus dem Scan); leer = alle Projekte und Issues der gewählten Teams.
+    #[graphql(default)]
+    pub projects: Vec<String>,
+    /// Objekt `{ "<Linear-Team-Key>": "<ID eines bestehenden Lineal-Teams>" }`: dieses Linear-Team
+    /// wird in das Lineal-Team importiert statt ein neues anzulegen (Sichtbarkeit und Schreibrecht
+    /// werden geprüft).
+    pub target_teams: Option<Json<Value>>,
+}
+
+fn target_teams(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String, Uuid>> {
+    let Some(Json(v)) = v else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(m) = v.as_object() else {
+        return Err(gql_err(AppError::invalid_request(
+            "targetTeams must be an object",
+        )));
+    };
+    if m.len() > 1_000 {
+        return Err(gql_err(AppError::invalid_request(
+            "targetTeams is too large",
+        )));
+    }
+    let mut out = BTreeMap::new();
+    for (k, val) in m {
+        let Some(id) = val.as_str() else {
+            return Err(gql_err(AppError::invalid_request(
+                "targetTeams values must be team ids",
+            )));
+        };
+        out.insert(k.clone(), parse_id(id)?);
+    }
+    Ok(out)
 }
 
 fn user_mapping(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String, Option<Uuid>>> {
@@ -307,6 +340,8 @@ impl ImportMutation {
                     key_mapping: key_mapping(input.key_mapping)?,
                     dry_run: input.dry_run,
                     delta: input.delta,
+                    projects: input.projects,
+                    target_teams: target_teams(input.target_teams)?,
                 },
             )
             .await

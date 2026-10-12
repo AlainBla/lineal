@@ -84,6 +84,39 @@ impl Session<'_, '_> {
         if ty == "canceled" && name.eq_ignore_ascii_case("duplicate") {
             ty = "duplicate";
         }
+        if self.target_by_source.contains_key(team_src) {
+            let src = n
+                .id()
+                .ok_or_else(|| AppError::invalid_request("workflow state without id"))?
+                .to_owned();
+            if self.mapping("WorkflowState", &src).await?.is_some() {
+                self.target("WorkflowState", &src).await?;
+                self.counters("WorkflowState").unchanged += 1;
+                return Ok(());
+            }
+            let existing = self
+                .tx()?
+                .imports()
+                .find_state_by_type_and_name(team, ty, &name)
+                .await?;
+            if let Some(existing) = existing {
+                let checksum = super::node::checksum_of(n.0);
+                self.put_mapping("WorkflowState", &src, existing, n, &checksum)
+                    .await?;
+                self.counters("WorkflowState").unchanged += 1;
+                self.plan_add("statesMapped");
+                self.note(
+                    "info",
+                    "WorkflowState",
+                    Some(&src),
+                    format!(
+                        "mapped to the existing {ty} status `{}` of the target team",
+                        clean_text(&name, 80, false)
+                    ),
+                );
+                return Ok(());
+            }
+        }
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let make = |name: &str| {
             row(vec![
@@ -135,6 +168,7 @@ impl Session<'_, '_> {
         }
         let up = up?;
         if up.outcome == Outcome::Created {
+            self.plan_add("statesNew");
             self.event(DomainEvent::WorkflowStateCreated {
                 state_id: StateId(up.id),
                 team_id: TeamId(team),
@@ -153,6 +187,9 @@ impl Session<'_, '_> {
             let Some(src) = n.id().filter(|id| self.selected.contains(*id)) else {
                 continue;
             };
+            if self.target_by_source.contains_key(src) {
+                continue; // bestehendes Team: Standard-/Triage-Status bleiben unverändert
+            }
             let Some(team) = self.target("Team", src).await? else {
                 continue;
             };
@@ -177,7 +214,11 @@ impl Session<'_, '_> {
                     .await?;
             }
             let close = self
-                .target_opt("WorkflowState", n.ref_id("autoCloseState"))
+                .target_opt(
+                    "WorkflowState",
+                    n.ref_id("autoCloseState")
+                        .or_else(|| n.str("autoCloseStateId")),
+                )
                 .await?;
             self.tx()?
                 .imports()
@@ -189,6 +230,15 @@ impl Session<'_, '_> {
     }
 
     pub(crate) async fn step_labels(&mut self) -> HResult<()> {
+        if !self.opts.target_teams.is_empty() {
+            self.note(
+                "info",
+                "IssueLabel",
+                None,
+                "import into existing teams: labels are mapped by name or created when an issue uses them",
+            );
+            return Ok(());
+        }
         let nodes = self.fetch_all(SourceEntity::IssueLabels).await?;
         // Gruppen (und Wurzeln) vor ihren Kindern.
         let (roots, children): (Vec<&Value>, Vec<&Value>) =
@@ -219,6 +269,12 @@ impl Session<'_, '_> {
         }
         self.end_unit(None).await?;
         Ok(())
+    }
+
+    /// Label bei Bedarf (Import in ein bestehendes Team) zuordnen oder anlegen.
+    pub(crate) async fn label_on_demand(&mut self, node: &Value) -> AppResult<()> {
+        self.label(N(node), "IssueLabel", ImportTable::IssueLabel, true)
+            .await
     }
 
     async fn label(
@@ -269,6 +325,50 @@ impl Session<'_, '_> {
                 n.id(),
                 "the label name is reserved in Lineal and was renamed",
             );
+        }
+        // Import in bestehende Teams: gleichnamiges Label (Team-Label, dann Workspace-Label) zuordnen.
+        let in_target = team.is_none_or(|t| self.target_by_source.values().any(|v| *v == t));
+        if issue_label && !self.target_by_source.is_empty() && in_target {
+            let src = n
+                .id()
+                .ok_or_else(|| AppError::invalid_request("label without id"))?
+                .to_owned();
+            if let Some(m) = self.mapping(ty, &src).await? {
+                self.cache.insert((ty, src), m.target_id);
+                self.counters(ty).unchanged += 1;
+                return Ok(());
+            }
+            let mut found = None;
+            if let Some(t) = team {
+                found = self
+                    .tx()?
+                    .imports()
+                    .find_row_id_by_name(table, &name, Some(t))
+                    .await?;
+            }
+            if found.is_none() {
+                found = self
+                    .tx()?
+                    .imports()
+                    .find_row_id_by_name(table, &name, None)
+                    .await?;
+            }
+            if let Some(id) = found {
+                let checksum = super::node::checksum_of(n.0);
+                self.put_mapping(ty, &src, id, n, &checksum).await?;
+                self.counters(ty).unchanged += 1;
+                self.plan_add("labelsMapped");
+                self.note(
+                    "info",
+                    ty,
+                    Some(&src),
+                    format!(
+                        "mapped to the existing label `{}`",
+                        clean_text(&name, 80, false)
+                    ),
+                );
+                return Ok(());
+            }
         }
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let creator = self.target_opt("User", n.ref_id("creator")).await?;
@@ -323,6 +423,7 @@ impl Session<'_, '_> {
         }
         let up = up?;
         if issue_label && up.outcome == Outcome::Created {
+            self.plan_add("labelsNew");
             self.event(DomainEvent::IssueLabelCreated {
                 label_id: LabelId(up.id),
             })

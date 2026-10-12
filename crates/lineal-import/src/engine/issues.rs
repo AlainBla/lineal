@@ -7,6 +7,7 @@ use lineal_app::error::{AppError, AppResult, ErrorKind};
 use lineal_app::ports::repos::import::{ImportTable, NewMapping};
 use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{IssueId, IssueRelationId, TeamId, UserId};
+use lineal_domain::rules::markdown::is_safe_url;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -51,15 +52,51 @@ impl Session<'_, '_> {
             self.counters("Issue").skipped += 1;
             return Ok(());
         };
+        // Projektfilter: nur Issues der gewählten Projekte (Sub-Issues anderer Projekte bleiben draußen).
+        if !self.opts.projects.is_empty()
+            && !n
+                .ref_id("project")
+                .is_some_and(|p| self.opts.projects.contains(p))
+        {
+            self.counters("Issue").skipped += 1;
+            return Ok(());
+        }
         // Nummer aus Linear; ersatzweise aus der Kennung (`ENG-123`).
-        let number = n
+        let linear_number = n
             .int("number")
             .or_else(|| {
                 n.str("identifier")
                     .and_then(|i| i.rsplit('-').next()?.parse().ok())
             })
-            .filter(|x| *x > 0 && *x < i32::MAX as i64)
-            .ok_or_else(|| AppError::invalid_request("issue without a valid number"))?;
+            .filter(|x| *x > 0 && *x < i32::MAX as i64);
+        // Bestehendes Zielteam: neue Nummern aus dem Zähler des Teams (die Linear-Nummer würde mit
+        // vorhandenen Issues kollidieren); bereits importierte Issues behalten ihre Nummer.
+        let into_existing = self.target_by_source.contains_key(team_src);
+        let number = if into_existing {
+            if self.mapping("Issue", &src).await?.is_none() {
+                let first = self
+                    .tx()?
+                    .teams()
+                    .allocate_issue_numbers(TeamId(team), 1)
+                    .await?;
+                Some(i64::from(first))
+            } else {
+                None
+            }
+        } else {
+            Some(
+                linear_number
+                    .ok_or_else(|| AppError::invalid_request("issue without a valid number"))?,
+            )
+        };
+        if n.ref_id("delegate").is_some() && self.reported_tags.insert("delegate".into()) {
+            self.note(
+                "warning",
+                "Issue",
+                Some(&src),
+                "issues delegated to agents were imported without the delegate (not supported in Lineal)",
+            );
+        }
         let state = match self.target_opt("WorkflowState", n.ref_id("state")).await? {
             Some(s) => s,
             None => {
@@ -112,7 +149,7 @@ impl Session<'_, '_> {
                 .insert_row_ignore(ImportTable::ProjectTeam, &Value::Object(r))
                 .await?;
         }
-        let r: Map<String, Value> = row(vec![
+        let mut r: Map<String, Value> = row(vec![
             ("team_id", json!(team)),
             ("number", json!(number)),
             (
@@ -168,11 +205,18 @@ impl Session<'_, '_> {
             ("created_at", jts(Some(created))),
             ("updated_at", jts(Some(updated))),
         ]);
+        if number.is_none() {
+            r.remove("number");
+        }
         let up = self
             .upsert("Issue", n, ImportTable::Issue, r, false)
             .await?;
         if !up.wrote() {
             return Ok(());
+        }
+        if into_existing && up.outcome == Outcome::Created {
+            self.linear_identifier_link(n, team_src, up.id, created)
+                .await?;
         }
         // Eltern-Bezug, dessen Elternteil noch nicht importiert ist: vormerken (Phase 4b).
         if let Some(p) = parent_src
@@ -274,6 +318,120 @@ impl Session<'_, '_> {
         Ok(())
     }
 
+    /// Import in ein bestehendes Team: die Linear-Kennung (`KOL-12`) bleibt auffindbar, als Alias
+    /// (löst im Suchfeld/Links auf, sofern sie nicht mit dem Key des Zielteams übereinstimmt) und
+    /// immer als Anhang `Linear: KOL-12` mit Link in den Quell-Workspace.
+    async fn linear_identifier_link(
+        &mut self,
+        n: N<'_>,
+        team_src: &str,
+        issue: Uuid,
+        created: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let Some(ident) = n.text("identifier").map(str::to_uppercase) else {
+            return Ok(());
+        };
+        let Some((prefix, num)) = ident.rsplit_once('-') else {
+            return Ok(());
+        };
+        if prefix.is_empty() || num.parse::<u32>().is_err() || ident.len() > 32 {
+            return Ok(());
+        }
+        let linear_key = self.team_keys.get(team_src).cloned().unwrap_or_default();
+        let target_key = self
+            .rewrite
+            .key_map
+            .get(&linear_key)
+            .cloned()
+            .unwrap_or_else(|| linear_key.clone());
+        if !prefix.eq_ignore_ascii_case(&target_key) {
+            let r = row(vec![
+                ("identifier", json!(ident)),
+                ("entity_type", json!("issue")),
+                ("issue_id", json!(issue)),
+                ("team_key", json!(prefix)),
+                ("created_at", jts(Some(created))),
+            ]);
+            self.tx()?
+                .imports()
+                .insert_row_ignore(ImportTable::IssueIdentifierAlias, &Value::Object(r))
+                .await?;
+            self.plan_add("aliasesCreated");
+        }
+        if let Some(url) = n.text("url").filter(|u| u.len() <= 2048 && is_safe_url(u)) {
+            let r = row(vec![
+                ("id", json!(self.new_id())),
+                ("issue_id", json!(issue)),
+                ("url", json!(url)),
+                ("title", json!(format!("Linear: {ident}"))),
+                ("source_type", json!("linear")),
+                ("created_at", jts(Some(self.now))),
+                ("updated_at", jts(Some(self.now))),
+            ]);
+            self.tx()?
+                .imports()
+                .insert_row_ignore(ImportTable::Attachment, &Value::Object(r))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Relation, deren Gegenstück nicht importiert wird: als Anhang `Linear: blocks KOL-33` mit Link.
+    async fn outside_relation_link(
+        &mut self,
+        n: N<'_>,
+        ty: &str,
+        mapped_issue: Uuid,
+        mapped_is_source: bool,
+    ) -> AppResult<()> {
+        let other = if mapped_is_source {
+            n.0.get("relatedIssue")
+        } else {
+            n.0.get("issue")
+        };
+        let other = other.map(N);
+        let ident = other
+            .and_then(|o| o.text("identifier"))
+            .map(|i| clean_text(i, 40, false))
+            .unwrap_or_else(|| "(unknown issue)".into());
+        let verb = match (ty, mapped_is_source) {
+            ("blocks", true) => "blocks",
+            ("blocks", false) => "blocked by",
+            ("duplicate", true) => "duplicate of",
+            ("duplicate", false) => "duplicated by",
+            ("similar", _) => "similar to",
+            _ => "related to",
+        };
+        self.counters("IssueRelation").skipped += 1;
+        self.plan_add("relationsOutside");
+        self.note(
+            "warning",
+            "IssueRelation",
+            n.id(),
+            format!("the related issue {ident} is not part of this import; kept as a link (`{verb}`) on the issue"),
+        );
+        let Some(url) = other
+            .and_then(|o| o.text("url"))
+            .filter(|u| u.len() <= 2048 && is_safe_url(u))
+        else {
+            return Ok(());
+        };
+        let r = row(vec![
+            ("id", json!(self.new_id())),
+            ("issue_id", json!(mapped_issue)),
+            ("url", json!(url)),
+            ("title", json!(format!("Linear: {verb} {ident}"))),
+            ("source_type", json!("linear")),
+            ("created_at", jts(Some(self.now))),
+            ("updated_at", jts(Some(self.now))),
+        ]);
+        self.tx()?
+            .imports()
+            .insert_row_ignore(ImportTable::Attachment, &Value::Object(r))
+            .await?;
+        Ok(())
+    }
+
     /// Phase 4b: vorgemerkte Eltern-Bezüge auflösen.
     pub(crate) async fn step_issue_parents(&mut self) -> HResult<()> {
         let source = self.source().to_owned();
@@ -360,9 +518,14 @@ impl Session<'_, '_> {
         };
         let a = self.target_opt("Issue", n.ref_id("issue")).await?;
         let b = self.target_opt("Issue", n.ref_id("relatedIssue")).await?;
-        let (Some(a), Some(b)) = (a, b) else {
-            self.counters("IssueRelation").skipped += 1;
-            return Ok(());
+        let (a, b) = match (a, b) {
+            (Some(a), Some(b)) => (a, b),
+            (Some(a), None) => return self.outside_relation_link(n, ty, a, true).await,
+            (None, Some(b)) => return self.outside_relation_link(n, ty, b, false).await,
+            (None, None) => {
+                self.counters("IssueRelation").skipped += 1;
+                return Ok(());
+            }
         };
         if a == b {
             self.counters("IssueRelation").skipped += 1;

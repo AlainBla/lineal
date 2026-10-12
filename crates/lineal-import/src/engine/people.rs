@@ -14,6 +14,13 @@ const ESTIMATION: &[&str] = &["notUsed", "exponential", "fibonacci", "linear", "
 const SORT_ON_STATE: &[&str] = &["top", "bottom", "none"];
 const PERIODS: &[i64] = &[1, 3, 6, 9, 12];
 
+/// Linear: `visibility` (`public`/`private`/`restricted`; `restricted` liegt in einem privaten
+/// Team und wird vorsichtig als privat übernommen), ältere Quellen liefern `private`.
+pub(crate) fn is_private(n: N<'_>) -> bool {
+    n.bool("private").unwrap_or(false)
+        || matches!(n.str("visibility"), Some("private" | "restricted"))
+}
+
 impl Session<'_, '_> {
     /// Freier Anzeigename (`alice`, `alice2`, …).
     async fn free_display_name(&mut self, email: &str) -> AppResult<String> {
@@ -35,6 +42,15 @@ impl Session<'_, '_> {
     }
 
     pub(crate) async fn step_users(&mut self) -> HResult<()> {
+        if self.opts.scoped() {
+            self.note(
+                "info",
+                "User",
+                None,
+                "partial import: people are matched or created as placeholders only when they are referenced",
+            );
+            return Ok(());
+        }
         let nodes = self.fetch_all(SourceEntity::Users).await?;
         for chunk in nodes.chunks(self.eng.config.page_size.max(1) as usize) {
             self.begin_unit().await?;
@@ -49,7 +65,7 @@ impl Session<'_, '_> {
         Ok(())
     }
 
-    async fn user(&mut self, n: N<'_>) -> AppResult<()> {
+    pub(crate) async fn user(&mut self, n: N<'_>) -> AppResult<()> {
         let src = n
             .id()
             .ok_or_else(|| AppError::invalid_request("user without id"))?
@@ -65,7 +81,14 @@ impl Session<'_, '_> {
         let explicit = self.opts.user_mapping.get(&src).copied().flatten();
         let mut target: Option<Uuid> = None;
         if let Some(id) = explicit {
-            if self.tx()?.users().get(UserId(id)).await?.is_some() {
+            // Nur aktive Benutzer (oder frühere Import-Platzhalter) dieses Workspace.
+            let usable = self
+                .tx()?
+                .users()
+                .get(UserId(id))
+                .await?
+                .is_some_and(|u| u.active || u.status == "imported");
+            if usable {
                 target = Some(id);
             } else {
                 self.note(
@@ -81,6 +104,7 @@ impl Session<'_, '_> {
         {
             target = self.tx()?.imports().find_user_id_by_email(email).await?;
         }
+        let matched = target.is_some();
         let target = match target {
             Some(t) => t,
             None => {
@@ -94,9 +118,8 @@ impl Session<'_, '_> {
                 }
                 let id = self.new_id();
                 let display = self.free_display_name(&email).await?;
-                let role = if n.bool("admin").unwrap_or(false) {
-                    "admin"
-                } else if n.bool("guest").unwrap_or(false) {
+                // Platzhalter bekommen nie mehr Rechte als `user`, auch wenn die Quelle Admins kennt.
+                let role = if n.bool("guest").unwrap_or(false) {
                     "guest"
                 } else {
                     "user"
@@ -126,6 +149,11 @@ impl Session<'_, '_> {
         };
         self.put_mapping("User", &src, target, n, &checksum).await?;
         self.counters("User").created += 1;
+        self.plan_add(if matched {
+            "usersMatched"
+        } else {
+            "usersPlaceholder"
+        });
         Ok(())
     }
 
@@ -144,6 +172,11 @@ impl Session<'_, '_> {
             let before = pending.len();
             for v in pending {
                 let n = N(v);
+                if let Some(existing) = n.id().and_then(|i| self.target_by_source.get(i)).copied() {
+                    let r = self.map_existing_team(n, existing).await;
+                    self.item_result("Team", n.id(), r)?;
+                    continue;
+                }
                 let parent = n.ref_id("parent").filter(|p| self.selected.contains(*p));
                 if let Some(p) = parent {
                     let mapped = self.target("Team", p).await?;
@@ -172,6 +205,34 @@ impl Session<'_, '_> {
             pending = next;
         }
         self.end_unit(None).await?;
+        Ok(())
+    }
+
+    /// Linear-Team einem bestehenden Lineal-Team zuordnen: nur das Mapping wird gespeichert, die
+    /// Einstellungen des Lineal-Teams bleiben unverändert.
+    async fn map_existing_team(&mut self, n: N<'_>, existing: Uuid) -> AppResult<()> {
+        let src = n
+            .id()
+            .ok_or_else(|| AppError::invalid_request("team without id"))?
+            .to_owned();
+        let tx = self.tx()?;
+        let Some(team) = tx.teams().get(TeamId(existing)).await? else {
+            return Err(AppError::invalid_request("the target team is gone"));
+        };
+        let checksum = super::node::checksum_of(n.0);
+        self.put_mapping("Team", &src, existing, n, &checksum)
+            .await?;
+        self.counters("Team").unchanged += 1;
+        self.plan_add("teamsMapped");
+        self.note(
+            "info",
+            "Team",
+            Some(&src),
+            format!(
+                "mapped to the existing Lineal team `{}`; its settings are not changed and issue numbers are assigned anew",
+                team.key
+            ),
+        );
         Ok(())
     }
 
@@ -224,11 +285,7 @@ impl Session<'_, '_> {
                 ("parent_id", json!(parent)),
                 (
                     "visibility",
-                    json!(if n.bool("private").unwrap_or(false) {
-                        "private"
-                    } else {
-                        "public"
-                    }),
+                    json!(if is_private(n) { "private" } else { "public" }),
                 ),
                 ("timezone", json!(tz)),
                 (
@@ -370,6 +427,11 @@ impl Session<'_, '_> {
             return Err(AppError::invalid_request("membership without team"));
         };
         if !self.selected.contains(team_src) {
+            self.counters("TeamMembership").skipped += 1;
+            return Ok(());
+        }
+        if self.target_by_source.contains_key(team_src) {
+            // Die Mitglieder eines bestehenden Lineal-Teams ändert der Import nicht.
             self.counters("TeamMembership").skipped += 1;
             return Ok(());
         }

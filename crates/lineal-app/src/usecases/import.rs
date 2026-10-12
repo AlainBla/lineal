@@ -11,12 +11,13 @@ use super::audit::AuditEvent;
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
-use crate::policy::{Action, require_workspace};
+use crate::policy::{Action, PolicySnapshot, require_workspace};
 use crate::ports::repos::import::{ImportRun, ImportRunUpdate, NewImportRun};
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::{DateTime, Duration, Utc};
 use hkdf::Hkdf;
+use lineal_domain::ids::{OrgId, TeamId, UserId};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -135,6 +136,10 @@ pub struct ImportStartInput {
     pub dry_run: bool,
     /// Nur Änderungen seit dem letzten erfolgreichen Lauf (docs/13 §4.2).
     pub delta: bool,
+    /// Linear-Projekt-IDs; leer = alle Projekte/Issues der gewählten Teams (docs/13 §4.6).
+    pub projects: Vec<String>,
+    /// Linear-Team-Key -> ID eines **bestehenden** Lineal-Teams (kein neues Team; docs/13 §4.7).
+    pub target_teams: BTreeMap<String, Uuid>,
 }
 
 /// Aufbereitete Optionen (`import_run.options`), vom Importer gelesen.
@@ -142,13 +147,17 @@ pub fn options_json(
     input: &ImportStartInput,
     teams: &[String],
     updated_after: Option<DateTime<Utc>>,
+    started_by: Option<Uuid>,
 ) -> Value {
     json!({
+        "startedBy": started_by,
         "teams": teams,
         "userMapping": input.user_mapping,
         "keyMapping": input.key_mapping,
         "dryRun": input.dry_run,
         "delta": input.delta,
+        "projects": input.projects,
+        "targetTeams": input.target_teams,
         "updatedAfter": updated_after,
     })
 }
@@ -289,12 +298,66 @@ impl App {
         if selected.is_empty() {
             return Err(invalid("teams", "no team to import"));
         }
+        let scan_projects: std::collections::BTreeSet<&str> = run.stats["scan"]["teams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|t| t["projects"].as_array().into_iter().flatten())
+            .filter_map(|p| p["id"].as_str())
+            .collect();
+        if input.projects.len() > 1000 {
+            return Err(invalid("projects", "too many projects"));
+        }
+        for p in &input.projects {
+            if !scan_projects.contains(p.as_str()) {
+                return Err(invalid("projects", format!("unknown project `{p}`")));
+            }
+        }
+        if !input.target_teams.is_empty() {
+            let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+            let mut used = std::collections::BTreeSet::new();
+            for (key, team_id) in &input.target_teams {
+                if !selected.contains(key) {
+                    return Err(invalid(
+                        "targetTeams",
+                        format!("`{key}` is not one of the imported teams"),
+                    ));
+                }
+                // Sichtbarkeit (sonst not_found) und Schreibrecht (sonst forbidden).
+                snap.require_team(ctx, Action::ViewTeam, TeamId(*team_id))?;
+                snap.require_team(ctx, Action::CreateIssue, TeamId(*team_id))?;
+                snap.require_team(ctx, Action::UpdateTeamSettings, TeamId(*team_id))?;
+                let team = tx
+                    .teams()
+                    .get(TeamId(*team_id))
+                    .await?
+                    .ok_or_else(|| AppError::not_found("Could not find referenced Team."))?;
+                if team.retired_at.is_some() || team.trashed {
+                    return Err(invalid("targetTeams", "the target team is retired"));
+                }
+                if team.inherit_workflow_statuses {
+                    return Err(invalid(
+                        "targetTeams",
+                        "the target team inherits its workflow statuses; choose a team with its own",
+                    ));
+                }
+                if !used.insert(*team_id) {
+                    return Err(invalid(
+                        "targetTeams",
+                        "a Lineal team can only be the target of one Linear team per run",
+                    ));
+                }
+            }
+        }
         let mut conflicts = Vec::new();
         let mut targets: BTreeMap<String, String> = BTreeMap::new();
         for key in &selected {
             let Some((src_id, _)) = scan_teams.iter().find(|(_, k)| k == key) else {
                 return Err(invalid("teams", format!("unknown team `{key}`")));
             };
+            if input.target_teams.contains_key(key) {
+                continue; // wird einem bestehenden Team zugeordnet: kein Key-Konflikt möglich
+            }
             let target = input
                 .key_mapping
                 .get(key)
@@ -345,7 +408,12 @@ impl App {
                 run.id,
                 &ImportRunUpdate {
                     status: Some("running".into()),
-                    options: Some(options_json(&input, &selected, updated_after)),
+                    options: Some(options_json(
+                        &input,
+                        &selected,
+                        updated_after,
+                        actor_id(ctx),
+                    )),
                     checkpoint: Some(json!({})),
                     started_at: Some(Some(now)),
                     finished_at: Some(None),
@@ -497,6 +565,101 @@ impl App {
             .await?;
         let counts = tx.imports().report_counts(run_id).await?;
         Ok((entries, counts))
+    }
+
+    /// Prüft bei **jeder** Ausführung (Start, Fortsetzen, Delta, Probelauf) erneut, dass die Ziel-Teams
+    /// eines Laufs noch zulässig sind: Team gehört zum Workspace des Laufs, ist nicht stillgelegt/gelöscht,
+    /// hat eigene Status, gehört zu den importierten Teams, und der Benutzer, der den Lauf gestartet hat,
+    /// ist noch aktiv, darf importieren und hat ViewTeam, CreateIssue und UpdateTeamSettings darauf.
+    /// Läufe ohne Benutzer (CLI im Systemkontext) prüfen nur die Team-Eigenschaften.
+    /// Schlägt die Prüfung fehl, bricht der Lauf ab, bevor etwas geschrieben wird.
+    pub async fn import_verify_targets(&self, org: OrgId, run: &ImportRun) -> AppResult<()> {
+        let raw = &run.options["targetTeams"];
+        let Some(map) = raw.as_object().filter(|m| !m.is_empty()) else {
+            if raw.is_null() || raw.as_object().is_some() {
+                return Ok(());
+            }
+            return Err(invalid("targetTeams", "stored options are invalid"));
+        };
+        let denied = || {
+            AppError::forbidden(
+                "The import target team is no longer available to the user who started the run.",
+            )
+        };
+        let selected: Vec<&str> = run.options["teams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let starter = run.options["startedBy"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+            .or(run.started_by);
+        let mut tx = self.store.begin(org).await?;
+        let ctx = match starter {
+            Some(uid) => {
+                let user = tx
+                    .users()
+                    .get(UserId(uid))
+                    .await?
+                    .filter(|u| u.active && u.status == "active")
+                    .ok_or_else(denied)?;
+                let ctx = RequestCtx {
+                    org_id: org,
+                    actor: Actor::User {
+                        id: user.id,
+                        role: user.role,
+                    },
+                    request_id: "import-run".into(),
+                    scopes: crate::context::Scopes::all(),
+                    team_scope: None,
+                    via_session: false,
+                    client_ip: None,
+                    credential_kind: None,
+                };
+                require_workspace(&mut *tx, &ctx, Action::ManageImport)
+                    .await
+                    .map_err(|_| denied())?;
+                Some(ctx)
+            }
+            None => None,
+        };
+        let snap = match &ctx {
+            Some(c) => Some(PolicySnapshot::load(&mut *tx, c).await?),
+            None => None,
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, val) in map {
+            let id = val
+                .as_str()
+                .and_then(|s| s.parse::<Uuid>().ok())
+                .ok_or_else(|| invalid("targetTeams", "stored options are invalid"))?;
+            if !selected.contains(&key.as_str()) || !seen.insert(id) {
+                return Err(invalid("targetTeams", "stored options are invalid"));
+            }
+            if let (Some(ctx), Some(snap)) = (&ctx, &snap) {
+                for action in [
+                    Action::ViewTeam,
+                    Action::CreateIssue,
+                    Action::UpdateTeamSettings,
+                ] {
+                    snap.require_team(ctx, action, TeamId(id))
+                        .map_err(|_| denied())?;
+                }
+            }
+            // `begin(org)` liest nur Teams dieses Workspace; fremde IDs sind hier nicht auffindbar.
+            let team = tx
+                .teams()
+                .get(TeamId(id))
+                .await?
+                .filter(|t| t.org_id == org)
+                .ok_or_else(denied)?;
+            if team.retired_at.is_some() || team.trashed || team.inherit_workflow_statuses {
+                return Err(denied());
+            }
+        }
+        Ok(())
     }
 
     /// Entschlüsselt das Token eines Laufs (nur für den Importer in Job/CLI; System- oder

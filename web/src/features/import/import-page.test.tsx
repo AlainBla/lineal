@@ -8,6 +8,8 @@ import { mockGraphql, renderWithApp } from "@/features/issues/test-fixtures";
 import { progressPercent } from "./api";
 import { ImportPage } from "./import-page";
 
+const TARGETS = { teams: [{ id: "kp-id", key: "KP", name: "Kolleg Plus" }] };
+
 const PLANNED = {
   id: "run-1",
   source: "linear",
@@ -26,6 +28,10 @@ const PLANNED = {
         parentId: null,
         issueCount: 110,
         conflict: true,
+        projects: [
+          { id: "p1", name: "Checkout", status: "In Progress", issueCount: 40 },
+          { id: "p2", name: "API v2", status: "Planned", issueCount: 25 },
+        ],
       },
       {
         id: "t2",
@@ -103,6 +109,7 @@ describe("ImportPage", () => {
       ImportRuns: () => ({ importRuns: [PLANNED] }),
       ImportRun: () => ({ importRun: PLANNED }),
       ImportStart: () => ({ importStart: { ...PLANNED, status: "running", phase: 1 } }),
+      ImportTargetTeams: () => TARGETS,
     });
     await renderWithApp(<ImportPage />);
     const user = userEvent.setup();
@@ -123,8 +130,95 @@ describe("ImportPage", () => {
         keyMapping: { ENG: "ENGX" },
         dryRun: true,
         delta: false,
+        projects: [],
+        targetTeams: {},
       },
     });
+  });
+
+  it("imports into an existing team and only the checked projects", async () => {
+    const api = mockGraphql({
+      ImportRuns: () => ({ importRuns: [PLANNED] }),
+      ImportRun: () => ({ importRun: PLANNED }),
+      ImportStart: () => ({ importStart: { ...PLANNED, status: "running", phase: 1 } }),
+      ImportTargetTeams: () => TARGETS,
+    });
+    await renderWithApp(<ImportPage />);
+    const user = userEvent.setup();
+    await screen.findByText("Engineering");
+    // Ziel: bestehendes Team statt neuem Team; der Key-Konflikt entfällt damit.
+    const target = screen.getByLabelText("Target for ENG");
+    expect(target).toHaveDisplayValue("As new team (key ENG)");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3 + 1));
+    await user.selectOptions(target, "kp-id");
+    expect(screen.queryByLabelText("Target key for ENG")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Team key conflict/)).not.toBeInTheDocument();
+    // Projekte als Checkliste, Standard: alle.
+    const checkout = screen.getByLabelText("Import project Checkout of ENG");
+    expect(checkout).toBeChecked();
+    await user.click(screen.getByLabelText("Import project API v2 of ENG"));
+    await user.click(screen.getByRole("button", { name: "Start import" }));
+    await waitFor(() => expect(api.of("ImportStart")).toHaveLength(1));
+    expect(api.of("ImportStart")[0]?.variables).toEqual({
+      input: {
+        runId: "run-1",
+        teams: ["ENG", "DES"],
+        keyMapping: {},
+        dryRun: false,
+        delta: false,
+        projects: ["p1"],
+        targetTeams: { ENG: "kp-id" },
+      },
+    });
+  });
+
+  it("shows the planned mappings and warnings of a dry run", async () => {
+    const dry = {
+      ...PLANNED,
+      dryRun: true,
+      stats: {
+        entities: {
+          Issue: { created: 40, updated: 0, unchanged: 0, skipped: 0, conflicts: 0, errors: 0 },
+          Comment: { created: 7, updated: 0, unchanged: 0, skipped: 0, conflicts: 0, errors: 0 },
+        },
+        plan: {
+          statesMapped: 2,
+          statesNew: 11,
+          labelsNew: 14,
+          usersMatched: 1,
+          usersPlaceholder: 2,
+          relationsOutside: 8,
+        },
+      },
+    };
+    mockGraphql({
+      ImportRuns: () => ({ importRuns: [dry] }),
+      ImportRun: () => ({ importRun: dry }),
+      ImportTargetTeams: () => TARGETS,
+      ImportReport: () => ({
+        importReport: {
+          infoCount: 3,
+          warningCount: 1,
+          errorCount: 0,
+          entries: [
+            {
+              severity: "warning",
+              sourceType: "IssueRelation",
+              sourceId: "r",
+              message: "the related issue KOL-9 is not part of this import",
+            },
+          ],
+        },
+      }),
+    });
+    await renderWithApp(<ImportPage />);
+    const plan = await screen.findByTestId("plan-report");
+    expect(plan).toHaveTextContent("Statuses mapped to existing statuses2");
+    expect(plan).toHaveTextContent("Statuses to be created11");
+    expect(plan).toHaveTextContent("People created as placeholders2");
+    expect(plan).toHaveTextContent("Relations to issues outside the import (kept as links)8");
+    expect(plan).toHaveTextContent("Issues planned40");
+    expect(await screen.findByText(/KOL-9 is not part of this import/)).toBeInTheDocument();
   });
 
   it("shows the report of a finished run", async () => {

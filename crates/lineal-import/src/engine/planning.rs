@@ -52,7 +52,17 @@ impl Session<'_, '_> {
             self.counters("Cycle").skipped += 1;
             return Ok(());
         };
-        let number = n.int("number").filter(|x| *x > 0 && *x < i32::MAX as i64);
+        let mut number = n.int("number").filter(|x| *x > 0 && *x < i32::MAX as i64);
+        // Bestehendes Zielteam: neue Zyklus-Nummern aus dem Zähler des Teams.
+        let into_existing = self.target_by_source.contains_key(team_src);
+        if into_existing {
+            number = match n.id() {
+                Some(src) if self.mapping("Cycle", src).await?.is_some() => Some(0),
+                _ => Some(i64::from(
+                    self.tx()?.teams().next_cycle_number(TeamId(team)).await?,
+                )),
+            };
+        }
         let (Some(number), Some(starts), Some(ends)) = (number, n.ts("startsAt"), n.ts("endsAt"))
         else {
             return Err(AppError::invalid_request(
@@ -65,7 +75,7 @@ impl Session<'_, '_> {
         let now = self.now;
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let arr = |k: &str| json!(n.floats(k, 1000));
-        let r = row(vec![
+        let mut r = row(vec![
             ("team_id", json!(team)),
             ("number", json!(number)),
             (
@@ -94,6 +104,9 @@ impl Session<'_, '_> {
                 jts(n.ts("updatedAt").map(|t| t.min(now)).or(Some(created))),
             ),
         ]);
+        if number == 0 {
+            r.remove("number");
+        }
         let up = self
             .upsert("Cycle", n, ImportTable::Cycle, r, false)
             .await?;
@@ -280,6 +293,10 @@ impl Session<'_, '_> {
             .id()
             .ok_or_else(|| AppError::invalid_request("project without id"))?
             .to_owned();
+        if !self.opts.projects.is_empty() && !self.opts.projects.contains(&src) {
+            self.counters("Project").skipped += 1;
+            return Ok(());
+        }
         // Teams: nur importierte; das erste ist das Lead-Team.
         let mut teams: Vec<Uuid> = Vec::new();
         for t in n.ref_ids("teams", 50) {

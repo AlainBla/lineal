@@ -102,9 +102,19 @@ pub(crate) struct Options {
     pub key_mapping: HashMap<String, String>,
     pub dry_run: bool,
     pub updated_after: Option<DateTime<Utc>>,
+    /// Nur Issues dieser Linear-Projekte (leer = alle).
+    pub projects: HashSet<String>,
+    /// Linear-Team-Key -> bestehendes Lineal-Team.
+    pub target_teams: HashMap<String, Uuid>,
 }
 
 impl Options {
+    /// Teilimport (Projektfilter oder bestehendes Zielteam): Personen und Labels werden erst bei
+    /// Bedarf angelegt, statt den ganzen Quell-Workspace zu übernehmen.
+    pub fn scoped(&self) -> bool {
+        !self.projects.is_empty() || !self.target_teams.is_empty()
+    }
+
     fn parse(v: &Value) -> Options {
         let strings = |k: &str| -> Vec<String> {
             v[k].as_array()
@@ -137,6 +147,15 @@ impl Options {
             key_mapping,
             dry_run: v["dryRun"].as_bool().unwrap_or(false),
             updated_after: v["updatedAfter"].as_str().and_then(|s| s.parse().ok()),
+            projects: strings("projects").into_iter().collect(),
+            target_teams: v["targetTeams"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, val)| Some((k.clone(), val.as_str()?.parse().ok()?)))
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -386,6 +405,14 @@ pub(crate) struct Session<'e, 'a> {
     pub users_by_username: HashMap<String, String>,
     pub reported_tags: HashSet<String>,
     pub source_kind: &'static str,
+    /// Quell-Team-ID -> bestehendes Lineal-Team (Import in ein vorhandenes Team).
+    pub target_by_source: HashMap<String, Uuid>,
+    /// Quell-User-ID -> Objekt (für das Anlegen bei Bedarf im Teilimport).
+    pub user_nodes: HashMap<String, Value>,
+    /// Quell-Label-ID -> Objekt (dito).
+    pub label_nodes: HashMap<String, Value>,
+    /// Zähler für den Plan/Bericht (`stats.plan`), z. B. `statesMapped`.
+    pub plan: BTreeMap<String, u64>,
 }
 
 impl<'a> ImportEngine<'a> {
@@ -453,6 +480,10 @@ impl<'a> ImportEngine<'a> {
             labels: HashMap::new(),
             users_by_username: HashMap::new(),
             reported_tags: HashSet::new(),
+            target_by_source: HashMap::new(),
+            user_nodes: HashMap::new(),
+            label_nodes: HashMap::new(),
+            plan: BTreeMap::new(),
         };
         let result = s.drive().await;
         s.finish(result).await
@@ -540,6 +571,7 @@ impl Session<'_, '_> {
             .collect();
         let mut base = self.run.stats.as_object().cloned().unwrap_or_default();
         base.insert("entities".into(), Value::Object(entities));
+        base.insert("plan".into(), json!(self.plan));
         Value::Object(base)
     }
 
@@ -601,7 +633,13 @@ impl Session<'_, '_> {
         Ok(rows.into_iter().next())
     }
 
-    /// Ziel-ID zu einer Quell-ID (Cache, sonst Datenbank).
+    /// Planzähler erhöhen (`stats.plan`).
+    pub(crate) fn plan_add(&mut self, key: &str) {
+        *self.plan.entry(key.to_owned()).or_default() += 1;
+    }
+
+    /// Ziel-ID zu einer Quell-ID (Cache, sonst Datenbank). Im Teilimport werden Personen und
+    /// Issue-Labels beim ersten Bezug angelegt bzw. zugeordnet.
     pub(crate) async fn target(&mut self, ty: &'static str, src: &str) -> AppResult<Option<Uuid>> {
         if let Some(id) = self.cache.get(&(ty, src.to_owned())) {
             return Ok(Some(*id));
@@ -609,8 +647,34 @@ impl Session<'_, '_> {
         let m = self.mapping(ty, src).await?;
         if let Some(m) = &m {
             self.cache.insert((ty, src.to_owned()), m.target_id);
+            return Ok(Some(m.target_id));
         }
-        Ok(m.map(|m| m.target_id))
+        if self.opts.scoped() {
+            match ty {
+                "User" => {
+                    if let Some(node) = self.user_nodes.get(src).cloned() {
+                        let r = self.user(N(&node)).await;
+                        match r {
+                            Ok(()) => {}
+                            Err(e) if matches!(e.kind, ErrorKind::InvalidRequest) => {
+                                self.counters("User").errors += 1;
+                                self.note("error", "User", Some(src), e.message);
+                            }
+                            Err(e) => return Err(e),
+                        }
+                        return Ok(self.cache.get(&("User", src.to_owned())).copied());
+                    }
+                }
+                "IssueLabel" if !self.opts.target_teams.is_empty() => {
+                    if let Some(node) = self.label_nodes.get(src).cloned() {
+                        Box::pin(self.label_on_demand(&node)).await?;
+                        return Ok(self.cache.get(&("IssueLabel", src.to_owned())).copied());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) async fn target_opt(
@@ -758,8 +822,22 @@ impl Session<'_, '_> {
                 cursor,
                 updated_after: self.opts.updated_after,
                 limit: self.eng.config.page_size.clamp(1, 100),
+                scope: self.scope(),
             })
             .await?)
+    }
+
+    /// Einschränkung der Abfragen auf die gewählten Teams/Projekte (leer = alles).
+    fn scope(&self) -> crate::port::Scope {
+        let mut teams: Vec<String> = if self.opts.teams.is_empty() {
+            Vec::new()
+        } else {
+            self.selected.iter().cloned().collect()
+        };
+        teams.sort();
+        let mut projects: Vec<String> = self.opts.projects.iter().cloned().collect();
+        projects.sort();
+        crate::port::Scope { teams, projects }
     }
 
     /// Alle Objekte einer (kleinen) Entität.
@@ -894,6 +972,11 @@ impl Session<'_, '_> {
 
     /// Vorbereitung: Workspace, Benutzer-/Label-Metadaten, Umschreibe-Kontext, Team-Auswahl.
     pub(crate) async fn init(&mut self) -> HResult<()> {
+        // Ziel-Teams und Rechte des Starters bei jeder Ausführung neu prüfen (vor jedem Schreiben).
+        self.eng
+            .app
+            .import_verify_targets(self.org, &self.run)
+            .await?;
         let ws = self.eng.source.workspace().await?;
         if self.run.checkpoint["step"].is_null() {
             for n in self.eng.source.notices() {
@@ -905,6 +988,9 @@ impl Session<'_, '_> {
             let n = N(&u);
             if let (Some(name), Some(id)) = (n.text("displayName"), n.id()) {
                 users.insert(name.to_lowercase(), id.to_owned());
+            }
+            if let Some(id) = n.id() {
+                self.user_nodes.insert(id.to_owned(), u.clone());
             }
         }
         // Linear-Benutzername -> Lineal-display_name wird beim Schreiben der User ergänzt
@@ -941,7 +1027,18 @@ impl Session<'_, '_> {
             if self.opts.teams.is_empty() || self.opts.teams.iter().any(|k| k == key) {
                 self.selected.insert(id.to_owned());
             }
-            let target = self.opts.target_key(key);
+            let mut target = self.opts.target_key(key);
+            if let Some(team) = self.opts.target_teams.get(key).copied() {
+                if self.selected.contains(id) {
+                    self.target_by_source.insert(id.to_owned(), team);
+                }
+                let mut tx = self.eng.app.store.begin(self.org).await?;
+                let found = tx.teams().get(lineal_domain::ids::TeamId(team)).await?;
+                drop(tx);
+                target = found
+                    .ok_or_else(|| AppError::not_found("Could not find referenced Team."))?
+                    .key;
+            }
             if target != key {
                 self.rewrite.key_map.insert(key.to_owned(), target);
             }
@@ -949,6 +1046,7 @@ impl Session<'_, '_> {
         for l in self.fetch_all_unfiltered(SourceEntity::IssueLabels).await? {
             let n = N(&l);
             if let Some(id) = n.id() {
+                self.label_nodes.insert(id.to_owned(), l.clone());
                 self.labels.insert(
                     id.to_owned(),
                     LabelMeta {

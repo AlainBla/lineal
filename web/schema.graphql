@@ -658,6 +658,16 @@ input ImportStartInput {
 	Nur Änderungen seit dem letzten erfolgreichen Lauf übernehmen.
 	"""
 	delta: Boolean! = false
+	"""
+	Linear-Projekt-IDs (aus dem Scan); leer = alle Projekte und Issues der gewählten Teams.
+	"""
+	projects: [String!]! = []
+	"""
+	Objekt `{ "<Linear-Team-Key>": "<ID eines bestehenden Lineal-Teams>" }`: dieses Linear-Team
+	wird in das Lineal-Team importiert statt ein neues anzulegen (Sichtbarkeit und Schreibrecht
+	werden geprüft).
+	"""
+	targetTeams: JSON
 }
 
 type Initiative {

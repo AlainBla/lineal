@@ -97,6 +97,16 @@ impl SourceEntity {
     }
 }
 
+/// Einschränkung einer Seitenanfrage auf Teams/Projekte der Quelle (nur ein Hilfsmittel, um nicht
+/// den ganzen Workspace zu lesen; die Engine filtert zusätzlich selbst).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scope {
+    /// Quell-Team-IDs; leer = alle.
+    pub teams: Vec<String>,
+    /// Quell-Projekt-IDs (nur für Issues); leer = alle.
+    pub projects: Vec<String>,
+}
+
 /// Eine Seitenanfrage.
 #[derive(Debug, Clone)]
 pub struct PageQuery {
@@ -107,6 +117,8 @@ pub struct PageQuery {
     pub updated_after: Option<DateTime<Utc>>,
     /// Seitengröße (50–100).
     pub limit: u32,
+    /// Optionale Einschränkung auf Teams/Projekte.
+    pub scope: Scope,
 }
 
 /// Eine Seite normalisierter Objekte.
@@ -200,6 +212,7 @@ pub trait ImportSource: Send + Sync {
                     cursor: cursor.clone(),
                     updated_after,
                     limit: 100,
+                    scope: Scope::default(),
                 })
                 .await?;
             out.extend(page.items);
