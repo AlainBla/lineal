@@ -33,6 +33,7 @@ pub fn periodic_jobs() -> Vec<Arc<dyn PeriodicJob>> {
         Arc::new(import_runner::ImportRunnerJob),
         Arc::new(webhooks::WebhookDeliveryJob),
         Arc::new(team_purge::TeamPurgeJob),
+        Arc::new(audit_retention::AuditRetentionJob),
     ]
 }
 
