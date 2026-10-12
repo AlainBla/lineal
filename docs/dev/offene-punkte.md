@@ -87,3 +87,8 @@ WP20 erledigt: Web-Seite `/invite/<token>`, Settings „Members“ mit Einladung
 - Verlaufsanzeige (WP21): Der Server schwärzt unsichtbare Verweise (Team, Parent, Projekt, Cycle, Meilenstein) zu `null`; das ist von „nicht gesetzt“ nicht unterscheidbar. Die Web-Anzeige liest `null` auf nur einer Seite als „nicht gesetzt“, auf beiden als „ein privates Element“. Parent/Meilenstein erscheinen ohne Namen („a parent issue“); Statuswechsel des Erstellers innerhalb von 3 Minuten stehen serverseitig nicht einzeln im Verlauf (Erstellungsfenster).
 - E2E: nur die Flows F3, F5, F7, F12, F13, F16 (Einladung), F17 und Sichtbarkeit privater Teams; übrige Flows aus docs/08 ungetestet; Kein E2E-Lauf in CI (scripts/e2e.sh manuell).
 - Lieferkette: braces (ReDoS) in der @graphql-codegen-Kette ohne gepatchte Version (Dev-Werkzeug, siehe docs/15 §4.6).
+WP23 (Ersteinrichtung/Betrieb):
+- Kein Web-Formular zur Workspace-Anlage (GraphQL `createWorkspace` hat keine UI); bei `disabled` antwortet es forbidden.
+- Passwort in `DATABASE_URL` (Compose) muss URL-sicher sein; kein Secret-Datei-Mechanismus (Docker Secrets) für `LINEAL_DB_PASSWORD`/`LINEAL_SESSION_SECRET`.
+- `LINEAL_INSTANCE_ADMINS` bindet an User-ID (+ aktiv, Rolle Owner/Admin); keine eigene Instanz-Admin-Tabelle.
+- Kein Backup/Restore-Ablauf für das Volume `appdata` beschrieben.

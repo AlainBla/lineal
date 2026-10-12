@@ -33310,6 +33310,31 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <td>Komma-Liste von CIDR-Bereichen; nur von dort wird <code>X-Forwarded-For</code> ausgewertet</td>
 </tr>
 <tr>
+<td><code>LINEAL_WORKSPACE_CREATION</code></td>
+<td><code>all</code> mit <code>LINEAL_DEV</code>, sonst <code>disabled</code></td>
+<td>wer per GraphQL <code>createWorkspace</code> weitere Workspaces anlegen darf: <code>disabled</code>, <code>admins</code>, <code>all</code>; ungültiger Wert verhindert den Start. Das CLI <code>create-workspace</code> ist ausgenommen</td>
+</tr>
+<tr>
+<td><code>LINEAL_INSTANCE_ADMINS</code></td>
+<td>leer</td>
+<td>nur für <code>admins</code>: Komma-Liste von User-UUIDs (<code>lineal create-workspace</code> gibt die ID des Owners aus). Erlaubt ist nur ein aktiver User mit Rolle Owner/Admin und dieser ID. Bewusst keine E-Mail und kein <code>url_key</code>: E-Mails legt jeder Workspace-Admin beliebig an, <code>url_key</code>s lassen sich umbenennen und neu belegen. Ungültige UUIDs verhindern den Start</td>
+</tr>
+<tr>
+<td><code>LINEAL_OWNER_PASSWORD</code></td>
+<td>–</td>
+<td>nur für <code>lineal create-workspace</code>: Passwort des Owners (sonst interaktive Abfrage ohne Echo)</td>
+</tr>
+<tr>
+<td><code>LINEAL_DB_PASSWORD</code></td>
+<td>–</td>
+<td>nur Docker-Profil <code>app</code>: Passwort der Datenbank <code>app-db</code> (Pflicht; URL-sichere Zeichen, z. B. <code>openssl rand -hex 24</code>)</td>
+</tr>
+<tr>
+<td><code>LINEAL_HTTP_PORT</code></td>
+<td><code>8088</code></td>
+<td>nur Docker: Host-Port des nginx</td>
+</tr>
+<tr>
 <td><code>LINEAL_BACKEND</code></td>
 <td><code>http://localhost:8080</code></td>
 <td>nur Web (Vite-Proxy/Preview): Adresse des Servers</td>
@@ -33323,22 +33348,33 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 </table>
 <h3 id="ch-15-umsetzungsstand-3-2-prozesse-und-ports">3.2 Prozesse und Ports</h3>
 <ul>
-<li><code>lineal migrate</code>, <code>lineal seed [--demo]</code>, <code>lineal serve</code>, <code>lineal worker</code>, <code>lineal import</code>, <code>lineal schema-export</code>.</li>
+<li><code>lineal migrate</code>, <code>lineal create-workspace</code>, <code>lineal seed [--demo]</code>, <code>lineal serve</code>, <code>lineal worker</code>, <code>lineal import</code>, <code>lineal schema-export</code>.</li>
 <li><code>serve</code> und <code>worker</code> sind getrennte Prozesse und teilen sich die Datenbank; der Worker braucht keinen Port. Der Server muss mit <code>ConnectInfo</code> laufen (Client-IP für Rate-Limit); <code>lineal serve</code> tut das.</li>
 <li>Entwicklung: PostgreSQL im Container auf <code>127.0.0.1:5440</code>, Server <code>:8080</code>, Vite-Dev <code>:5173</code>. Belegte Ports über <code>LINEAL_BIND</code>/<code>LINEAL_BACKEND</code> umstellen. E2E (<code>scripts/e2e.sh</code>) nutzt die Datenbank <code>lineal_e2e</code> und freie Ports (ab 18741 bzw. 4173).</li>
 <li>Hinter einem Reverse-Proxy: <code>LINEAL_BASE_URL</code> auf die öffentliche URL, <code>LINEAL_TRUSTED_PROXIES</code> auf die Proxy-Adressen, WebSocket-Upgrade für <code>/sync</code> durchreichen.</li>
 </ul>
+<h3 id="ch-15-umsetzungsstand-3-2c-ersteinrichtung">3.2c Ersteinrichtung</h3>
+<p>Eine frische Instanz hat keinen Workspace; <code>lineal serve</code> loggt dann ein WARN mit dem Befehl. Ersten Workspace samt Owner anlegen (nach <code>lineal migrate</code>):</p>
+<pre><code class="language-bash">LINEAL_OWNER_PASSWORD='…' lineal create-workspace --name &quot;Acme&quot; --url-key acme \
+  --owner-email alice@acme.example --owner-name &quot;Alice&quot;
+</code></pre>
+<p>Das Passwort wird nie als Argument übergeben: aus <code>LINEAL_OWNER_PASSWORD</code> oder interaktiv ohne Echo mit Wiederholung (mindestens 8 Zeichen). Ausgabe: Login-URL (<code>LINEAL_BASE_URL/login</code>) und die User-ID des Owners (für <code>LINEAL_INSTANCE_ADMINS</code>). Belegter <code>--url-key</code> ist ein Fehler. Das CLI ist Betreiberzugang und von <code>LINEAL_WORKSPACE_CREATION</code> ausgenommen. Weitere Workspaces über die Oberfläche/GraphQL nur, wenn der Betreiber es erlaubt (Default außerhalb des Dev-Modus: <code>disabled</code>, Antwort <code>forbidden</code> „Workspace creation is disabled on this instance.“).</p>
+<p><code>lineal seed</code> (auch <code>--demo</code>) legt Benutzer mit dem bekannten Passwort <code>lineal-dev</code> an und läuft deshalb nur mit <code>LINEAL_DEV=1</code> oder <code>--allow-insecure-demo-users</code>.</p>
 <h3 id="ch-15-umsetzungsstand-3-2a-end-to-end-tests">3.2a End-to-End-Tests</h3>
 <p><code>scripts/e2e.sh</code> (nicht Teil von <code>check.sh</code>; Laufzeit ca. 1–2 Minuten) legt die Datenbank <code>lineal_e2e</code> im Container neu an, migriert, seedet (<code>lineal seed --demo</code>), legt zwei API-Keys für Bob an (frei und auf ENG beschränkt), baut das Web und startet über Playwright <code>lineal serve</code> (mit <code>LINEAL_DEV=1</code>), <code>lineal worker</code> und <code>vite preview</code> (Proxy auf den Server) auf freien Ports; Chromium läuft headless mit <code>chromiumSandbox: false</code>. Flows (<code>web/e2e/*.e2e.ts</code>): F3 Issue anlegen (Taste <code>c</code>, „Create more“, lückenlose Kennung), F5 Status-Picker <code>S</code> durch den Workflow, F12 Filter → View → Favorit, F13 Erwähnung → Inbox eines zweiten Users, F16 Einladung annehmen (Alice lädt ein, zweiter Browser-Kontext nimmt über <code>/invite/&lt;token&gt;</code> an), F7 Teamwechsel (<code>Strg+Umschalt+M</code>, alte Kennung bleibt auflösbar), F17 MCP-Agent per HTTP (<code>list_issues</code>, <code>save_issue</code>, team-beschränkter Key), F19 API-Key in der Oberfläche anlegen, mit <code>list_issues</code> über <code>/mcp</code> benutzen und widerrufen, Sichtbarkeit des privaten Teams DES. Einzelne Flows: <code>scripts/e2e.sh -g F3</code>.</p>
 <h3 id="ch-15-umsetzungsstand-3-2b-docker">3.2b Docker</h3>
 <p><code>Dockerfile</code> (mehrstufig) baut zwei Images: <code>--target server</code> (Binary <code>lineal</code> auf <code>debian:bookworm-slim</code>, User <code>lineal</code> UID 10001, Daten unter <code>/data</code>, Default <code>serve</code> auf <code>0.0.0.0:8080</code>, Healthcheck <code>/healthz</code>) und <code>--target web</code> (<code>nginx-unprivileged</code> mit dem Vite-Build; leitet <code>/graphql</code>, <code>/auth/*</code>, <code>/oauth/*</code>, <code>/mcp</code>, <code>/sync</code> (WebSocket), <code>/uploads/*</code>, <code>/files/*</code>, <code>/invite/accept</code>, <code>/.well-known/*</code> an den Server weiter, alles andere auf <code>index.html</code>). nginx setzt <code>X-Forwarded-For</code> neu (nicht angehängt) und ein Edge-Rate-Limit je IP (Login/Einladung/OAuth-Token 10/min, übrige API 50/s mit Burst) vor das In-Process-Limit.</p>
 <p><code>docker-compose.yml</code> hat das Profil <code>app</code>; ohne Profil startet weiter nur PostgreSQL (Entwicklung, <code>check.sh</code>).</p>
 <pre><code class="language-bash">export LINEAL_SESSION_SECRET=&quot;$(openssl rand -hex 32)&quot;   # Pflicht; z. B. in .env ablegen
+export LINEAL_DB_PASSWORD=&quot;$(openssl rand -hex 24)&quot;      # Pflicht: Passwort der App-Datenbank
 docker compose --profile app up -d --build               # migrate (einmalig), server, worker, web
-docker compose --profile app run --rm migrate seed --demo   # optional: Beispiel-Workspace acme
-# Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Seed-Login z. B. alice@acme.example / lineal-dev
+# Ersteinrichtung (statt seed): Workspace und Owner anlegen
+LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNER_PASSWORD migrate \
+  create-workspace --name &quot;Acme&quot; --owner-email alice@acme.example --owner-name &quot;Alice&quot;
+# Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Login mit der Owner-E-Mail
 </code></pre>
-<p>Dienste: <code>migrate</code> (Einmal-Job, Server und Worker warten auf Erfolg), <code>server</code> (Netze <code>default</code> + <code>edge</code>), <code>worker</code>, <code>web</code> (nur Netz <code>edge</code>, Port <code>127.0.0.1:${LINEAL_HTTP_PORT:-8088}</code>). <code>LINEAL_TRUSTED_PROXIES</code> ist nur die feste Adresse des nginx-Containers <code>172.31.88.10/32</code> (nicht das Subnetz: Das Gateway <code>.1</code> ist der Host). Blobs liegen im Volume <code>blobs</code> (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor <code>web</code> terminieren, <code>LINEAL_BASE_URL=https://…</code> setzen (Cookie <code>Secure</code>, CSRF-Origin) und in <code>deploy/nginx.conf</code> <code>set_real_ip_from &lt;TLS-Proxy&gt;</code> + <code>real_ip_header X-Forwarded-For</code> ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; <code>seed --demo</code> nur für Demo-Installationen.</p>
+<p>Der App-Stack hat eine eigene Datenbank <code>app-db</code> (postgres:16, Volume <code>appdata</code>, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB <code>postgres</code> (Port 5440). Ohne <code>LINEAL_DB_PASSWORD</code> startet <code>app-db</code> nicht (klare Meldung im Log); <code>docker compose up</code> ohne Profil braucht keine Variablen. <code>LINEAL_WORKSPACE_CREATION</code> (Default <code>disabled</code>) und <code>LINEAL_INSTANCE_ADMINS</code> werden an Server und Worker durchgereicht; Vorlage in <code>.env.example</code>.</p>
+<p>Dienste: <code>app-db</code>, <code>migrate</code> (Einmal-Job, Server und Worker warten auf Erfolg), <code>server</code> (Netze <code>default</code> + <code>edge</code>), <code>worker</code>, <code>web</code> (nur Netz <code>edge</code>, Port <code>127.0.0.1:${LINEAL_HTTP_PORT:-8088}</code>). <code>LINEAL_TRUSTED_PROXIES</code> ist nur die feste Adresse des nginx-Containers <code>172.31.88.10/32</code> (nicht das Subnetz: Das Gateway <code>.1</code> ist der Host). Blobs liegen im Volume <code>blobs</code> (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor <code>web</code> terminieren, <code>LINEAL_BASE_URL=https://…</code> setzen (Cookie <code>Secure</code>, CSRF-Origin) und in <code>deploy/nginx.conf</code> <code>set_real_ip_from &lt;TLS-Proxy&gt;</code> + <code>real_ip_header X-Forwarded-For</code> ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; <code>seed</code> läuft deshalb nur mit <code>LINEAL_DEV=1</code> oder <code>--allow-insecure-demo-users</code> (im Container: <code>-e LINEAL_DEV=1</code>), nur für Demo-Installationen.</p>
 <h3 id="ch-15-umsetzungsstand-3-3-hintergrundjobs">3.3 Hintergrundjobs</h3>
 <p>Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in <code>outbox_delivery.attempts</code>/<code>last_error</code> und überleben Neustarts; nach <code>max_event_attempts</code> (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit <code>last_error</code>, abfragbar über <code>OutboxRepo::list_dead_letters</code>). Periodische Jobs: <code>cycles</code> (60 s), <code>update_reminders</code> (1 h), <code>snooze</code> (60 s), <code>sync_purge</code> (1 h, Sync-Log 14 Tage), <code>notification_cap</code> (5 min), <code>due_reminders</code> (5 min), <code>email_digest</code> (60 s), <code>auto_close</code>, <code>auto_archive</code> (je 5 min), <code>purge</code> (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), <code>sla</code> (60 s), <code>triage_rotation</code> (60 s), <code>import_runner</code> (10 s), Webhook-Zustellung, <code>team_purge</code> (1 h).</p>
 <h2 id="ch-15-umsetzungsstand-4-sicherheitsma-nahmen">4. Sicherheitsmaßnahmen</h2>

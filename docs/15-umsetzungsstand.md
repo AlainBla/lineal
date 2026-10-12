@@ -48,15 +48,33 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 | `LINEAL_DB_MAX_CONNECTIONS` | `10` | Größe des Verbindungspools |
 | `LINEAL_ALLOWED_ORIGINS` | Origin von `LINEAL_BASE_URL` | Komma-Liste erlaubter Origins für Cookie-Sessions (CSRF) |
 | `LINEAL_TRUSTED_PROXIES` | leer | Komma-Liste von CIDR-Bereichen; nur von dort wird `X-Forwarded-For` ausgewertet |
+| `LINEAL_WORKSPACE_CREATION` | `all` mit `LINEAL_DEV`, sonst `disabled` | wer per GraphQL `createWorkspace` weitere Workspaces anlegen darf: `disabled`, `admins`, `all`; ungültiger Wert verhindert den Start. Das CLI `create-workspace` ist ausgenommen |
+| `LINEAL_INSTANCE_ADMINS` | leer | nur für `admins`: Komma-Liste von User-UUIDs (`lineal create-workspace` gibt die ID des Owners aus). Erlaubt ist nur ein aktiver User mit Rolle Owner/Admin und dieser ID. Bewusst keine E-Mail und kein `url_key`: E-Mails legt jeder Workspace-Admin beliebig an, `url_key`s lassen sich umbenennen und neu belegen. Ungültige UUIDs verhindern den Start |
+| `LINEAL_OWNER_PASSWORD` | – | nur für `lineal create-workspace`: Passwort des Owners (sonst interaktive Abfrage ohne Echo) |
+| `LINEAL_DB_PASSWORD` | – | nur Docker-Profil `app`: Passwort der Datenbank `app-db` (Pflicht; URL-sichere Zeichen, z. B. `openssl rand -hex 24`) |
+| `LINEAL_HTTP_PORT` | `8088` | nur Docker: Host-Port des nginx |
 | `LINEAL_BACKEND` | `http://localhost:8080` | nur Web (Vite-Proxy/Preview): Adresse des Servers |
 | `RUST_LOG` | `info` | Log-Filter |
 
 ### 3.2 Prozesse und Ports
 
-- `lineal migrate`, `lineal seed [--demo]`, `lineal serve`, `lineal worker`, `lineal import`, `lineal schema-export`.
+- `lineal migrate`, `lineal create-workspace`, `lineal seed [--demo]`, `lineal serve`, `lineal worker`, `lineal import`, `lineal schema-export`.
 - `serve` und `worker` sind getrennte Prozesse und teilen sich die Datenbank; der Worker braucht keinen Port. Der Server muss mit `ConnectInfo` laufen (Client-IP für Rate-Limit); `lineal serve` tut das.
 - Entwicklung: PostgreSQL im Container auf `127.0.0.1:5440`, Server `:8080`, Vite-Dev `:5173`. Belegte Ports über `LINEAL_BIND`/`LINEAL_BACKEND` umstellen. E2E (`scripts/e2e.sh`) nutzt die Datenbank `lineal_e2e` und freie Ports (ab 18741 bzw. 4173).
 - Hinter einem Reverse-Proxy: `LINEAL_BASE_URL` auf die öffentliche URL, `LINEAL_TRUSTED_PROXIES` auf die Proxy-Adressen, WebSocket-Upgrade für `/sync` durchreichen.
+
+### 3.2c Ersteinrichtung
+
+Eine frische Instanz hat keinen Workspace; `lineal serve` loggt dann ein WARN mit dem Befehl. Ersten Workspace samt Owner anlegen (nach `lineal migrate`):
+
+```bash
+LINEAL_OWNER_PASSWORD='…' lineal create-workspace --name "Acme" --url-key acme \
+  --owner-email alice@acme.example --owner-name "Alice"
+```
+
+Das Passwort wird nie als Argument übergeben: aus `LINEAL_OWNER_PASSWORD` oder interaktiv ohne Echo mit Wiederholung (mindestens 8 Zeichen). Ausgabe: Login-URL (`LINEAL_BASE_URL/login`) und die User-ID des Owners (für `LINEAL_INSTANCE_ADMINS`). Belegter `--url-key` ist ein Fehler. Das CLI ist Betreiberzugang und von `LINEAL_WORKSPACE_CREATION` ausgenommen. Weitere Workspaces über die Oberfläche/GraphQL nur, wenn der Betreiber es erlaubt (Default außerhalb des Dev-Modus: `disabled`, Antwort `forbidden` „Workspace creation is disabled on this instance.“).
+
+`lineal seed` (auch `--demo`) legt Benutzer mit dem bekannten Passwort `lineal-dev` an und läuft deshalb nur mit `LINEAL_DEV=1` oder `--allow-insecure-demo-users`.
 
 ### 3.2a End-to-End-Tests
 
@@ -70,12 +88,17 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 
 ```bash
 export LINEAL_SESSION_SECRET="$(openssl rand -hex 32)"   # Pflicht; z. B. in .env ablegen
+export LINEAL_DB_PASSWORD="$(openssl rand -hex 24)"      # Pflicht: Passwort der App-Datenbank
 docker compose --profile app up -d --build               # migrate (einmalig), server, worker, web
-docker compose --profile app run --rm migrate seed --demo   # optional: Beispiel-Workspace acme
-# Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Seed-Login z. B. alice@acme.example / lineal-dev
+# Ersteinrichtung (statt seed): Workspace und Owner anlegen
+LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNER_PASSWORD migrate \
+  create-workspace --name "Acme" --owner-email alice@acme.example --owner-name "Alice"
+# Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Login mit der Owner-E-Mail
 ```
 
-Dienste: `migrate` (Einmal-Job, Server und Worker warten auf Erfolg), `server` (Netze `default` + `edge`), `worker`, `web` (nur Netz `edge`, Port `127.0.0.1:${LINEAL_HTTP_PORT:-8088}`). `LINEAL_TRUSTED_PROXIES` ist nur die feste Adresse des nginx-Containers `172.31.88.10/32` (nicht das Subnetz: Das Gateway `.1` ist der Host). Blobs liegen im Volume `blobs` (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor `web` terminieren, `LINEAL_BASE_URL=https://…` setzen (Cookie `Secure`, CSRF-Origin) und in `deploy/nginx.conf` `set_real_ip_from <TLS-Proxy>` + `real_ip_header X-Forwarded-For` ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; `seed --demo` nur für Demo-Installationen.
+Der App-Stack hat eine eigene Datenbank `app-db` (postgres:16, Volume `appdata`, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB `postgres` (Port 5440). Ohne `LINEAL_DB_PASSWORD` startet `app-db` nicht (klare Meldung im Log); `docker compose up` ohne Profil braucht keine Variablen. `LINEAL_WORKSPACE_CREATION` (Default `disabled`) und `LINEAL_INSTANCE_ADMINS` werden an Server und Worker durchgereicht; Vorlage in `.env.example`.
+
+Dienste: `app-db`, `migrate` (Einmal-Job, Server und Worker warten auf Erfolg), `server` (Netze `default` + `edge`), `worker`, `web` (nur Netz `edge`, Port `127.0.0.1:${LINEAL_HTTP_PORT:-8088}`). `LINEAL_TRUSTED_PROXIES` ist nur die feste Adresse des nginx-Containers `172.31.88.10/32` (nicht das Subnetz: Das Gateway `.1` ist der Host). Blobs liegen im Volume `blobs` (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor `web` terminieren, `LINEAL_BASE_URL=https://…` setzen (Cookie `Secure`, CSRF-Origin) und in `deploy/nginx.conf` `set_real_ip_from <TLS-Proxy>` + `real_ip_header X-Forwarded-For` ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; `seed` läuft deshalb nur mit `LINEAL_DEV=1` oder `--allow-insecure-demo-users` (im Container: `-e LINEAL_DEV=1`), nur für Demo-Installationen.
 
 ### 3.3 Hintergrundjobs
 

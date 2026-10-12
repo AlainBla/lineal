@@ -17,11 +17,14 @@ Die Spezifikation liegt in [`docs/`](docs/README.md); Architektur in
 cp .env.example .env
 docker compose up -d --wait               # Projektname "lineal", Postgres :5440
 cargo run -p lineal-server -- migrate     # Migrationen anwenden
-cargo run -p lineal-server -- seed        # Beispiel-Workspace acme (im Scaffold noch leer)
+cargo run -p lineal-server -- seed        # Beispiel-Workspace acme (nur mit LINEAL_DEV=1, Passwort lineal-dev)
 cargo run -p lineal-server -- serve       # http://localhost:8080  (GET /healthz)
 cargo run -p lineal-server -- worker      # Outbox-Konsumenten und periodische Jobs
 cd web && npm install && npm run dev      # http://localhost:5173 (Proxy auf :8080)
 ```
+
+Einen echten Workspace samt Owner legt `lineal create-workspace --name … --owner-email … --owner-name …`
+an (Passwort aus `LINEAL_OWNER_PASSWORD` oder interaktiv); Betrieb und Docker: docs/15 §3.2b/§3.2c.
 
 `scripts/dev.sh` startet DB, Migrationen, Server und Web-Dev-Server in einem Schritt
 (`SEED=1 scripts/dev.sh` legt zusätzlich die Beispieldaten an). Belegt ein anderer Prozess `:8080`,
