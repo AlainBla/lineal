@@ -97,13 +97,12 @@ async fn issue_trash_cascades_to_documents_and_restore_keeps_manual_deletions(po
     let err = app
         .get_document(&alice(), &a.doc.id.to_string())
         .await
-        .err()
-        .expect("trashed");
+        .expect_err("trashed");
     assert_eq!(err.kind, ErrorKind::NotFound);
 
     app.restore_issue(&alice(), &ident).await.unwrap();
     assert_eq!(flags(&pool, a.doc.id.0).await, (false, false, false));
-    assert_eq!(flags(&pool, b.doc.id.0).await.0, true);
+    assert!(flags(&pool, b.doc.id.0).await.0);
     app.get_document(&alice(), &a.doc.id.to_string())
         .await
         .unwrap();

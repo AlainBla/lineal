@@ -472,7 +472,6 @@ async fn rename_to_a_colliding_number_is_rejected(pool: PgPool) {
             },
         )
         .await
-        .err()
-        .expect("collision");
+        .expect_err("collision");
     assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
 }

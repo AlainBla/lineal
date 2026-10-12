@@ -1134,6 +1134,8 @@ Der Typ-Tab („All“, „Issues“, „Projects“, „Initiatives“, „Docu
 5. **@-Filter** im Suchfeld: Tippt der User `@`, schlägt die UI Teams, User, Status, Labels und Projekte vor. Gewählte @-Werte werden als Filter-Chip in die Filterleiste übernommen (nicht als Suchtext), z. B. `@ENG` → `{"team": {"id": {"in": ["5d0a…-eng"]}}}`, `@Bob` → Assignee-Filter (bei Projekten: Lead).
 6. Leere Eingabe oder nur Stoppwörter → keine Volltextsuche, leere Ergebnisliste mit Empty State.
 
+> **Umsetzung (WP34):** Die Volltextkonfiguration ist je Workspace wählbar: `simple` (Default, kein Stemming, Teilwort-Präfixe), `german` oder `english` (Wortstämme). Setzen per GraphQL `workspaceFulltextConfigUpdate(config)` (Admin/Owner, Audit), lesen per `workspaceFulltextConfig`. Die `search_vector`-Spalten von Issues, Projekten, Initiativen, Dokumenten und Kommentaren sind Trigger-gepflegt (Migration 3100, vorher generierte Spalten); der Wechsel baut alle Vektoren des Workspace in einer Transaktion neu auf (keine Web-Auswahl, große Workspaces: lange Transaktion). Die Aussage „englisches Stemming“ oben gilt damit nur bei `english`.
+
 ### 5.4 Kombination mit Filtern, Sortierung, Limit
 
 - Auf der Suchseite stehen eigene Filter zur Verfügung: Advanced filter, Team, Status type, Assignee/Lead, Creator, Created date, Updated date. Sie werden mit dem Suchbegriff **UND**-verknüpft und für Issues als `IssueFilter` (Abschnitt 1) ausgewertet, für Projekte als `ProjectFilter`.

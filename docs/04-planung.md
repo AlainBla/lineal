@@ -78,6 +78,8 @@ function onCycleRenamed(cycle, newName):
     cycle.team.nextCycleNumber = n + 1
 ```
 
+> **Umsetzung (WP34):** `onCycleRenamed` läuft in `update_cycle`. Neu nummeriert werden die künftigen, nicht gestarteten, nicht archivierten Cycles nach dem umbenannten (zweiphasig wegen der Eindeutigkeit `(team, number)`); Namen der Form `Cycle <n>` entfallen. `Team.cycleNumberBase` steht in `team.cycle_number_base`, der Zähler `last_cycle_number` wird auf die höchste Nummer gesetzt. Kollidiert eine neue Nummer mit einem Cycle, der seine Nummer behält, lehnt der Server mit `invalid_request` ab.
+
 `number` muss pro Team eindeutig bleiben. Würde die Umnummerierung mit einer bestehenden (vergangenen) Nummer kollidieren, lehnt das System die Umbenennung mit `conflict` ab. Vergangene Cycles werden nie umnummeriert.
 
 ### 1.4 Zeitberechnung und Generierung des Cycle-Kalenders
@@ -319,6 +321,8 @@ function syncInheritedCycles(subTeam):
 
 Archivieren eines Cycles (`cycleArchive`) löst alle noch zugeordneten Issues vorher vom Cycle (`cycle = null`). Der Auto-Archiv-Job archiviert nur abgeschlossene Cycles, deren `completedAt` länger als `Team.autoArchivePeriod` Monate zurückliegt.
 
+> **Umsetzung (WP34):** Der Job `auto_archive` setzt `archivedAt` und `autoArchivedAt`; zugeordnete Issues werden vorher gelöst (Event `IssueUpdated`). Projekte (§2.12): Status `completed`/`canceled`, `updatedAt` älter als die Periode des Lead-Teams, alle Issues archiviert oder geschlossen und seit der Periode unverändert.
+
 ### 1.9 Fortschritt und Scope-Historie
 
 **Gewicht eines Issues.** Nutzt das Team Schätzungen (`issueEstimationType != notUsed`), zählt `issue.estimate`, für ungeschätzte Issues `team.defaultIssueEstimate`. Nutzt das Team keine Schätzungen, zählt jedes Issue mit 1. Issues in `canceled` und `duplicate` zählen nicht zum Scope.
@@ -363,6 +367,8 @@ function writeDailySnapshot(cycle, at):
 Für die Grafik erzeugt der Client zusätzlich die Ziel-Linie: Sie verteilt den Scope gleichmäßig über die Arbeitstage und verläuft an Samstagen und Sonntagen flach. Nach dem Abschluss sind Grafik und Kennzahlen **eingefrorene Snapshots**; die Issue-Liste des Cycles kann später davon abweichen (z. B. weil ein Issue wieder geöffnet wurde).
 
 **Kapazität.** Für künftige Cycles berechnet das System eine Kapazitätsschätzung aus dem Mittel von `completedScopeHistory[last]` der drei zuletzt abgeschlossenen Cycles. Ohne Historie gilt `Anzahl Teammitglieder × defaultIssueEstimate × cycleDuration` als grobe Schätzung (Annahme für die Formel).
+
+> **Umsetzung (WP34):** `Cycle.capacity` (GraphQL, Float, `null` bei abgeschlossenen Cycles) gilt für laufende und künftige Cycles. Grundlage sind die bis zu drei zuletzt abgeschlossenen Cycles **mit** Historie; sonst die grobe Schätzung mit `cycleDuration` in Wochen. Die Cycle-Ansicht im Web zeigt den Wert neben dem Fortschritt.
 
 ### 1.10 Cycle-Ansichten: current, previous, next
 

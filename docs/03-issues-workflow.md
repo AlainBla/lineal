@@ -705,6 +705,8 @@ job autoArchive (täglich, pro Team):
 
 Änderungen an der Einstellung greifen beim nächsten Lauf (innerhalb von 24 h).
 
+> **Umsetzung (WP34):** Der Ersteller erhält eine Benachrichtigung `issueAutoArchived` (Kategorie `system`, nicht priorisiert). Zusätzlich gibt es 7 Tage vorher eine Vorwarnung `issueAutoArchiveWarning` (je Issue und Änderungsstand einmal). Der Job läuft alle 5 Minuten (idempotent), nicht täglich. Cycles und Projekte archiviert derselbe Job (docs/04).
+
 ### 9.3 Auto-Close
 
 Team-Einstellung `autoClosePeriod` in **Monaten** (erlaubt: `null` = aus, 1, 3, 6, 9, 12; Default `null`, **Festlegung**), Zielstatus `autoCloseStateId` (Status der Kategorie `canceled`, Default = erster `canceled`-Status). Betrifft offene Issues in `backlog`, `unstarted` und `triage`, die die Periode lang **nicht aktualisiert** wurden. Issues in `started` werden **nicht** auto-geschlossen (**Festlegung**; im Original nicht eindeutig).
@@ -781,6 +783,8 @@ Mitgliedschaft im Parent-Team zählt für ein Sub-Team nicht automatisch als Mit
 Die Ziffern (1), (2), (3) im folgenden Diagramm sind die Tastenkürzel der Triage-Ansicht (Snooze: `H`); UI-Abläufe und Kürzel siehe [08-userflows.md](08-userflows.md).
 
 **Snooze-Ende:** Das Issue taucht wieder auf, sobald `snoozedUntilAt` erreicht ist **oder** neue Aktivität eintritt (neuer Kommentar, Feldänderung durch jemand anderen als `snoozedBy`), je nachdem, was zuerst passiert. Dann werden `snoozedUntilAt` und `snoozedBy` geleert.
+
+> **Umsetzung (WP34):** „Neue Aktivität“ sind ein neuer Kommentar und jede Feldänderung (`update_issue`) eines anderen Users als `snoozedBy`; beides leert `snoozedUntilAt`/`snoozedBy` in derselben Transaktion (History `snoozedUntilAt`, Event `IssueUpdated`). Aktivität des Snoozenden selbst beendet das Snooze nicht.
 
 ```mermaid
 stateDiagram-v2

@@ -41,7 +41,7 @@ const INITIATIVE_FIELDS = `id identifier slugId name summary description color i
 
 const CYCLE_FIELDS = `id teamId number name description startsAt endsAt completedAt progress scope completedScope
   issueCount completedIssueCount scopeHistory completedScopeHistory inProgressScopeHistory
-  isActive isPast isFuture isNext isPrevious`;
+  isActive isPast isFuture isNext isPrevious capacity`;
 
 // ---------- Projekte ----------
 

@@ -368,6 +368,10 @@ type Cycle {
 	isFuture: Boolean!
 	isNext: Boolean!
 	isPrevious: Boolean!
+	"""
+	Kapazitätsschätzung (Velocity der letzten drei Cycles); nur laufende und künftige Cycles.
+	"""
+	capacity: Float
 	createdAt: String!
 	updatedAt: String!
 }
@@ -499,6 +503,11 @@ input DocumentUpdateInput {
 	Optimistische Sperre auf die Inhalts-Revision.
 	"""
 	expectedVersion: Int
+	"""
+	Automatisches Speichern des Editors: Inhaltsänderungen werden zu Snapshots gebündelt
+	(docs/06 §1.9). Ohne Angabe erzeugt jede Inhaltsänderung einen Snapshot.
+	"""
+	autosave: Boolean
 }
 
 type EntitySearchConnection {
@@ -556,6 +565,17 @@ type FavoriteDeletePayload {
 type FavoritePayload {
 	success: Boolean!
 	favorite: Favorite
+}
+
+"""
+Antwort auf ein Feld eines Form-Templates.
+"""
+input FormAnswerInput {
+	fieldId: String!
+	"""
+	Text, Zahl oder Liste von Texten (JSON).
+	"""
+	value: JSON!
 }
 
 """
@@ -891,6 +911,19 @@ input IssueCreateInput {
 	cycleId: String
 	dueDate: String
 	sortOrder: Float
+	"""
+	Template (UUID oder Name); hat Vorrang vor `useDefaultTemplate`.
+	"""
+	templateId: String
+	"""
+	Wendet das Default-Template des Teams an (Mitglieder: `defaultTemplateForMembers`, sonst
+	`defaultTemplateForNonMembers`, docs/06 §2.8).
+	"""
+	useDefaultTemplate: Boolean
+	"""
+	Antworten eines Form-Templates.
+	"""
+	formAnswers: [FormAnswerInput!]
 }
 
 """
@@ -1053,6 +1086,11 @@ type Mutation {
 	Ändert die Security-Settings (Admin/Owner; `adminManagementRole` nur Owner).
 	"""
 	workspaceSecuritySettingsUpdate(input: SecuritySettingsUpdateInput!): SecuritySettingsPayload!
+	"""
+	Setzt die Volltextkonfiguration der Suche (`simple`, `german`, `english`; Admin/Owner).
+	Die Suchvektoren des Workspace werden dabei neu aufgebaut.
+	"""
+	workspaceFulltextConfigUpdate(config: String!): String!
 	"""
 	Ändert die Rolle eines Users (`admin`, `user`, `guest`, `owner`; Regeln siehe docs/02 §6.4).
 	"""
@@ -1642,6 +1680,14 @@ input ProjectInput {
 	targetDate: String
 	targetDateResolution: String
 	links: [LinkInput!]
+	"""
+	Nur beim Anlegen: Template (UUID oder Name); hat Vorrang vor `useDefaultTemplate`.
+	"""
+	templateId: String
+	"""
+	Nur beim Anlegen: wendet `defaultProjectTemplate` des Lead-Teams an (docs/06 §2.8).
+	"""
+	useDefaultTemplate: Boolean
 }
 
 type ProjectMilestone {
@@ -1724,6 +1770,10 @@ type Query {
 	außer Gästen und Apps.
 	"""
 	workspaceSecuritySettings: WorkspaceSecuritySettings!
+	"""
+	Volltextkonfiguration der Suche (`simple`, `german`, `english`). Nur für Owner/Admin.
+	"""
+	workspaceFulltextConfig: String!
 	"""
 	Mitglieder mit E-Mail, Rolle und Status. Nur für Owner/Admin.
 	"""

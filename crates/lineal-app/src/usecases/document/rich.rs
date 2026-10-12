@@ -193,6 +193,7 @@ impl App {
     /// `old`) werden aufgelöst, abonnieren das Dokument und erhalten eine Benachrichtigung
     /// `documentMention` über den vorhandenen Fan-out-Weg. Nur aktive User, die das Elternobjekt
     /// sehen (Gäste keine Initiative-Dokumente); der Akteur selbst bekommt nichts.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn notify_document_mentions(
         &self,
         tx: &mut dyn Tx,
