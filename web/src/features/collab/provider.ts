@@ -324,8 +324,10 @@ export class CollabProvider {
   }
 }
 
-/** `ws(s)://host/collab/document/<id>` passend zur aktuellen Seite. */
-export function collabUrl(documentId: string, loc: Location = window.location): string {
+export type CollabKind = "document" | "issue" | "project" | "initiative";
+
+/** `ws(s)://host/collab/<kind>/<id>` passend zur aktuellen Seite. */
+export function collabUrl(kind: CollabKind, id: string, loc: Location = window.location): string {
   const scheme = loc.protocol === "https:" ? "wss" : "ws";
-  return `${scheme}://${loc.host}/collab/document/${encodeURIComponent(documentId)}`;
+  return `${scheme}://${loc.host}/collab/${kind}/${encodeURIComponent(id)}`;
 }

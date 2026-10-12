@@ -90,12 +90,12 @@ afterEach(() => {
 
 describe("CollabProvider", () => {
   it("baut die URL passend zur Seite", () => {
-    expect(collabUrl("a b", { protocol: "https:", host: "lineal.example" } as Location)).toBe(
-      "wss://lineal.example/collab/document/a%20b",
-    );
-    expect(collabUrl("d1", { protocol: "http:", host: "localhost:5173" } as Location)).toBe(
-      "ws://localhost:5173/collab/document/d1",
-    );
+    expect(
+      collabUrl("document", "a b", { protocol: "https:", host: "lineal.example" } as Location),
+    ).toBe("wss://lineal.example/collab/document/a%20b");
+    expect(
+      collabUrl("issue", "d1", { protocol: "http:", host: "localhost:5173" } as Location),
+    ).toBe("ws://localhost:5173/collab/issue/d1");
   });
 
   it("verbindet, sendet Schritt 1 und wendet Serverstand an", () => {

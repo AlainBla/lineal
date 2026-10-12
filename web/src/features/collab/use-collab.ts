@@ -1,7 +1,13 @@
 /** React-Anbindung des Collab-Providers: ein Provider je Dokument, Neuaufbau bei Epochenwechsel. */
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { type CollabOptions, CollabProvider, type CollabStatus, collabUrl } from "./provider";
+import {
+  type CollabKind,
+  type CollabOptions,
+  CollabProvider,
+  type CollabStatus,
+  collabUrl,
+} from "./provider";
 
 export interface CollabSession {
   provider: CollabProvider | null;
@@ -53,7 +59,8 @@ const IDLE: Snapshot = {
 };
 
 export function useCollab(
-  documentId: string,
+  kind: CollabKind,
+  id: string,
   options?: Partial<CollabOptions>,
   enabled = true,
 ): CollabSession {
@@ -62,7 +69,7 @@ export function useCollab(
 
   useEffect(() => {
     if (!enabled) return;
-    const p = new CollabProvider({ url: collabUrl(documentId), ...options });
+    const p = new CollabProvider({ url: collabUrl(kind, id), ...options });
     const off = p.onReset(() => setGeneration((g) => g + 1));
     // Der Provider entsteht (wie jede Verbindung) erst im Effekt, nicht beim Rendern.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -75,7 +82,7 @@ export function useCollab(
     };
     // `options` ist nur für Tests gedacht und ändert sich nicht.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, generation, enabled]);
+  }, [kind, id, generation, enabled]);
 
   const snap = useSyncExternalStore(
     (cb) => (provider ? provider.subscribe(cb) : () => {}),

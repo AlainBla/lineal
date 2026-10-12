@@ -3,17 +3,21 @@ import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { login, unique } from "./helpers";
+import { createIssue, login, unique } from "./helpers";
 
 /** Wie `sql()`, liefert aber das Ergebnis (eine Zelle). */
 function sqlValue(statement: string): string {
   const cmd = (
     process.env.LINEAL_E2E_PSQL ?? "docker compose exec -T postgres psql -U lineal -d lineal_e2e"
   ).split(/\s+/);
-  return execFileSync(cmd[0]!, [...cmd.slice(1), "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", statement], {
-    cwd: path.resolve(import.meta.dirname, "../.."),
-    stdio: "pipe",
-  })
+  return execFileSync(
+    cmd[0]!,
+    [...cmd.slice(1), "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", statement],
+    {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      stdio: "pipe",
+    },
+  )
     .toString()
     .trim();
 }
@@ -84,6 +88,46 @@ test("WP36: two users edit one document concurrently, see each other's cursor, a
   await expect(reloaded).toContainText(a);
   await expect(reloaded).toContainText(b);
 
+  await aliceCtx.close();
+  await bobCtx.close();
+});
+
+// WP36: Beschreibung eines Issues wird ebenfalls live bearbeitet und über den Issue-Pfad gespeichert.
+test("WP36: issue description is edited live by two users and saved on the issue", async ({
+  browser,
+}) => {
+  const aliceCtx = await browser.newContext();
+  const bobCtx = await browser.newContext();
+  const alice = await aliceCtx.newPage();
+  const bob = await bobCtx.newPage();
+  await login(alice, "alice");
+  await login(bob, "bob");
+  const identifier = await createIssue(alice, "ENG", unique("Live-Beschreibung"));
+
+  for (const page of [alice, bob]) {
+    await page.goto(`/acme/issue/${identifier}`);
+    await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible();
+  }
+  const a = unique("Alice");
+  const b = unique("Bob");
+  const aliceEditor = alice.getByRole("textbox", { name: "Description" });
+  const bobEditor = bob.getByRole("textbox", { name: "Description" });
+  await aliceEditor.click();
+  await alice.keyboard.type(`${a} `, { delay: 30 });
+  await bobEditor.click();
+  await bob.keyboard.type(`${b} `, { delay: 30 });
+  for (const editor of [aliceEditor, bobEditor]) {
+    await expect(editor).toContainText(a);
+    await expect(editor).toContainText(b);
+  }
+  await expect
+    .poll(() => sqlValue(`SELECT description FROM issue WHERE identifier = '${identifier}'`), {
+      timeout: 20_000,
+    })
+    .toContain(b);
+  expect(sqlValue(`SELECT description FROM issue WHERE identifier = '${identifier}'`)).toContain(a);
+  await alice.reload();
+  await expect(alice.getByRole("textbox", { name: "Description" })).toContainText(a);
   await aliceCtx.close();
   await bobCtx.close();
 });

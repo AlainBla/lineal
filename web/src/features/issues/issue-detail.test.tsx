@@ -12,6 +12,18 @@ import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./t
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
 
+// Stufe 1 (Collab-Endpunkt nicht erreichbar): die Echtzeit-Tests liegen in features/collab.
+vi.mock("@/features/collab/use-collab", () => ({
+  useCollab: () => ({
+    provider: null,
+    status: "fallback",
+    canWrite: false,
+    synced: false,
+    everConnected: false,
+    generation: 0,
+  }),
+}));
+
 vi.mock("./rich-editor", () => ({
   RichEditor: (p: {
     ariaLabel: string;

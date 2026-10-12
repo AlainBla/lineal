@@ -213,7 +213,7 @@ function DocumentEditor({
   docRef: string;
   onRestored: () => void;
 }) {
-  const session = useCollab(doc.id);
+  const session = useCollab("document", doc.id);
   // Vor der ersten Verbindung (auch während der ersten Wiederholungen) wird nichts gerendert,
   // damit kein Editor mit Stufe-1-Inhalt neben einem Echtzeit-Editor entsteht.
   if (

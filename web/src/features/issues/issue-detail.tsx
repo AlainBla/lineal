@@ -12,6 +12,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
 import { useShortcutContext } from "@/lib/shortcuts";
 
+import { ConnectionStatus, Presence } from "@/features/collab/presence";
+import { useCollab } from "@/features/collab/use-collab";
+
 import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
@@ -31,7 +34,61 @@ const AUTOSAVE_MS = 800;
 
 type SaveStatus = "saved" | "dirty" | "saving";
 
+/**
+ * Beschreibung: Echtzeit-Mitbearbeitung (Stufe 2), sobald der Collab-Endpunkt verbunden ist; sonst
+ * (nicht erreichbar/beendet) Stufe 1 mit Autosave.
+ */
 function DescriptionEditor({ issue, actions }: { issue: Issue; actions: IssueActions }) {
+  const session = useCollab("issue", issue.id);
+  if (
+    session.status === "connecting" ||
+    (session.status === "disconnected" && !session.everConnected)
+  ) {
+    return <Skeleton className="h-16 w-full" />;
+  }
+  if (session.status === "fallback" || session.status === "closed" || !session.provider) {
+    return <Stage1DescriptionEditor issue={issue} actions={actions} />;
+  }
+  return <LiveDescriptionEditor issue={issue} session={session} />;
+}
+
+function LiveDescriptionEditor({
+  issue,
+  session,
+}: {
+  issue: Issue;
+  session: ReturnType<typeof useCollab>;
+}) {
+  void issue;
+  const users = useKnownUsers();
+  const me = useSession();
+  const mentionUsers = useMemo(
+    () =>
+      me
+        ? [{ id: me.user.id, name: me.user.name }, ...users.filter((u) => u.id !== me.user.id)]
+        : users,
+    [users, me],
+  );
+  const provider = session.provider!;
+  return (
+    <div className="flex flex-col gap-1">
+      <RichEditor
+        key={`collab:${session.generation}`}
+        value=""
+        ariaLabel="Description"
+        placeholder="Add description…"
+        users={mentionUsers}
+        collab={{ provider, canWrite: session.canWrite }}
+      />
+      <div className="flex items-center justify-end gap-2 text-xs text-subtle-foreground">
+        <Presence provider={provider} />
+        <ConnectionStatus status={session.status} canWrite={session.canWrite} />
+      </div>
+    </div>
+  );
+}
+
+function Stage1DescriptionEditor({ issue, actions }: { issue: Issue; actions: IssueActions }) {
   const users = useKnownUsers();
   const session = useSession();
   const [status, setStatus] = useState<SaveStatus>("saved");
