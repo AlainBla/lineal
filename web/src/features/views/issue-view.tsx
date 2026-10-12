@@ -19,15 +19,18 @@ import {
   type DisplayOptions,
 } from "./display-options";
 import { FilterBar } from "./filter-bar";
-import { buildFilter, type FilterChip } from "./filter-model";
+import { buildFilter, type Filter, type FilterChip } from "./filter-model";
+import { combineFilter, filterToChips } from "./filter-parse";
 import {
   usePreferences,
   useResetPreferences,
   useUpdatePreferences,
+  useUpdateView,
   useViewIssues,
   type PrefTarget,
 } from "./queries";
 import { useFilterSources } from "./use-filter-sources";
+import { TransferOwnerButton, ViewSubscriptionButton } from "./view-actions";
 import { ViewBuilderDialog } from "./view-builder";
 
 /**
@@ -46,7 +49,20 @@ export function IssueView({
   teamId?: string;
   title: string;
 }) {
-  const [chips, setChips] = useState<FilterChip[]>([]);
+  // Gespeicherte Views: filterData → Chips (+ „erweiterter Filter“ für Nicht-Darstellbares).
+  const initial = useMemo(() => filterToChips(view?.filterData), [view?.filterData]);
+  const [chips, setChipsState] = useState<FilterChip[]>(initial.chips);
+  const [advanced, setAdvancedState] = useState<Filter[]>(initial.rest);
+  const [touched, setTouched] = useState(false);
+  const setChips = (c: FilterChip[]) => {
+    setChipsState(c);
+    setTouched(true);
+  };
+  const setAdvanced = (r: Filter[]) => {
+    setAdvancedState(r);
+    setTouched(true);
+  };
+  const updateView = useUpdateView();
   const [local, setLocal] = useState<Partial<DisplayOptions>>({});
   const [saveOpen, setSaveOpen] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -68,8 +84,22 @@ export function IssueView({
     if (view) updatePrefs.mutate(patch);
   };
 
-  const filter = useMemo(() => buildFilter(chips), [chips]);
-  const q = useViewIssues({ customViewId: view?.id, filter, teamId, includeSubTeams: !!teamId });
+  const filter = useMemo(() => combineFilter(buildFilter(chips), advanced), [chips, advanced]);
+  // Unverändert: die View serverseitig anwenden. Bearbeitet: der Chip-Filter ersetzt filterData;
+  // der Scope der View (Team, Projekt) wird als UND-Bedingung beibehalten (docs/05 §4.1).
+  const scoped = useMemo(() => {
+    if (!view || !touched) return filter;
+    const scope: Filter[] = [];
+    if (view.teamId) scope.push({ team: { id: { in: [view.teamId] } } });
+    if (view.projectId) scope.push({ project: { id: { in: [view.projectId] } } });
+    return combineFilter(filter, scope);
+  }, [view, touched, filter]);
+  const q = useViewIssues({
+    customViewId: view && !touched ? view.id : undefined,
+    filter: view && !touched ? undefined : scoped,
+    teamId,
+    includeSubTeams: !!teamId,
+  });
   const { sources, metas, teams } = useFilterSources();
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
@@ -125,8 +155,50 @@ export function IssueView({
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
         <h1 className="text-sm font-medium">{title}</h1>
-        <FilterBar chips={chips} onChange={setChips} sources={sources} />
+        <FilterBar
+          chips={chips}
+          onChange={setChips}
+          sources={sources}
+          advanced={advanced}
+          onAdvancedChange={setAdvanced}
+        />
         <div className="ml-auto flex items-center gap-1">
+          {view && touched && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setChipsState(initial.chips);
+                  setAdvancedState(initial.rest);
+                  setTouched(false);
+                }}
+              >
+                Discard
+              </Button>
+              {view.canEdit && (
+                <Button
+                  size="sm"
+                  disabled={updateView.isPending}
+                  onClick={() =>
+                    updateView.mutate(
+                      { id: view.id, input: { filterData: filter, expectedVersion: view.version } },
+                      { onSuccess: () => setTouched(false) },
+                    )
+                  }
+                >
+                  Save changes
+                </Button>
+              )}
+            </>
+          )}
+          {updateView.isError && (
+            <span role="alert" className="text-xs text-destructive">
+              Could not save the view.
+            </span>
+          )}
+          {view && <ViewSubscriptionButton view={view} />}
+          {view && <TransferOwnerButton view={view} />}
           {chips.length > 0 && !view && (
             <Button variant="ghost" size="sm" onClick={() => setSaveOpen(true)}>
               Save view

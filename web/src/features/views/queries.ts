@@ -259,3 +259,92 @@ export function useResetPreferences(t: PrefTarget | null) {
 }
 
 // ---------- Personen (Assignee-Filter, Picker) ----------
+
+// ---------- Favoriten sortieren (WP31) ----------
+
+/** Verschiebt einen Favoriten (Mittelwert-`sortOrder`, optional in/aus einem Ordner); optimistisch. */
+export function useMoveFavorite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; sortOrder: number; parentId: string | null }) =>
+      gqlRequest(
+        `mutation FavoriteMove($id: String!, $sortOrder: Float!, $parentId: String) {
+          favoriteUpdate(id: $id, sortOrder: $sortOrder, parentId: $parentId) { success }
+        }`,
+        v,
+      ),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: viewKeys.favorites });
+      const prev = qc.getQueryData<Favorite[]>(viewKeys.favorites);
+      qc.setQueryData<Favorite[]>(viewKeys.favorites, (old) =>
+        old?.map((f) =>
+          f.id === v.id ? { ...f, sortOrder: v.sortOrder, parentId: v.parentId } : f,
+        ),
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(viewKeys.favorites, ctx.prev),
+    onSettled: () => void qc.invalidateQueries({ queryKey: viewKeys.favorites }),
+  });
+}
+
+// ---------- Views ändern, Eigentümer, Abos (WP31) ----------
+
+/** `customViewUpdate`: Filter speichern, Eigentümer wechseln (`ownerId`) u. a. */
+export function useUpdateView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; input: Record<string, unknown> }) =>
+      gqlRequest(
+        `mutation ViewUpdate($id: String!, $input: CustomViewUpdateInput!) {
+          customViewUpdate(id: $id, input: $input) { success }
+        }`,
+        v,
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["views"] });
+      void qc.invalidateQueries({ queryKey: ["issues", "view"] });
+    },
+  });
+}
+
+export const VIEW_SUBSCRIPTION_TYPES = [
+  { value: "issueAddedToView", label: "New issue in this view" },
+  { value: "issueStatusChanged", label: "Issue completed or canceled" },
+  { value: "issueStatusChangedAll", label: "Every status change" },
+] as const;
+
+export interface ViewSubscriptionState {
+  active: boolean;
+  notificationSubscriptionTypes: string[];
+}
+
+export function useViewSubscription(viewId: string) {
+  return useQuery({
+    queryKey: ["views", "subscription", viewId] as const,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ viewSubscription: ViewSubscriptionState | null }, { id: string }>(
+          `query ViewSubscriptionGet($id: String!) {
+            viewSubscription(customViewId: $id) { active notificationSubscriptionTypes }
+          }`,
+          { id: viewId },
+          { signal },
+        )
+      ).viewSubscription,
+  });
+}
+
+export function useSetViewSubscription(viewId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { active: boolean; types?: string[] }) =>
+      gqlRequest(
+        `mutation ViewSubscriptionSet($id: String!, $active: Boolean!, $types: [String!]) {
+          viewSubscriptionUpdate(customViewId: $id, active: $active, notificationSubscriptionTypes: $types) { active }
+        }`,
+        { id: viewId, active: v.active, types: v.types },
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["views", "subscription", viewId] }),
+  });
+}

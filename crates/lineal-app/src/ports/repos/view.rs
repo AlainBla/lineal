@@ -203,6 +203,18 @@ pub struct NewFavorite {
     pub now: DateTime<Utc>,
 }
 
+/// Abo eines Users auf eine Custom View (Zeile `notification_subscription` mit
+/// `target_type = 'customView'`, docs/05 §4.7).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewSubscription {
+    pub id: Uuid,
+    pub subscriber_id: UserId,
+    pub view_id: ViewId,
+    /// `issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`.
+    pub types: Vec<String>,
+    pub active: bool,
+}
+
 /// Filterbaum einer Art, wie ihn `verify_filter_refs` prüft.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnyFilter {
@@ -386,6 +398,55 @@ pub trait ViewRepo: Send {
         _target: Uuid,
         _access: &ViewAccess,
     ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Setzt Position und Ordner eines eigenen Favoriten (`None` = oberste Ebene).
+    async fn update_favorite(
+        &mut self,
+        _owner: UserId,
+        _id: Uuid,
+        _parent: Option<Uuid>,
+        _sort_order: f64,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Option<Favorite>> {
+        unimplemented_repo()
+    }
+
+    // --- View-Abos (WP31; Auslösen der Benachrichtigung: WP32, docs/dev/schnittstellen.md) ---
+    /// Legt das Abo des Users auf die View an oder ändert es (je Paar höchstens eines).
+    async fn upsert_view_subscription(
+        &mut self,
+        _user: UserId,
+        _view: ViewId,
+        _types: &[String],
+        _active: bool,
+        _now: DateTime<Utc>,
+    ) -> AppResult<ViewSubscription> {
+        unimplemented_repo()
+    }
+    async fn get_view_subscription(
+        &mut self,
+        _user: UserId,
+        _view: ViewId,
+    ) -> AppResult<Option<ViewSubscription>> {
+        unimplemented_repo()
+    }
+    /// Alle aktiven Abos auf die View, die den Ereignistyp `ntype` enthalten (Fan-out-Hook).
+    async fn active_view_subscriptions(
+        &mut self,
+        _view: ViewId,
+        _ntype: &str,
+    ) -> AppResult<Vec<ViewSubscription>> {
+        unimplemented_repo()
+    }
+    /// Deaktiviert alle Abos außer dem des genannten Users (View verliert Sichtbarkeit).
+    async fn deactivate_view_subscriptions_except(
+        &mut self,
+        _view: ViewId,
+        _keep: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
         unimplemented_repo()
     }
 }

@@ -1211,6 +1211,15 @@ type Mutation {
 	"""
 	customViewDuplicate(id: String!): CustomViewPayload!
 	favoriteCreate(input: FavoriteCreateInput!): FavoritePayload!
+	"""
+	Verschiebt einen eigenen Favoriten (Reihenfolge per Drag & Drop): `sortOrder` ist die
+	Mittelwert-Position, `parentId` der Ordner (leer = oberste Ebene).
+	"""
+	favoriteUpdate(id: String!, sortOrder: Float!, parentId: String): FavoritePayload!
+	"""
+	Abonniert eine sichtbare Issue-View oder ändert das Abo (Default `issueAddedToView`).
+	"""
+	viewSubscriptionUpdate(customViewId: String!, active: Boolean!, notificationSubscriptionTypes: [String!]): ViewSubscription!
 	favoriteDelete(id: String!): FavoriteDeletePayload!
 	"""
 	Persönliche Änderung der Anzeigeoptionen (nur die genannten Schlüssel).
@@ -1812,6 +1821,10 @@ type Query {
 	"""
 	customView(id: String!): CustomView!
 	"""
+	Eigenes Abo einer sichtbaren View (`null`, solange keines besteht).
+	"""
+	viewSubscription(customViewId: String!): ViewSubscription
+	"""
 	Favoriten des Viewers (nur sichtbare Ziele).
 	"""
 	favorites: [Favorite!]!
@@ -2383,6 +2396,19 @@ type ViewPreferencesValues {
 	values: JSON!
 	hasPersonal: Boolean!
 	hasDefault: Boolean!
+}
+
+"""
+Abo auf eine Custom View (docs/05 §4.7).
+"""
+type ViewSubscription {
+	id: String!
+	viewId: String!
+	"""
+	`issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`.
+	"""
+	notificationSubscriptionTypes: [String!]!
+	active: Boolean!
 }
 
 """

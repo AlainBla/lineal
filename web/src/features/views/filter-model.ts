@@ -15,10 +15,27 @@ export type FilterField =
   | "team"
   | "dueDate"
   | "createdAt"
+  | "updatedAt"
+  | "startedAt"
+  | "completedAt"
+  | "canceledAt"
+  | "estimate"
+  | "subscribers"
+  | "parent"
+  | "slaStatus"
   | "title";
 
 export type FilterOp =
-  "is" | "isNot" | "includeAny" | "includeAll" | "excludeAny" | "before" | "after" | "contains";
+  | "is"
+  | "isNot"
+  | "includeAny"
+  | "includeAll"
+  | "excludeAny"
+  | "before"
+  | "after"
+  | "lessThan"
+  | "greaterThan"
+  | "contains";
 
 export interface FilterChip {
   id: string;
@@ -43,8 +60,28 @@ export const FIELD_LABEL: Record<FilterField, string> = {
   team: "Team",
   dueDate: "Due date",
   createdAt: "Created",
+  updatedAt: "Updated",
+  startedAt: "Started",
+  completedAt: "Completed",
+  canceledAt: "Canceled",
+  estimate: "Estimate",
+  subscribers: "Subscribers",
+  parent: "Parent issue",
+  slaStatus: "SLA status",
   title: "Title",
 };
+
+/** Datumsfelder mit den Operatoren before/after (docs/05 §1.5). */
+export const DATE_FIELDS = [
+  "createdAt",
+  "updatedAt",
+  "startedAt",
+  "completedAt",
+  "canceledAt",
+] as const;
+export type DateField = (typeof DATE_FIELDS)[number];
+export const isDateField = (f: FilterField): f is DateField =>
+  (DATE_FIELDS as readonly string[]).includes(f);
 
 /** Operatoren je Feld (docs/05 §1.5). */
 export const FIELD_OPS: Record<FilterField, FilterOp[]> = {
@@ -58,6 +95,14 @@ export const FIELD_OPS: Record<FilterField, FilterOp[]> = {
   team: ["is", "isNot"],
   dueDate: ["is", "isNot", "before", "after"],
   createdAt: ["before", "after"],
+  updatedAt: ["before", "after"],
+  startedAt: ["before", "after"],
+  completedAt: ["before", "after"],
+  canceledAt: ["before", "after"],
+  estimate: ["is", "isNot", "lessThan", "greaterThan"],
+  subscribers: ["includeAny", "excludeAny"],
+  parent: ["is", "isNot"],
+  slaStatus: ["is", "isNot"],
   title: ["contains"],
 };
 
@@ -69,10 +114,12 @@ export const OP_LABEL: Record<FilterOp, string> = {
   excludeAny: "exclude if any of",
   before: "before",
   after: "after",
+  lessThan: "less than",
+  greaterThan: "greater than",
   contains: "contains",
 };
 
-const CLOSED_TYPES = ["completed", "canceled", "duplicate"];
+export const CLOSED_TYPES = ["completed", "canceled", "duplicate"];
 
 /** Assignee/Creator (docs/05 §1.6, §1.7). */
 function userFilter(op: FilterOp, values: string[]): Filter {
@@ -147,6 +194,20 @@ function teamFilter(chip: FilterChip): Filter {
   };
 }
 
+function estimateFilter(chip: FilterChip): Filter {
+  const n = Number(chip.values[0]);
+  switch (chip.op) {
+    case "isNot":
+      return { estimate: { neq: n } };
+    case "lessThan":
+      return { estimate: { lt: n } };
+    case "greaterThan":
+      return { estimate: { gt: n } };
+    default:
+      return { estimate: { eq: n } };
+  }
+}
+
 function dueDateFilter(chip: FilterChip): Filter {
   const v = chip.values[0] ?? "";
   if (chip.op === "before") return { dueDate: { lt: v } };
@@ -180,7 +241,24 @@ export function chipToFilter(chip: FilterChip): Filter {
     case "dueDate":
       return dueDateFilter(chip);
     case "createdAt":
-      return { createdAt: { [op === "before" ? "lt" : "gt"]: values[0] ?? "" } };
+    case "updatedAt":
+    case "startedAt":
+    case "completedAt":
+    case "canceledAt":
+      return { [field]: { [op === "before" ? "lt" : "gt"]: values[0] ?? "" } };
+    case "estimate":
+      return estimateFilter(chip);
+    case "subscribers":
+      return {
+        subscribers:
+          op === "excludeAny"
+            ? { every: { id: { nin: values } } }
+            : { some: { id: { in: values } } },
+      };
+    case "parent":
+      return { parent: { null: op === "is" } };
+    case "slaStatus":
+      return { slaStatus: { [op === "isNot" ? "nin" : "in"]: values } };
     case "title":
       return { title: { containsIgnoreCaseAndAccent: values[0] ?? "" } };
   }
