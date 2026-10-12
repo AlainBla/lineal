@@ -1,4 +1,4 @@
-//! Echtzeit-Mitbearbeitung (WP36, docs/06 §1.9 Stufe 2): `GET /collab/document/{id}` öffnet einen
+//! Echtzeit-Mitbearbeitung (WP36, docs/06 §1.9 Stufe 2): `GET /collab/{document|issue|project|initiative}/{id}` öffnet einen
 //! WebSocket in den Raum des Inhalts.
 //!
 //! **Warum ein eigener Endpunkt statt eines Kanals in `/sync`?** `/sync` ist ein einziger
@@ -33,7 +33,7 @@ use super::*;
 use axum::extract::Path;
 use lineal_app::collab::crdt;
 use lineal_app::usecases::document::{CollabAccess, CollabLoad, CollabTarget, PersistOutcome};
-use lineal_domain::ids::DocumentId;
+use lineal_domain::ids::{DocumentId, InitiativeId, IssueId, ProjectId};
 use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -694,6 +694,9 @@ pub(crate) async fn collab_socket(
     };
     let target = match kind.as_str() {
         "document" => CollabTarget::Document(DocumentId(id)),
+        "issue" => CollabTarget::Issue(IssueId(id)),
+        "project" => CollabTarget::Project(ProjectId(id)),
+        "initiative" => CollabTarget::Initiative(InitiativeId(id)),
         _ => return error_response(StatusCode::NOT_FOUND, "not_found", "Unknown content kind."),
     };
     // Sichtbarkeit und Recht: unsichtbar = nicht vorhanden (404), vor dem Upgrade.

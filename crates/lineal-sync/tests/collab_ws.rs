@@ -1023,3 +1023,135 @@ async fn comment_anchors_survive_edits_and_detach_when_text_is_removed(pool: PgP
         .unwrap_err();
     assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
 }
+
+async fn desc_client(e: &Env, who: &str, kind: &str, id: Uuid) -> Client {
+    let ws = e
+        .try_connect(Some(who), &format!("/collab/{kind}/{id}"), &[])
+        .await
+        .unwrap();
+    Client::start(ws).await
+}
+
+async fn wait_sql<F: Fn(&str) -> bool>(e: &Env, sql: &str, id: Uuid, f: F) -> String {
+    for _ in 0..80 {
+        let v: Option<String> = sqlx::query_scalar(sql)
+            .bind(id)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+        let v = v.unwrap_or_default();
+        if f(&v) {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("not persisted");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_description_room_converges_persists_and_merges_api_writes(pool: PgPool) {
+    use lineal_app::usecases::issue::{CreateIssueInput, DescriptionEdit, UpdateIssueInput};
+    let e = env(pool).await;
+    let issue = e
+        .app
+        .create_issue(
+            &user(SeedUser::Alice),
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Mit Beschreibung".into()),
+                description: Some("Anfang".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue;
+    let id = issue.id.0;
+    let v0 = issue.version;
+    let mut alice = desc_client(&e, "alice", "issue", id).await;
+    let mut bob = desc_client(&e, "bob", "issue", id).await;
+    assert_eq!(alice.hello["canWrite"], true);
+    assert_eq!(alice.md(), "Anfang");
+    alice.add_paragraph("von Alice").await;
+    bob.add_paragraph("von Bob").await;
+    pump_both(&mut alice, &mut bob, 600).await;
+    assert_eq!(alice.md(), bob.md());
+    let text = wait_sql(&e, "SELECT description FROM issue WHERE id = $1", id, |d| {
+        d.contains("von Alice") && d.contains("von Bob")
+    })
+    .await;
+    assert!(text.ends_with("Anfang"));
+    let v1: i32 = sqlx::query_scalar("SELECT version FROM issue WHERE id = $1")
+        .bind(id)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert!(
+        v1 > v0,
+        "Issue-Version wurde über den normalen Änderungsweg erhöht"
+    );
+
+    // API-Schreibvorgang (Beschreibung ersetzen) bei offener Sitzung landet im Raum.
+    e.app
+        .update_issue(
+            &user(SeedUser::Bob),
+            UpdateIssueInput {
+                id: id.to_string(),
+                description: Some(DescriptionEdit::Set("Neu per API".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for _ in 0..40 {
+        alice.pump(Duration::from_millis(100)).await;
+        if alice.md() == "Neu per API" {
+            break;
+        }
+    }
+    assert_eq!(alice.md(), "Neu per API");
+
+    // Gast Carol (nur WEB) sieht ENG-Issues nicht: 404.
+    assert_eq!(
+        e.status(Some("carol"), &format!("/collab/issue/{id}"))
+            .await,
+        404
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_and_initiative_description_rooms_persist_to_their_owner(pool: PgPool) {
+    use lineal_testkit::seed::planning::{seed_initiative_id, seed_project_id};
+    let e = env(pool).await;
+    let project = seed_project_id().0;
+    let mut a = desc_client(&e, "alice", "project", project).await;
+    assert_eq!(a.hello["canWrite"], true);
+    a.add_paragraph("Projekt-Notiz").await;
+    a.pump(Duration::from_millis(300)).await;
+    let text = wait_sql(
+        &e,
+        "SELECT content FROM project WHERE id = $1",
+        project,
+        |d| d.contains("Projekt-Notiz"),
+    )
+    .await;
+    assert!(text.contains("Projekt-Notiz"));
+
+    let initiative = seed_initiative_id().0;
+    let mut b = desc_client(&e, "alice", "initiative", initiative).await;
+    b.add_paragraph("Initiativ-Notiz").await;
+    b.pump(Duration::from_millis(300)).await;
+    wait_sql(
+        &e,
+        "SELECT content FROM initiative WHERE id = $1",
+        initiative,
+        |d| d.contains("Initiativ-Notiz"),
+    )
+    .await;
+    // Gast ohne Sicht auf Initiativen: 404.
+    assert_eq!(
+        e.status(Some("carol"), &format!("/collab/initiative/{initiative}"))
+            .await,
+        404
+    );
+}

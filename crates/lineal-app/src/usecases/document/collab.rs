@@ -10,8 +10,27 @@ use crate::ports::repos::document::ContentState;
 /// Was ein Raum bearbeitet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CollabTarget {
-    /// Inhalt eines Dokuments (`document_content.id` des Dokuments, adressiert über die Dokument-ID).
+    /// Inhalt eines Dokuments (adressiert über die Dokument-ID, nie über die Inhalts-ID).
     Document(DocumentId),
+    /// Beschreibung eines Issues (`issue.description`); der Zustand liegt in `document_content`
+    /// (`owner_type = 'issue'`), der Markdown-Text bleibt in der Beschreibung.
+    Issue(IssueId),
+    /// Markdown-Beschreibung eines Projekts (`project.content`).
+    Project(ProjectId),
+    /// Markdown-Beschreibung einer Initiative (`initiative.content`).
+    Initiative(InitiativeId),
+}
+
+impl CollabTarget {
+    /// Besitzerart der Inhaltszeile und Besitzer-ID (für Beschreibungen).
+    fn owner(self) -> Option<(&'static str, Uuid)> {
+        match self {
+            Self::Document(_) => None,
+            Self::Issue(i) => Some(("issue", i.0)),
+            Self::Project(p) => Some(("project", p.0)),
+            Self::Initiative(i) => Some(("initiative", i.0)),
+        }
+    }
 }
 
 /// Ergebnis der Zugriffsprüfung beim Beitritt bzw. bei der periodischen Re-Validierung.
@@ -57,6 +76,14 @@ pub enum PersistOutcome {
     /// Zwischenzeitlich extern geändert (API/MCP/Wiederherstellung): der Raum muss den aktuellen
     /// Stand einarbeiten und erneut speichern.
     Stale(CollabLoad),
+}
+
+/// Aktueller Stand des Besitzerobjekts einer Beschreibung.
+struct OwnerView {
+    title: String,
+    markdown: String,
+    version: i32,
+    can_write: bool,
 }
 
 /// Wie der CRDT-Zustand beim Schreiben von Inhalt behandelt wird.
@@ -123,24 +150,106 @@ impl App {
         ctx: &RequestCtx,
         target: CollabTarget,
     ) -> AppResult<CollabAccess> {
+        let write_scope = matches!(ctx.actor, Actor::System) || ctx.scopes.write;
+        let user_name = match actor_user_id(ctx) {
+            Some(u) => tx.users().get(u).await?.map(|u| u.name),
+            None => None,
+        }
+        .unwrap_or_else(|| "Unknown".to_owned());
         match target {
             CollabTarget::Document(id) => {
                 let (doc, parent, scope) =
                     load_visible(tx, snap, ctx, &id.0.to_string(), false).await?;
-                let scope_ok = matches!(ctx.actor, Actor::System) || ctx.scopes.write;
-                let can_write = scope_ok
+                let can_write = write_scope
                     && require_write(snap, ctx, parent, &scope).is_ok()
                     && require_writable_parent(&scope).is_ok();
-                let user_name = match actor_user_id(ctx) {
-                    Some(u) => tx.users().get(u).await?.map(|u| u.name),
-                    None => None,
-                }
-                .unwrap_or_else(|| "Unknown".to_owned());
                 Ok(CollabAccess {
                     content_id: doc.content_id,
                     title: doc.title,
                     can_write,
                     user_name,
+                })
+            }
+            _ => {
+                let o = self.owner_in(tx, snap, ctx, target).await?;
+                Ok(CollabAccess {
+                    content_id: Uuid::nil(),
+                    title: o.title,
+                    can_write: write_scope && o.can_write,
+                    user_name,
+                })
+            }
+        }
+    }
+
+    /// Beschreibung eines Issues/Projekts/einer Initiative: Sichtbarkeit wie beim Lesen des
+    /// Objekts (nicht sichtbar → `not_found`), Schreibrecht wie beim Ändern des Objekts.
+    async fn owner_in(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        ctx: &RequestCtx,
+        target: CollabTarget,
+    ) -> AppResult<OwnerView> {
+        match target {
+            CollabTarget::Document(_) => Err(AppError::internal("not an owner target")),
+            CollabTarget::Issue(id) => {
+                let i = crate::resolve::issue::resolve_in(tx, snap, ctx, &id.0.to_string()).await?;
+                if i.trashed {
+                    return Err(crate::resolve::issue::issue_not_found(&id.0.to_string()));
+                }
+                let can_write = i.archived_at.is_none()
+                    && snap
+                        .require_team(ctx, Action::UpdateIssue, i.team_id)
+                        .is_ok();
+                Ok(OwnerView {
+                    title: i.title,
+                    markdown: i.description.unwrap_or_default(),
+                    version: i.version,
+                    can_write,
+                })
+            }
+            CollabTarget::Project(id) => {
+                let r = crate::resolve::project::resolve_in(tx, snap, &id.0.to_string()).await?;
+                let p = r.project;
+                if p.trashed {
+                    return Err(AppError::not_found("Could not find project"));
+                }
+                let can_write = p.archived_at.is_none()
+                    && crate::usecases::project::require_manage(
+                        snap,
+                        ctx,
+                        Action::ManageProject,
+                        &r.teams,
+                    )
+                    .is_ok();
+                Ok(OwnerView {
+                    title: p.name,
+                    markdown: p.content.unwrap_or_default(),
+                    version: p.version,
+                    can_write,
+                })
+            }
+            CollabTarget::Initiative(id) => {
+                if snap
+                    .require_workspace(ctx, Action::ViewInitiatives)
+                    .is_err()
+                {
+                    return Err(AppError::not_found("Could not find initiative"));
+                }
+                let i = crate::resolve::initiative::resolve_in(tx, snap, &id.0.to_string()).await?;
+                if i.trashed {
+                    return Err(AppError::not_found("Could not find initiative"));
+                }
+                let can_write = i.archived_at.is_none()
+                    && snap
+                        .require_workspace(ctx, Action::ManageInitiatives)
+                        .is_ok();
+                Ok(OwnerView {
+                    title: i.name,
+                    markdown: i.content.unwrap_or_default(),
+                    version: i.version,
+                    can_write,
                 })
             }
         }
@@ -154,14 +263,54 @@ impl App {
     ) -> AppResult<CollabLoad> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
-        let cs = tx
-            .documents()
-            .content_state(access.content_id, false)
-            .await?
-            .ok_or_else(|| AppError::not_found("Could not find document content."))?;
+        let load = self.collab_load_in(&mut *tx, &snap, ctx, target).await?;
         tx.commit().await?;
-        Ok(cs.into())
+        Ok(load)
+    }
+
+    async fn collab_load_in(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        ctx: &RequestCtx,
+        target: CollabTarget,
+    ) -> AppResult<CollabLoad> {
+        let mut load: CollabLoad = match target.owner() {
+            None => {
+                let access = self.collab_access_in(tx, snap, ctx, target).await?;
+                tx.documents()
+                    .content_state(access.content_id, false)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("Could not find document content."))?
+                    .into()
+            }
+            Some((owner_type, owner_id)) => {
+                let o = self.owner_in(tx, snap, ctx, target).await?;
+                let cs = tx
+                    .documents()
+                    .content_state_of_owner(owner_type, owner_id, &o.markdown, false)
+                    .await?;
+                CollabLoad {
+                    content_id: cs.content_id,
+                    // Der Text steht am Besitzer (Beschreibung), die Zeile hält nur den Zustand.
+                    markdown: o.markdown,
+                    state: cs.state,
+                    epoch: cs.epoch,
+                    version: o.version,
+                }
+            }
+        };
+        // Zustand, der nicht (mehr) zum Text passt (Schreiben am Raum vorbei), wird verworfen.
+        if let Some(state) = load.state.as_deref() {
+            let fresh = crdt::doc_from_state(state).is_some_and(|d| {
+                crdt::check_limits(&d).is_ok() && crdt::sanitized_markdown_of(&d) == load.markdown
+            });
+            if !fresh {
+                load.state = None;
+                load.epoch = None;
+            }
+        }
+        Ok(load)
     }
 
     /// Hinterlegt den frisch erzeugten Zustand samt Epoche (Erstbefüllung aus Markdown), sofern die
@@ -176,11 +325,28 @@ impl App {
     ) -> AppResult<bool> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
-        let written = tx
-            .documents()
-            .set_content_state(access.content_id, Some(version), Some(state), Some(epoch))
-            .await?;
+        let written = match target.owner() {
+            None => {
+                let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
+                tx.documents()
+                    .set_content_state(access.content_id, Some(version), Some(state), Some(epoch))
+                    .await?
+            }
+            Some((owner_type, owner_id)) => {
+                let o = self.owner_in(&mut *tx, &snap, ctx, target).await?;
+                if o.version != version {
+                    false
+                } else {
+                    let cs = tx
+                        .documents()
+                        .content_state_of_owner(owner_type, owner_id, &o.markdown, true)
+                        .await?;
+                    tx.documents()
+                        .set_content_state(cs.content_id, None, Some(state), Some(epoch))
+                        .await?
+                }
+            }
+        };
         tx.commit().await?;
         Ok(written)
     }
@@ -193,7 +359,9 @@ impl App {
         target: CollabTarget,
         doc: &yrs::Doc,
     ) -> AppResult<usize> {
-        let CollabTarget::Document(doc_id) = target;
+        let CollabTarget::Document(doc_id) = target else {
+            return Ok(0);
+        };
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         // Lesezugriff genügt nicht: Anker schreiben nur Berechtigte (Sichtbarkeit wird geprüft).
@@ -217,14 +385,19 @@ impl App {
     pub async fn collab_version(&self, ctx: &RequestCtx, target: CollabTarget) -> AppResult<i32> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
-        let cs = tx
-            .documents()
-            .content_state(access.content_id, false)
-            .await?
-            .ok_or_else(|| AppError::not_found("Could not find document content."))?;
+        let version = match target.owner() {
+            None => {
+                let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
+                tx.documents()
+                    .content_state(access.content_id, false)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("Could not find document content."))?
+                    .version
+            }
+            Some(_) => self.owner_in(&mut *tx, &snap, ctx, target).await?.version,
+        };
         tx.commit().await?;
-        Ok(cs.version)
+        Ok(version)
     }
 
     /// Speichert den Stand eines Raums wie das automatische Speichern des Editors: bereinigtes
@@ -242,7 +415,11 @@ impl App {
         epoch: Uuid,
         expected_version: i32,
     ) -> AppResult<PersistOutcome> {
-        let CollabTarget::Document(doc_id) = target;
+        let CollabTarget::Document(doc_id) = target else {
+            return self
+                .collab_persist_owner(ctx, target, markdown, state, epoch, expected_version)
+                .await;
+        };
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
@@ -290,6 +467,104 @@ impl App {
         tx.commit().await?;
         Ok(PersistOutcome::Saved {
             version: view.doc.content_version,
+        })
+    }
+
+    /// Speichern der Beschreibung eines Issues/Projekts/einer Initiative über denselben Weg wie
+    /// ein normales Ändern (Bereinigung, Version, Verlauf, Ereignisse, Erwähnungen). Die Prüfung der
+    /// Revision und das Schreiben laufen in getrennten Transaktionen: eine API-Änderung dazwischen
+    /// wird vom Raum beim nächsten Abgleich zusammengeführt (letzter Schreiber gewinnt den Text).
+    async fn collab_persist_owner(
+        &self,
+        ctx: &RequestCtx,
+        target: CollabTarget,
+        markdown: &str,
+        state: &str,
+        epoch: Uuid,
+        expected_version: i32,
+    ) -> AppResult<PersistOutcome> {
+        let Some((owner_type, owner_id)) = target.owner() else {
+            return Err(AppError::internal("not an owner target"));
+        };
+        let (owner, load, can_write) = {
+            let mut tx = self.store.begin(ctx.org_id).await?;
+            let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+            let access = self.collab_access_in(&mut *tx, &snap, ctx, target).await?;
+            let o = self.owner_in(&mut *tx, &snap, ctx, target).await?;
+            let load = self.collab_load_in(&mut *tx, &snap, ctx, target).await?;
+            tx.commit().await?;
+            (o, load, access.can_write)
+        };
+        if !can_write {
+            return Err(AppError::forbidden("Not allowed to edit this content."));
+        }
+        if owner.version != expected_version {
+            return Ok(PersistOutcome::Stale(load));
+        }
+        let clean = clean_markdown(markdown)?;
+        let version = if clean == owner.markdown {
+            owner.version
+        } else {
+            match target {
+                CollabTarget::Issue(id) => {
+                    self.update_issue(
+                        ctx,
+                        crate::usecases::issue::UpdateIssueInput {
+                            id: id.0.to_string(),
+                            description: Some(crate::usecases::issue::DescriptionEdit::Set(clean)),
+                            source: crate::ports::repos::issue::HistorySource::User,
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                    .issue
+                    .version
+                }
+                CollabTarget::Project(id) => {
+                    self.save_project(
+                        ctx,
+                        crate::usecases::project::SaveProjectInput {
+                            id: Some(id.0.to_string()),
+                            description: Some(clean),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                    .project
+                    .version
+                }
+                CollabTarget::Initiative(id) => {
+                    self.save_initiative(
+                        ctx,
+                        crate::usecases::initiative::SaveInitiativeInput {
+                            id: Some(id.0.to_string()),
+                            description: Some(clean),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                    .initiative
+                    .version
+                }
+                CollabTarget::Document(_) => {
+                    return Err(AppError::internal("document target in owner path"));
+                }
+            }
+        };
+        // Zustand festhalten (eigene Transaktion: der Text liegt am Besitzer).
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let cs = tx
+            .documents()
+            .content_state_of_owner(owner_type, owner_id, &load.markdown, true)
+            .await?;
+        tx.documents()
+            .set_content_state(cs.content_id, None, Some(state), Some(epoch))
+            .await?;
+        tx.commit().await?;
+        Ok(if version == owner.version {
+            PersistOutcome::Unchanged { version }
+        } else {
+            PersistOutcome::Saved { version }
         })
     }
 }
