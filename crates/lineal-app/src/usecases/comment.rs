@@ -175,6 +175,26 @@ pub(crate) fn authorize(
     Ok(())
 }
 
+/// Wie `authorize`, berücksichtigt aber Freigaben: bei Issue-Eltern gilt die zentrale Regel
+/// `resolve::issue::authorize_issue` (Team sichtbar oder Issue mit dem Akteur geteilt).
+async fn authorize_parent(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    parent: ParentRef,
+    scope: &ParentScope,
+    action: Action,
+    write: bool,
+) -> AppResult<()> {
+    if let (ParentRef::Issue(issue), ParentScope::Teams(teams)) = (parent, scope)
+        && teams.len() == 1
+    {
+        return crate::resolve::issue::authorize_issue(tx, snap, ctx, issue, teams[0], action)
+            .await;
+    }
+    authorize(snap, ctx, scope, action, write)
+}
+
 async fn scope_of(tx: &mut dyn Tx, parent: ParentRef) -> AppResult<ParentScope> {
     tx.comments()
         .parent_scope(parent)
@@ -417,13 +437,15 @@ async fn load_accessible(
         .parent_scope(comment.parent)
         .await?
         .ok_or_else(|| not_found("Comment", id))?;
-    authorize(snap, ctx, &scope, action, write).map_err(|e| {
-        if e.kind == crate::error::ErrorKind::NotFound {
-            not_found("Comment", id)
-        } else {
-            e
-        }
-    })?;
+    authorize_parent(tx, snap, ctx, comment.parent, &scope, action, write)
+        .await
+        .map_err(|e| {
+            if e.kind == crate::error::ErrorKind::NotFound {
+                not_found("Comment", id)
+            } else {
+                e
+            }
+        })?;
     Ok((comment, scope))
 }
 
@@ -448,7 +470,16 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let parent = resolve_parent(&mut *tx, &input.parent).await?;
         let scope = scope_of(&mut *tx, parent).await?;
-        authorize(&snap, ctx, &scope, Action::ViewTeam, false)?;
+        authorize_parent(
+            &mut *tx,
+            &snap,
+            ctx,
+            parent,
+            &scope,
+            Action::ViewTeam,
+            false,
+        )
+        .await?;
         let limit = input.limit.clamp(1, 250);
         let mut rows = tx
             .comments()
@@ -530,7 +561,16 @@ impl App {
             }
         };
         let scope = scope_of(&mut *tx, parent).await?;
-        authorize(&snap, ctx, &scope, Action::CommentIssue, true)?;
+        authorize_parent(
+            &mut *tx,
+            &snap,
+            ctx,
+            parent,
+            &scope,
+            Action::CommentIssue,
+            true,
+        )
+        .await?;
 
         // Ein Status-Update hat genau einen Thread: weitere Kommentare werden Antworten.
         if root.is_none()
@@ -936,14 +976,17 @@ async fn resolve_reaction_target(
         ReactionTargetSpec::Comment(id) => {
             let (c, scope) =
                 load_accessible(tx, snap, ctx, id, Action::ReactIssue, true, false).await?;
-            (ReactionTarget::Comment(c.id), scope)
+            authorize_parent(tx, snap, ctx, c.parent, &scope, Action::ReactIssue, true).await?;
+            return Ok(ReactionTarget::Comment(c.id));
         }
         ReactionTargetSpec::Issue(r) => {
             let p = resolve_parent(tx, &ParentSpec::Issue(r.clone())).await?;
             let ParentRef::Issue(i) = p else {
                 return Err(not_found("Issue", r));
             };
-            (ReactionTarget::Issue(i), scope_of(tx, p).await?)
+            let scope = scope_of(tx, p).await?;
+            authorize_parent(tx, snap, ctx, p, &scope, Action::ReactIssue, true).await?;
+            return Ok(ReactionTarget::Issue(i));
         }
         ReactionTargetSpec::ProjectUpdate(r) | ReactionTargetSpec::InitiativeUpdate(r) => {
             let kind = if matches!(spec, ReactionTargetSpec::ProjectUpdate(_)) {
