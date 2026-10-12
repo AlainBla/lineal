@@ -203,6 +203,9 @@ describe("navigation helpers", () => {
     expect(teamKeyFromPath("/acme/team/WEB/triage")).toBe("WEB");
     expect(teamKeyFromPath("/acme/inbox")).toBeNull();
     expect(breadcrumbFor("/acme/team/ENG/all")).toEqual(["ENG", "All issues"]);
+    // Slugs aus Titeln erscheinen nie (auch nicht ohne Zugriff auf das Objekt).
+    expect(breadcrumbFor("/acme/issue/ENG-13/geteiltes-issue-xyz")).toEqual(["Issue", "ENG-13"]);
+    expect(breadcrumbFor("/acme/document/geheime-planung-a1b2")).toEqual(["Document"]);
   });
 });
 

@@ -9,6 +9,7 @@ use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
 use crate::ports::repos::attachment::{Attachment, IssueRef, NewLink, NewUpload, Reservation};
+use crate::resolve;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::*;
@@ -233,13 +234,15 @@ impl App {
             .find_issue(reference)
             .await?
             .ok_or_else(|| not_found_issue(reference))?;
-        snap.require_team(ctx, action, issue.team_id).map_err(|e| {
-            if e.kind == crate::error::ErrorKind::NotFound {
-                not_found_issue(reference)
-            } else {
-                e
-            }
-        })?;
+        resolve::issue::authorize_issue(tx, snap, ctx, issue.id, issue.team_id, action)
+            .await
+            .map_err(|e| {
+                if e.kind == crate::error::ErrorKind::NotFound {
+                    not_found_issue(reference)
+                } else {
+                    e
+                }
+            })?;
         Ok(issue)
     }
 
@@ -612,9 +615,16 @@ impl App {
                     let Some(issue) = tx.attachments().issue_ref(a.issue_id).await? else {
                         continue;
                     };
-                    if snap
-                        .require_team(ctx, Action::ViewTeam, issue.team_id)
-                        .is_err()
+                    if resolve::issue::authorize_issue(
+                        &mut *tx,
+                        &snap,
+                        ctx,
+                        issue.id,
+                        issue.team_id,
+                        Action::ViewTeam,
+                    )
+                    .await
+                    .is_err()
                     {
                         continue;
                     }
@@ -680,13 +690,15 @@ impl App {
             .issue_ref(attachment.issue_id)
             .await?
             .ok_or_else(not_found)?;
-        snap.require_team(ctx, action, issue.team_id).map_err(|e| {
-            if e.kind == crate::error::ErrorKind::NotFound {
-                not_found()
-            } else {
-                e
-            }
-        })?;
+        resolve::issue::authorize_issue(tx, snap, ctx, issue.id, issue.team_id, action)
+            .await
+            .map_err(|e| {
+                if e.kind == crate::error::ErrorKind::NotFound {
+                    not_found()
+                } else {
+                    e
+                }
+            })?;
         Ok((attachment, issue))
     }
 

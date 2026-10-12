@@ -1261,7 +1261,7 @@ impl App {
             created_after: input.created_after,
             updated_after: input.updated_after,
             triaged_after: input.triaged_after,
-            shared_with: actor_user_id(ctx),
+            shared_with: resolve::issue::share_recipient(&snap, ctx),
             ..Default::default()
         };
         let mut scope_team: Option<Team> = None;

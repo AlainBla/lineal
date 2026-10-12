@@ -344,7 +344,7 @@ async fn can_see(
             if scope.teams.iter().any(|t| visible.contains(t)) {
                 true
             } else {
-                match actor_user_id(ctx) {
+                match crate::resolve::issue::share_recipient(snap, ctx) {
                     Some(u) => tx.documents().issue_shared_with(i, u).await?,
                     None => false,
                 }

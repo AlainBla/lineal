@@ -427,7 +427,15 @@ async fn visibility_follows_project_issue_and_initiative_parents(pool: PgPool) {
         ),
         ErrorKind::NotFound
     );
-    // Issue-Sharing macht das Dokument lesbar, aber nicht schreibbar.
+    // Issue-Sharing macht das Dokument lesbar, aber nicht schreibbar (Freigaben müssen im
+    // Workspace erlaubt sein, sonst wirken bestehende Freigaben nicht).
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(SeedData::acme().org.0)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1, $2, $3)")
         .bind(SeedData::acme().org.0)
         .bind(issue.issue.id.0)

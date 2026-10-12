@@ -354,6 +354,7 @@ impl<'a> Fan<'a> {
             .recipients(
                 &mut *self.tx,
                 &ViewIssueEvent {
+                    now: self.now,
                     issue: f,
                     is_new,
                     changed,

@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import { expect, test } from "@playwright/test";
 
 import { createIssue, login, sql, unique } from "./helpers";
@@ -13,6 +15,12 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
 
   // Teilen braucht aktivierte Freigaben und einen Team-Owner (Bob ist in ENG nur Mitglied).
   sql(`UPDATE organization SET limits = limits || '{"issueSharingEnabled": true}'::jsonb`);
+  // Eigener Key: F22 sperrt Bob zwischendurch, das widerruft dessen übrige API-Keys dauerhaft.
+  const key = `lin_api_e2e_f32_${randomBytes(12).toString("hex")}`;
+  const hash = createHash("sha256").update(key).digest("hex");
+  sql(
+    `INSERT INTO api_key (organization_id, user_id, label, key_prefix, key_hash, scopes, team_ids) SELECT u.organization_id, u.id, 'e2e f32', left('${key}', 12), '${hash}', ARRAY['read','write'], NULL FROM "user" u WHERE u.email = 'bob@acme.example'`,
+  );
   sql(
     `UPDATE team_membership SET owner = true WHERE user_id = (SELECT id FROM "user" WHERE email = 'bob@acme.example') AND team_id = (SELECT id FROM team WHERE key = 'ENG')`,
   );
@@ -32,21 +40,37 @@ test("a shared issue appears live for the guest and disappears on unshare", asyn
   await expect(carol.getByRole("alert")).toBeVisible();
   await expect(carol.getByText(title)).toHaveCount(0);
 
+  // Ein Kommentar von Bob am Issue: Carol soll ihn nach dem Teilen lesen können.
+  const note = unique("Kommentar");
+  const commented = await callTool(request, key, "save_comment", {
+    issueId: identifier,
+    body: note,
+  });
+  expect(commented.isError, JSON.stringify(commented.data)).toBe(false);
+
   // Bob teilt (MCP `share_issue`, API-Key von Bob): der Sync-Strom stellt es Carol zu.
-  const shared = await callTool(request, API_KEY, "share_issue", {
+  const shared = await callTool(request, key, "share_issue", {
     issue: identifier,
     user: "carol@acme.example",
   });
   expect(shared.isError, JSON.stringify(shared.data)).toBe(false);
-  await expect(carol.getByText(title).first()).toBeVisible({ timeout: 20_000 });
+  // Der Titel steht im Eingabefeld der Detailseite (kein Textknoten, daher nicht über getByText).
+  await expect(carol.getByRole("textbox", { name: "Title" })).toHaveValue(title, {
+    timeout: 20_000,
+  });
+
+  // Kommentare des geteilten Issues sind lesbar (kein „Could not load comments“).
+  await expect(carol.getByText(note)).toBeVisible({ timeout: 20_000 });
 
   // Entzug: das Issue verschwindet bei Carol wieder.
-  const unshared = await callTool(request, API_KEY, "unshare_issue", {
+  const unshared = await callTool(request, key, "unshare_issue", {
     issue: identifier,
     user: "carol@acme.example",
   });
   expect(unshared.isError, JSON.stringify(unshared.data)).toBe(false);
-  await expect(carol.getByText(title)).toHaveCount(0, { timeout: 20_000 });
+  // Die Detailseite zeigt wieder „nicht gefunden“ (Fehlerhinweis, Titelfeld verschwunden).
+  await expect(carol.getByRole("alert").first()).toBeVisible({ timeout: 20_000 });
+  await expect(carol.getByRole("textbox", { name: "Title" })).toHaveCount(0);
 
   await bobCtx.close();
   await carolCtx.close();
