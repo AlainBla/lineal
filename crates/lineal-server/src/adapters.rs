@@ -105,6 +105,8 @@ pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
             blob_dir: config.blob_dir.clone(),
             allowed_origins: config.allowed_origins.clone(),
             trusted_proxies: config.trusted_proxies.clone(),
+            workspace_creation: config.workspace_creation,
+            instance_admins: config.instance_admins.clone(),
         },
     })
 }

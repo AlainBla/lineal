@@ -1,6 +1,7 @@
 //! Konfiguration aus der Umgebung (12-Factor). WP03 erweitert.
 
 use anyhow::{Context, Result, bail};
+use lineal_app::WorkspaceCreation;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -21,6 +22,11 @@ pub struct Config {
     pub allowed_origins: Vec<String>,
     /// `LINEAL_TRUSTED_PROXIES` (CIDR-Liste); leer = `X-Forwarded-For` wird ignoriert.
     pub trusted_proxies: Vec<String>,
+    /// `LINEAL_WORKSPACE_CREATION=disabled|admins|all`; Default `all` im Dev-Modus, sonst
+    /// `disabled`. Gilt für GraphQL `createWorkspace`, nicht für das CLI.
+    pub workspace_creation: WorkspaceCreation,
+    /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste E-Mails, kleingeschrieben) für `admins`.
+    pub instance_admins: Vec<String>,
 }
 
 fn csv(value: Option<String>) -> Vec<String> {
@@ -41,6 +47,15 @@ fn random_secret() -> String {
     )
 }
 
+fn is_dev(v: Option<String>) -> bool {
+    v.is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
+/// `LINEAL_DEV` aus der Umgebung (ohne die übrige Konfiguration zu prüfen).
+pub fn dev_from_env() -> bool {
+    is_dev(std::env::var("LINEAL_DEV").ok())
+}
+
 impl Config {
     /// Liest die Konfiguration aus Umgebungsvariablen (siehe `.env.example`).
     pub fn from_env() -> Result<Self> {
@@ -49,7 +64,7 @@ impl Config {
 
     /// Wie [`Config::from_env`], mit austauschbarer Quelle (Tests).
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let dev = get("LINEAL_DEV").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+        let dev = is_dev(get("LINEAL_DEV"));
         // Das Secret signiert Blob-URLs (HMAC). Ein bekanntes oder fehlendes Secret erlaubt
         // gefälschte Upload-/Download-URLs, daher außerhalb des Dev-Modus Pflicht.
         let session_secret = match get("LINEAL_SESSION_SECRET") {
@@ -70,6 +85,16 @@ impl Config {
                 bail!("LINEAL_TRUSTED_PROXIES: invalid CIDR {cidr:?}");
             }
         }
+        let workspace_creation = match get("LINEAL_WORKSPACE_CREATION") {
+            Some(v) if !v.trim().is_empty() => WorkspaceCreation::parse(&v)
+                .context("LINEAL_WORKSPACE_CREATION must be disabled, admins or all")?,
+            _ if dev => WorkspaceCreation::All,
+            _ => WorkspaceCreation::Disabled,
+        };
+        let instance_admins: Vec<String> = csv(get("LINEAL_INSTANCE_ADMINS"))
+            .into_iter()
+            .map(|e| e.to_lowercase())
+            .collect();
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -84,6 +109,8 @@ impl Config {
             dev,
             allowed_origins,
             trusted_proxies,
+            workspace_creation,
+            instance_admins,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())
                 .transpose()
@@ -158,6 +185,43 @@ mod tests {
         assert_eq!(cfg.trusted_proxies, ["10.0.0.0/8", "::1"]);
         assert!(with("", "").unwrap().trusted_proxies.is_empty());
         assert!(with("", "10.0.0.0/99").is_err());
+    }
+
+    #[test]
+    fn workspace_creation_defaults_and_admins() {
+        let with = |dev: bool, mode: Option<&'static str>, admins: Option<&'static str>| {
+            Config::from_lookup(move |k| match k {
+                "LINEAL_DEV" => dev.then(|| "1".into()),
+                "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
+                "LINEAL_WORKSPACE_CREATION" => mode.map(Into::into),
+                "LINEAL_INSTANCE_ADMINS" => admins.map(Into::into),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            with(true, None, None).unwrap().workspace_creation,
+            WorkspaceCreation::All
+        );
+        assert_eq!(
+            with(false, None, None).unwrap().workspace_creation,
+            WorkspaceCreation::Disabled
+        );
+        assert_eq!(
+            with(false, Some("All"), None).unwrap().workspace_creation,
+            WorkspaceCreation::All
+        );
+        let cfg = with(
+            false,
+            Some("admins"),
+            Some(" Alice@Acme.example, bob@acme.example ,"),
+        )
+        .unwrap();
+        assert_eq!(cfg.workspace_creation, WorkspaceCreation::Admins);
+        assert_eq!(
+            cfg.instance_admins,
+            ["alice@acme.example", "bob@acme.example"]
+        );
+        assert!(with(false, Some("maybe"), None).is_err());
     }
 
     #[test]

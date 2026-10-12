@@ -8,7 +8,7 @@
 use super::auth::{LoginInput, hash_token};
 use super::team::emit;
 use super::user::{display_name_from_email, validate_email, validate_password};
-use crate::app::App;
+use crate::app::{App, WorkspaceCreation};
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
@@ -590,6 +590,22 @@ impl App {
             .filter(|u| u.active && u.status == "active")
             .ok_or_else(|| AppError::forbidden("Only active users can create workspaces."))?;
         drop(tx);
+        let allowed = match self.config.workspace_creation {
+            WorkspaceCreation::All => true,
+            WorkspaceCreation::Disabled => false,
+            WorkspaceCreation::Admins => {
+                let email = account.email.trim();
+                self.config
+                    .instance_admins
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(email))
+            }
+        };
+        if !allowed {
+            return Err(AppError::forbidden(
+                "Workspace creation is disabled on this instance.",
+            ));
+        }
         let mut sys = self.store.begin_system().await?;
         let owned = sys
             .auth()

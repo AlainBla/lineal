@@ -10,6 +10,6 @@ pub mod ports;
 pub mod resolve;
 pub mod usecases;
 
-pub use app::{App, AppConfig};
+pub use app::{App, AppConfig, WorkspaceCreation};
 pub use context::{Actor, RequestCtx, Scopes};
 pub use error::{AppError, AppResult, ErrorKind};

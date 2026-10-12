@@ -4,6 +4,31 @@ use crate::ports::{BlobStore, Clock, IdGen, Mailer, PasswordHasher, SearchIndex,
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Wer darf per `createWorkspace` (angemeldetes Konto) weitere Workspaces anlegen?
+/// Das CLI `lineal create-workspace` (Betreiberzugang) ist davon ausgenommen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkspaceCreation {
+    /// Niemand.
+    Disabled,
+    /// Nur Konten, deren E-Mail in `instance_admins` steht.
+    Admins,
+    /// Jeder angemeldete User.
+    #[default]
+    All,
+}
+
+impl WorkspaceCreation {
+    /// Parst `disabled|admins|all` (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Some(Self::Disabled),
+            "admins" => Some(Self::Admins),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// Konfiguration, die der Application-Layer kennt (aus der Umgebung gelesen vom Server).
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -14,6 +39,11 @@ pub struct AppConfig {
     pub allowed_origins: Vec<String>,
     /// CIDR-Liste vertrauenswürdiger Proxys (`X-Forwarded-For` nur von diesen Peers).
     pub trusted_proxies: Vec<String>,
+    /// Betreiber-Policy für `createWorkspace` (Default `All`; der Server setzt außerhalb des
+    /// Dev-Modus `Disabled`).
+    pub workspace_creation: WorkspaceCreation,
+    /// Instanz-Admins (E-Mails, kleingeschrieben) für `WorkspaceCreation::Admins`.
+    pub instance_admins: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -24,6 +54,8 @@ impl Default for AppConfig {
             blob_dir: PathBuf::from("./var/blobs"),
             allowed_origins: Vec::new(),
             trusted_proxies: Vec::new(),
+            workspace_creation: WorkspaceCreation::All,
+            instance_admins: Vec::new(),
         }
     }
 }
