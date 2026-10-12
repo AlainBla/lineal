@@ -34,6 +34,7 @@ pub struct FakeSource {
     policy: UrlPolicy,
     page_calls: Mutex<HashMap<&'static str, usize>>,
     downloads: Mutex<Vec<String>>,
+    probes: Mutex<Vec<String>>,
     /// Wenn gesetzt: jede Anfrage schlägt mit diesem Fehler fehl (z. B. `Auth`).
     fail_with: Mutex<Option<SourceError>>,
     /// Entität, Anzahl erfolgreicher Seitenabrufe, danach Fehler (Absturz mitten im Lauf).
@@ -84,6 +85,7 @@ impl FakeSource {
             policy,
             page_calls: Mutex::new(HashMap::new()),
             downloads: Mutex::new(Vec::new()),
+            probes: Mutex::new(Vec::new()),
             fail_with: Mutex::new(None),
             fail_after: Mutex::new(None),
             kind: "linear",
@@ -157,6 +159,11 @@ impl FakeSource {
         lock(&self.downloads).clone()
     }
 
+    /// URLs, deren Größe erfragt wurde (`probe`).
+    pub fn probes(&self) -> Vec<String> {
+        lock(&self.probes).clone()
+    }
+
     /// Download-Policy für Tests ersetzen.
     #[must_use]
     pub fn with_policy(mut self, policy: UrlPolicy) -> Self {
@@ -221,6 +228,15 @@ impl ImportSource for FakeSource {
             items: page,
             next_cursor: next,
         })
+    }
+
+    async fn probe(&self, url: &str) -> SourceResult<Option<u64>> {
+        if let Some(e) = lock(&self.fail_with).clone() {
+            return Err(e);
+        }
+        self.policy.check_url(url)?;
+        lock(&self.probes).push(url.to_owned());
+        Ok(self.files.get(url).map(|(_, b)| b.len() as u64))
     }
 
     async fn download(&self, url: &str) -> SourceResult<Downloaded> {

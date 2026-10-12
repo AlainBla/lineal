@@ -14,6 +14,7 @@ mod issues;
 pub mod node;
 mod people;
 mod planning;
+mod views;
 mod workflow;
 
 use crate::blob::BlobSink;
@@ -193,12 +194,13 @@ pub(crate) enum Step {
     Documents,
     ProjectUpdates,
     InitiativeUpdates,
+    UpdateComments,
     Views,
     Finalize,
 }
 
 impl Step {
-    pub const ALL: [Step; 25] = [
+    pub const ALL: [Step; 26] = [
         Self::Users,
         Self::Teams,
         Self::Memberships,
@@ -222,6 +224,7 @@ impl Step {
         Self::Documents,
         Self::ProjectUpdates,
         Self::InitiativeUpdates,
+        Self::UpdateComments,
         Self::Views,
         Self::Finalize,
     ];
@@ -238,7 +241,11 @@ impl Step {
             Self::Issues | Self::IssueParents | Self::IssueRelations => 4,
             Self::Comments | Self::IssueHistory | Self::IssueSubscriptions => 5,
             Self::Attachments | Self::EmbeddedFiles => 6,
-            Self::Documents | Self::ProjectUpdates | Self::InitiativeUpdates | Self::Views => 7,
+            Self::Documents
+            | Self::ProjectUpdates
+            | Self::InitiativeUpdates
+            | Self::UpdateComments
+            | Self::Views => 7,
             Self::Finalize => 8,
         }
     }
@@ -268,6 +275,7 @@ impl Step {
             Self::Documents => "Documents",
             Self::ProjectUpdates => "ProjectUpdates",
             Self::InitiativeUpdates => "InitiativeUpdates",
+            Self::UpdateComments => "UpdateComments",
             Self::Views => "Views",
             Self::Finalize => "Finalize",
         }
@@ -413,6 +421,8 @@ pub(crate) struct Session<'e, 'a> {
     pub label_nodes: HashMap<String, Value>,
     /// Zähler für den Plan/Bericht (`stats.plan`), z. B. `statesMapped`.
     pub plan: BTreeMap<String, u64>,
+    /// Dry-Run: bereits gezählte Download-URLs (je Datei nur einmal).
+    pub dl_seen: HashSet<String>,
 }
 
 impl<'a> ImportEngine<'a> {
@@ -484,6 +494,7 @@ impl<'a> ImportEngine<'a> {
             user_nodes: HashMap::new(),
             label_nodes: HashMap::new(),
             plan: BTreeMap::new(),
+            dl_seen: HashSet::new(),
         };
         let result = s.drive().await;
         s.finish(result).await
@@ -631,6 +642,11 @@ impl Session<'_, '_> {
             .get_mappings(&source, ty, &[src.to_owned()])
             .await?;
         Ok(rows.into_iter().next())
+    }
+
+    /// Planzähler um `n` erhöhen (`stats.plan`).
+    pub(crate) fn plan_add_n(&mut self, key: &str, n: u64) {
+        *self.plan.entry(key.to_owned()).or_default() += n;
     }
 
     /// Planzähler erhöhen (`stats.plan`).

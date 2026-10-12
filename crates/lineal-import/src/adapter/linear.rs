@@ -56,7 +56,8 @@ const ISSUE_FIELDS: &str = "id number identifier title description priority esti
     createdAt updatedAt archivedAt startedAt completedAt canceledAt autoClosedAt autoArchivedAt triagedAt \
     snoozedUntilAt slaStartedAt slaMediumRiskAt slaHighRiskAt slaBreachesAt slaType trashed previousIdentifiers \
     url team { id key } state { id } assignee { id } delegate { id } creator { id } parent { id } project { id } \
-    projectMilestone { id } cycle { id } labels(first: 50) { nodes { id } }";
+    projectMilestone { id } cycle { id } labels(first: 50) { nodes { id } } \
+    reactions { id emoji createdAt user { id } }";
 
 fn spec(entity: SourceEntity) -> QuerySpec {
     use SourceEntity::*;
@@ -228,14 +229,16 @@ fn spec(entity: SourceEntity) -> QuerySpec {
         ),
         CustomViews => conn(
             "customViews",
-            "id name description icon color shared filterData createdAt updatedAt team { id } owner { id }",
+            "id name description icon color shared modelName filterData projectFilterData initiativeFilterData \
+             createdAt updatedAt archivedAt team { id } owner { id } creator { id }",
             "",
             false,
         ),
         Favorites => conn(
             "favorites",
-            "id type sortOrder createdAt updatedAt owner { id } issue { id } project { id } customView { id } \
-             initiative { id }",
+            "id type sortOrder folderName predefinedViewType createdAt updatedAt archivedAt owner { id } \
+             parent { id } issue { id } project { id } customView { id } initiative { id } cycle { id } \
+             document { id } label { id } projectLabel { id } team { id } user { id } predefinedViewTeam { id }",
             "",
             false,
         ),
@@ -648,6 +651,10 @@ impl ImportSource for LinearSource {
 
     async fn download(&self, url: &str) -> SourceResult<Downloaded> {
         self.config.policy.fetch(url, Some(&self.auth)).await
+    }
+
+    async fn probe(&self, url: &str) -> SourceResult<Option<u64>> {
+        self.config.policy.head_size(url, Some(&self.auth)).await
     }
 }
 

@@ -93,15 +93,8 @@ impl Session<'_, '_> {
             Step::Documents => self.step_documents(cursor).await,
             Step::ProjectUpdates => self.step_project_updates(cursor).await,
             Step::InitiativeUpdates => self.step_initiative_updates(cursor).await,
-            Step::Views => {
-                self.note(
-                    "info",
-                    "CustomView",
-                    None,
-                    "custom views and favorites are not imported by this version of the importer",
-                );
-                Ok(())
-            }
+            Step::UpdateComments => self.step_update_comments(cursor).await,
+            Step::Views => self.step_views(cursor).await,
             Step::Finalize => self.step_finalize().await,
         }
     }
