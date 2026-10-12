@@ -9,7 +9,8 @@ export function SettingsShell({
   children,
 }: {
   title: string;
-  nav: Array<{ label: string; to: string; active: boolean }>;
+  /** `group` setzt vor dem Eintrag eine Überschrift (gilt bis zur nächsten Gruppe). */
+  nav: Array<{ label: string; to: string; active: boolean; group?: string }>;
   children: ReactNode;
 }) {
   useEffect(() => {
@@ -29,6 +30,11 @@ export function SettingsShell({
         <ul className="flex flex-col gap-px">
           {nav.map((n) => (
             <li key={n.label}>
+              {n.group && (
+                <p className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground first:pt-1">
+                  {n.group}
+                </p>
+              )}
               <Link
                 to={n.to as "/"}
                 aria-current={n.active ? "page" : undefined}
