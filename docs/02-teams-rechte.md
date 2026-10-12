@@ -395,6 +395,8 @@ Das Original führt nach dem Setzen des Parents durch einen Wizard (Status norma
 
 Die Ausführung ist ein Hintergrundjob, weil viele Issues betroffen sein können. Während des Jobs ist das Team gesperrt (Schreibzugriffe → `conflict` mit `details.reason = "team_migration_in_progress"`).
 
+> **Umsetzung (WP29).** `previewTeamNesting` ist als GraphQL-Query verfügbar und liefert `conflicts[]` mit `kind` ∈ `membership`, `visibility`, `workflowState` (inkl. automatischem Ziel je Status), `label`, `cycle`, `estimate`. Die Ausführung ist **kein** Hintergrundjob, sondern läuft in einer Transaktion (kein Teamsperr-Zustand `team_migration_in_progress`). `stateMapping` ist umgesetzt (`{fromStateId, toStateId}`, Ziel muss ein Status des Parents sein); `labelMapping` und das Zusammenführen der Label-Duplikate (Schritt 6) fehlen noch: die Vorschau zeigt die Duplikate, sie bleiben Team-Labels. Schritt 7 (Cycles: laufenden Cycle schließen, Issues künftiger Cycles verschieben) ist nur teilweise umgesetzt – das Team übernimmt den Zeitplan des Parents, deshalb meldet die Vorschau `cycle` – und die Projektstatus-Neuauflösung (Schritt 9) fehlt.
+
 **Algorithmus `nestTeam(T, P, options)`**:
 
 1. **Recht und Grundprüfungen:** Aufrufer ist `admin`/`owner`; `subTeamsEnabled`; `P != T`; `P` ist kein Nachfahre von `T`; `P` und `T` sind nicht retired/gelöscht; `depth(P) + height(T) <= maxTeamDepth`. Sonst `invalid_request` bzw. `limit_exceeded`.
