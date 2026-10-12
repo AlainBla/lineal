@@ -1,7 +1,17 @@
 import { ArrowDown, ArrowUp, Plus } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
+import { useSession } from "@/app/auth";
+
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
 import {
@@ -25,6 +35,8 @@ import {
   useWorkflowStates,
   useWorkspaceMembers,
 } from "./queries";
+import { TeamAccessSection, TeamDangerZone } from "./team-admin-sections";
+import { normalizeKey, validateKey } from "./team-key";
 import { Field, Section, selectClass } from "./ui";
 
 function SaveRow({ pending, error, dirty }: { pending: boolean; error: unknown; dirty: boolean }) {
@@ -42,61 +54,162 @@ function SaveRow({ pending, error, dirty }: { pending: boolean; error: unknown; 
   );
 }
 
+const ICON_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+
 export function GeneralSection({ team }: { team: Team }) {
   const update = useUpdateTeam(team.id);
+  const session = useSession();
+  const navigate = useNavigate();
   const [name, setName] = useState(team.name);
   const [key, setKey] = useState(team.key);
   const [description, setDescription] = useState(team.description ?? "");
+  const [icon, setIcon] = useState(team.icon ?? "");
+  const [color, setColor] = useState(team.color ?? "");
   const [timezone, setTimezone] = useState(team.timezone);
+  const [confirmKey, setConfirmKey] = useState(false);
+  const keyError = key !== team.key ? validateKey(key) : null;
+  const iconError = icon !== "" && !ICON_RE.test(icon) ? "Use letters, digits, _ : - only." : null;
+  const colorError =
+    color !== "" && !/^#[0-9A-Fa-f]{6}$/.test(color) ? "Use the form #RRGGBB." : null;
   const dirty =
     name !== team.name ||
     key !== team.key ||
     description !== (team.description ?? "") ||
+    icon !== (team.icon ?? "") ||
+    color !== (team.color ?? "") ||
     timezone !== team.timezone;
+  const invalid = !!keyError || !!iconError || !!colorError;
+  const save = () => {
+    update.mutate(
+      {
+        ...(name !== team.name ? { name } : {}),
+        ...(key !== team.key ? { key } : {}),
+        ...(description !== (team.description ?? "") ? { description } : {}),
+        // Leeren von Icon/Farbe kennt die API nicht; nur gesetzte Werte senden.
+        ...(icon !== (team.icon ?? "") && icon !== "" ? { icon } : {}),
+        ...(color !== (team.color ?? "") && color !== "" ? { color } : {}),
+        ...(timezone !== team.timezone ? { timezone } : {}),
+      },
+      {
+        onSuccess: () => {
+          setConfirmKey(false);
+          // Nach einem Key-Wechsel zeigt die URL den neuen Key.
+          if (key !== team.key && session)
+            void navigate({
+              to: `/${session.workspace.urlKey}/settings/teams/${key}/general` as "/",
+            });
+        },
+      },
+    );
+  };
   return (
-    <Section title="General" description="Name, identifier and timezone of this team.">
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          update.mutate({
-            ...(name !== team.name ? { name } : {}),
-            ...(key !== team.key ? { key } : {}),
-            ...(description !== (team.description ?? "") ? { description } : {}),
-            ...(timezone !== team.timezone ? { timezone } : {}),
-          });
-        }}
+    <>
+      <Section
+        title="General"
+        description="Name, identifier, appearance and timezone of this team."
       >
-        <Field label="Name">
-          <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Identifier">
-          <Input
-            aria-label="Identifier"
-            value={key}
-            onChange={(e) => setKey(e.target.value.toUpperCase())}
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (invalid) return;
+            if (key !== team.key) setConfirmKey(true);
+            else save();
+          }}
+        >
+          <Field label="Name">
+            <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Identifier">
+            <Input
+              aria-label="Identifier"
+              value={key}
+              maxLength={7}
+              aria-invalid={!!keyError}
+              onChange={(e) => setKey(normalizeKey(e.target.value))}
+            />
+            {keyError && (
+              <span role="alert" className="text-xs text-destructive">
+                {keyError}
+              </span>
+            )}
+          </Field>
+          <Field label="Description">
+            <Input
+              aria-label="Description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Icon">
+              <Input
+                aria-label="Icon"
+                value={icon}
+                placeholder="e.g. rocket"
+                onChange={(e) => setIcon(e.target.value)}
+              />
+              {iconError && (
+                <span role="alert" className="text-xs text-destructive">
+                  {iconError}
+                </span>
+              )}
+            </Field>
+            <Field label="Color">
+              <Input
+                aria-label="Color"
+                value={color}
+                placeholder="#5e6ad2"
+                onChange={(e) => setColor(e.target.value)}
+              />
+              {colorError && (
+                <span role="alert" className="text-xs text-destructive">
+                  {colorError}
+                </span>
+              )}
+            </Field>
+          </div>
+          <Field label="Timezone">
+            <Input
+              aria-label="Timezone"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">Estimates: {team.issueEstimationType}</p>
+          <SaveRow
+            pending={update.isPending}
+            error={confirmKey ? null : update.error}
+            dirty={dirty && !invalid}
           />
-        </Field>
-        <Field label="Description">
-          <Input
-            aria-label="Description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </Field>
-        <Field label="Timezone">
-          <Input
-            aria-label="Timezone"
-            value={timezone}
-            onChange={(e) => setTimezone(e.target.value)}
-          />
-        </Field>
-        <p className="text-xs text-muted-foreground">
-          Estimates: {team.issueEstimationType} · Visibility: {team.visibility}
-        </p>
-        <SaveRow pending={update.isPending} error={update.error} dirty={dirty} />
-      </form>
-    </Section>
+        </form>
+        <Dialog open={confirmKey} onOpenChange={setConfirmKey}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Change identifier to {key}?</DialogTitle>
+              <DialogDescription>
+                All issue identifiers of this team switch from {team.key}-… to {key}-…. The old
+                identifiers keep resolving to the same issues.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center gap-3 p-4">
+              <Button size="sm" disabled={update.isPending} onClick={save}>
+                Change identifier
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmKey(false)}>
+                Cancel
+              </Button>
+              {update.isError && (
+                <span role="alert" className="text-xs text-destructive">
+                  {errorText(update.error)}
+                </span>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </Section>
+      <TeamDangerZone team={team} />
+    </>
   );
 }
 
@@ -111,66 +224,74 @@ export function MembersSection({ team }: { team: Team }) {
   }, [all.data, members.data]);
   const [pick, setPick] = useState("");
   return (
-    <Section title="Members" description="People who belong to this team.">
-      {members.isLoading && <ListSkeleton rows={3} />}
-      {members.isError && <ErrorState error={members.error} title="Could not load members" />}
-      <ul className="divide-y divide-border rounded-lg border border-border">
-        {(members.data ?? []).map((m) => (
-          <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-            {m.displayName || m.name}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              aria-label={`Remove ${m.displayName || m.name}`}
-              onClick={() => remove.mutate(m.id)}
+    <>
+      <Section title="Members" description="People who belong to this team.">
+        {members.isLoading && <ListSkeleton rows={3} />}
+        {members.isError && <ErrorState error={members.error} title="Could not load members" />}
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {(members.data ?? []).map((m) => (
+            <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+              {m.displayName || m.name}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                aria-label={`Remove ${m.displayName || m.name}`}
+                onClick={() => remove.mutate(m.id)}
+              >
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+        {adding ? (
+          <div className="flex items-center gap-2">
+            <select
+              aria-label="Add member"
+              className={selectClass}
+              value={pick}
+              onChange={(e) => setPick(e.target.value)}
             >
-              Remove
+              <option value="">Choose a person…</option>
+              {candidates.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.displayName || u.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              disabled={!pick}
+              onClick={() =>
+                add.mutate(pick, {
+                  onSuccess: () => {
+                    setPick("");
+                    setAdding(false);
+                  },
+                })
+              }
+            >
+              Add
             </Button>
-          </li>
-        ))}
-      </ul>
-      {adding ? (
-        <div className="flex items-center gap-2">
-          <select
-            aria-label="Add member"
-            className={selectClass}
-            value={pick}
-            onChange={(e) => setPick(e.target.value)}
-          >
-            <option value="">Choose a person…</option>
-            {candidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.displayName || u.name}
-              </option>
-            ))}
-          </select>
+            {add.isError && (
+              <span role="alert" className="text-xs text-destructive">
+                {errorText(add.error)}
+              </span>
+            )}
+          </div>
+        ) : (
           <Button
+            variant="outline"
             size="sm"
-            disabled={!pick}
-            onClick={() =>
-              add.mutate(pick, {
-                onSuccess: () => {
-                  setPick("");
-                  setAdding(false);
-                },
-              })
-            }
+            className="self-start"
+            onClick={() => setAdding(true)}
           >
-            Add
+            <Plus /> Add a member
           </Button>
-          {add.isError && (
-            <span role="alert" className="text-xs text-destructive">
-              {errorText(add.error)}
-            </span>
-          )}
-        </div>
-      ) : (
-        <Button variant="outline" size="sm" className="self-start" onClick={() => setAdding(true)}>
-          <Plus /> Add a member
-        </Button>
-      )}
-    </Section>
+        )}
+      </Section>
+      <TeamAccessSection team={team} />
+    </>
   );
 }
 

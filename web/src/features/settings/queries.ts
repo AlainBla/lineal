@@ -7,6 +7,8 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type { IssueLabel, Organization, Team, WorkflowState } from "@/gql/graphql";
 import { gqlRequest } from "@/lib/graphql";
 
+import { refreshTeams } from "./teams-queries";
+
 export const settingsKeys = {
   team: (key: string) => ["settings", "team", key] as const,
   members: (key: string) => ["settings", "members", key] as const,
@@ -15,7 +17,7 @@ export const settingsKeys = {
   workspace: ["settings", "workspace"] as const,
 };
 
-const TEAM_FIELDS = `id key name displayName parentId description icon color visibility timezone triageEnabled
+const TEAM_FIELDS = `id key name displayName parentId description icon color visibility allMembersCanJoin timezone triageEnabled
   cyclesEnabled issueEstimationType inheritWorkflowStatuses retiredAt`;
 
 function refresh(qc: QueryClient) {
@@ -48,9 +50,9 @@ export function useUpdateTeam(teamId: string) {
         }`,
         { id: teamId, input },
       ),
-    onSuccess: () => {
+    onSuccess: async () => {
       refresh(qc);
-      void qc.invalidateQueries({ queryKey: ["session"] });
+      await refreshTeams(qc);
     },
   });
 }
