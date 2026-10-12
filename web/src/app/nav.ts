@@ -101,16 +101,31 @@ const SEGMENT_TITLES: Record<string, string> = {
 
 const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, " ");
 
-/** Breadcrumb-Segmente für einen Pfad, ohne Workspace-Präfix: `/acme/team/ENG/all` → `["ENG", "All issues"]`. */
+/** Objektseiten, deren Folgesegmente Kennung und Slug (aus dem Titel) enthalten. */
+const OBJECT_SEGMENTS = new Set(["issue", "document", "project", "initiative", "view"]);
+/** Kennungen wie `ENG-13`, `P-ENG-3` oder Team-Keys. */
+const IDENTIFIER = /^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*$/;
+
+/**
+ * Breadcrumb-Segmente für einen Pfad, ohne Workspace-Präfix: `/acme/team/ENG/all` → `["ENG", "All issues"]`.
+ * Nach Objektsegmenten (`issue`, `document`, …) erscheinen nur Kennungen und bekannte Tabs, nie der
+ * Slug: Er stammt aus dem Titel und würde ihn sonst auch dann zeigen, wenn der Zugriff fehlt.
+ */
 export function breadcrumbFor(pathname: string): string[] {
   const parts = pathname.split("/").filter(Boolean).slice(1); // Workspace-Präfix weg
   const out: string[] = [];
+  let inObject = false;
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i]!;
     if (p === "team") continue;
-    out.push(
-      SEGMENT_TITLES[p] ?? (/^[A-Z][A-Z0-9]*$/.test(p) ? p : titleCase(decodeURIComponent(p))),
-    );
+    const known = SEGMENT_TITLES[p];
+    if (inObject) {
+      if (known) out.push(known);
+      else if (IDENTIFIER.test(p)) out.push(p);
+      continue;
+    }
+    if (OBJECT_SEGMENTS.has(p)) inObject = true;
+    out.push(known ?? (IDENTIFIER.test(p) ? p : titleCase(decodeURIComponent(p))));
   }
   return out;
 }
