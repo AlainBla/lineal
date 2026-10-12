@@ -123,7 +123,8 @@ echo
 echo "Ziel: Projekt '$COMPOSE_PROJECT_NAME' – Datenbank 'lineal' und Volume '$BLOB_VOLUME' werden ÜBERSCHRIEBEN."
 echo "Backup-Volume laut Manifest: $BLOB_VOLUME_BACKUP"
 if (( ASSUME_YES == 0 )); then
-  read -r -p "Zum Fortfahren 'restore' eingeben: " answer || answer=""
+  printf "Zum Fortfahren 'restore' eingeben: " >&2
+  read -r answer || answer=""
   [[ "$answer" == "restore" ]] || die "abgebrochen (keine Änderung vorgenommen)"
 fi
 
