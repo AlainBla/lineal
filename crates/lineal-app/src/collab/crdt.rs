@@ -101,7 +101,10 @@ pub fn apply_markdown(doc: &Doc, new_md: &str) -> Option<Vec<u8>> {
     let new_keys: Vec<String> = new_blocks.iter().map(pm::block_to_markdown).collect();
     let mut txn = doc.transact_mut();
     let before = txn.state_vector();
-    let old_blocks = pm::read_fragment(&frag, &txn);
+    let old_blocks = pm::read_top_level(&frag, &txn);
+    if u32::try_from(old_blocks.len()).ok() != Some(frag.len(&txn)) {
+        return None;
+    }
     // Leere Blöcke (z. B. der abschließende Absatz des Editors) bleiben unangetastet: sie sind im
     // Markdown unsichtbar. Gearbeitet wird auf den Indizes der Quellkinder.
     let old: Vec<(usize, String)> = old_blocks
@@ -230,6 +233,11 @@ fn edit_block_in_place<F: XmlFragment>(
     let Some(XmlOut::Text(text)) = el.get(&*txn, 0) else {
         return false;
     };
+    // Der gelesene Text muss die Länge des Y-Texts exakt abbilden (Einbettungen u. Ä. würden die
+    // Offsets verschieben): sonst wird der ganze Block ersetzt statt falsch zu schneiden.
+    if text.len(&*txn) != utf16_len(&oc_chars) {
+        return false;
+    }
     let mut pre = 0;
     while pre < oc_chars.len() && pre < nc_chars.len() && oc_chars[pre] == nc_chars[pre] {
         pre += 1;
@@ -429,8 +437,13 @@ pub fn anchors_for_quote(doc: &Doc, quoted: &str) -> Option<(String, String)> {
         };
         let start = u32::try_from(plain[..byte_at].encode_utf16().count()).ok()?;
         let len = u32::try_from(quoted.encode_utf16().count()).ok()?;
+        let end = start.checked_add(len)?;
+        // Offsets nur, wenn der gelesene Text die Länge des Y-Texts exakt abbildet.
+        if t.len(&txn) != u32::try_from(plain.encode_utf16().count()).ok()? {
+            continue;
+        }
         let a = t.sticky_index(&txn, start, Assoc::After)?;
-        let b = t.sticky_index(&txn, start + len, Assoc::Before)?;
+        let b = t.sticky_index(&txn, end, Assoc::Before)?;
         return Some((
             STANDARD.encode(a.encode_v1()),
             STANDARD.encode(b.encode_v1()),
@@ -559,6 +572,35 @@ mod tests {
     }
 
     #[test]
+    fn prepend_after_front_deletion() {
+        let d = doc_from_markdown("A\n\nB");
+        apply_markdown(&d, "B").expect("c");
+        assert_eq!(markdown_of(&d), "B");
+        apply_markdown(&d, "W\n\nB").expect("c");
+        assert_eq!(markdown_of(&d), "W\n\nB");
+    }
+
+    #[test]
+    fn prepend_multiple() {
+        let d =
+            doc_from_state("AQPXuI22AQAHAQdkZWZhdWx0AwlwYXJhZ3JhcGgHANe4jbYBAAYEANe4jbYBAQNlzIEA")
+                .expect("s");
+        apply_markdown(&d, "a\n\nb\n\nc\n\ne\u{301}").expect("c");
+        assert_eq!(markdown_of(&d), "a\n\nb\n\nc\n\ne\u{301}");
+    }
+
+    #[test]
+    fn prepend_multiple_plain() {
+        let d = doc_from_state(&state_to_b64(&doc_from_markdown("e"))).expect("s");
+        let frag = d.get_or_insert_xml_fragment(FRAGMENT);
+        let blocks = pm::parse_markdown("a\n\nb\n\nc");
+        let mut txn = d.transact_mut();
+        let n = pm::insert_nodes(&frag, &mut txn, 0, &blocks);
+        let out = pm::to_markdown(&pm::read_fragment(&frag, &txn));
+        assert_eq!((n, out.as_str()), (3, "a\n\nb\n\nc\n\ne"));
+    }
+
+    #[test]
     fn diff_blocks_finds_ranges() {
         let ops = diff_blocks(&["a", "b", "c"], &["a", "x", "c", "d"]);
         assert_eq!(
@@ -626,5 +668,149 @@ mod tests {
         let _ = state_to_b64(&doc);
         let copy = doc_from_state(&state_to_b64(&doc)).expect("state");
         assert_eq!(check_limits(&copy), Err(LimitError::TooDeep));
+    }
+
+    // --- Unicode und Fuzz ---------------------------------------------------------------
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(n).unwrap_or(1)).unwrap_or(0)
+        }
+    }
+
+    const PIECES: [&str; 12] = [
+        "a",
+        "Ä",
+        "ß",
+        "日本",
+        "😀",
+        "👨‍👩‍👧",
+        "e\u{301}",
+        " ",
+        "**x**",
+        "wort",
+        "\u{1F1E9}\u{1F1EA}",
+        "é",
+    ];
+
+    fn random_md(rng: &mut Rng) -> String {
+        let blocks = rng.below(4) + 1;
+        (0..blocks)
+            .map(|_| {
+                (0..rng.below(5) + 1)
+                    .map(|_| PIECES[rng.below(PIECES.len())])
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn sync(a: &Doc, b: &Doc) {
+        let ua = a
+            .transact()
+            .encode_state_as_update_v1(&b.transact().state_vector());
+        let ub = b
+            .transact()
+            .encode_state_as_update_v1(&a.transact().state_vector());
+        b.transact_mut()
+            .apply_update(Update::decode_v1(&ua).expect("ua"))
+            .expect("apply");
+        a.transact_mut()
+            .apply_update(Update::decode_v1(&ub).expect("ub"))
+            .expect("apply");
+    }
+
+    #[test]
+    fn multibyte_texts_round_trip_and_edit_in_place() {
+        for md in [
+            "😀 Start",
+            "Mitte 日本語 Mitte",
+            "Ende 👨‍👩‍👧",
+            "Ää",
+            "e\u{301}x",
+        ] {
+            let doc = doc_from_markdown(md);
+            assert_eq!(markdown_of(&doc), md);
+            // Vorn, mittig und hinten einfügen bzw. löschen.
+            for edit in [
+                format!("😀{md}"),
+                format!("{md}😀"),
+                md.replacen(' ', " 日 ", 1),
+                md.chars().skip(1).collect(),
+            ] {
+                let d = doc_from_markdown(md);
+                apply_markdown(&d, &edit);
+                assert_eq!(
+                    markdown_of(&d),
+                    markdown_of(&doc_from_markdown(&edit)),
+                    "{md} -> {edit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_edits_over_multibyte_text_converge() {
+        let base = doc_from_markdown("Grüße 😀 aus 日本 und mehr 👨‍👩‍👧 Text");
+        let a = doc_from_state(&state_to_b64(&base)).expect("a");
+        let b = doc_from_state(&state_to_b64(&base)).expect("b");
+        apply_markdown(&a, "Grüße aus 日本 und mehr 👨‍👩‍👧 Text");
+        apply_markdown(&b, "Grüße 😀 aus 日 und mehr Text 😀");
+        sync(&a, &b);
+        assert_eq!(markdown_of(&a), markdown_of(&b));
+        assert!(check_limits(&a).is_ok());
+    }
+
+    #[test]
+    fn fuzz_two_clients_converge_without_panic() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        for round in 0..300 {
+            let base = doc_from_markdown(&random_md(&mut rng));
+            let a = doc_from_state(&state_to_b64(&base)).expect("a");
+            let b = doc_from_state(&state_to_b64(&base)).expect("b");
+            let a = {
+                // Gegenstelle wie ein JS-Client: mit Garbage Collection.
+                let d = Doc::with_options(Options {
+                    offset_kind: OffsetKind::Utf16,
+                    skip_gc: false,
+                    ..Options::default()
+                });
+                let _ = d.get_or_insert_xml_fragment(FRAGMENT);
+                d.transact_mut()
+                    .apply_update(
+                        Update::decode_v1(&STANDARD.decode(state_to_b64(&a)).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                d
+            };
+            for _ in 0..rng.below(6) + 1 {
+                let target = if rng.below(2) == 0 { &a } else { &b };
+                let md = random_md(&mut rng);
+                apply_markdown(target, &md);
+                // Abgeleitetes Markdown entspricht dem Y-Inhalt.
+                assert_eq!(
+                    markdown_of(target),
+                    markdown_of(&doc_from_markdown(&md)),
+                    "round {round}: {md:?}"
+                );
+                if rng.below(3) == 0 {
+                    sync(&a, &b);
+                }
+            }
+            sync(&a, &b);
+            assert_eq!(markdown_of(&a), markdown_of(&b), "round {round}");
+            assert!(check_limits(&a).is_ok());
+            // Zustand und Neuaufbau stimmen überein.
+            let again = doc_from_state(&state_to_b64(&a)).expect("state");
+            assert_eq!(markdown_of(&again), markdown_of(&a));
+        }
     }
 }

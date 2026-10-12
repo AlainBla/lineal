@@ -228,6 +228,21 @@ pub struct NewHistory {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// CRDT-Zustand eines Inhalts (`document_content`, WP36).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContentState {
+    pub content_id: Uuid,
+    /// Besitzerart (`document`, `issue`, `project`, `initiative`).
+    pub owner_type: String,
+    pub owner_id: Uuid,
+    pub markdown: String,
+    /// Base64 eines Yjs-Updates V1; `None` = noch kein/verworfener Zustand.
+    pub state: Option<String>,
+    /// Epoche der CRDT-Linie (siehe Migration 3300).
+    pub epoch: Option<Uuid>,
+    pub version: i32,
+}
+
 /// Persistenzzugriff des Bereichs `document`. Alle Abfragen laufen im Workspace der Transaktion.
 #[async_trait]
 pub trait DocumentRepo: Send {
@@ -387,6 +402,45 @@ pub trait DocumentRepo: Send {
     /// Snapshots per Trigger nicht aktualisiert werden dürfen).
     async fn history_delete(&mut self, content_id: Uuid, id: Uuid) -> AppResult<()> {
         let _ = (content_id, id);
+        unimplemented_repo()
+    }
+
+    /// CRDT-Zustand eines Inhalts per `document_content.id`. `lock` sperrt die Zeile bis zum Ende
+    /// der Transaktion (`FOR UPDATE`), damit API-Schreibvorgänge und Raum-Speicherung sich
+    /// nicht überholen.
+    async fn content_state(
+        &mut self,
+        content_id: Uuid,
+        lock: bool,
+    ) -> AppResult<Option<ContentState>> {
+        let _ = (content_id, lock);
+        unimplemented_repo()
+    }
+
+    /// CRDT-Zustand eines Inhalts per Besitzer (legt die Inhaltszeile bei Bedarf an, `markdown`
+    /// dient dann als Anfangswert – für Beschreibungen von Issues, Projekten, Initiativen).
+    async fn content_state_of_owner(
+        &mut self,
+        owner_type: &str,
+        owner_id: Uuid,
+        markdown_if_new: &str,
+        lock: bool,
+    ) -> AppResult<ContentState> {
+        let _ = (owner_type, owner_id, markdown_if_new, lock);
+        unimplemented_repo()
+    }
+
+    /// Setzt Zustand und Epoche, ohne Markdown/Version zu ändern (Erstbefüllung, Nachführen bei
+    /// API-Schreibvorgängen). `Some(version)`: nur wenn die Inhaltsrevision stimmt; liefert, ob
+    /// geschrieben wurde.
+    async fn set_content_state(
+        &mut self,
+        content_id: Uuid,
+        only_if_version: Option<i32>,
+        state: Option<&str>,
+        epoch: Option<Uuid>,
+    ) -> AppResult<bool> {
+        let _ = (content_id, only_if_version, state, epoch);
         unimplemented_repo()
     }
 }

@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use lineal_app::AppResult;
 use lineal_app::ports::repos::DocumentRepo;
 use lineal_app::ports::repos::document::{
-    DocParent, Document, DocumentQuery, HistoryEntry, HistoryKind, NewDocument, NewHistory,
-    ParentScope, ParentState,
+    ContentState, DocParent, Document, DocumentQuery, HistoryEntry, HistoryKind, NewDocument,
+    NewHistory, ParentScope, ParentState,
 };
 use lineal_app::ports::repos::user::OrderBy;
 use lineal_domain::ids::*;
@@ -315,6 +315,7 @@ impl DocumentRepo for PgTx {
         let version: Option<i32> = sqlx::query_scalar(
             "UPDATE document_content SET markdown = $3, version = version + 1, updated_at = $4, \
              restored_at = CASE WHEN $5 THEN $4 ELSE restored_at END \
+             , content_state = NULL, content_epoch = NULL \
              WHERE organization_id = $1 AND owner_type = 'document' AND owner_id = $2 RETURNING version",
         )
         .bind(self.org.0)
@@ -810,5 +811,106 @@ impl DocumentRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn content_state(
+        &mut self,
+        content_id: Uuid,
+        lock: bool,
+    ) -> AppResult<Option<ContentState>> {
+        let sql = format!(
+            "SELECT id, owner_type, owner_id, markdown, content_state, content_epoch, version \
+             FROM document_content WHERE organization_id = $1 AND id = $2{}",
+            if lock { " FOR UPDATE" } else { "" }
+        );
+        let row: Option<CsRow> = sqlx::query_as(&sql)
+            .bind(self.org.0)
+            .bind(content_id)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn content_state_of_owner(
+        &mut self,
+        owner_type: &str,
+        owner_id: Uuid,
+        markdown_if_new: &str,
+        lock: bool,
+    ) -> AppResult<ContentState> {
+        sqlx::query(
+            "INSERT INTO document_content (id, organization_id, owner_type, owner_id, markdown) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (organization_id, owner_type, owner_id) DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(self.org.0)
+        .bind(owner_type)
+        .bind(owner_id)
+        .bind(markdown_if_new)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let sql = format!(
+            "SELECT id, owner_type, owner_id, markdown, content_state, content_epoch, version \
+             FROM document_content WHERE organization_id = $1 AND owner_type = $2 AND owner_id = $3{}",
+            if lock { " FOR UPDATE" } else { "" }
+        );
+        let row: CsRow = sqlx::query_as(&sql)
+            .bind(self.org.0)
+            .bind(owner_type)
+            .bind(owner_id)
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(row.into())
+    }
+
+    async fn set_content_state(
+        &mut self,
+        content_id: Uuid,
+        only_if_version: Option<i32>,
+        state: Option<&str>,
+        epoch: Option<Uuid>,
+    ) -> AppResult<bool> {
+        let n = sqlx::query(
+            "UPDATE document_content SET content_state = $3, content_epoch = $4 \
+             WHERE organization_id = $1 AND id = $2 AND ($5::int IS NULL OR version = $5)",
+        )
+        .bind(self.org.0)
+        .bind(content_id)
+        .bind(state)
+        .bind(epoch)
+        .bind(only_if_version)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        Ok(n > 0)
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CsRow {
+    id: Uuid,
+    owner_type: String,
+    owner_id: Uuid,
+    markdown: String,
+    content_state: Option<String>,
+    content_epoch: Option<Uuid>,
+    version: i32,
+}
+
+impl From<CsRow> for ContentState {
+    fn from(r: CsRow) -> Self {
+        Self {
+            content_id: r.id,
+            owner_type: r.owner_type,
+            owner_id: r.owner_id,
+            markdown: r.markdown,
+            state: r.content_state,
+            epoch: r.content_epoch,
+            version: r.version,
+        }
     }
 }

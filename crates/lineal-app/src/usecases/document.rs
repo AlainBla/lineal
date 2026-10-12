@@ -4,7 +4,10 @@
 //! Jede Schreiboperation läuft in einer Transaktion inkl. Historie und Outbox-Event. Nicht
 //! sichtbare Dokumente (privates Team, unsichtbares Projekt …) sind überall `not_found`.
 
+mod collab;
 mod rich;
+
+pub use collab::{CollabAccess, CollabLoad, CollabTarget, PersistOutcome};
 
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
@@ -756,6 +759,18 @@ impl App {
         input: SaveDocumentInput,
         bundle: bool,
     ) -> AppResult<DocumentView> {
+        self.save_document_with(tx, ctx, input, bundle, &collab::StateMode::FromMarkdown)
+            .await
+    }
+
+    async fn save_document_with(
+        &self,
+        tx: &mut dyn Tx,
+        ctx: &RequestCtx,
+        input: SaveDocumentInput,
+        bundle: bool,
+        state: &collab::StateMode,
+    ) -> AppResult<DocumentView> {
         let snap = PolicySnapshot::load(tx, ctx).await?;
         let now = self.clock.now();
         if input.content.is_some() && input.patch.is_some() {
@@ -767,7 +782,7 @@ impl App {
         let (doc, warnings) = match &input.id {
             None => self.create_document_in(tx, &snap, ctx, &input, now).await?,
             Some(r) => (
-                self.update_document_in(tx, &snap, ctx, r, &input, now, bundle)
+                self.update_document_in(tx, &snap, ctx, r, &input, now, bundle, state)
                     .await?,
                 vec![],
             ),
@@ -911,6 +926,7 @@ impl App {
         input: &SaveDocumentInput,
         now: DateTime<Utc>,
         bundle: bool,
+        state: &collab::StateMode,
     ) -> AppResult<Document> {
         if input.template.is_some() {
             return Err(invalid(
@@ -1007,10 +1023,28 @@ impl App {
         };
         if let (true, Some(markdown)) = (content_changed, new_content) {
             let previous_change = loaded_updated_at;
+            // Zustand vor dem Schreiben sichern (sperrt die Zeile); `set_content` verwirft ihn,
+            // danach wird er mitgeführt (API/MCP) bzw. vom Raum geliefert.
+            let prev_state = match state {
+                collab::StateMode::FromMarkdown => {
+                    tx.documents().content_state(doc.content_id, true).await?
+                }
+                collab::StateMode::Provided { .. } => None,
+            };
             let version = tx
                 .documents()
                 .set_content(doc.id, &markdown, false, actor, now)
                 .await?;
+            match state {
+                collab::StateMode::FromMarkdown => {
+                    collab::advance_state(tx, doc.content_id, prev_state, &markdown).await?;
+                }
+                collab::StateMode::Provided { state, epoch } => {
+                    tx.documents()
+                        .set_content_state(doc.content_id, None, Some(state), *epoch)
+                        .await?;
+                }
+            }
             let mut actors: Vec<UserId> = actor.into_iter().collect();
             let mut created_at = None;
             if bundle
@@ -1177,10 +1211,12 @@ impl App {
             .ok_or_else(|| AppError::not_found("Could not find referenced document version."))?;
         let actor = actor_user_id(ctx);
         let markdown = clean_markdown(&entry.markdown)?;
+        let prev_state = tx.documents().content_state(doc.content_id, true).await?;
         let version = tx
             .documents()
             .set_content(doc.id, &markdown, true, actor, now)
             .await?;
+        collab::advance_state(&mut *tx, doc.content_id, prev_state, &markdown).await?;
         tx.documents()
             .history_insert(&NewHistory {
                 id: self.ids.new_uuid(),

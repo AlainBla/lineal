@@ -520,6 +520,51 @@ fn collect_text(nodes: &[Pm], out: &mut Vec<Pm>) {
     }
 }
 
+/// Liest die Wurzelkinder **positionsgenau**: genau ein Eintrag je Kind des Fragments (Text- und
+/// Fragmentknoten auf Wurzelebene werden zu Absätzen/leeren Absätzen), damit Indizes für
+/// Änderungen am Baum nie von der tatsächlichen Kindposition abweichen.
+pub fn read_top_level<T: ReadTxn, F: XmlFragment>(frag: &F, txn: &T) -> Vec<Pm> {
+    let mut reader = Reader { nodes: 0 };
+    let mut out = Vec::new();
+    for child in frag.children(txn) {
+        reader.nodes += 1;
+        let node = if reader.nodes > MAX_NODES {
+            Pm::elem("paragraph", vec![])
+        } else {
+            match child {
+                XmlOut::Element(el) => {
+                    let tag = el.tag().to_string();
+                    let attrs: Vec<(String, Any)> = el
+                        .attributes(txn)
+                        .filter_map(|(k, v)| match v {
+                            Out::Any(a) => Some((k.to_string(), a)),
+                            _ => None,
+                        })
+                        .collect();
+                    let content = reader.read(&el, txn, 1);
+                    normalize_elem(tag, attrs, content)
+                }
+                XmlOut::Text(t) => {
+                    let mut content = Vec::new();
+                    for d in t.diff(txn, |y: YChange| y) {
+                        if let Out::Any(Any::String(s)) = &d.insert {
+                            let marks = d.attributes.as_deref().map(read_marks).unwrap_or_default();
+                            content.push(Pm::Text {
+                                text: s.to_string(),
+                                marks,
+                            });
+                        }
+                    }
+                    Pm::elem("paragraph", content)
+                }
+                XmlOut::Fragment(_) => Pm::elem("paragraph", vec![]),
+            }
+        };
+        out.push(node);
+    }
+    out
+}
+
 /// Liest die Blöcke des Fragments.
 pub fn read_fragment<T: ReadTxn, F: XmlFragment>(frag: &F, txn: &T) -> Vec<Pm> {
     Reader { nodes: 0 }.read(frag, txn, 0)
