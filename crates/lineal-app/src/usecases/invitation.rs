@@ -147,6 +147,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::InviteUsers)?;
+        for e in &emails {
+            super::user::check_invite_domain(&snap.org, e, "emails")?;
+        }
         match role {
             UserRole::Admin => snap.require_workspace(ctx, Action::GrantAdminRole)?,
             UserRole::User | UserRole::Guest => {}
@@ -274,6 +277,7 @@ impl App {
             return Err(AppError::conflict("The invitation can no longer be resent")
                 .with_details(json!({ "status": inv.status })));
         }
+        super::user::check_invite_domain(&snap.org, &inv.email, "id")?;
         let now = self.clock.now();
         let token = random_token();
         tx.webhooks()
@@ -455,6 +459,14 @@ impl App {
             .filter(|i| i.status == "pending" && i.expires_at > now)
             .ok_or_else(invitation_not_found)?;
         let org = tx.orgs().get().await?.ok_or_else(invitation_not_found)?;
+        // Aktuelle Domain-Beschränkung gilt auch für früher erstellte Einladungen und für das Konto,
+        // das sie annimmt (neutraler Fehler wie bei ungültigem Token).
+        let policy = crate::policy::OrgPolicy::from_json(&org.security_settings, &org.limits);
+        if !policy.invite_domain_allowed(&inv.email)
+            || required_email.is_some_and(|e| !policy.invite_domain_allowed(e))
+        {
+            return Err(invitation_not_found());
+        }
         let teams = tx.teams().list_all().await?;
         let tree = crate::policy::TeamTree::new(teams);
         let existing = tx.users().find_by_email(&inv.email).await?;

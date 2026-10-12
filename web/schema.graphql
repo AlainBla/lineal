@@ -999,6 +999,22 @@ type Mutation {
 	Ändert Workspace-Settings (Admin/Owner).
 	"""
 	workspaceUpdate(input: WorkspaceUpdateInput!): WorkspacePayload!
+	"""
+	Ändert die Security-Settings (Admin/Owner; `adminManagementRole` nur Owner).
+	"""
+	workspaceSecuritySettingsUpdate(input: SecuritySettingsUpdateInput!): SecuritySettingsPayload!
+	"""
+	Ändert die Rolle eines Users (`admin`, `user`, `guest`, `owner`; Regeln siehe docs/02 §6.4).
+	"""
+	userRoleUpdate(userId: String!, role: String!): WorkspaceMemberPayload!
+	"""
+	Sperrt einen User: Sessions, API-Keys und OAuth-Tokens werden sofort ungültig.
+	"""
+	userSuspend(userId: String!): WorkspaceMemberPayload!
+	"""
+	Hebt die Sperre auf (der User muss sich neu anmelden).
+	"""
+	userUnsuspend(userId: String!): WorkspaceMemberPayload!
 	teamCreate(input: TeamCreateInput!): TeamPayload!
 	teamUpdate(id: String!, input: TeamUpdateInput!): TeamPayload!
 	"""
@@ -1654,6 +1670,15 @@ type Query {
 	"""
 	workspace: Organization!
 	"""
+	Security-Settings (Mindestrollen, erlaubte Einladungs-Domains). Lesbar für alle Mitglieder
+	außer Gästen und Apps.
+	"""
+	workspaceSecuritySettings: WorkspaceSecuritySettings!
+	"""
+	Mitglieder mit E-Mail, Rolle und Status. Nur für Owner/Admin.
+	"""
+	workspaceMembers(includeSuspended: Boolean! = false, first: Int! = 250): [WorkspaceMember!]!
+	"""
 	Für den Aufrufer sichtbare User (Assignee-Picker, Erwähnungen). Ohne E-Mail-Adressen
 	(Sicherheits-Checkliste Punkt 6); optional auf ein Team und einen Suchbegriff begrenzt.
 	"""
@@ -1911,6 +1936,28 @@ Trefferausschnitt (`<mark>` um Fundstellen, übriger Text HTML-escaped).
 type SearchHighlight {
 	field: String!
 	snippet: String!
+}
+
+type SecuritySettingsPayload {
+	success: Boolean!
+	securitySettings: WorkspaceSecuritySettings!
+}
+
+"""
+Nicht gesetzte Felder bleiben unverändert; Rollen als `user`, `admin` oder `owner`.
+"""
+input SecuritySettingsUpdateInput {
+	teamCreationRole: String
+	invitationsRole: String
+	adminManagementRole: String
+	labelManagementRole: String
+	templateManagementRole: String
+	personalApiKeysRole: String
+	apiSettingsRole: String
+	workspaceInitiativesRole: String
+	pinnedViewManagementRole: String
+	importRole: String
+	allowedInviteDomains: [String!]
 }
 
 type SuccessPayload {
@@ -2356,6 +2403,38 @@ type WorkloadUser {
 	displayName: String!
 }
 
+"""
+`WorkspaceMember`: Admin-Sicht mit E-Mail (nur Owner/Admin).
+"""
+type WorkspaceMember {
+	id: String!
+	name: String!
+	displayName: String!
+	email: String!
+	role: String!
+	"""
+	`active`, `suspended` oder `imported`.
+	"""
+	status: String!
+	lastSeenAt: String
+	createdAt: String!
+	teams: [WorkspaceMemberTeam!]!
+}
+
+type WorkspaceMemberPayload {
+	success: Boolean!
+	member: WorkspaceMember!
+}
+
+"""
+Team-Angabe einer Mitgliederzeile.
+"""
+type WorkspaceMemberTeam {
+	id: String!
+	key: String!
+	name: String!
+}
+
 type WorkspaceOverviewGql {
 	period: String!
 	includeSubTeams: Boolean!
@@ -2369,6 +2448,26 @@ type WorkspaceOverviewGql {
 type WorkspacePayload {
 	success: Boolean!
 	workspace: Organization
+}
+
+"""
+`WorkspaceSecuritySettings`: Mindestrollen (`user`, `admin`, `owner`) und erlaubte Domains.
+"""
+type WorkspaceSecuritySettings {
+	teamCreationRole: String!
+	invitationsRole: String!
+	adminManagementRole: String!
+	labelManagementRole: String!
+	templateManagementRole: String!
+	personalApiKeysRole: String!
+	apiSettingsRole: String!
+	workspaceInitiativesRole: String!
+	pinnedViewManagementRole: String!
+	importRole: String!
+	"""
+	Leer = Einladungen an alle Domains erlaubt.
+	"""
+	allowedInviteDomains: [String!]!
 }
 
 input WorkspaceUpdateInput {

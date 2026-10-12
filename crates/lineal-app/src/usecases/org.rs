@@ -372,6 +372,167 @@ impl App {
     }
 }
 
+/// Schlüssel der Rollen-Einstellungen in `securitySettings` (camelCase wie im JSON).
+pub const SECURITY_ROLE_KEYS: [&str; 10] = [
+    "teamCreationRole",
+    "invitationsRole",
+    "adminManagementRole",
+    "labelManagementRole",
+    "templateManagementRole",
+    "personalApiKeysRole",
+    "apiSettingsRole",
+    "workspaceInitiativesRole",
+    "pinnedViewManagementRole",
+    "importRole",
+];
+
+/// Höchstzahl erlaubter Einladungs-Domains.
+pub const MAX_INVITE_DOMAINS: usize = 50;
+
+/// Änderung der Security-Settings (`None` = unverändert).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SecuritySettingsPatch {
+    /// `(Schlüssel aus SECURITY_ROLE_KEYS, Mindestrolle)`.
+    pub roles: Vec<(String, UserRole)>,
+    /// Erlaubte Domains für Einladungen; leere Liste = alle.
+    pub allowed_invite_domains: Option<Vec<String>>,
+}
+
+/// Normalisiert und prüft eine Domain (`Acme.Example`, `@acme.example` -> `acme.example`).
+pub fn normalize_invite_domain(raw: &str) -> AppResult<String> {
+    let d = raw.trim().trim_start_matches('@').to_lowercase();
+    let label_ok = |l: &str| {
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    let labels: Vec<&str> = d.split('.').collect();
+    if d.len() > 253 || labels.len() < 2 || !labels.iter().all(|l| label_ok(l)) {
+        return Err(
+            AppError::invalid_request(format!("`{raw}` is not a valid domain"))
+                .with_details(json!({ "field": "allowedInviteDomains" })),
+        );
+    }
+    Ok(d)
+}
+
+impl App {
+    /// Liest die Security-Settings (alle Mitglieder außer Gästen und Apps). Die Werte sind nicht
+    /// geheim und werden vom Web gebraucht (Einladungs-Dialog, ausgeblendete Aktionen).
+    pub async fn get_security_settings(&self, ctx: &RequestCtx) -> AppResult<OrgPolicy> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        if matches!(snap.actor.role, UserRole::Guest | UserRole::App) || !ctx.scopes.read {
+            return Err(AppError::forbidden(
+                "Security settings are not available to guests or apps.",
+            ));
+        }
+        let org = tx
+            .orgs()
+            .get()
+            .await?
+            .ok_or_else(|| AppError::not_found("Could not find referenced Workspace."))?;
+        Ok(OrgPolicy::from_json(&org.security_settings, &org.limits))
+    }
+
+    /// Ändert die Security-Settings (Admin/Owner; `adminManagementRole` nur Owner). Werte sind
+    /// Mindestrollen `user|admin|owner` (`adminManagementRole`: `admin|owner`, sonst könnte jedes
+    /// Mitglied Admins ernennen). Owner erfüllen jede Mindestrolle und können sich so nie aussperren.
+    pub async fn update_security_settings(
+        &self,
+        ctx: &RequestCtx,
+        patch: SecuritySettingsPatch,
+    ) -> AppResult<OrgPolicy> {
+        if matches!(ctx.actor, Actor::System) {
+            return Err(AppError::forbidden(
+                "Security settings cannot be changed by system contexts.",
+            ));
+        }
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
+        let mut new_roles: Vec<(&str, UserRole)> = Vec::new();
+        for (key, role) in &patch.roles {
+            let Some(k) = SECURITY_ROLE_KEYS.iter().find(|k| **k == key) else {
+                return Err(
+                    AppError::invalid_request(format!("unknown setting `{key}`"))
+                        .with_details(json!({ "field": key })),
+                );
+            };
+            let ok = !matches!(
+                (*k, role),
+                (_, UserRole::Guest | UserRole::App) | ("adminManagementRole", UserRole::User)
+            );
+            if !ok {
+                return Err(AppError::invalid_request(format!(
+                    "`{key}` does not allow the role `{}`",
+                    role.as_str()
+                ))
+                .with_details(json!({ "field": key })));
+            }
+            if *k == "adminManagementRole" {
+                snap.require_workspace(ctx, Action::UpdateWorkspaceLimits)?;
+            }
+            new_roles.push((k, *role));
+        }
+        let domains = match &patch.allowed_invite_domains {
+            Some(list) => {
+                if list.len() > MAX_INVITE_DOMAINS {
+                    return Err(AppError::invalid_request(format!(
+                        "at most {MAX_INVITE_DOMAINS} domains"
+                    ))
+                    .with_details(json!({ "field": "allowedInviteDomains" })));
+                }
+                let mut out: Vec<String> = Vec::new();
+                for d in list {
+                    let d = normalize_invite_domain(d)?;
+                    if !out.contains(&d) {
+                        out.push(d);
+                    }
+                }
+                Some(out)
+            }
+            None => None,
+        };
+        let current = tx
+            .orgs()
+            .get()
+            .await?
+            .ok_or_else(|| AppError::not_found("Could not find referenced Workspace."))?;
+        let mut merged = merge_object(
+            &default_security_settings_json(),
+            &current.security_settings,
+        );
+        if let Some(obj) = merged.as_object_mut() {
+            for (k, r) in &new_roles {
+                obj.insert((*k).to_owned(), json!(r.as_str()));
+            }
+            if let Some(d) = &domains {
+                obj.insert("allowedInviteDomains".into(), json!(d));
+            }
+        }
+        let org = tx
+            .orgs()
+            .update(&OrgPatch {
+                security_settings: Some(merged),
+                now: Some(self.clock.now()),
+                ..Default::default()
+            })
+            .await?;
+        emit(&mut *tx, ctx, DomainEvent::OrganizationUpdated {}).await?;
+        tracing::info!(
+            actor = ?ctx.actor,
+            changed_roles = ?new_roles.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            domains_changed = domains.is_some(),
+            "security settings updated"
+        );
+        tx.commit().await?;
+        Ok(OrgPolicy::from_json(&org.security_settings, &org.limits))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -33,6 +33,21 @@ pub(crate) fn validate_email(email: &str) -> AppResult<()> {
     }
 }
 
+/// Prüft die erlaubten Einladungs-Domains (`allowedInviteDomains`); `field` benennt das Eingabefeld.
+pub(crate) fn check_invite_domain(
+    org: &crate::policy::OrgPolicy,
+    email: &str,
+    field: &str,
+) -> AppResult<()> {
+    if org.invite_domain_allowed(email) {
+        return Ok(());
+    }
+    Err(
+        AppError::invalid_request("This email domain is not allowed for invitations")
+            .with_details(json!({ "field": field, "reason": "domain_not_allowed" })),
+    )
+}
+
 pub(crate) fn validate_password(password: &str) -> AppResult<()> {
     if password.chars().count() < MIN_PASSWORD_LEN {
         return Err(AppError::invalid_request(format!(
@@ -161,6 +176,63 @@ impl App {
         tx.users().list(&filter, &input.page).await
     }
 
+    /// Admin-Mitgliederliste (nur Owner/Admin): alle User mit E-Mail, Rolle, Status und sichtbaren
+    /// Teams, optional inklusive suspendierter. Neueste zuerst, höchstens `limit` (1..=250).
+    pub async fn list_members(
+        &self,
+        ctx: &RequestCtx,
+        include_suspended: bool,
+        limit: i64,
+    ) -> AppResult<Vec<UserView>> {
+        forbid_system(ctx)?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let is_admin = matches!(
+            ctx.actor,
+            crate::context::Actor::User {
+                role: UserRole::Owner | UserRole::Admin,
+                ..
+            }
+        );
+        if !is_admin || !ctx.scopes.read || !ctx.scopes.admin {
+            return Err(AppError::forbidden(
+                "Only workspace admins can list members with their email addresses.",
+            ));
+        }
+        let page = tx
+            .users()
+            .list(
+                &UserFilter {
+                    include_suspended,
+                    ..Default::default()
+                },
+                &PageRequest {
+                    limit: limit.clamp(1, 250),
+                    order_by: crate::ports::repos::user::OrderBy::CreatedAt,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let visible = snap.visible_team_ids();
+        let mut out = Vec::with_capacity(page.items.len());
+        for user in page.items {
+            let mut teams = Vec::new();
+            for m in tx.teams().list_memberships_of_user(user.id).await? {
+                if visible.contains(&m.team_id)
+                    && let Some(t) = snap.tree.get(m.team_id)
+                    && !t.trashed
+                {
+                    teams.push(TeamView {
+                        display_name: snap.tree.display_name(t.id),
+                        team: t.clone(),
+                    });
+                }
+            }
+            out.push(UserView { user, teams });
+        }
+        Ok(out)
+    }
+
     /// Legt einen User an (Recht: `invitationsRole`; Admin-Rolle zusätzlich `adminManagementRole`).
     pub async fn create_user(&self, ctx: &RequestCtx, input: CreateUserInput) -> AppResult<User> {
         forbid_system(ctx)?;
@@ -192,6 +264,7 @@ impl App {
         }
         let email = input.email.trim().to_string();
         validate_email(&email)?;
+        check_invite_domain(&snap.org, &email, "email")?;
         if tx.users().find_by_email(&email).await?.is_some() {
             return Err(AppError::conflict("A user with this email already exists")
                 .with_details(json!({ "field": "email" })));
@@ -312,6 +385,10 @@ impl App {
                 );
             }
         }
+        if role == UserRole::Guest && !snap.org.limits.guests_enabled {
+            return Err(AppError::limit_exceeded("Guests are disabled.")
+                .with_details(json!({ "limit": "guestsEnabled" })));
+        }
         if role == UserRole::Guest
             && tx
                 .teams()
@@ -386,6 +463,12 @@ impl App {
         tx.users()
             .set_active(target.id, active, self.clock.now())
             .await?;
+        if !active {
+            // Alte Sessions, Keys und Tokens bleiben auch nach einer Entsperrung ungültig.
+            tx.auth()
+                .revoke_all_credentials_of_user(target.id, self.clock.now())
+                .await?;
+        }
         emit(
             &mut *tx,
             ctx,
