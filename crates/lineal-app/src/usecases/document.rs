@@ -504,6 +504,21 @@ impl App {
         url_key: &str,
         warnings: Vec<String>,
     ) -> AppResult<DocumentView> {
+        self.document_view_opts(tx, snap, doc, url_key, warnings, true)
+            .await
+    }
+
+    /// `link_issues = false` verzichtet auf das Verlinken von Issue-Kennungen (Listen: gekürzte
+    /// Auszüge, keine Abfrage je Kennung).
+    async fn document_view_opts(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        doc: Document,
+        url_key: &str,
+        warnings: Vec<String>,
+        link_issues: bool,
+    ) -> AppResult<DocumentView> {
         let parent = match doc.parent() {
             Some(DocParent::Project(p)) => tx.projects().get(p).await?.map(|p| {
                 let key = snap
@@ -571,7 +586,7 @@ impl App {
             doc.slug_id
         );
         let mut doc = doc;
-        if !doc.content.is_empty() {
+        if link_issues && !doc.content.is_empty() {
             doc.content = rich::link_visible_issues(tx, snap, url_key, &doc.content).await?;
         }
         Ok(DocumentView {
@@ -688,7 +703,7 @@ impl App {
         let mut items = Vec::with_capacity(rows.len());
         for d in rows {
             items.push(
-                self.document_view(&mut *tx, &snap, d, &url_key, vec![])
+                self.document_view_opts(&mut *tx, &snap, d, &url_key, vec![], false)
                     .await?,
             );
         }

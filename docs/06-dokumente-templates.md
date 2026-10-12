@@ -245,7 +245,7 @@ Ein Verfahren nach dem Prinzip „Operational Transformation“ ist gleichwertig
 - Trashed-Dokumente erscheinen nie in Suche oder Listen (nur in der Papierkorb-Ansicht).
 - Erwähnungen: In Rich-Text-Feldern kann auf ein Dokument per URL verwiesen werden; die Ausgabe ersetzt sie durch einen Link mit dem aktuellen Titel. Überschriften im Dokument erhalten stabile Anker (`#<heading-slug>`), auf die verlinkt werden kann.
 
-> **Umsetzung (WP34):** `@Name`-Erwähnungen (Anzeigename, wie in Issues) abonnieren das Dokument und erzeugen `documentMention` für aktive User, die das Elternobjekt sehen (Gäste keine Initiative-Dokumente, der Autor nicht). Issue-Kennungen (`ENG-123`) außerhalb von Code und Links werden **bei der Ausgabe** zu `[ENG-123](/<urlKey>/issue/ENG-123)` verlinkt, wenn das Issue für den Akteur sichtbar ist; gespeichert wird der Klartext (Patch-Anker bleiben eindeutig).
+> **Umsetzung (WP34):** `@Name`-Erwähnungen (Anzeigename, wie in Issues) abonnieren das Dokument und erzeugen `documentMention` für aktive User, die das Elternobjekt sehen (Gäste keine Initiative-Dokumente, der Autor nicht). Issue-Kennungen (`ENG-123`) außerhalb von Code und Links werden **bei der Ausgabe** zu `[ENG-123](/<urlKey>/issue/ENG-123)` verlinkt, wenn das Issue für den Akteur sichtbar ist; gespeichert wird der Klartext (Patch-Anker bleiben eindeutig); Listen (`list_documents`) verlinken nicht. Folge: wer den verlinkten Ausgabetext als Patch-Anker nutzt, erhält `conflict`.
 
 ### 1.12 Abonnements und Benachrichtigungen
 
