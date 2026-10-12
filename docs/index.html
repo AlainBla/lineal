@@ -33336,6 +33336,16 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <td>nur Docker: Host-Port des nginx</td>
 </tr>
 <tr>
+<td><code>LINEAL_BACKUP_DIR</code></td>
+<td><code>./backups</code></td>
+<td>nur Backup-Skripte: Zielverzeichnis, relativ zum Projektverzeichnis</td>
+</tr>
+<tr>
+<td><code>LINEAL_BACKUP_KEEP</code></td>
+<td><code>14</code></td>
+<td>nur Backup-Skripte: Anzahl aufbewahrter <code>lineal-*</code>-Backups</td>
+</tr>
+<tr>
 <td><code>LINEAL_BACKEND</code></td>
 <td><code>http://localhost:8080</code></td>
 <td>nur Web (Vite-Proxy/Preview): Adresse des Servers</td>
@@ -33376,6 +33386,23 @@ LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNE
 </code></pre>
 <p>Der App-Stack hat eine eigene Datenbank <code>app-db</code> (postgres:16, Volume <code>appdata</code>, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB <code>postgres</code> (Port 5440). Ohne <code>LINEAL_DB_PASSWORD</code> startet <code>app-db</code> nicht (klare Meldung im Log); <code>docker compose up</code> ohne Profil braucht keine Variablen. <code>LINEAL_WORKSPACE_CREATION</code> (Default <code>disabled</code>) und <code>LINEAL_INSTANCE_ADMINS</code> werden an Server und Worker durchgereicht; Vorlage in <code>.env.example</code>.</p>
 <p>Dienste: <code>app-db</code>, <code>migrate</code> (Einmal-Job, Server und Worker warten auf Erfolg), <code>server</code> (Netze <code>default</code> + <code>edge</code>), <code>worker</code>, <code>web</code> (nur Netz <code>edge</code>, Port <code>127.0.0.1:${LINEAL_HTTP_PORT:-8088}</code>). <code>LINEAL_TRUSTED_PROXIES</code> ist nur die feste Adresse des nginx-Containers <code>172.31.88.10/32</code> (nicht das Subnetz: Das Gateway <code>.1</code> ist der Host). Blobs liegen im Volume <code>blobs</code> (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor <code>web</code> terminieren, <code>LINEAL_BASE_URL=https://…</code> setzen (Cookie <code>Secure</code>, CSRF-Origin) und in <code>deploy/nginx.conf</code> <code>set_real_ip_from &lt;TLS-Proxy&gt;</code> + <code>real_ip_header X-Forwarded-For</code> ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; <code>seed</code> läuft deshalb nur mit <code>LINEAL_DEV=1</code> oder <code>--allow-insecure-demo-users</code> (im Container: <code>-e LINEAL_DEV=1</code>), nur für Demo-Installationen.</p>
+<h3 id="ch-15-umsetzungsstand-3-2d-backup-und-restore">3.2d Backup und Restore</h3>
+<p><code>scripts/backup.sh</code> sichert den App-Stack (Profil <code>app</code>) in <code>${LINEAL_BACKUP_DIR:-./backups}/lineal-&lt;UTC-Zeitstempel&gt;/</code> (Rechte 700):</p>
+<ul>
+<li><code>database.dump</code>: <code>pg_dump -Fc</code> der Datenbank <code>lineal</code> aus <code>app-db</code> (über <code>docker compose exec</code>, Ausgabe auf stdout; keine Passwörter auf der Kommandozeile oder in Dateien).</li>
+<li><code>blobs.tar.gz</code>: Inhalt des Volumes <code>blobs</code> (Dateien unter <code>/data/blobs</code>), gelesen über einen kurzlebigen <code>alpine</code>-Container. Der Volume-Name ist <code>&lt;Projekt&gt;_blobs</code> (Projekt <code>lineal</code>: <code>lineal_blobs</code>).</li>
+<li><code>manifest.txt</code>: Zeitpunkt, Quellstand (Commit), Migrationsstand (<code>max(version)</code> aus <code>_sqlx_migrations</code>), Größen und sha256 beider Dateien.</li>
+</ul>
+<p>Das Backup entsteht zuerst in <code>lineal-&lt;ts&gt;.partial</code> und wird erst nach Erfolg umbenannt; bei Fehlern bleibt kein halbfertiges Verzeichnis zurück. Nach erfolgreichem Lauf löscht die Aufbewahrung die ältesten <code>lineal-*</code>-Verzeichnisse über <code>LINEAL_BACKUP_KEEP</code> (Default 14). Der Stack muss laufen (<code>app-db</code>); die Anwendung selbst muss nicht gestoppt werden.</p>
+<pre><code class="language-bash">scripts/backup.sh                              # Backup anlegen (Exit-Code ≠ 0 bei Fehlern)
+scripts/restore.sh backups/lineal-&lt;ts&gt;         # Restore: Eingabe &quot;restore&quot; verlangt
+scripts/restore.sh --yes backups/lineal-&lt;ts&gt;   # ohne Rückfrage (Automatisierung)
+</code></pre>
+<p>Cron-Beispiel (täglich 03:00 Ortszeit des Hosts; <code>LINEAL_BACKUP_*</code> aus <code>.env</code> oder der Crontab):</p>
+<pre><code class="language-cron">0 3 * * * cd /pfad &amp;&amp; scripts/backup.sh &gt;&gt; /var/log/lineal-backup.log 2&gt;&amp;1
+</code></pre>
+<p><code>scripts/restore.sh</code> prüft zuerst sha256 und Größen aus dem Manifest; bei Abweichung bricht es ab, ohne etwas zu ändern. Ist der Migrationsstand des Backups neuer als die Migrationen des Checkouts (aus dem die Images gebaut werden), warnt es. Danach: <code>app-db</code> starten, <code>server</code>, <code>worker</code>, <code>web</code> stoppen, <code>pg_restore --clean --if-exists --no-owner</code> über <code>app-db</code>, Blob-Volume leeren und aus dem Archiv füllen, <code>migrate</code> ausführen, dann <code>server</code>, <code>worker</code>, <code>web</code> starten. Schlägt ein Schritt fehl, bleiben die Dienste gestoppt. <code>COMPOSE_PROJECT_NAME</code> (Default <code>lineal</code>) bestimmt, welcher Stack und welches Volume gemeint sind.</p>
+<p><strong>Betreiberaufgaben (nicht im Skript):</strong> Backups enthalten Datenbank und Dateien unverschlüsselt und liegen standardmäßig auf demselben Host wie der Stack. Eine Off-Site-Kopie (anderer Host, Objektspeicher) und eine Verschlüsselung vor dem Ablegen (z. B. <code>age -r &lt;Empfänger&gt;</code> oder <code>gpg --encrypt</code>) gehören zum Betrieb. Außerdem: Restore-Probe regelmäßig in einem eigenen Compose-Projekt durchführen (<code>COMPOSE_PROJECT_NAME=lineal-restore-test</code>, eigener Port und Subnetz; den Produktivstack nicht anfassen).</p>
 <h3 id="ch-15-umsetzungsstand-3-3-hintergrundjobs">3.3 Hintergrundjobs</h3>
 <p>Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in <code>outbox_delivery.attempts</code>/<code>last_error</code> und überleben Neustarts; nach <code>max_event_attempts</code> (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit <code>last_error</code>, abfragbar über <code>OutboxRepo::list_dead_letters</code>). Periodische Jobs: <code>cycles</code> (60 s), <code>update_reminders</code> (1 h), <code>snooze</code> (60 s), <code>sync_purge</code> (1 h, Sync-Log 14 Tage), <code>notification_cap</code> (5 min), <code>due_reminders</code> (5 min), <code>email_digest</code> (60 s), <code>auto_close</code>, <code>auto_archive</code> (je 5 min), <code>purge</code> (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), <code>sla</code> (60 s), <code>triage_rotation</code> (60 s), <code>import_runner</code> (10 s), Webhook-Zustellung, <code>team_purge</code> (1 h).</p>
 <h2 id="ch-15-umsetzungsstand-4-sicherheitsma-nahmen">4. Sicherheitsmaßnahmen</h2>

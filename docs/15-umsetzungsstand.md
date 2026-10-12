@@ -53,6 +53,8 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 | `LINEAL_OWNER_PASSWORD` | – | nur für `lineal create-workspace`: Passwort des Owners (sonst interaktive Abfrage ohne Echo) |
 | `LINEAL_DB_PASSWORD` | – | nur Docker-Profil `app`: Passwort der Datenbank `app-db` (Pflicht; URL-sichere Zeichen, z. B. `openssl rand -hex 24`) |
 | `LINEAL_HTTP_PORT` | `8088` | nur Docker: Host-Port des nginx |
+| `LINEAL_BACKUP_DIR` | `./backups` | nur Backup-Skripte: Zielverzeichnis, relativ zum Projektverzeichnis |
+| `LINEAL_BACKUP_KEEP` | `14` | nur Backup-Skripte: Anzahl aufbewahrter `lineal-*`-Backups |
 | `LINEAL_BACKEND` | `http://localhost:8080` | nur Web (Vite-Proxy/Preview): Adresse des Servers |
 | `RUST_LOG` | `info` | Log-Filter |
 
@@ -99,6 +101,32 @@ LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNE
 Der App-Stack hat eine eigene Datenbank `app-db` (postgres:16, Volume `appdata`, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB `postgres` (Port 5440). Ohne `LINEAL_DB_PASSWORD` startet `app-db` nicht (klare Meldung im Log); `docker compose up` ohne Profil braucht keine Variablen. `LINEAL_WORKSPACE_CREATION` (Default `disabled`) und `LINEAL_INSTANCE_ADMINS` werden an Server und Worker durchgereicht; Vorlage in `.env.example`.
 
 Dienste: `app-db`, `migrate` (Einmal-Job, Server und Worker warten auf Erfolg), `server` (Netze `default` + `edge`), `worker`, `web` (nur Netz `edge`, Port `127.0.0.1:${LINEAL_HTTP_PORT:-8088}`). `LINEAL_TRUSTED_PROXIES` ist nur die feste Adresse des nginx-Containers `172.31.88.10/32` (nicht das Subnetz: Das Gateway `.1` ist der Host). Blobs liegen im Volume `blobs` (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor `web` terminieren, `LINEAL_BASE_URL=https://…` setzen (Cookie `Secure`, CSRF-Origin) und in `deploy/nginx.conf` `set_real_ip_from <TLS-Proxy>` + `real_ip_header X-Forwarded-For` ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; `seed` läuft deshalb nur mit `LINEAL_DEV=1` oder `--allow-insecure-demo-users` (im Container: `-e LINEAL_DEV=1`), nur für Demo-Installationen.
+
+### 3.2d Backup und Restore
+
+`scripts/backup.sh` sichert den App-Stack (Profil `app`) in `${LINEAL_BACKUP_DIR:-./backups}/lineal-<UTC-Zeitstempel>/` (Rechte 700):
+
+- `database.dump`: `pg_dump -Fc` der Datenbank `lineal` aus `app-db` (über `docker compose exec`, Ausgabe auf stdout; keine Passwörter auf der Kommandozeile oder in Dateien).
+- `blobs.tar.gz`: Inhalt des Volumes `blobs` (Dateien unter `/data/blobs`), gelesen über einen kurzlebigen `alpine`-Container. Der Volume-Name ist `<Projekt>_blobs` (Projekt `lineal`: `lineal_blobs`).
+- `manifest.txt`: Zeitpunkt, Quellstand (Commit), Migrationsstand (`max(version)` aus `_sqlx_migrations`), Größen und sha256 beider Dateien.
+
+Das Backup entsteht zuerst in `lineal-<ts>.partial` und wird erst nach Erfolg umbenannt; bei Fehlern bleibt kein halbfertiges Verzeichnis zurück. Nach erfolgreichem Lauf löscht die Aufbewahrung die ältesten `lineal-*`-Verzeichnisse über `LINEAL_BACKUP_KEEP` (Default 14). Der Stack muss laufen (`app-db`); die Anwendung selbst muss nicht gestoppt werden.
+
+```bash
+scripts/backup.sh                              # Backup anlegen (Exit-Code ≠ 0 bei Fehlern)
+scripts/restore.sh backups/lineal-<ts>         # Restore: Eingabe "restore" verlangt
+scripts/restore.sh --yes backups/lineal-<ts>   # ohne Rückfrage (Automatisierung)
+```
+
+Cron-Beispiel (täglich 03:00 Ortszeit des Hosts; `LINEAL_BACKUP_*` aus `.env` oder der Crontab):
+
+```cron
+0 3 * * * cd /pfad && scripts/backup.sh >> /var/log/lineal-backup.log 2>&1
+```
+
+`scripts/restore.sh` prüft zuerst sha256 und Größen aus dem Manifest; bei Abweichung bricht es ab, ohne etwas zu ändern. Ist der Migrationsstand des Backups neuer als die Migrationen des Checkouts (aus dem die Images gebaut werden), warnt es. Danach: `app-db` starten, `server`, `worker`, `web` stoppen, `pg_restore --clean --if-exists --no-owner` über `app-db`, Blob-Volume leeren und aus dem Archiv füllen, `migrate` ausführen, dann `server`, `worker`, `web` starten. Schlägt ein Schritt fehl, bleiben die Dienste gestoppt. `COMPOSE_PROJECT_NAME` (Default `lineal`) bestimmt, welcher Stack und welches Volume gemeint sind.
+
+**Betreiberaufgaben (nicht im Skript):** Backups enthalten Datenbank und Dateien unverschlüsselt und liegen standardmäßig auf demselben Host wie der Stack. Eine Off-Site-Kopie (anderer Host, Objektspeicher) und eine Verschlüsselung vor dem Ablegen (z. B. `age -r <Empfänger>` oder `gpg --encrypt`) gehören zum Betrieb. Außerdem: Restore-Probe regelmäßig in einem eigenen Compose-Projekt durchführen (`COMPOSE_PROJECT_NAME=lineal-restore-test`, eigener Port und Subnetz; den Produktivstack nicht anfassen).
 
 ### 3.3 Hintergrundjobs
 
