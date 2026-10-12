@@ -1,6 +1,7 @@
 //! usecases – Benutzer (docs/02 §6, docs/07 §3.1): lesen, auflisten, anlegen, Rolle, Suspendierung,
 //! Passwort.
 
+use super::audit::AuditEvent;
 use super::team::{TeamView, emit};
 use crate::app::App;
 use crate::context::RequestCtx;
@@ -399,9 +400,21 @@ impl App {
             return Err(AppError::invalid_request("a guest needs at least one team")
                 .with_details(json!({ "field": "role" })));
         }
+        let old_role = target.role;
         tx.users()
             .set_role(target.id, role, self.clock.now())
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "user.role_changed",
+                "user",
+                Some(target.id.0),
+                json!({ "from": old_role.as_str(), "to": role.as_str() }),
+            ),
+        )
+        .await?;
         emit(
             &mut *tx,
             ctx,
@@ -463,6 +476,21 @@ impl App {
         tx.users()
             .set_active(target.id, active, self.clock.now())
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                if active {
+                    "user.reactivated"
+                } else {
+                    "user.suspended"
+                },
+                "user",
+                Some(target.id.0),
+                json!({}),
+            ),
+        )
+        .await?;
         if !active {
             // Alte Sessions, Keys und Tokens bleiben auch nach einer Entsperrung ungültig.
             tx.auth()

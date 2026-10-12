@@ -39,6 +39,8 @@ async fn ctx_of_key(app: &App, key: &str) -> RequestCtx {
         scopes: p.scopes,
         team_scope: p.team_scope,
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     }
 }
 

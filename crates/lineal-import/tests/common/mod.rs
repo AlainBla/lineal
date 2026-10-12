@@ -73,6 +73,8 @@ impl Env {
             scopes: Scopes::all(),
             team_scope: None,
             via_session: false,
+            client_ip: None,
+            credential_kind: None,
         }
     }
 

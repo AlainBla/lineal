@@ -5,6 +5,8 @@
 //! wird `hash_token` = SHA-256. Eine Einladung gilt 7 Tage. Die Annahme verknüpft einen importierten
 //! Platzhalter-User gleicher E-Mail, statt einen zweiten User anzulegen.
 
+use super::audit::AuditEvent;
+use super::audit::user_ctx;
 use super::auth::{LoginInput, hash_token};
 use super::team::emit;
 use super::user::{display_name_from_email, validate_email, validate_password};
@@ -228,6 +230,17 @@ impl App {
                 .get_invitation(id)
                 .await?
                 .ok_or_else(|| AppError::internal("invitation vanished after insert"))?;
+            self.record_audit(
+                &mut *tx,
+                ctx,
+                AuditEvent::new(
+                    "invitation.created",
+                    "invitation",
+                    Some(id),
+                    json!({ "email": invitation.email, "role": role.as_str() }),
+                ),
+            )
+            .await?;
             created.push(CreatedInvitation { invitation, token });
         }
         tx.commit().await?;
@@ -298,6 +311,17 @@ impl App {
             .get()
             .await?
             .ok_or_else(|| AppError::internal("workspace vanished"))?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "invitation.resent",
+                "invitation",
+                Some(id),
+                json!({ "email": invitation.email }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         if let Err(e) = self
             .mailer
@@ -334,6 +358,17 @@ impl App {
         tx.webhooks()
             .set_invitation_status(id, "revoked", None, self.clock.now())
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "invitation.revoked",
+                "invitation",
+                Some(id),
+                json!({ "email": inv.email }),
+            ),
+        )
+        .await?;
         let updated = tx
             .webhooks()
             .get_invitation(id)
@@ -379,6 +414,7 @@ impl App {
                     workspace: Some(accepted.url_key.clone()),
                     user_agent: None,
                     ip_address: None,
+                    request_id: None,
                 })
                 .await?,
             ),
@@ -520,6 +556,8 @@ impl App {
             team_scope: None,
 
             via_session: false,
+            client_ip: None,
+            credential_kind: None,
         };
         emit(&mut *tx, &ev_ctx, DomainEvent::UserCreated { user_id }).await?;
         for t in &inv.team_ids {
@@ -562,6 +600,25 @@ impl App {
         tx.webhooks()
             .set_invitation_status(inv.id, "accepted", Some(user_id), now)
             .await?;
+        let accept_ctx = user_ctx(
+            inv.org_id,
+            user_id,
+            UserRole::User,
+            None,
+            String::new(),
+            None,
+        );
+        self.record_audit(
+            &mut *tx,
+            &accept_ctx,
+            AuditEvent::new(
+                "invitation.accepted",
+                "invitation",
+                Some(inv.id),
+                json!({ "email": inv.email }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok((
             AcceptedInvitation {
@@ -638,6 +695,7 @@ impl App {
                 owner_name: account.name.clone(),
                 owner_email: account.email.clone(),
                 owner_password: None,
+                credential_kind: ctx.credential_kind,
             })
             .await?;
         if let Some(h) = hash {

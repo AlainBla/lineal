@@ -332,6 +332,8 @@ async fn notification_data(
         team_scope: None,
 
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     match app
         .get_notification(&ctx, lineal_domain::ids::NotificationId(id))

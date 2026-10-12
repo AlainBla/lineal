@@ -2,6 +2,7 @@
 //! Arbeitspakete ergänzen nur Methoden in den Dateien ihrer Eigentumsliste.
 
 pub mod attachment;
+pub mod audit;
 pub mod auth;
 pub mod comment;
 pub mod cycle;
@@ -25,6 +26,7 @@ pub mod view;
 pub mod webhook;
 
 pub use attachment::AttachmentRepo;
+pub use audit::{AuditActorKind, AuditCursor, AuditEntry, AuditFilter, AuditRepo, NewAuditEntry};
 pub use auth::{AuthRepo, CredentialKind, Principal};
 pub use comment::CommentRepo;
 pub use cycle::CycleRepo;

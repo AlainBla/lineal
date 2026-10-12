@@ -86,7 +86,8 @@ pub fn default_security_settings_json() -> Value {
         "workspaceInitiativesRole": "user",
         "pinnedViewManagementRole": "admin",
         "importRole": "admin",
-        "allowedInviteDomains": []
+        "allowedInviteDomains": [],
+        "auditLogRetentionDays": 365
     })
 }
 
@@ -106,6 +107,8 @@ pub struct OrgPolicy {
     /// Erlaubte E-Mail-Domains für Einladungen und `create_user` (klein geschrieben);
     /// leer = alle Domains.
     pub allowed_invite_domains: Vec<String>,
+    /// Aufbewahrung des Audit-Logs in Tagen (Default 365, nie unter 30).
+    pub audit_log_retention_days: i64,
     pub limits: Limits,
 }
 
@@ -176,6 +179,11 @@ impl OrgPolicy {
                         .collect()
                 })
                 .unwrap_or_default(),
+            audit_log_retention_days: security
+                .get("auditLogRetentionDays")
+                .and_then(Value::as_i64)
+                .filter(|d| *d >= 30)
+                .unwrap_or(365),
             limits: Limits {
                 max_teams: opt_int(limits, &["maxTeams"], d.max_teams),
                 sub_teams_enabled: flag(limits, "subTeamsEnabled", d.sub_teams_enabled),

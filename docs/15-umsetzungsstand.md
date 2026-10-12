@@ -130,7 +130,7 @@ Cron-Beispiel (täglich 03:00 Ortszeit des Hosts; `LINEAL_BACKUP_*` aus `.env` o
 
 ### 3.3 Hintergrundjobs
 
-Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in `outbox_delivery.attempts`/`last_error` und überleben Neustarts; nach `max_event_attempts` (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit `last_error`, abfragbar über `OutboxRepo::list_dead_letters`). Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min), `purge` (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).
+Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in `outbox_delivery.attempts`/`last_error` und überleben Neustarts; nach `max_event_attempts` (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit `last_error`, abfragbar über `OutboxRepo::list_dead_letters`). Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `audit_retention` (1 h, Audit-Log je Workspace nach `auditLogRetentionDays`), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min), `purge` (5 min: Papierkorb nach Frist, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).
 
 ## 4. Sicherheitsmaßnahmen
 
@@ -163,6 +163,19 @@ Jeder Lese- und Schreibpfad (GraphQL, MCP, REST, Jobs) läuft durch dieselbe Pol
 ### 4.5 Dateien und Löschen
 
 Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; `BlobStore::delete` entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).
+
+### 4.7 Audit-Log (WP25)
+
+- Tabelle `audit_log` (Migration 2500): je Eintrag Zeitpunkt, Akteur (`actor_user_id`, `actor_kind` user/app/system), Zugangsart (`credential_kind` session/api_key/oauth/cli), Aktion, Ziel, Details (JSON), IP und Request-ID. Geschrieben wird in **derselben** Transaktion wie die Änderung (`App::record_audit`), nicht über die Outbox.
+- Protokolliert: Login erfolgreich und fehlgeschlagen (Fehlversuch nur, wenn das Konto existiert; Details nur `reason`), Logout, Security-Settings (vorher/nachher je Einstellung), Rollenwechsel, Sperren/Entsperren, Einladung erstellt/erneut gesendet/widerrufen/angenommen, API-Key erstellt/widerrufen, OAuth-App autorisiert/widerrufen, Workspace angelegt (inkl. CLI `create-workspace`), Import gestartet/abgeschlossen, Team angelegt/archiviert/gelöscht, Webhook angelegt/gelöscht.
+- Keine Geheimnisse: nie Tokens, Passwörter, API-Key-Klartext (nur `key_prefix`), Webhook-Secrets, Pfad und Query einer Webhook-URL (nur der Host), keine Issue-Inhalte. E-Mail-Adressen stehen nur in Einladungs-Einträgen (Admin-Sicht); die GraphQL-Antwort liefert Akteurs-Namen, keine E-Mails.
+- Append-only: Trigger verbietet `UPDATE`, `DELETE` und `TRUNCATE`. Löschen ist nur über die Funktion `audit_log_purge_expired(now)` möglich, die den Sitzungsschalter `lineal.audit_purge` transaktionslokal setzt; der Job `audit_retention` ruft sie auf.
+- Aufbewahrung: `securitySettings.auditLogRetentionDays` (Default 365, Minimum 30, Maximum 3650); nur über GraphQL `workspaceSecuritySettingsUpdate` änderbar, mit denselben Rechten wie die übrigen Security-Settings (`UpdateWorkspaceSettings`).
+- Lesen: GraphQL `auditLog(first, after, action, actorId, since, until)`, nur Owner/Admin mit Scope `read` und `admin`; sonst `forbidden`. Cursor-Pagination, höchstens 100 je Seite. Mandantentrennung wie bei den übrigen Tabellen: jede Abfrage filtert auf `organization_id` der Transaktion (kein Postgres-RLS).
+- Client-IP und Request-ID kommen aus `RequestCtx` (`client_ip`, `request_id`), `credential_kind` aus dem Principal (Adapter). Login und Logout über REST übergeben beide; Einladungsannahme und Konto-Login ohne Netzwerkkontext schreiben die IP leer.
+- Web: `/{ws}/settings/audit` (Settings-Navigation „Audit log“, nur Owner/Admin).
+
+Entscheidung: Die Leseberechtigung nutzt die Prüfung „Owner/Admin mit Scope `read` und `admin`“ direkt und nicht `Action::UpdateWorkspaceSettings`, weil diese Aktion zusätzlich einen Schreib-Scope verlangt. Ein Nur-Lese-Admin-Key darf das Log lesen, aber keine Einstellungen ändern.
 
 ### 4.6 Lieferkette
 

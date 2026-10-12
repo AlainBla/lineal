@@ -60,6 +60,8 @@ pub async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, 
         team_scope: principal.team_scope,
 
         via_session: false,
+        client_ip: None,
+        credential_kind: Some(lineal_app::context::credential_label(principal.kind)),
     })
 }
 

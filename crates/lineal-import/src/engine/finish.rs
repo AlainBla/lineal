@@ -4,8 +4,10 @@ use super::node::N;
 use super::{HResult, Halt, ImportEngine, RunOutcome, Session, Step, src_err};
 use crate::port::SourceEntity;
 use chrono::Utc;
+use lineal_app::RequestCtx;
 use lineal_app::error::AppResult;
 use lineal_app::ports::repos::import::{ImportRunUpdate, ImportTable};
+use lineal_app::usecases::audit::AuditEvent;
 use lineal_domain::ids::OrgId;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -228,6 +230,20 @@ impl Session<'_, '_> {
                         .await?;
                     tx.imports().delete_import_credential(run_id).await?;
                     unlock_teams(&mut *tx, &self.run.source).await?;
+                    let audit_ctx = RequestCtx::system(self.org, "import");
+                    self.eng
+                        .app
+                        .record_audit(
+                            &mut *tx,
+                            &audit_ctx,
+                            AuditEvent::new(
+                                "import.completed",
+                                "import_run",
+                                Some(run_id),
+                                json!({ "source": self.run.source }),
+                            ),
+                        )
+                        .await?;
                 }
                 done
             }

@@ -144,6 +144,9 @@ impl Tx for PgTx {
     fn imports(&mut self) -> &mut dyn ImportRepo {
         self
     }
+    fn audit(&mut self) -> &mut dyn AuditRepo {
+        self
+    }
 
     async fn commit(self: Box<Self>) -> AppResult<()> {
         self.tx.commit().await.map_err(db_err)

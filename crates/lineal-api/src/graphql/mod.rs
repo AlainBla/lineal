@@ -2,6 +2,7 @@
 //! Gemeinsame Datei: nur S1 / Orchestrator.
 
 pub mod api_key;
+pub mod audit;
 pub mod comment;
 pub mod cycle;
 pub mod document;
@@ -25,6 +26,7 @@ use lineal_app::App;
 use std::sync::Arc;
 
 use api_key::{ApiKeyMutation, ApiKeyQuery};
+use audit::AuditQuery;
 use comment::{CommentMutation, CommentQuery};
 use cycle::{CycleMutation, CycleQuery};
 use document::{DocumentMutation, DocumentQuery};
@@ -64,6 +66,7 @@ pub struct QueryRoot(
     WebhookQuery,
     ImportQuery,
     ApiKeyQuery,
+    AuditQuery,
 );
 
 #[derive(MergedObject, Default)]

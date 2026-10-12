@@ -949,6 +949,7 @@ async fn invitations_of_another_workspace_cannot_be_accepted_or_managed(pool: Pg
             owner_name: "Zoe Example".into(),
             owner_email: "zoe@beta.example".into(),
             owner_password: Some("correct horse battery".into()),
+            credential_kind: None,
         })
         .await
         .unwrap();
@@ -963,6 +964,8 @@ async fn invitations_of_another_workspace_cannot_be_accepted_or_managed(pool: Pg
         team_scope: None,
 
         via_session: false,
+        client_ip: None,
+        credential_kind: None,
     };
     let c = fx
         .app
