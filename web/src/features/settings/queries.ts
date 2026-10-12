@@ -16,7 +16,9 @@ export const settingsKeys = {
 };
 
 const TEAM_FIELDS = `id key name displayName parentId description icon color visibility timezone triageEnabled
-  cyclesEnabled issueEstimationType inheritWorkflowStatuses retiredAt`;
+  cyclesEnabled issueEstimationType inheritWorkflowStatuses retiredAt
+  issueEstimationExtended issueEstimationAllowZero defaultIssueEstimate inheritIssueEstimation
+  autoClosePeriod autoCloseStateId autoArchivePeriod autoCloseParentIssues autoCloseChildIssues`;
 
 function refresh(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: ["settings"] });

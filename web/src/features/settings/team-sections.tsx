@@ -27,7 +27,15 @@ import {
 } from "./queries";
 import { Field, Section, selectClass } from "./ui";
 
-function SaveRow({ pending, error, dirty }: { pending: boolean; error: unknown; dirty: boolean }) {
+export function SaveRow({
+  pending,
+  error,
+  dirty,
+}: {
+  pending: boolean;
+  error: unknown;
+  dirty: boolean;
+}) {
   return (
     <div className="flex items-center gap-3">
       <Button type="submit" size="sm" disabled={!dirty || pending}>
