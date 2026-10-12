@@ -495,6 +495,16 @@ type DocumentPayload {
 	document: Document
 }
 
+type DocumentSubscriptionPayload {
+	success: Boolean!
+	documentId: String!
+	"""
+	Abo-Zustand nach der Aktion.
+	"""
+	subscribed: Boolean!
+	changed: Boolean!
+}
+
 input DocumentUpdateInput {
 	title: String
 	content: String
@@ -1392,6 +1402,14 @@ type Mutation {
 	"""
 	issueUnsubscribe(id: String!, user: String): IssueSubscriptionPayload!
 	"""
+	Dokument abonnieren (docs/05 §6.3); sichtbar nur für User, die das Dokument sehen.
+	"""
+	documentSubscribe(id: String!): DocumentSubscriptionPayload!
+	"""
+	Dokument-Abo beenden.
+	"""
+	documentUnsubscribe(id: String!): DocumentSubscriptionPayload!
+	"""
 	Objekt-Abo anlegen oder ändern (Upsert je Ziel und Kontext).
 	"""
 	notificationSubscriptionUpdate(input: NotificationSubscriptionInput!): NotificationSubscription!
@@ -1597,6 +1615,17 @@ type Notification {
 	initiativeId: String
 	documentId: String
 	commentId: String
+	"""
+	Meilenstein, auf den sich die Notification bezieht (gruppiert unter dem Projekt).
+	"""
+	projectMilestoneId: String
+	projectUpdateId: String
+	initiativeUpdateId: String
+	"""
+	Typen aller in diese Notification gebündelten Ereignisse (innerhalb einer Minute, gleicher
+	Akteur und gleiches Objekt); leer, wenn nicht gebündelt. `type` ist der spezifischste.
+	"""
+	bundledTypes: [String!]!
 	isPriority: Boolean!
 	readAt: String
 	snoozedUntilAt: String
@@ -2088,6 +2117,10 @@ type Query {
 	Eigene Objekt-Abos (Team, Projekt, Initiative, Cycle, Label).
 	"""
 	notificationSubscriptions: [NotificationSubscription!]!
+	"""
+	Ob der angemeldete User das Dokument abonniert hat (unsichtbare Dokumente: `not_found`).
+	"""
+	documentSubscribed(id: String!): Boolean!
 	"""
 	Ein Dokument per UUID, `slugId` oder URL.
 	"""

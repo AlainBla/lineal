@@ -216,6 +216,7 @@ async fn apply(
     tx.outbox()
         .push(NewEvent::new(
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: saved.id,
                 team_id: saved.team_id,
                 changed: vec!["stateId".into()],

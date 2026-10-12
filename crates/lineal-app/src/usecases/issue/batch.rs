@@ -226,6 +226,7 @@ impl App {
                 team_id: saved.team_id,
                 changed: vec!["archivedAt".into()],
                 mentioned_user_ids: vec![],
+                previous: None,
             },
         )
         .await?;

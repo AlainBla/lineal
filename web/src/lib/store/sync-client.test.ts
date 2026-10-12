@@ -67,6 +67,82 @@ describe("SyncClient", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("Bootstrap beim Erststart: Strom ab dessen lastSyncId, ohne Voll-Reload des Verzeichnisses", async () => {
+    const storage = memoryStorage();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    qc.setQueryData(["users", "u", "ws", "", ""], [{ id: "1" }]);
+    const bootstrap = vi.fn(async () => 77);
+    const client = new SyncClient({
+      qc,
+      storage,
+      url: "ws://x/sync",
+      bootstrap,
+      createSocket: (u) => {
+        const s = new FakeSocket(u);
+        sockets.push(s);
+        return s;
+      },
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(storage.value).toBe(77);
+    expect(sockets[0]!.url).toBe("ws://x/sync?since=77");
+    // Alles außer dem befüllten Verzeichnis wird neu geladen.
+    const call = spy.mock.calls.find((c) => c[0] && "predicate" in c[0])!;
+    const predicate = (call[0] as unknown as { predicate: (q: { queryKey: unknown[] }) => boolean })
+      .predicate;
+    expect(predicate({ queryKey: ["users", "u"] })).toBe(false);
+    expect(predicate({ queryKey: ["issues"] })).toBe(true);
+    // hello (resumed) löst keinen weiteren Voll-Reload aus.
+    spy.mockClear();
+    sockets[0]!.open();
+    sockets[0]!.push({ type: "hello", lastSyncId: 80, resumed: true });
+    expect(spy).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("Bootstrap schlägt fehl: Rückfall auf den bisherigen Ablauf", async () => {
+    const storage = memoryStorage();
+    const client = new SyncClient({
+      qc,
+      storage,
+      url: "ws://x/sync",
+      bootstrap: async () => {
+        throw new Error("offline");
+      },
+      createSocket: (u) => {
+        const s = new FakeSocket(u);
+        sockets.push(s);
+        return s;
+      },
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(storage.value).toBeNull();
+    expect(sockets[0]!.url).toBe("ws://x/sync");
+    client.stop();
+  });
+
+  it("mit gespeicherter ID kein Bootstrap", () => {
+    const bootstrap = vi.fn(async () => 1);
+    const client = new SyncClient({
+      qc,
+      storage: memoryStorage(5),
+      url: "ws://x/sync",
+      bootstrap,
+      createSocket: (u) => {
+        const s = new FakeSocket(u);
+        sockets.push(s);
+        return s;
+      },
+    });
+    client.start();
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(sockets[0]!.url).toBe("ws://x/sync?since=5");
+    client.stop();
+  });
+
   it("verbindet ohne since, lädt einmal alles neu und merkt sich den Kopf des Logs", () => {
     const storage = memoryStorage();
     const spy = vi.spyOn(qc, "invalidateQueries");

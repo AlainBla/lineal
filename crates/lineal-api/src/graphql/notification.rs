@@ -39,6 +39,13 @@ pub struct NotificationGql {
     pub initiative_id: Option<String>,
     pub document_id: Option<String>,
     pub comment_id: Option<String>,
+    /// Meilenstein, auf den sich die Notification bezieht (gruppiert unter dem Projekt).
+    pub project_milestone_id: Option<String>,
+    pub project_update_id: Option<String>,
+    pub initiative_update_id: Option<String>,
+    /// Typen aller in diese Notification gebündelten Ereignisse (innerhalb einer Minute, gleicher
+    /// Akteur und gleiches Objekt); leer, wenn nicht gebündelt. `type` ist der spezifischste.
+    pub bundled_types: Vec<String>,
     pub is_priority: bool,
     pub read_at: Option<String>,
     pub snoozed_until_at: Option<String>,
@@ -68,6 +75,10 @@ impl From<NotificationItem> for NotificationGql {
             initiative_id: n.initiative_id.map(|a| a.to_string()),
             document_id: n.document_id.map(|a| a.to_string()),
             comment_id: n.comment_id.map(|a| a.to_string()),
+            project_milestone_id: n.project_milestone_id.map(|a| a.to_string()),
+            project_update_id: n.project_update_id.map(|a| a.to_string()),
+            initiative_update_id: n.initiative_update_id.map(|a| a.to_string()),
+            bundled_types: n.bundled_types,
             is_priority: n.is_priority,
             read_at: n.read_at.map(ts),
             snoozed_until_at: n.snoozed_until_at.map(ts),
@@ -112,6 +123,16 @@ pub struct IssueSubscriptionPayload {
     pub success: bool,
     pub issue_id: String,
     pub user_id: String,
+    pub changed: bool,
+}
+
+#[derive(SimpleObject)]
+#[graphql(name = "DocumentSubscriptionPayload")]
+pub struct DocumentSubscriptionPayload {
+    pub success: bool,
+    pub document_id: String,
+    /// Abo-Zustand nach der Aktion.
+    pub subscribed: bool,
     pub changed: bool,
 }
 
@@ -347,6 +368,20 @@ impl NotificationQuery {
             .gql(ctx)?;
         Ok(subs.into_iter().map(sub_gql).collect())
     }
+
+    /// Ob der angemeldete User das Dokument abonniert hat (unsichtbare Dokumente: `not_found`).
+    async fn document_subscribed(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<bool> {
+        let doc = Uuid::parse_str(id.trim())
+            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+        app(ctx)?
+            .is_document_subscribed(request_ctx(ctx)?, doc)
+            .await
+            .gql(ctx)
+    }
 }
 
 fn sub_gql(
@@ -491,6 +526,46 @@ impl NotificationMutation {
             success: true,
             issue_id: r.issue_id.to_string(),
             user_id: r.user_id.to_string(),
+            changed: r.changed,
+        })
+    }
+
+    /// Dokument abonnieren (docs/05 §6.3); sichtbar nur für User, die das Dokument sehen.
+    async fn document_subscribe(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<DocumentSubscriptionPayload> {
+        let doc = Uuid::parse_str(id.trim())
+            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+        let r = app(ctx)?
+            .subscribe_document(request_ctx(ctx)?, doc)
+            .await
+            .gql(ctx)?;
+        Ok(DocumentSubscriptionPayload {
+            success: true,
+            document_id: r.document_id.to_string(),
+            subscribed: r.subscribed,
+            changed: r.changed,
+        })
+    }
+
+    /// Dokument-Abo beenden.
+    async fn document_unsubscribe(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> async_graphql::Result<DocumentSubscriptionPayload> {
+        let doc = Uuid::parse_str(id.trim())
+            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+        let r = app(ctx)?
+            .unsubscribe_document(request_ctx(ctx)?, doc)
+            .await
+            .gql(ctx)?;
+        Ok(DocumentSubscriptionPayload {
+            success: true,
+            document_id: r.document_id.to_string(),
+            subscribed: r.subscribed,
             changed: r.changed,
         })
     }

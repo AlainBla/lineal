@@ -143,6 +143,18 @@ pub trait OutboxRepo: Send {
         sync_unimplemented()
     }
 
+    /// Eine Seite Objekte eines Modells für den Bootstrap (`/sync/bootstrap`), aufsteigend nach ID
+    /// ab `after` (exklusiv), samt Sync-Gruppen. Die Rechte-Filterung (Gruppenschnitt mit den Gruppen
+    /// des Users) übernimmt der Aufrufer. Unbekannte Modelle liefern nichts.
+    async fn sync_bootstrap_page(
+        &mut self,
+        _model_name: &str,
+        _after: Option<Uuid>,
+        _limit: i64,
+    ) -> AppResult<Vec<SyncModelRow>> {
+        sync_unimplemented()
+    }
+
     /// Aktueller Zustand eines Objekts als Sync-`data` plus seine Sync-Gruppen (zum Zeitpunkt des
     /// Aufrufs). `None`, wenn es nicht (mehr) existiert oder `model_name` unbekannt ist.
     async fn sync_model(
@@ -156,6 +168,14 @@ pub trait OutboxRepo: Send {
 
 fn sync_unimplemented<T>() -> AppResult<T> {
     Err(AppError::internal("not implemented"))
+}
+
+/// Ein Objekt des Bootstraps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncModelRow {
+    pub id: Uuid,
+    pub data: Value,
+    pub groups: Vec<String>,
 }
 
 /// Neue Aktion für das Sync-Log.

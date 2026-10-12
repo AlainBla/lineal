@@ -304,6 +304,7 @@ impl Session<'_, '_> {
             }
         } else {
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: IssueId(up.id),
                 team_id: TeamId(team),
                 changed: [

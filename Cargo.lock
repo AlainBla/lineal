@@ -1953,6 +1953,7 @@ dependencies = [
  "lineal-app",
  "lineal-db",
  "lineal-domain",
+ "lineal-jobs",
  "lineal-testkit",
  "serde",
  "serde_json",

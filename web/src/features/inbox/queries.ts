@@ -14,7 +14,8 @@ export const inboxKeys = {
 };
 
 const FIELDS = `id type category title subtitle url groupKey actorId actorName issueId issueIdentifier
-  projectId initiativeId documentId commentId isPriority readAt snoozedUntilAt unsnoozedAt archivedAt createdAt updatedAt`;
+  projectId initiativeId documentId commentId projectMilestoneId projectUpdateId initiativeUpdateId bundledTypes
+  isPriority readAt snoozedUntilAt unsnoozedAt archivedAt createdAt updatedAt`;
 
 export interface InboxFilter {
   unreadOnly: boolean;

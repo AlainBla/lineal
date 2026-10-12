@@ -106,6 +106,7 @@ pub(crate) async fn wake_snoozed_issue(
                 team_id: saved.team_id,
                 changed: vec!["snoozedUntilAt".into()],
                 mentioned_user_ids: vec![],
+                previous: None,
             },
             ctx,
         ))

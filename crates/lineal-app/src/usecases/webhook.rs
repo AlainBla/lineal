@@ -1298,6 +1298,7 @@ mod tests {
         let id = IssueId::new_v7();
         let team = TeamId::new_v7();
         let m = map_event(&DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: id,
             team_id: team,
             changed: vec!["stateId".into()],

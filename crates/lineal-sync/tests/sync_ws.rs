@@ -574,3 +574,721 @@ async fn membership_change_triggers_an_immediate_recheck(pool: PgPool) {
     .await;
     assert_eq!(next_close(&mut bob, WAIT).await, Some(4401));
 }
+
+// --- WP32: Freigaben, Gäste, Bootstrap ---------------------------------------------------------
+
+/// Gruppen, wie `lineal-jobs` sie je Modell vergibt (siehe `sync_model`): hier direkt ins Log
+/// geschrieben, damit der Adapter-Filter isoliert geprüft wird.
+fn g(kind: &str, id: Uuid) -> String {
+    format!("{kind}:{id}")
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn guest_receives_workspace_labels_and_own_team_people_but_nothing_foreign(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    let mut carol = e.connect("carol", None).await;
+    let mut bob = e.connect("bob", None).await;
+    next_json(&mut carol, WAIT).await.unwrap();
+    next_json(&mut bob, WAIT).await.unwrap();
+
+    // Alles, was Carol (Gast, nur WEB) NICHT sehen darf.
+    e.append(
+        "U",
+        "Issue",
+        vec![g("team", d.eng.0)],
+        json!({ "tag": "eng-issue" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "IssueLabel",
+        vec![g("team", d.eng.0)],
+        json!({ "tag": "eng-label" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "Initiative",
+        vec!["org".into()],
+        json!({ "tag": "initiative" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "User",
+        vec!["org".into(), g("user", d.alice.0), g("tmem", d.eng.0)],
+        json!({ "tag": "eng-only-person" }),
+    )
+    .await;
+    // Was sie sehen darf: Workspace-Label, Workspace, Person ihres Teams, eigene Person.
+    e.append(
+        "U",
+        "IssueLabel",
+        vec!["org".into(), "orgpub".into()],
+        json!({ "tag": "ws-label" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "Organization",
+        vec!["org".into(), "orgpub".into()],
+        json!({ "tag": "workspace" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "User",
+        vec![
+            "org".into(),
+            g("user", d.bob.0),
+            g("tmem", d.eng.0),
+            g("tmem", d.web.0),
+        ],
+        json!({ "tag": "web-person" }),
+    )
+    .await;
+    e.append(
+        "U",
+        "User",
+        vec!["org".into(), g("user", d.carol.0), g("tmem", d.web.0)],
+        json!({ "tag": "self" }),
+    )
+    .await;
+
+    let mut got: Vec<Value> = vec![];
+    while let Some(m) = next_sync(&mut carol, QUIET).await {
+        got.extend(m["actions"].as_array().unwrap().iter().cloned());
+    }
+    let tags: Vec<&str> = got
+        .iter()
+        .map(|a| a["data"]["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        tags,
+        ["ws-label", "workspace", "web-person", "self"],
+        "{tags:?}"
+    );
+    // Fremde Team-/Mitgliedschafts-IDs stehen auch nicht in den Gruppen der gelieferten Aktionen.
+    let wire = serde_json::to_string(&got).unwrap();
+    assert!(
+        !wire.contains(&d.eng.0.to_string()),
+        "ENG-ID im Datenstrom: {wire}"
+    );
+    assert!(!wire.contains(&d.des.0.to_string()));
+    assert!(!wire.contains(&d.alice.0.to_string()));
+    // Der Nicht-Gast Bob erhält dagegen alles Sichtbare (`org`, Team).
+    let mut bob_tags = vec![];
+    while let Some(m) = next_sync(&mut bob, QUIET).await {
+        bob_tags.extend(model_ids(&m));
+    }
+    for want in [
+        "eng-issue",
+        "eng-label",
+        "initiative",
+        "eng-only-person",
+        "ws-label",
+    ] {
+        assert!(bob_tags.contains(&want.to_owned()), "{want}: {bob_tags:?}");
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn guest_gets_a_shared_issue_live_and_loses_it_on_unshare(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    // Issue in ENG: Carol (Gast, nur WEB) sieht es nicht.
+    let issue = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue (id, organization_id, team_id, number, title, state_id, creator_id) \
+         VALUES ($1,$2,$3,200,'Geteiltes Issue',$4,$5)",
+    )
+    .bind(issue)
+    .bind(d.org.0)
+    .bind(d.eng.0)
+    .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(1)[1].0)
+    .bind(d.bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let other = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue (id, organization_id, team_id, number, title, state_id, creator_id) \
+         VALUES ($1,$2,$3,201,'Nicht geteilt',$4,$5)",
+    )
+    .bind(other)
+    .bind(d.org.0)
+    .bind(d.eng.0)
+    .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(1)[1].0)
+    .bind(d.bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb",
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let worker = lineal_jobs::Worker::with(
+        e.app.clone(),
+        vec![Arc::new(lineal_jobs::consumers::sync::SyncConsumer)],
+        vec![],
+        lineal_jobs::WorkerConfig::default(),
+    );
+    let mut carol = e.connect("carol", None).await;
+    next_json(&mut carol, WAIT).await.unwrap();
+
+    // Ein Update am nicht geteilten Issue: Carol bekommt nichts.
+    let bob = lineal_testkit::ctx_for(lineal_testkit::SeedUser::Alice);
+    e.app
+        .share_issue(&bob, &other.to_string(), "carol@acme.example")
+        .await
+        .unwrap();
+    e.app
+        .unshare_issue(&bob, &other.to_string(), "carol@acme.example")
+        .await
+        .unwrap();
+    // Bob teilt `issue` mit Carol.
+    let shared = e
+        .app
+        .share_issue(&bob, &issue.to_string(), "carol@acme.example")
+        .await
+        .unwrap();
+    assert!(shared.shared);
+    // Weder Erstellen noch Teilen erzeugen hier Sync-Aktionen, bis der Worker die Outbox verteilt.
+    while worker.tick().await.unwrap().deliveries > 0 {}
+
+    let mut got: Vec<Value> = vec![];
+    while let Some(m) = next_sync(&mut carol, QUIET).await {
+        got.extend(m["actions"].as_array().unwrap().iter().cloned());
+    }
+    let for_issue: Vec<&Value> = got
+        .iter()
+        .filter(|a| a["modelName"] == "Issue" && a["modelId"] == issue.to_string())
+        .collect();
+    assert!(
+        !for_issue.is_empty(),
+        "geteiltes Issue kommt live an: {got:?}"
+    );
+    let share = for_issue.last().unwrap();
+    assert_eq!(share["data"]["title"], "Geteiltes Issue");
+    // Nur die eigene Gruppe, nie die Team-ID von ENG.
+    assert_eq!(share["syncGroups"], json!([g("user", d.carol.0)]));
+    // Das andere Issue wurde geteilt und wieder entzogen, bevor der Worker die Events verteilte: der
+    // Strom kennt nur den Endzustand (kein Zugriff), also erfährt Carol nichts darüber.
+    assert!(
+        !got.iter().any(|a| a["modelId"] == other.to_string()),
+        "{got:?}"
+    );
+
+    // Entzug: Carol erhält `D` für das Issue.
+    e.app
+        .unshare_issue(&bob, &issue.to_string(), "carol@acme.example")
+        .await
+        .unwrap();
+    while worker.tick().await.unwrap().deliveries > 0 {}
+    let mut after: Vec<Value> = vec![];
+    while let Some(m) = next_sync(&mut carol, QUIET).await {
+        after.extend(m["actions"].as_array().unwrap().iter().cloned());
+    }
+    let last = after
+        .iter()
+        .rfind(|a| a["modelId"] == issue.to_string())
+        .expect("Entzug wird zugestellt");
+    assert_eq!(last["action"], "D");
+    assert_eq!(last["syncGroups"], json!([g("user", d.carol.0)]));
+
+    // Spätere Änderungen am Issue erreichen Carol nicht mehr.
+    sqlx::query("UPDATE issue SET title = 'Neuer Titel' WHERE id = $1")
+        .bind(issue)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // (ein IssueUpdated-Event über den Use-Case-Weg: Share/Unshare am anderen Issue reicht nicht,
+    // daher direkt ins Log mit den Gruppen, die `sync_model` jetzt liefern würde)
+    let mut tx = e.app.store.begin(d.org).await.unwrap();
+    let state = tx
+        .outbox()
+        .sync_model("Issue", issue)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.groups,
+        vec![g("team", d.eng.0)],
+        "keine Freigabe mehr"
+    );
+}
+
+/// `GET /sync/bootstrap` als `who` (Session-Cookie); liefert Status und Zeilen.
+async fn bootstrap(e: &Env, who: Option<&str>, query: &str) -> (StatusCode, Vec<String>) {
+    use http_body_util::BodyExt;
+    let router = router_with(e.app.clone(), fast());
+    let mut req = Request::get(format!("/sync/bootstrap{query}"));
+    if let Some(who) = who {
+        req = req.header("cookie", format!("lineal_session={}", token(who)));
+    }
+    let res = router
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    (status, text.lines().map(str::to_owned).collect())
+}
+
+/// Objekte (ohne Metazeile) und Metadaten einer Antwort.
+fn split(lines: &[String]) -> (Vec<Value>, Value) {
+    let (meta, rest) = lines.split_last().expect("Metazeile");
+    let meta = serde_json::from_str(meta.strip_prefix("_metadata_=").expect("Metazeile")).unwrap();
+    (
+        rest.iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect(),
+        meta,
+    )
+}
+
+/// Lädt alle Pakete mit `limit` und liefert alle Objekte plus die `lastSyncId`.
+async fn bootstrap_all(e: &Env, who: &str, first: &str) -> (Vec<Value>, i64, usize) {
+    let (mut objs, mut pages, mut last_id) = (vec![], 0, None);
+    let mut query = first.to_owned();
+    loop {
+        let (status, lines) = bootstrap(e, Some(who), &query).await;
+        assert_eq!(status, StatusCode::OK);
+        let (o, meta) = split(&lines);
+        objs.extend(o);
+        pages += 1;
+        let id = meta["lastSyncId"].as_i64().unwrap();
+        assert_eq!(
+            *last_id.get_or_insert(id),
+            id,
+            "lastSyncId bleibt über alle Pakete gleich"
+        );
+        match meta["nextCursor"].as_str() {
+            Some(c) => query = format!("?cursor={}", c.replace(';', "%3B").replace(',', "%2C")),
+            None => return (objs, last_id.unwrap(), pages),
+        }
+        assert!(pages < 200);
+    }
+}
+
+fn class_ids(objs: &[Value], class: &str) -> Vec<String> {
+    objs.iter()
+        .filter(|o| o["__class"] == class)
+        .map(|o| o["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_rejects_bad_requests_and_anonymous_callers(pool: PgPool) {
+    let e = env(pool).await;
+    assert_eq!(bootstrap(&e, None, "").await.0, StatusCode::UNAUTHORIZED);
+    for bad in [
+        "?modelNames=Comment",
+        "?modelNames=Issue,Issue",
+        "?modelNames=",
+        "?limit=0",
+        "?limit=100000",
+        "?cursor=nonsense",
+        "?cursor=1%3B9%3B-%3BUser",
+    ] {
+        assert_eq!(
+            bootstrap(&e, Some("bob"), bad).await.0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    let (status, lines) = bootstrap(&e, Some("bob"), "?modelNames=Team&limit=5").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(lines.last().unwrap().starts_with("_metadata_="));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_never_leaks_foreign_teams_to_a_guest(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    // ENG-Issue, DES-Issue (privat), ENG-Dokument: Carol sieht keines davon.
+    for (team, slot, number) in [(d.eng, 1_u128, 210), (d.des, 3, 211)] {
+        sqlx::query(
+            "INSERT INTO issue (organization_id, team_id, number, title, state_id, creator_id) \
+             VALUES ($1,$2,$3,'Geheim',$4,$5)",
+        )
+        .bind(d.org.0)
+        .bind(team.0)
+        .bind(number)
+        .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(slot)[1].0)
+        .bind(d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO document (organization_id, title, team_id, creator_id) VALUES ($1,'ENG-Doc',$2,$3)")
+        .bind(d.org.0)
+        .bind(d.eng.0)
+        .bind(d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+
+    let all = "?modelNames=Organization,Team,User,WorkflowState,IssueLabel,Cycle,Project,ProjectMilestone,Initiative,CustomView,Issue,Template,Document&limit=50";
+    let (carol, _, _) = bootstrap_all(&e, "carol", all).await;
+    let (bob, _, _) = bootstrap_all(&e, "bob", all).await;
+
+    // Teams: nur WEB; Bob sieht alle drei.
+    assert_eq!(class_ids(&carol, "Team"), [d.web.0.to_string()]);
+    assert_eq!(class_ids(&bob, "Team").len(), 3);
+    // Keine ENG-/DES-Spuren irgendwo im Gast-Bootstrap (IDs, Namen, Gruppen).
+    let wire = serde_json::to_string(&carol).unwrap();
+    for needle in [
+        d.eng.0.to_string(),
+        d.des.0.to_string(),
+        "Geheim".into(),
+        "ENG-Doc".into(),
+    ] {
+        assert!(!wire.contains(&needle), "{needle} im Gast-Bootstrap");
+    }
+    assert!(class_ids(&carol, "Issue").is_empty());
+    assert!(class_ids(&carol, "Initiative").is_empty());
+    assert!(class_ids(&carol, "Document").is_empty());
+    // Bob sieht ENG-Issues und das Dokument.
+    assert_eq!(class_ids(&bob, "Issue").len(), 2);
+    assert_eq!(class_ids(&bob, "Document").len(), 1);
+
+    // Personen: nur Mitglieder von WEB (und sie selbst), mit eigener Gruppe statt Team-Hinweisen.
+    let allowed: Vec<String> = sqlx::query_scalar(
+        "SELECT user_id::text FROM team_membership WHERE team_id = $1 AND archived_at IS NULL",
+    )
+    .bind(d.web.0)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    for id in class_ids(&carol, "User") {
+        assert!(
+            allowed.contains(&id) || id == d.carol.0.to_string(),
+            "fremde Person {id} im Gast-Bootstrap"
+        );
+    }
+    assert!(class_ids(&carol, "User").contains(&d.carol.0.to_string()));
+    assert!(class_ids(&bob, "User").len() >= 3);
+    // Die gelieferten Gruppen enthalten nur Gruppen des Empfängers.
+    for o in &carol {
+        for grp in o["syncGroups"].as_array().unwrap() {
+            let grp = grp.as_str().unwrap();
+            assert!(
+                [
+                    format!("team:{}", d.web.0),
+                    format!("tmem:{}", d.web.0),
+                    format!("user:{}", d.carol.0),
+                    "orgpub".to_owned(),
+                ]
+                .contains(&grp.to_owned()),
+                "{grp}"
+            );
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_includes_a_shared_issue_only_after_the_share_and_pages_are_consistent(
+    pool: PgPool,
+) {
+    let e = env(pool).await;
+    let d = e.d;
+    let issue = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue (id, organization_id, team_id, number, title, state_id, creator_id) \
+         VALUES ($1,$2,$3,220,'Geteilt',$4,$5)",
+    )
+    .bind(issue)
+    .bind(d.org.0)
+    .bind(d.eng.0)
+    .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(1)[1].0)
+    .bind(d.bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let first = "?modelNames=Issue,Team,User&limit=2";
+    let (before, _, _) = bootstrap_all(&e, "carol", first).await;
+    assert!(!class_ids(&before, "Issue").contains(&issue.to_string()));
+
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id, shared_by_id) VALUES ($1,$2,$3,$4)")
+        .bind(d.org.0)
+        .bind(issue)
+        .bind(d.carol.0)
+        .bind(d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let (after, head, pages) = bootstrap_all(&e, "carol", first).await;
+    assert_eq!(class_ids(&after, "Issue"), [issue.to_string()]);
+    assert!(
+        pages >= 2,
+        "kleine Pakete werden über den Cursor fortgesetzt"
+    );
+    // Paketweise = in einem Zug (gleiche Objektmenge).
+    let (one, head_one, one_pages) =
+        bootstrap_all(&e, "carol", "?modelNames=Issue,Team,User&limit=2000").await;
+    assert_eq!(one_pages, 1);
+    assert_eq!(head, head_one);
+    let mut a: Vec<String> = after
+        .iter()
+        .map(|o| o["id"].as_str().unwrap().to_owned())
+        .collect();
+    let mut b: Vec<String> = one
+        .iter()
+        .map(|o| o["id"].as_str().unwrap().to_owned())
+        .collect();
+    a.sort();
+    b.sort();
+    assert_eq!(a, b);
+    // Das geteilte Issue trägt nur die eigene Gruppe von Carol (keine ENG-ID).
+    let obj = after.iter().find(|o| o["id"] == issue.to_string()).unwrap();
+    assert_eq!(obj["syncGroups"], json!([format!("user:{}", d.carol.0)]));
+    assert_eq!(obj["__class"], "Issue");
+}
+
+// --- Sicherheitsprüfung: Bootstrap je Modellklasse -------------------------------------------
+
+/// Legt je Klasse ein Objekt im privaten Team DES an (plus ein archiviertes/Papierkorb-Objekt in ENG)
+/// und liefert `(Klasse, id)`.
+async fn des_fixtures(e: &Env) -> Vec<(&'static str, String)> {
+    let d = e.d;
+    let mut out = vec![];
+    let one = |sql: String| {
+        let pool = e.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(&sql)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .to_string()
+        }
+    };
+    let (org, des, bob) = (d.org.0, d.des.0, d.bob.0);
+    out.push((
+        "IssueLabel",
+        one(format!("INSERT INTO issue_label (organization_id, team_id, name, color) VALUES ('{org}','{des}','Des-Label','#112233') RETURNING id")).await,
+    ));
+    out.push((
+        "Cycle",
+        one(format!("INSERT INTO cycle (organization_id, team_id, number, starts_at, ends_at) VALUES ('{org}','{des}',90, now(), now() + interval '7 days') RETURNING id")).await,
+    ));
+    out.push((
+        "Template",
+        one(format!("INSERT INTO template (organization_id, type, name, team_id) VALUES ('{org}','issue','Des-Template','{des}') RETURNING id")).await,
+    ));
+    out.push((
+        "CustomView",
+        one(format!("INSERT INTO custom_view (organization_id, name, model_name, filter_data, owner_id, creator_id, shared, team_id) VALUES ('{org}','Des-View','Issue','{{}}','{bob}','{bob}',true,'{des}') RETURNING id")).await,
+    ));
+    out.push((
+        "Document",
+        one(format!("INSERT INTO document (organization_id, title, team_id, creator_id) VALUES ('{org}','Des-Doc','{des}','{bob}') RETURNING id")).await,
+    ));
+    out.push((
+        "Issue",
+        one(format!(
+            "INSERT INTO issue (organization_id, team_id, number, title, state_id, creator_id) VALUES ('{org}','{des}',300,'Des-Issue','{}','{bob}') RETURNING id",
+            lineal_testkit::seed::identity::seed_workflow_state_ids(3)[1].0
+        )).await,
+    ));
+    let status: uuid::Uuid = sqlx::query_scalar("SELECT id FROM project_status LIMIT 1")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    let project = one(format!("INSERT INTO project (organization_id, name, lead_team_id, number, status_id, creator_id) VALUES ('{org}','Des-Project','{des}',300,'{status}','{bob}') RETURNING id")).await;
+    sqlx::query(
+        "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2::uuid,$3)",
+    )
+    .bind(org)
+    .bind(&project)
+    .bind(des)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let milestone = one(format!("INSERT INTO project_milestone (organization_id, project_id, name) VALUES ('{org}','{project}','Des-Milestone') RETURNING id")).await;
+    out.push(("Project", project));
+    out.push(("ProjectMilestone", milestone));
+    out.push(("Team", des.to_string()));
+    // Archiviertes ENG-Objekt und Issue im Papierkorb gehören nie zum Bootstrap.
+    let trashed = one(format!(
+        "INSERT INTO issue (organization_id, team_id, number, title, state_id, creator_id, trashed, trashed_at) VALUES ('{org}','{}',301,'Papierkorb','{}','{bob}', true, now()) RETURNING id",
+        d.eng.0,
+        lineal_testkit::seed::identity::seed_workflow_state_ids(1)[1].0
+    ))
+    .await;
+    out.push(("TrashedIssue", trashed));
+    out
+}
+
+const ALL_MODELS: &str = "?modelNames=Organization,Team,User,WorkflowState,IssueLabel,Cycle,Project,ProjectMilestone,Initiative,CustomView,Issue,Template,Document&limit=100";
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_private_team_objects_reach_only_members_in_every_class(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    let fixtures = des_fixtures(&e).await;
+    // DES-Gruppe des Teams selbst verwendet `team:<DES>`; Alice (kein DES) und Carol (Gast, nur WEB)
+    // dürfen keine dieser Objekte sehen, Bob (Mitglied) schon (Kontrolle gegen Leerlauf).
+    let (bob, _, _) = bootstrap_all(&e, "bob", ALL_MODELS).await;
+    for (who, expect_all) in [("alice", false), ("carol", false), ("bob", true)] {
+        let (objs, _, _) = if who == "bob" {
+            (bob.clone(), 0, 0)
+        } else {
+            bootstrap_all(&e, who, ALL_MODELS).await
+        };
+        let wire = serde_json::to_string(&objs).unwrap();
+        for (class, id) in &fixtures {
+            let present = wire.contains(id.as_str());
+            if *class == "TrashedIssue" {
+                assert!(!present, "{who}: Papierkorb-Issue geliefert");
+            } else {
+                assert_eq!(present, expect_all, "{who}: {class} {id}");
+            }
+        }
+        // Keine E-Mail-Adressen und keine Namen privater Objekte in den Antworten.
+        assert!(!wire.contains("@acme.example"), "{who}: E-Mail geliefert");
+        if !expect_all {
+            for name in [
+                "Des-Label",
+                "Des-Template",
+                "Des-View",
+                "Des-Doc",
+                "Des-Issue",
+                "Des-Project",
+                "Des-Milestone",
+            ] {
+                assert!(!wire.contains(name), "{who}: {name}");
+            }
+        }
+        // Nur bekannte Klassen.
+        for o in &objs {
+            let c = o["__class"].as_str().unwrap();
+            assert!(ALL_MODELS.contains(c), "{c}");
+        }
+    }
+    let _ = d;
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_private_views_and_admin_only_data_are_never_delivered(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    // Private View von Bob und Workspace-View: nur der Besitzer bzw. Nicht-Gäste.
+    for (name, shared) in [("Bobs-privat", false), ("WS-geteilt", true)] {
+        sqlx::query("INSERT INTO custom_view (organization_id, name, model_name, filter_data, owner_id, creator_id, shared) VALUES ($1,$2,'Issue','{}'::jsonb,$3,$3,$4)")
+            .bind(d.org.0)
+            .bind(name)
+            .bind(d.bob.0)
+            .bind(shared)
+            .execute(&e.pool)
+            .await
+            .unwrap();
+    }
+    let (alice, _, _) = bootstrap_all(&e, "alice", ALL_MODELS).await;
+    let (carol, _, _) = bootstrap_all(&e, "carol", ALL_MODELS).await;
+    let (bob, _, _) = bootstrap_all(&e, "bob", ALL_MODELS).await;
+    let names = |o: &[Value]| -> Vec<String> {
+        o.iter()
+            .filter(|x| x["__class"] == "CustomView")
+            .map(|x| x["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(names(&bob).contains(&"Bobs-privat".to_owned()));
+    assert!(!names(&alice).contains(&"Bobs-privat".to_owned()));
+    assert!(!names(&carol).contains(&"Bobs-privat".to_owned()));
+    assert!(names(&alice).contains(&"WS-geteilt".to_owned()));
+    assert!(
+        !names(&carol).contains(&"WS-geteilt".to_owned()),
+        "Gast: kein Workspace-View"
+    );
+
+    // Admin-Klassen (Einladungen, Keys, Webhooks, Audit, Sicherheit, Kommentare) sind nicht abrufbar.
+    for model in [
+        "Invitation",
+        "ApiKey",
+        "Webhook",
+        "AuditLog",
+        "OrganizationSecurity",
+        "UserSession",
+        "Comment",
+        "Notification",
+    ] {
+        for who in ["alice", "carol"] {
+            assert_eq!(
+                bootstrap(&e, Some(who), &format!("?modelNames={model}"))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST,
+                "{who}: {model}"
+            );
+        }
+    }
+    // Der Workspace enthält nur Id und Name.
+    let org = alice
+        .iter()
+        .find(|o| o["__class"] == "Organization")
+        .unwrap();
+    let mut keys: Vec<&String> = org.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["__class", "id", "name", "syncGroups"]);
+    // Personen: nur Id und Namen, nie E-Mail/Rolle.
+    for o in alice
+        .iter()
+        .chain(carol.iter())
+        .filter(|o| o["__class"] == "User")
+    {
+        let mut keys: Vec<&String> = o.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "__class",
+                "displayName",
+                "id",
+                "name",
+                "syncGroups",
+                "updatedAt"
+            ]
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_manipulated_cursors_cannot_skip_the_filter_or_fake_the_head(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    let fixtures = des_fixtures(&e).await;
+    let issue_id = fixtures.iter().find(|f| f.0 == "Issue").unwrap().1.clone();
+    // Cursor mitten in der Issue-Klasse, ab Nil-UUID, mit absurd hohem Stand.
+    let cursor = "999999999;1;00000000-0000-0000-0000-000000000000;Team,Issue,Document";
+    let q = format!("?cursor={}", cursor.replace(';', "%3B").replace(',', "%2C"));
+    for who in ["alice", "carol"] {
+        let (status, lines) = bootstrap(&e, Some(who), &q).await;
+        assert_eq!(status, StatusCode::OK);
+        let (objs, meta) = split(&lines);
+        assert!(
+            !serde_json::to_string(&objs).unwrap().contains(&issue_id),
+            "{who}"
+        );
+        assert!(
+            objs.iter().all(|o| o["__class"] != "Team"),
+            "{who}: Cursor überspringt nie die Rechteprüfung, Klassen vor idx entfallen"
+        );
+        // Der gemeldete Stand ist nie größer als der echte Kopf des Logs.
+        let mut tx = e.app.store.begin(d.org).await.unwrap();
+        let head = tx.outbox().sync_head().await.unwrap().head;
+        assert!(meta["lastSyncId"].as_i64().unwrap() <= head);
+    }
+    // Fremde Organisation: der Cursor trägt keine Organisation, jede Abfrage nutzt die des Tokens.
+    let other_org = Uuid::now_v7();
+    let bad = format!("?cursor=1%3B0%3B{other_org}%3BIssue");
+    let (status, lines) = bootstrap(&e, Some("carol"), &bad).await;
+    assert_eq!(status, StatusCode::OK);
+    let (objs, _) = split(&lines);
+    assert!(objs.is_empty(), "Carol sieht keine Issues");
+}

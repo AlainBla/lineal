@@ -1100,6 +1100,7 @@ Favoriten sind **persönliche** Einträge in der Seitenleiste oberhalb von „Yo
 Default bei Anlage: `["issueAddedToView"]`. Die Prüfung „erfüllt den Filter jetzt, vorher nicht“ erfolgt im Fan-out anhand der Vorher-/Nachher-Werte des Events (`updatedFrom`) gegen den View-Filter, ausgewertet mit den Rechten des Abonnenten. Eigene Aktionen lösen keine View-Benachrichtigung aus.
 
 > **Umsetzung (WP31):** Das Abo ist eine `notification_subscription`-Zeile (`target_type = customView`) und wird über `viewSubscriptionUpdate` gesetzt (Glocke im Kopf der View; nur Issue-Views). Typen: `issueAddedToView`, `issueStatusChanged`, `issueStatusChangedAll`. Verliert eine geteilte View ihre Sichtbarkeit (`shared` → `false`), werden die Abos aller außer dem Owner deaktiviert. Das Auslösen der Benachrichtigung im Fan-out ist Sache von WP32 (Schnittstelle: docs/dev/schnittstellen.md). Gespeicherte Issue-Views werden im Web in Filter-Chips zurückgewandelt und sind dort bearbeitbar (Chip anklicken, entfernen, ergänzen, „Save changes“ schreibt `filterData`); Bedingungen, die die Leiste nicht darstellen kann (oberste `or`-Zweige, unbekannte Felder oder Operatoren), erscheinen als Chip „Advanced filter“ und bleiben beim Anwenden und Speichern unverändert erhalten. Der Eigentümerwechsel einer geteilten View steht im Kopf der View (Owner und Admins).
+> **Umsetzung:** Der Fan-out kennt keine View-Filter, sondern fragt eine `ViewSubscriptionSource` (`usecases::notification::views`, Details in `docs/dev/schnittstellen.md`) nach Abonnent und Typ je Issue-Ereignis (mit `is_new`, `changed` und `previous`) und übernimmt Self-Suppression, Sichtbarkeit, Bündelung und Idempotenz. Die Quelle liefert WP31 (Datenmodell der View-Abos).
 
 ---
 
@@ -1365,6 +1366,8 @@ MCP `get_notifications` liefert dagegen **einzelne** Notifications (neueste zuer
 | `notification:<id>` | `system` | einzeln |
 
 Mehrere Ereignisse desselben Akteurs am selben Objekt innerhalb von **1 Minute** werden zusätzlich zu **einer** Notification zusammengefasst (der Typ der spezifischsten bleibt, die Detailzeile listet die Änderungen; [09-api-events.md](09-api-events.md)). Der Link der Gruppe zeigt auf das Objekt, bei Kommentar-Typen mit Anker `#comment-<id>`.
+
+> **Umsetzung:** Die Zusammenfassung geschieht beim Erzeugen: Ereignisse desselben Akteurs im selben Gruppenschlüssel innerhalb von 60 s gehen in die jüngste Notification des Empfängers ein (spezifischster Typ bleibt in `type`, bei Gleichstand der bestehende). `Notification.bundledTypes` listet alle Typen der zusammengefassten Ereignisse (leer = nicht gebündelt, höchstens 20 Einträge); die Notification wird wieder ungelesen und beendet ein Snooze der Gruppe. Ohne menschlichen Akteur (Jobs, Automationen, Erinnerungen) wird nicht gebündelt.
 
 ### 6.7 Inbox-Anzeige und Filter
 

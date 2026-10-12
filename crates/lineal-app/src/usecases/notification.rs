@@ -6,6 +6,7 @@
 pub mod fanout;
 pub mod jobs;
 pub mod kinds;
+pub mod views;
 
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
@@ -59,6 +60,16 @@ pub struct MarkNotificationInput {
 pub struct IssueSubscriptionResult {
     pub issue_id: IssueId,
     pub user_id: UserId,
+    /// `true`, wenn sich der Zustand geändert hat.
+    pub changed: bool,
+}
+
+/// Ergebnis von `subscribe_document`/`unsubscribe_document`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentSubscriptionResult {
+    pub document_id: Uuid,
+    /// Abo-Zustand nach der Aktion.
+    pub subscribed: bool,
     /// `true`, wenn sich der Zustand geändert hat.
     pub changed: bool,
 }
@@ -578,6 +589,97 @@ impl App {
             user_id: target,
             changed,
         })
+    }
+
+    /// Lädt das Dokument für ein Abo und prüft die Sichtbarkeit (Gäste nur bei Teambezug,
+    /// sonst `not_found`).
+    async fn document_for_subscription(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        document: Uuid,
+    ) -> AppResult<Uuid> {
+        let missing = || AppError::not_found("Document not found.");
+        let facts = tx
+            .notifications()
+            .document_facts(document)
+            .await?
+            .ok_or_else(missing)?;
+        let visible = snap.visible_team_ids();
+        let ok = if facts.workspace_only {
+            snap.actor.role != lineal_domain::enums::UserRole::Guest
+        } else {
+            facts.teams.iter().any(|t| visible.contains(t))
+        };
+        if facts.trashed || !ok {
+            return Err(missing());
+        }
+        Ok(facts.id)
+    }
+
+    /// Dokument abonnieren (`manual`, docs/05 §6.3); reaktiviert ein beendetes Abo.
+    pub async fn subscribe_document(
+        &self,
+        ctx: &RequestCtx,
+        document: Uuid,
+    ) -> AppResult<DocumentSubscriptionResult> {
+        require_write(ctx)?;
+        let user = me(ctx)?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let id = self
+            .document_for_subscription(&mut *tx, &snap, document)
+            .await?;
+        let outcome = tx
+            .notifications()
+            .subscribe_document(id, user, SubscriptionReason::Manual, self.clock.now())
+            .await?;
+        tx.commit().await?;
+        Ok(DocumentSubscriptionResult {
+            document_id: id,
+            subscribed: true,
+            changed: outcome != SubscribeOutcome::Unchanged,
+        })
+    }
+
+    /// Dokument-Abo beenden (nur das eigene).
+    pub async fn unsubscribe_document(
+        &self,
+        ctx: &RequestCtx,
+        document: Uuid,
+    ) -> AppResult<DocumentSubscriptionResult> {
+        require_write(ctx)?;
+        let user = me(ctx)?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let id = self
+            .document_for_subscription(&mut *tx, &snap, document)
+            .await?;
+        let changed = tx
+            .notifications()
+            .unsubscribe_document(id, user, self.clock.now())
+            .await?;
+        tx.commit().await?;
+        Ok(DocumentSubscriptionResult {
+            document_id: id,
+            subscribed: false,
+            changed,
+        })
+    }
+
+    /// Ob der Aufrufer das Dokument abonniert hat.
+    pub async fn is_document_subscribed(
+        &self,
+        ctx: &RequestCtx,
+        document: Uuid,
+    ) -> AppResult<bool> {
+        let user = me(ctx)?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let id = self
+            .document_for_subscription(&mut *tx, &snap, document)
+            .await?;
+        tx.notifications().is_document_subscriber(id, user).await
     }
 
     /// Abo-Datensätze eines Issues (aktive und beendete).

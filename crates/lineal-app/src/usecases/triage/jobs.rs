@@ -244,6 +244,7 @@ impl App {
         emit_system(
             tx,
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: saved.id,
                 team_id: saved.team_id,
                 changed: vec!["stateId".into(), "autoClosedAt".into()],
@@ -363,6 +364,7 @@ impl App {
                 emit_system(
                     &mut *tx,
                     DomainEvent::IssueUpdated {
+                        previous: None,
                         issue_id: id,
                         team_id: issue.team_id,
                         changed: vec!["archivedAt".into()],
@@ -541,6 +543,7 @@ impl App {
                 emit_system(
                     &mut *tx,
                     DomainEvent::IssueUpdated {
+                        previous: None,
                         issue_id: saved.id,
                         team_id: saved.team_id,
                         changed: vec!["snoozedUntilAt".into()],

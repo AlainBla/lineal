@@ -228,6 +228,7 @@ impl App {
                 &mut *tx,
                 ctx,
                 DomainEvent::IssueUpdated {
+                    previous: None,
                     issue_id: issue,
                     team_id: team,
                     changed: vec!["projectMilestoneId".into()],

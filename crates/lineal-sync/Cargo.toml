@@ -27,6 +27,7 @@ sqlx.workspace = true
 [dev-dependencies]
 lineal-testkit.workspace = true
 lineal-db.workspace = true
+lineal-jobs.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 futures-util = "0.3"

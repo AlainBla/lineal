@@ -40,7 +40,7 @@ use fields::{
 };
 use history::Delta;
 use lineal_domain::enums::{Priority, SlaType, StateType};
-use lineal_domain::events::DomainEvent;
+use lineal_domain::events::{DomainEvent, IssuePrevious};
 use lineal_domain::ids::{IssueId, LabelId, StateId, TeamId, UserId};
 use lineal_domain::rules::patch::{self, PatchFailure, PatchOp};
 use lineal_domain::rules::state::{IssueTimestamps, TransitionSource, apply_transition};
@@ -1103,10 +1103,12 @@ impl App {
                 .await?;
         }
         if !changed.is_empty() {
+            let previous = IssuePrevious::of(&changed, old.assignee_id, old.state_type.as_str());
             emit(
                 tx,
                 ctx,
                 DomainEvent::IssueUpdated {
+                    previous,
                     issue_id: saved.id,
                     team_id: saved.team_id,
                     changed,
@@ -1562,6 +1564,7 @@ impl App {
             &mut *tx,
             ctx,
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: saved.id,
                 team_id: saved.team_id,
                 changed: vec![if was_trashed { "trashed" } else { "archivedAt" }.into()],
@@ -1619,6 +1622,7 @@ impl App {
                 &mut *tx,
                 ctx,
                 DomainEvent::IssueUpdated {
+                    previous: None,
                     issue_id: issue.id,
                     team_id: issue.team_id,
                     changed: vec!["sharedWith".into()],
@@ -1655,6 +1659,7 @@ impl App {
                 &mut *tx,
                 ctx,
                 DomainEvent::IssueUpdated {
+                    previous: None,
                     issue_id: issue.id,
                     team_id: issue.team_id,
                     changed: vec!["sharedWith".into()],

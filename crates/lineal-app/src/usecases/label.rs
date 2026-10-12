@@ -889,6 +889,7 @@ async fn record_label_history(
                 team_id: issue.team_id,
                 changed: vec!["labelIds".into()],
                 mentioned_user_ids: vec![],
+                previous: None,
             },
             ctx,
         ))
