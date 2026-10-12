@@ -9,7 +9,7 @@ use lineal_app::usecases::state::{CreateStateInput, StateView, UpdateStateInput}
 use lineal_app::usecases::team::{
     CreateTeamInput, ListTeamsInput, NestOptions, TeamView, UpdateTeamInput,
 };
-use lineal_domain::enums::{StateType, TeamVisibility};
+use lineal_domain::enums::{EstimationType, StateType, TeamVisibility};
 use lineal_domain::ids::StateId;
 use std::str::FromStr;
 
@@ -32,6 +32,17 @@ pub struct TeamGql {
     pub cycles_enabled: bool,
     pub issue_estimation_type: String,
     pub inherit_workflow_statuses: bool,
+    pub issue_estimation_extended: bool,
+    pub issue_estimation_allow_zero: bool,
+    pub default_issue_estimate: i32,
+    pub inherit_issue_estimation: bool,
+    /// Monate bis zum automatischen Schließen; `null` = aus.
+    pub auto_close_period: Option<i32>,
+    pub auto_close_state_id: Option<String>,
+    /// Monate bis zum automatischen Archivieren.
+    pub auto_archive_period: i32,
+    pub auto_close_parent_issues: bool,
+    pub auto_close_child_issues: bool,
     pub retired_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -56,6 +67,15 @@ impl From<TeamView> for TeamGql {
             cycles_enabled: t.cycles_enabled,
             issue_estimation_type: t.issue_estimation_type.as_str().into(),
             inherit_workflow_statuses: t.inherit_workflow_statuses,
+            issue_estimation_extended: t.issue_estimation_extended,
+            issue_estimation_allow_zero: t.issue_estimation_allow_zero,
+            default_issue_estimate: t.default_issue_estimate,
+            inherit_issue_estimation: t.inherit_issue_estimation,
+            auto_close_period: t.auto_close_period,
+            auto_close_state_id: t.auto_close_state_id.map(|s| s.to_string()),
+            auto_archive_period: t.auto_archive_period,
+            auto_close_parent_issues: t.auto_close_parent_issues,
+            auto_close_child_issues: t.auto_close_child_issues,
             retired_at: t.retired_at.map(|d| d.to_rfc3339()),
             created_at: t.created_at.to_rfc3339(),
             updated_at: t.updated_at.to_rfc3339(),
@@ -137,6 +157,18 @@ pub struct TeamUpdateInput {
     pub all_members_can_join: Option<bool>,
     pub triage_enabled: Option<bool>,
     pub cycles_enabled: Option<bool>,
+    /// `notUsed` | `exponential` | `fibonacci` | `linear` | `tShirt`.
+    pub issue_estimation_type: Option<String>,
+    pub issue_estimation_extended: Option<bool>,
+    pub issue_estimation_allow_zero: Option<bool>,
+    pub default_issue_estimate: Option<i32>,
+    /// Monate (1, 3, 6, 9, 12); `0` schaltet das automatische Schließen aus.
+    pub auto_close_period: Option<i32>,
+    /// Zielstatus (Id oder Name) der Kategorie `canceled`.
+    pub auto_close_state_id: Option<String>,
+    pub auto_archive_period: Option<i32>,
+    pub auto_close_parent_issues: Option<bool>,
+    pub auto_close_child_issues: Option<bool>,
 }
 
 #[derive(InputObject)]
@@ -289,6 +321,15 @@ impl TeamMutation {
         input: TeamUpdateInput,
     ) -> async_graphql::Result<TeamPayload> {
         let vis = input.visibility.as_deref().map(visibility).transpose()?;
+        let estimation = input
+            .issue_estimation_type
+            .as_deref()
+            .map(|s| {
+                EstimationType::from_str(s).map_err(|_| {
+                    async_graphql::Error::new(format!("invalid issueEstimationType `{s}`"))
+                })
+            })
+            .transpose()?;
         let team = app(ctx)?
             .update_team(
                 request_ctx(ctx)?,
@@ -304,6 +345,15 @@ impl TeamMutation {
                     all_members_can_join: input.all_members_can_join,
                     triage_enabled: input.triage_enabled,
                     cycles_enabled: input.cycles_enabled,
+                    issue_estimation_type: estimation,
+                    issue_estimation_extended: input.issue_estimation_extended,
+                    issue_estimation_allow_zero: input.issue_estimation_allow_zero,
+                    default_issue_estimate: input.default_issue_estimate,
+                    auto_close_period: input.auto_close_period.map(|p| (p != 0).then_some(p)),
+                    auto_close_state: input.auto_close_state_id,
+                    auto_archive_period: input.auto_archive_period,
+                    auto_close_parent_issues: input.auto_close_parent_issues,
+                    auto_close_child_issues: input.auto_close_child_issues,
                     ..Default::default()
                 },
             )

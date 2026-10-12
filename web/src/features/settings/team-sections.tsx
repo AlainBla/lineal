@@ -25,7 +25,6 @@ import { StatusIcon } from "@/features/issues/icons";
 import type { Team, WorkflowState } from "@/gql/graphql";
 
 import {
-  useLabelMutations,
   useMembership,
   useTeamLabels,
   useTeamMembers,
@@ -37,9 +36,18 @@ import {
 } from "./queries";
 import { TeamAccessSection, TeamDangerZone } from "./team-admin-sections";
 import { normalizeKey, validateKey } from "./team-key";
+import { LabelManager } from "./label-manager";
 import { Field, Section, selectClass } from "./ui";
 
-function SaveRow({ pending, error, dirty }: { pending: boolean; error: unknown; dirty: boolean }) {
+export function SaveRow({
+  pending,
+  error,
+  dirty,
+}: {
+  pending: boolean;
+  error: unknown;
+  dirty: boolean;
+}) {
   return (
     <div className="flex items-center gap-3">
       <Button type="submit" size="sm" disabled={!dirty || pending}>
@@ -508,113 +516,15 @@ export function StatusesSection({ team }: { team: Team }) {
 
 export function LabelsSection({ team }: { team: Team }) {
   const q = useTeamLabels(team.id);
-  const m = useLabelMutations();
-  const [name, setName] = useState("");
-  const [group, setGroup] = useState(false);
-  const [color, setColor] = useState("#5e6ad2");
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const own = (q.data ?? []).filter((l) => l.teamId === team.id && !l.retiredAt);
   if (q.isLoading) return <ListSkeleton rows={4} />;
   if (q.isError) return <ErrorState error={q.error} title="Could not load labels" />;
   return (
-    <Section title="Issue labels" description="Labels and label groups of this team.">
-      <ul className="divide-y divide-border rounded-lg border border-border">
-        {own.length === 0 && (
-          <li className="px-3 py-2 text-sm text-muted-foreground">No labels yet.</li>
-        )}
-        {own.map((l) => (
-          <li key={l.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-            <span
-              aria-hidden
-              className="size-2.5 rounded-full"
-              style={{ background: COLOR_RE.test(l.color) ? l.color : undefined }}
-            />
-            {editing === l.id ? (
-              <form
-                className="flex flex-1 items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (draft.trim()) m.update.mutate({ id: l.id, input: { name: draft.trim() } });
-                  setEditing(null);
-                }}
-              >
-                <Input
-                  aria-label="Label name"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  autoFocus
-                />
-                <Button type="submit" size="sm">
-                  Save
-                </Button>
-              </form>
-            ) : (
-              <span className="flex-1">
-                {l.name}
-                {l.isGroup && <span className="ml-2 text-xs text-muted-foreground">Group</span>}
-              </span>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setEditing(l.id);
-                setDraft(l.name);
-              }}
-            >
-              Rename
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label={`Retire ${l.name}`}
-              onClick={() => m.retire.mutate(l.id)}
-            >
-              Retire
-            </Button>
-          </li>
-        ))}
-      </ul>
-      <form
-        aria-label="Create label"
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!name.trim() || !COLOR_RE.test(color)) return;
-          m.create.mutate(
-            { name: name.trim(), color, teamId: team.id, isGroup: group || undefined },
-            { onSuccess: () => setName("") },
-          );
-        }}
-      >
-        <Input
-          aria-label="New label name"
-          placeholder="New label"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="max-w-48"
-        />
-        <Input
-          aria-label="Label color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          className="w-24"
-        />
-        <label className="flex items-center gap-1 text-sm">
-          <input type="checkbox" checked={group} onChange={(e) => setGroup(e.target.checked)} />{" "}
-          Group
-        </label>
-        <Button type="submit" size="sm" disabled={!name.trim() || !COLOR_RE.test(color)}>
-          <Plus /> Create
-        </Button>
-        {m.create.isError && (
-          <span role="alert" className="text-xs text-destructive">
-            {errorText(m.create.error)}
-          </span>
-        )}
-      </form>
-    </Section>
+    <LabelManager
+      title="Issue labels"
+      description="Labels and label groups of this team."
+      teamId={team.id}
+      labels={(q.data ?? []).filter((l) => l.teamId === team.id)}
+    />
   );
 }
 

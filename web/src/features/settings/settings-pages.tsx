@@ -9,6 +9,7 @@ import type { Organization } from "@/gql/graphql";
 
 import { workspaceSettingsNav } from "./nav";
 import { useSettingsTeam, useUpdateWorkspace, useWorkspaceSettings } from "./queries";
+import { AutomationsSection, EstimatesSection, TemplatesSection } from "./team-config-sections";
 import {
   CyclesSection,
   GeneralSection,
@@ -26,6 +27,9 @@ export const TEAM_SECTIONS = [
   ["issue-labels", "Issue labels"],
   ["cycles", "Cycles"],
   ["triage", "Triage"],
+  ["estimates", "Estimates"],
+  ["automations", "Automations"],
+  ["templates", "Templates"],
 ] as const;
 export type TeamSection = (typeof TEAM_SECTIONS)[number][0];
 export const isTeamSection = (v: string): v is TeamSection => TEAM_SECTIONS.some(([s]) => s === v);
@@ -64,6 +68,9 @@ export function TeamSettingsPage({
         {section === "issue-labels" && <LabelsSection team={team} />}
         {section === "cycles" && <CyclesSection key={k} team={team} />}
         {section === "triage" && <TriageSection team={team} />}
+        {section === "estimates" && <EstimatesSection key={k} team={team} />}
+        {section === "automations" && <AutomationsSection key={k} team={team} />}
+        {section === "templates" && <TemplatesSection team={team} />}
       </>
     );
   }

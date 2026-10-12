@@ -1864,6 +1864,10 @@ type Query {
 	Templates des Teams (eigene, geerbte, Workspace) bzw. alle sichtbaren.
 	"""
 	templates(teamId: String, type: TemplateKind): [Template!]!
+	"""
+	Gesetzte Default-Templates eines Teams.
+	"""
+	teamDefaultTemplates(teamId: String!): TeamDefaultTemplates!
 	template(id: String!): Template!
 	"""
 	Triage-Liste eines Teams (nicht gesnoozte, älteste zuerst).
@@ -2031,6 +2035,21 @@ type Team {
 	cyclesEnabled: Boolean!
 	issueEstimationType: String!
 	inheritWorkflowStatuses: Boolean!
+	issueEstimationExtended: Boolean!
+	issueEstimationAllowZero: Boolean!
+	defaultIssueEstimate: Int!
+	inheritIssueEstimation: Boolean!
+	"""
+	Monate bis zum automatischen Schließen; `null` = aus.
+	"""
+	autoClosePeriod: Int
+	autoCloseStateId: String
+	"""
+	Monate bis zum automatischen Archivieren.
+	"""
+	autoArchivePeriod: Int!
+	autoCloseParentIssues: Boolean!
+	autoCloseChildIssues: Boolean!
 	retiredAt: String
 	createdAt: String!
 	updatedAt: String!
@@ -2077,6 +2096,15 @@ input TeamCyclesInput {
 	existingActiveIssues: String
 }
 
+"""
+Default-Templates eines Teams (Ids; `null` = keines gesetzt).
+"""
+type TeamDefaultTemplates {
+	forMembersId: String
+	forNonMembersId: String
+	projectId: String
+}
+
 type TeamLifecyclePayload {
 	success: Boolean!
 	team: Team
@@ -2110,6 +2138,24 @@ input TeamUpdateInput {
 	allMembersCanJoin: Boolean
 	triageEnabled: Boolean
 	cyclesEnabled: Boolean
+	"""
+	`notUsed` | `exponential` | `fibonacci` | `linear` | `tShirt`.
+	"""
+	issueEstimationType: String
+	issueEstimationExtended: Boolean
+	issueEstimationAllowZero: Boolean
+	defaultIssueEstimate: Int
+	"""
+	Monate (1, 3, 6, 9, 12); `0` schaltet das automatische Schließen aus.
+	"""
+	autoClosePeriod: Int
+	"""
+	Zielstatus (Id oder Name) der Kategorie `canceled`.
+	"""
+	autoCloseStateId: String
+	autoArchivePeriod: Int
+	autoCloseParentIssues: Boolean
+	autoCloseChildIssues: Boolean
 }
 
 type Template {
