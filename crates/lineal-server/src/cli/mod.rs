@@ -39,6 +39,9 @@ pub enum Command {
         /// Templates, Dokumente).
         #[arg(long)]
         demo: bool,
+        /// Seed auch ohne `LINEAL_DEV=1` erlauben (Benutzer mit bekanntem Passwort `lineal-dev`!).
+        #[arg(long)]
+        allow_insecure_demo_users: bool,
     },
     /// Ersteinrichtung: Workspace und Owner anlegen (Passwort aus LINEAL_OWNER_PASSWORD oder
     /// interaktiv ohne Echo).
@@ -59,7 +62,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Serve => serve::run().await,
         Command::Worker => worker::run().await,
         Command::Migrate => migrate::run().await,
-        Command::Seed { demo } => seed::run(demo).await,
+        Command::Seed {
+            demo,
+            allow_insecure_demo_users,
+        } => seed::run(demo, allow_insecure_demo_users).await,
         Command::CreateWorkspace(args) => create_workspace::run(args).await,
         Command::Import(args) => import::run(args).await,
         Command::SchemaExport { out } => schema_export::run(&out),
