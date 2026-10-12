@@ -142,6 +142,61 @@ impl UrlPolicy {
         Ok((host, addrs))
     }
 
+    /// Größe per `HEAD` (kein Inhalt wird geladen). Dieselben Prüfungen wie `fetch`; `None`, wenn
+    /// der Server keine Länge nennt.
+    pub async fn head_size(
+        &self,
+        raw_url: &str,
+        auth_header: Option<&str>,
+    ) -> SourceResult<Option<u64>> {
+        let url = self.check_url(raw_url)?;
+        let (host, addrs) = self.resolve(&url).await?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(self.timeout)
+            .resolve_to_addrs(&host, &addrs)
+            .build()
+            .map_err(|_| SourceError::Transport("http client setup failed".into()))?;
+        let mut req = client.head(url);
+        if let Some(h) = auth_header {
+            req = req.header(reqwest::header::AUTHORIZATION, h);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| SourceError::Transport("probe request failed".into()))?;
+        let status = resp.status();
+        if status.is_redirection() {
+            return Err(SourceError::Rejected("redirects are not followed".into()));
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(SourceError::Auth);
+        }
+        if !status.is_success() {
+            return Err(SourceError::Transport(format!(
+                "probe failed with HTTP {}",
+                status.as_u16()
+            )));
+        }
+        let ct = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !self.content_type_ok(ct) {
+            return Err(SourceError::Rejected("content type is not allowed".into()));
+        }
+        let len = resp
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        if len.is_some_and(|l| l > self.max_bytes) {
+            return Err(SourceError::Rejected("file is too large".into()));
+        }
+        Ok(len)
+    }
+
     /// Lädt die Datei (siehe Moduldoku). Fehlertexte enthalten weder Token noch Antwortinhalt.
     pub async fn fetch(
         &self,

@@ -18,6 +18,10 @@ export function cycleBadge(c: Cycle): string {
   return "Completed";
 }
 
+/** Kapazitätsschätzung (Punkte), ohne überflüssige Nachkommastellen. */
+export const formatCapacity = (n: number): string =>
+  Number.isInteger(n) ? String(n) : n.toFixed(1);
+
 const cycleName = (c: Cycle) => c.name ?? `Cycle ${c.number}`;
 
 /** Cycles eines Teams (docs/08 §2.6): Timeline-Liste, neueste zuerst. */
@@ -122,6 +126,13 @@ export function CyclePage({
           <span className="text-xs text-muted-foreground">
             {shortDate(cycle.startsAt)} – {shortDate(cycle.endsAt)} ·{" "}
             {Math.round(cycle.progress * 100)}%
+            {cycle.capacity != null && (
+              <>
+                {" "}
+                · Capacity{" "}
+                <span data-testid="cycle-capacity">{formatCapacity(cycle.capacity)}</span>
+              </>
+            )}
           </span>
         }
       />

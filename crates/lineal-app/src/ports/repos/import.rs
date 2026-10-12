@@ -52,6 +52,8 @@ pub enum ImportTable {
     ProjectUpdate,
     InitiativeUpdate,
     EntityExternalLink,
+    CustomView,
+    Favorite,
 }
 
 impl ImportTable {
@@ -89,6 +91,8 @@ impl ImportTable {
             Self::ProjectUpdate => "project_update",
             Self::InitiativeUpdate => "initiative_update",
             Self::EntityExternalLink => "entity_external_link",
+            Self::CustomView => "custom_view",
+            Self::Favorite => "favorite",
         }
     }
 }

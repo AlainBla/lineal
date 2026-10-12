@@ -8,9 +8,20 @@ use lineal_app::ports::repos::CycleRepo;
 use lineal_app::ports::repos::cycle::{Cycle, CycleTeamRef, HistoryPoint, IssueScopeRow, NewCycle};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::{EstimationType, StateType};
-use lineal_domain::ids::{CycleId, IssueId, OrgId, StateId, TeamId};
+use lineal_domain::ids::{CycleId, IssueId, OrgId, ProjectId, StateId, TeamId};
 use serde_json::json;
 use uuid::Uuid;
+
+/// Auto-Archiv-Kandidaten unter den Projekten (docs/04 §2.12). Die Periode gilt vom Lead-Team.
+const AUTO_ARCHIVE_PROJECTS_SQL: &str = "SELECT p.id FROM project p \
+     JOIN project_status ps ON ps.id = p.status_id \
+     WHERE p.organization_id = $1 AND p.lead_team_id = $2 AND NOT p.trashed AND p.archived_at IS NULL \
+       AND ps.type IN ('completed', 'canceled') \
+       AND p.updated_at <= $3 \
+       AND NOT EXISTS (SELECT 1 FROM issue i WHERE i.project_id = p.id AND NOT i.trashed \
+                       AND i.archived_at IS NULL \
+                       AND (i.state_type IN ('triage', 'backlog', 'unstarted', 'started') OR i.updated_at > $3)) \
+     ORDER BY p.updated_at, p.id LIMIT $4";
 
 #[derive(sqlx::FromRow)]
 struct CycleRow {
@@ -288,6 +299,114 @@ impl CycleRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn set_number(&mut self, id: CycleId, number: i32, now: DateTime<Utc>) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE cycle SET number = $3, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(number)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn set_team_number_base(&mut self, team: TeamId, base: i32, last: i32) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE team SET cycle_number_base = $3, last_cycle_number = $4 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .bind(base)
+        .bind(last)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn team_number_base(&mut self, team: TeamId) -> AppResult<Option<i32>> {
+        let v: Option<Option<i32>> = sqlx::query_scalar(
+            "SELECT cycle_number_base FROM team WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(v.flatten())
+    }
+
+    async fn auto_archive_cycle_candidates(
+        &mut self,
+        team: TeamId,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<CycleId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM cycle WHERE organization_id = $1 AND team_id = $2 \
+               AND completed_at IS NOT NULL AND completed_at <= $3 AND archived_at IS NULL \
+             ORDER BY completed_at, id LIMIT $4",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(CycleId).collect())
+    }
+
+    async fn auto_archive(&mut self, id: CycleId, now: DateTime<Utc>) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE cycle SET archived_at = $3, auto_archived_at = $3, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn auto_archive_project_candidates(
+        &mut self,
+        team: TeamId,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<ProjectId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(AUTO_ARCHIVE_PROJECTS_SQL)
+            .bind(self.org.0)
+            .bind(team.0)
+            .bind(cutoff)
+            .bind(limit)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(rows.into_iter().map(ProjectId).collect())
+    }
+
+    async fn auto_archive_project(&mut self, id: ProjectId, now: DateTime<Utc>) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE project SET archived_at = $3, auto_archived_at = $3, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL AND NOT trashed",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn issue_rows(&mut self, cycle: CycleId) -> AppResult<Vec<IssueScopeRow>> {

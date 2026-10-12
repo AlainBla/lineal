@@ -15,6 +15,7 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
+use crate::ports::repos::document::DocParent;
 use crate::ports::repos::project::{
     NewProject, Project, ProjectFilter, ProjectLabelRow, ProjectPatch, ProjectStatus,
 };
@@ -1288,6 +1289,14 @@ impl App {
                 now,
             )
             .await?;
+        // Dokumente des Projekts folgen dem Papierkorb (docs/06 §1.10).
+        if trashed {
+            self.trash_documents_of(&mut *tx, DocParent::Project(r.project.id))
+                .await?;
+        } else {
+            self.restore_documents_of(&mut *tx, DocParent::Project(r.project.id))
+                .await?;
+        }
         let ev = if trashed {
             DomainEvent::ProjectRemoved {
                 project_id: r.project.id,

@@ -594,6 +594,10 @@ impl App {
                     .await?;
             }
         }
+        if let ParentRef::Issue(issue) = parent {
+            crate::usecases::automation::wake_snoozed_issue(&mut *tx, ctx, issue, author, now)
+                .await?;
+        }
         tx.outbox()
             .push(NewEvent::from_ctx(
                 DomainEvent::CommentCreated {

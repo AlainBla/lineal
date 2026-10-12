@@ -4,6 +4,8 @@
 //! Jede Schreiboperation läuft in einer Transaktion inkl. Historie und Outbox-Event. Nicht
 //! sichtbare Dokumente (privates Team, unsichtbares Projekt …) sind überall `not_found`.
 
+mod rich;
+
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
@@ -28,6 +30,23 @@ use uuid::Uuid;
 
 /// Maximale Länge des Titels (docs/06 §1.2).
 pub const MAX_TITLE_CHARS: usize = 255;
+/// Ruhe in Minuten, nach der eine Änderung einen neuen Snapshot beginnt (docs/06 §1.9).
+pub const SNAPSHOT_QUIET_MINUTES: i64 = 10;
+/// Höchstalter eines Snapshots in Minuten, bis zu dem weitere Änderungen eingebündelt werden.
+pub const SNAPSHOT_MAX_MINUTES: i64 = 60;
+
+/// Ob eine Änderung zum Zeitpunkt `now` in den letzten Snapshot `latest` eingebündelt wird: nur in
+/// einen `edited`-Snapshot, wenn die vorige Änderung weniger als [`SNAPSHOT_QUIET_MINUTES`] und der
+/// Snapshot weniger als [`SNAPSHOT_MAX_MINUTES`] zurückliegt.
+pub fn snapshot_can_be_bundled(
+    latest: &HistoryEntry,
+    previous_change: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    latest.kind == HistoryKind::Edited
+        && now - previous_change < chrono::Duration::minutes(SNAPSHOT_QUIET_MINUTES)
+        && now - latest.created_at < chrono::Duration::minutes(SNAPSHOT_MAX_MINUTES)
+}
 
 /// Das Elternobjekt eines Dokuments mit Anzeigewerten.
 #[derive(Debug, Clone, PartialEq)]
@@ -485,6 +504,21 @@ impl App {
         url_key: &str,
         warnings: Vec<String>,
     ) -> AppResult<DocumentView> {
+        self.document_view_opts(tx, snap, doc, url_key, warnings, true)
+            .await
+    }
+
+    /// `link_issues = false` verzichtet auf das Verlinken von Issue-Kennungen (Listen: gekürzte
+    /// Auszüge, keine Abfrage je Kennung).
+    async fn document_view_opts(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        doc: Document,
+        url_key: &str,
+        warnings: Vec<String>,
+        link_issues: bool,
+    ) -> AppResult<DocumentView> {
         let parent = match doc.parent() {
             Some(DocParent::Project(p)) => tx.projects().get(p).await?.map(|p| {
                 let key = snap
@@ -551,6 +585,10 @@ impl App {
             title_slug(&doc.title),
             doc.slug_id
         );
+        let mut doc = doc;
+        if link_issues && !doc.content.is_empty() {
+            doc.content = rich::link_visible_issues(tx, snap, url_key, &doc.content).await?;
+        }
         Ok(DocumentView {
             doc,
             parent,
@@ -665,7 +703,7 @@ impl App {
         let mut items = Vec::with_capacity(rows.len());
         for d in rows {
             items.push(
-                self.document_view(&mut *tx, &snap, d, &url_key, vec![])
+                self.document_view_opts(&mut *tx, &snap, d, &url_key, vec![], false)
                     .await?,
             );
         }
@@ -692,6 +730,32 @@ impl App {
         ctx: &RequestCtx,
         input: SaveDocumentInput,
     ) -> AppResult<DocumentView> {
+        self.save_document_impl(tx, ctx, input, false).await
+    }
+
+    /// Wie [`App::save_document`] für automatisches Speichern des Editors: Inhaltsänderungen werden
+    /// gebündelt (docs/06 §1.9) – ein neuer Snapshot entsteht erst nach [`SNAPSHOT_QUIET_MINUTES`]
+    /// Ruhe oder [`SNAPSHOT_MAX_MINUTES`] seit dem letzten Snapshot; sonst wird der letzte
+    /// `edited`-Snapshot fortgeschrieben (Akteure vereinigt). Ausdrückliches Speichern über
+    /// `save_document` erzeugt immer einen Snapshot.
+    pub async fn save_document_autosave(
+        &self,
+        ctx: &RequestCtx,
+        input: SaveDocumentInput,
+    ) -> AppResult<DocumentView> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let view = self.save_document_impl(&mut *tx, ctx, input, true).await?;
+        tx.commit().await?;
+        Ok(view)
+    }
+
+    async fn save_document_impl(
+        &self,
+        tx: &mut dyn Tx,
+        ctx: &RequestCtx,
+        input: SaveDocumentInput,
+        bundle: bool,
+    ) -> AppResult<DocumentView> {
         let snap = PolicySnapshot::load(tx, ctx).await?;
         let now = self.clock.now();
         if input.content.is_some() && input.patch.is_some() {
@@ -703,7 +767,7 @@ impl App {
         let (doc, warnings) = match &input.id {
             None => self.create_document_in(tx, &snap, ctx, &input, now).await?,
             Some(r) => (
-                self.update_document_in(tx, &snap, ctx, r, &input, now)
+                self.update_document_in(tx, &snap, ctx, r, &input, now, bundle)
                     .await?,
                 vec![],
             ),
@@ -814,6 +878,7 @@ impl App {
                 kind: HistoryKind::Created,
                 restored_from_id: None,
                 now,
+                created_at: None,
             })
             .await?;
         if let Some(u) = creator
@@ -831,9 +896,12 @@ impl App {
             },
         )
         .await?;
+        self.notify_document_mentions(tx, ctx, &doc, &scope, "", &doc.content, now)
+            .await?;
         Ok((doc, warnings))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn update_document_in(
         &self,
         tx: &mut dyn Tx,
@@ -842,6 +910,7 @@ impl App {
         reference: &str,
         input: &SaveDocumentInput,
         now: DateTime<Utc>,
+        bundle: bool,
     ) -> AppResult<Document> {
         if input.template.is_some() {
             return Err(invalid(
@@ -850,6 +919,7 @@ impl App {
             ));
         }
         let (mut doc, parent, scope) = load_visible(tx, snap, ctx, reference, false).await?;
+        let loaded_updated_at = doc.updated_at;
         require_write(snap, ctx, parent, &scope)?;
         require_writable_parent(&scope)?;
         if let Some(v) = input.expected_version
@@ -936,26 +1006,46 @@ impl App {
             doc
         };
         if let (true, Some(markdown)) = (content_changed, new_content) {
+            let previous_change = loaded_updated_at;
             let version = tx
                 .documents()
                 .set_content(doc.id, &markdown, false, actor, now)
                 .await?;
+            let mut actors: Vec<UserId> = actor.into_iter().collect();
+            let mut created_at = None;
+            if bundle
+                && let Some(latest) = tx.documents().history_latest(doc.content_id).await?
+                && snapshot_can_be_bundled(&latest, previous_change, now)
+            {
+                for a in &latest.actor_ids {
+                    if !actors.contains(a) {
+                        actors.push(*a);
+                    }
+                }
+                created_at = Some(latest.created_at);
+                tx.documents()
+                    .history_delete(doc.content_id, latest.id)
+                    .await?;
+            }
             tx.documents()
                 .history_insert(&NewHistory {
                     id: self.ids.new_uuid(),
                     document_content_id: doc.content_id,
                     markdown: markdown.clone(),
                     title: Some(doc.title.clone()),
-                    actor_ids: actor.into_iter().collect(),
+                    actor_ids: actors,
                     kind: HistoryKind::Edited,
                     restored_from_id: None,
                     now,
+                    created_at,
                 })
                 .await?;
-            doc.content = markdown;
+            let old_content = std::mem::replace(&mut doc.content, markdown);
             doc.content_version = version;
             doc.updated_at = now;
             doc.updated_by_id = actor;
+            self.notify_document_mentions(tx, ctx, &doc, &scope, &old_content, &doc.content, now)
+                .await?;
         }
         // Reparent und Titel/Inhalt: `DocumentUpdated` (kein eigener Event-Typ für Moves).
         emit(
@@ -1101,6 +1191,7 @@ impl App {
                 kind: HistoryKind::Restored,
                 restored_from_id: Some(entry.id),
                 now,
+                created_at: None,
             })
             .await?;
         emit(

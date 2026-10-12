@@ -101,6 +101,14 @@ pub trait OrgRepo: Send {
     async fn update(&mut self, _patch: &OrgPatch) -> AppResult<Org> {
         unimplemented_repo()
     }
+    /// Volltextkonfiguration des Workspace (`simple`, `german`, `english`).
+    async fn fulltext_config(&mut self) -> AppResult<String> {
+        unimplemented_repo()
+    }
+    /// Setzt die Volltextkonfiguration; ein Trigger baut die Suchvektoren des Workspace neu auf.
+    async fn set_fulltext_config(&mut self, _config: &str, _now: DateTime<Utc>) -> AppResult<()> {
+        unimplemented_repo()
+    }
     /// Legt einen Workspace-Projektstatus an.
     async fn insert_project_status(&mut self, _status: &NewProjectStatus) -> AppResult<()> {
         unimplemented_repo()

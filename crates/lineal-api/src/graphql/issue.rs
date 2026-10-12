@@ -11,6 +11,7 @@ use lineal_app::usecases::issue::{
     CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput, RelationChanges,
     UpdateIssueInput,
 };
+use lineal_app::usecases::template::FormAnswer;
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::RelationType;
 
@@ -231,6 +232,21 @@ pub struct IssueCreateInput {
     pub cycle_id: Option<String>,
     pub due_date: Option<String>,
     pub sort_order: Option<f64>,
+    /// Template (UUID oder Name); hat Vorrang vor `useDefaultTemplate`.
+    pub template_id: Option<String>,
+    /// Wendet das Default-Template des Teams an (Mitglieder: `defaultTemplateForMembers`, sonst
+    /// `defaultTemplateForNonMembers`, docs/06 §2.8).
+    pub use_default_template: Option<bool>,
+    /// Antworten eines Form-Templates.
+    pub form_answers: Option<Vec<FormAnswerInput>>,
+}
+
+/// Antwort auf ein Feld eines Form-Templates.
+#[derive(InputObject)]
+pub struct FormAnswerInput {
+    pub field_id: String,
+    /// Text, Zahl oder Liste von Texten (JSON).
+    pub value: async_graphql::Json<serde_json::Value>,
 }
 
 /// Tri-State: ein weggelassenes Feld bleibt unverändert, ein explizites `null` leert es.
@@ -388,36 +404,65 @@ impl IssueMutation {
             .map(|s| s.parse())
             .transpose()
             .map_err(|_| gql_err(AppError::invalid_request("id must be a UUID")))?;
-        let v = app(ctx)?
-            .create_issue(
-                request_ctx(ctx)?,
-                CreateIssueInput {
-                    id,
-                    team: input.team_id,
-                    title: input.title,
-                    description: input.description,
-                    state: input.state_id,
-                    priority: input.priority.map(i64::from),
-                    assignee: input.assignee_id,
-                    estimate: input.estimate,
-                    labels: input.label_ids,
-                    due_date: input
-                        .due_date
-                        .as_deref()
-                        .map(date)
-                        .transpose()
-                        .map_err(gql_err)?,
-                    cycle: input.cycle_id,
-                    project: input.project_id,
-                    milestone: input.project_milestone_id,
-                    parent: input.parent_id,
-                    sort_order: input.sort_order,
-                    source: HistorySource::Api,
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(gql_err)?;
+        let a = app(ctx)?;
+        let rctx = request_ctx(ctx)?;
+        let template = match (&input.template_id, input.use_default_template) {
+            (Some(t), _) => Some(t.clone()),
+            (None, Some(true)) => a
+                .default_template_for_issue(rctx, &input.team_id)
+                .await
+                .map_err(gql_err)?,
+            _ => None,
+        };
+        let answers: Vec<FormAnswer> = input
+            .form_answers
+            .unwrap_or_default()
+            .into_iter()
+            .map(|x| FormAnswer {
+                field_id: x.field_id,
+                value: x.value.0,
+            })
+            .collect();
+        let create = CreateIssueInput {
+            id,
+            team: input.team_id,
+            title: input.title,
+            description: input.description,
+            state: input.state_id,
+            priority: input.priority.map(i64::from),
+            assignee: input.assignee_id,
+            estimate: input.estimate,
+            labels: input.label_ids,
+            due_date: input
+                .due_date
+                .as_deref()
+                .map(date)
+                .transpose()
+                .map_err(gql_err)?,
+            cycle: input.cycle_id,
+            project: input.project_id,
+            milestone: input.project_milestone_id,
+            parent: input.parent_id,
+            sort_order: input.sort_order,
+            source: HistorySource::Api,
+            ..Default::default()
+        };
+        let v = match template {
+            Some(t) => {
+                a.create_issue_with_form(rctx, &t, create, answers, &[])
+                    .await
+                    .map_err(gql_err)?
+                    .root
+            }
+            None => {
+                if !answers.is_empty() {
+                    return Err(gql_err(AppError::invalid_request(
+                        "formAnswers require a form template",
+                    )));
+                }
+                a.create_issue(rctx, create).await.map_err(gql_err)?
+            }
+        };
         Ok(payload(v))
     }
 

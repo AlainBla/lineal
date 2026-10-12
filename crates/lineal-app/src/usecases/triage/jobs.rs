@@ -370,6 +370,16 @@ impl App {
                     },
                 )
                 .await?;
+                // Ersteller benachrichtigen (docs/03 §9.2, nicht Inbox-prioritär).
+                crate::usecases::automation::notify_issue_creator(
+                    self,
+                    &mut *tx,
+                    id,
+                    "issueAutoArchived",
+                    &format!("autoarchived:{id}:{}", now.timestamp_millis()),
+                    now,
+                )
+                .await?;
                 total += 1;
             }
             tx.commit().await?;

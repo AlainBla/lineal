@@ -633,7 +633,7 @@ impl DocumentRepo for PgTx {
         let row = sqlx::query_as::<_, HistRow>(&format!(
             "INSERT INTO document_content_history (id, organization_id, document_content_id, markdown, \
              title, actor_ids, content_snapshot_at, kind, restored_from_id, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $7) RETURNING {HIST_COLS}"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING {HIST_COLS}"
         ))
         .bind(h.id)
         .bind(self.org.0)
@@ -644,6 +644,7 @@ impl DocumentRepo for PgTx {
         .bind(h.now)
         .bind(h.kind.as_str())
         .bind(h.restored_from_id)
+        .bind(h.created_at.unwrap_or(h.now))
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -738,5 +739,76 @@ impl DocumentRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(rows.into_iter().map(DocumentId).collect())
+    }
+
+    async fn purge_trashed(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<DocumentId>> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "DELETE FROM document WHERE organization_id = $1 AND id IN ( \
+               SELECT id FROM document WHERE organization_id = $1 AND trashed \
+                 AND trashed_at IS NOT NULL AND trashed_at <= $2 ORDER BY trashed_at, id LIMIT $3) \
+             RETURNING id",
+        )
+        .bind(self.org.0)
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        self.sweep_orphan_contents(limit.saturating_mul(4)).await?;
+        Ok(ids.into_iter().map(DocumentId).collect())
+    }
+
+    async fn sweep_orphan_contents(&mut self, limit: i64) -> AppResult<u64> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT c.id FROM document_content c WHERE c.organization_id = $1 \
+               AND c.owner_type = 'document' \
+               AND NOT EXISTS (SELECT 1 FROM document d WHERE d.organization_id = c.organization_id \
+                               AND d.id = c.owner_id) \
+             LIMIT $2",
+        )
+        .bind(self.org.0)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        sqlx::query(
+            "DELETE FROM document_content_history WHERE organization_id = $1 \
+               AND document_content_id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(&ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let n =
+            sqlx::query("DELETE FROM document_content WHERE organization_id = $1 AND id = ANY($2)")
+                .bind(self.org.0)
+                .bind(&ids)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?
+                .rows_affected();
+        Ok(n)
+    }
+
+    async fn history_delete(&mut self, content_id: Uuid, id: Uuid) -> AppResult<()> {
+        sqlx::query(
+            "DELETE FROM document_content_history WHERE organization_id = $1 \
+             AND document_content_id = $2 AND id = $3",
+        )
+        .bind(self.org.0)
+        .bind(content_id)
+        .bind(id)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 }

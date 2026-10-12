@@ -850,7 +850,7 @@ fn content_cmp<'q>(qb: &mut Qb<'q>, col: &str, c: &ContentComparator) -> R {
         g.next(qb);
         match crate::search::tsquery(t) {
             Some(q) => {
-                qb.push(format!("{col} @@ to_tsquery('simple', "));
+                qb.push(format!("{col} @@ to_tsquery(lineal_ts_config({ORG}), "));
                 qb.push_bind(q);
                 qb.push(")");
             }
@@ -863,7 +863,9 @@ fn content_cmp<'q>(qb: &mut Qb<'q>, col: &str, c: &ContentComparator) -> R {
         g.next(qb);
         match crate::search::tsquery(t) {
             Some(q) => {
-                qb.push(format!("NOT COALESCE({col} @@ to_tsquery('simple', "));
+                qb.push(format!(
+                    "NOT COALESCE({col} @@ to_tsquery(lineal_ts_config({ORG}), "
+                ));
                 qb.push_bind(q);
                 qb.push("), false)");
             }

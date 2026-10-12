@@ -224,6 +224,8 @@ pub struct NewHistory {
     pub kind: HistoryKind,
     pub restored_from_id: Option<Uuid>,
     pub now: DateTime<Utc>,
+    /// Anlagezeitpunkt des Eintrags; `None` = `now`. Bündelung behält so den Beginn des Fensters.
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// Persistenzzugriff des Bereichs `document`. Alle Abfragen laufen im Workspace der Transaktion.
@@ -358,6 +360,33 @@ pub trait DocumentRepo: Send {
     /// Stellt genau die mit dem Elternobjekt mitgelöschten Dokumente wieder her.
     async fn cascade_restore(&mut self, parent: DocParent) -> AppResult<Vec<DocumentId>> {
         let _ = parent;
+        unimplemented_repo()
+    }
+
+    /// Löscht Dokumente im Papierkorb, deren `trashed_at` bei oder vor `cutoff` liegt, endgültig
+    /// (Kommentare, Abos und Notifications fallen per Fremdschlüssel mit; Inhalt und Historie
+    /// räumt dieselbe Methode ab). Liefert die gelöschten IDs.
+    async fn purge_trashed(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<DocumentId>> {
+        let _ = (cutoff, limit);
+        unimplemented_repo()
+    }
+
+    /// Entfernt Inhalte und Snapshots von Dokumenten, die per Fremdschlüssel mit ihrem Elternobjekt
+    /// (Issue, Projekt, Initiative, Cycle, Team) gelöscht wurden (`document_content` hat keinen
+    /// Fremdschlüssel). Liefert die Zahl entfernter Inhalte.
+    async fn sweep_orphan_contents(&mut self, limit: i64) -> AppResult<u64> {
+        let _ = limit;
+        unimplemented_repo()
+    }
+
+    /// Löscht einen Snapshot (Bündelung: der Aufrufer ersetzt ihn durch eine neue Fassung, weil
+    /// Snapshots per Trigger nicht aktualisiert werden dürfen).
+    async fn history_delete(&mut self, content_id: Uuid, id: Uuid) -> AppResult<()> {
+        let _ = (content_id, id);
         unimplemented_repo()
     }
 }

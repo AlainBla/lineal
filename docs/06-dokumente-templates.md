@@ -193,6 +193,8 @@ Die Historie wird als Folge von **vollständigen Snapshots** gespeichert, nicht 
 
 - Beim Anlegen entsteht ein Snapshot `created`.
 - Bei Bearbeitung wird **gebündelt**: Ein neuer Snapshot entsteht erst, wenn seit der letzten Änderung 10 Minuten Ruhe herrschte, wenn seit dem letzten Snapshot 60 Minuten vergangen sind, oder bei einem expliziten Speichern über API/MCP (jeder `save_document`/`save_issue`-Aufruf, der den Inhalt ändert, erzeugt einen Snapshot). Alle in diesem Fenster aktiven User landen in `actorIds`. Die Fenster sind Workspace-Konfiguration.
+
+> **Umsetzung (WP34):** Gebündelt wird nur beim automatischen Speichern des Editors (`documentUpdate(input: {autosave: true})`, `App::save_document_autosave`): in den letzten `edited`-Snapshot, wenn die vorige Änderung weniger als 10 Minuten und der Snapshot weniger als 60 Minuten zurückliegt (Akteure werden vereinigt, der Beginn des Fensters bleibt). Jedes ausdrückliche Speichern (`save_document`, MCP, `documentUpdate` ohne Flag) erzeugt einen Snapshot. Die Fenster sind Konstanten (`SNAPSHOT_QUIET_MINUTES`, `SNAPSHOT_MAX_MINUTES`), keine Workspace-Konfiguration. **Stufe 2 (CRDT, Echtzeit) ist bewusst nicht gebaut**; es gilt Stufe 1.
 - **Wiederherstellen** überschreibt keine Historie: Der Inhalt des gewählten Snapshots wird als neue aktuelle Version gespeichert, es entsteht ein Snapshot `restored`, `DocumentContent.restoredAt` wird gesetzt, und an Abonnenten geht eine Benachrichtigung über eine wesentliche Änderung.
 - Aufbewahrung: unbegrenzt, solange das Dokument existiert (optional ausdünnen: ältere als 90 Tage auf einen Snapshot pro Tag reduzieren; Lineal-Erweiterung).
 - Die Historie ist für alle lesbar, die den Inhalt lesen dürfen; Wiederherstellen erfordert Bearbeitungsrecht.
@@ -233,6 +235,8 @@ Ein Verfahren nach dem Prinzip „Operational Transformation“ ist gleichwertig
 
 **Kaskade (Lineal-Festlegung):** Wird das Elternobjekt in den Papierkorb gelegt, wandern dessen Dokumente mit (`trashed = true`, gleicher `trashedAt`, Markierung `trashedWithParent = true`). Wird das Elternobjekt wiederhergestellt, werden genau die mitgelöschten Dokumente ebenfalls wiederhergestellt; vorher einzeln gelöschte Dokumente bleiben gelöscht. Wird ein Team gelöscht, gilt dasselbe für Team- und Cycle-Dokumente.
 
+> **Umsetzung (WP34):** Verdrahtet in `delete_issue`/`restore_issue`, `set_project_trashed` und `delete_team`/`restore_deleted_team` (inkl. Cycle-Dokumente). Der Job `purge` löscht Dokumente und Projekte nach `trashRetentionDays` endgültig; Kommentare, Abos und Notifications fallen per Fremdschlüssel mit, `document_content` und Snapshots (kein Fremdschlüssel) räumt der Job als „verwaiste Inhalte“ ab – auch nach Issue-, Projekt- und Team-Purge.
+
 ### 1.11 Suche
 
 - Dokumente werden mit `title` (höher gewichtet) und dem Markdown-Klartext von `content` indiziert. Details des Suchindex und der Rangfolge: [05-views-suche-inbox.md](05-views-suche-inbox.md).
@@ -240,6 +244,8 @@ Ein Verfahren nach dem Prinzip „Operational Transformation“ ist gleichwertig
 - In Listen wird `content` nach ca. 500 Zeichen gekürzt und mit einem Hinweis versehen, `get_document` für den vollständigen Text zu verwenden ([07-mcp-server.md](07-mcp-server.md)).
 - Trashed-Dokumente erscheinen nie in Suche oder Listen (nur in der Papierkorb-Ansicht).
 - Erwähnungen: In Rich-Text-Feldern kann auf ein Dokument per URL verwiesen werden; die Ausgabe ersetzt sie durch einen Link mit dem aktuellen Titel. Überschriften im Dokument erhalten stabile Anker (`#<heading-slug>`), auf die verlinkt werden kann.
+
+> **Umsetzung (WP34):** `@Name`-Erwähnungen (Anzeigename, wie in Issues) abonnieren das Dokument und erzeugen `documentMention` für aktive User, die das Elternobjekt sehen (Gäste keine Initiative-Dokumente, der Autor nicht). Issue-Kennungen (`ENG-123`) außerhalb von Code und Links werden **bei der Ausgabe** zu `[ENG-123](/<urlKey>/issue/ENG-123)` verlinkt, wenn das Issue für den Akteur sichtbar ist; gespeichert wird der Klartext (Patch-Anker bleiben eindeutig); Listen (`list_documents`) verlinken nicht. Folge: wer den verlinkten Ausgabetext als Patch-Anker nutzt, erhält `conflict`.
 
 ### 1.12 Abonnements und Benachrichtigungen
 
@@ -639,6 +645,8 @@ Regeln:
 ```
 
 Die Property-Felder (`title`, `priority`, `dueDate`, `labelGroup`) setzen die entsprechenden Issue-Felder. Alle anderen Antworten werden in Formularreihenfolge als Markdown in die Beschreibung geschrieben: pro Feld eine Überschrift `### <label>`, darunter die Antwort (Checkboxen als Liste, `instructions` als statischer Text). Fehlende Pflichtfelder → `invalid_request` mit `details.fields`.
+
+> **Umsetzung (WP34):** `App::create_issue_with_form` und GraphQL `issueCreate(input: {templateId, formAnswers: [{fieldId, value}]})` werten Formulare aus (`usecases::template::render_form`); ausdrücklich übergebene Felder haben Vorrang vor Antworten. `useDefaultTemplate: true` (GraphQL `issueCreate`, `projectCreate`) wählt das Default des Teams (Mitglied/Nicht-Mitglied, Projekt: Lead-Team); `templateId` hat Vorrang. MCP wendet weder Defaults noch Formulare automatisch an.
 
 ---
 

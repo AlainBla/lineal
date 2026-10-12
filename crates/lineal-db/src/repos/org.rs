@@ -105,6 +105,28 @@ impl OrgRepo for PgTx {
         .map_err(db_err)
     }
 
+    async fn fulltext_config(&mut self) -> AppResult<String> {
+        sqlx::query_scalar("SELECT fulltext_config FROM organization WHERE id = $1")
+            .bind(self.org.0)
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(db_err)
+    }
+
+    async fn set_fulltext_config(&mut self, config: &str, now: DateTime<Utc>) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE organization SET fulltext_config = $2, version = version + 1, updated_at = $3 \
+             WHERE id = $1",
+        )
+        .bind(self.org.0)
+        .bind(config)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn update(&mut self, patch: &OrgPatch) -> AppResult<Org> {
         let now = patch.now.unwrap_or_else(Utc::now);
         let mut qb: QueryBuilder<'_, Postgres> =

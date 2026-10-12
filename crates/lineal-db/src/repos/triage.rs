@@ -945,32 +945,69 @@ impl TriageRepo for PgTx {
         cutoff: DateTime<Utc>,
         limit: i64,
     ) -> AppResult<Vec<IssueId>> {
-        let rows: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT i.id FROM issue i \
-             WHERE i.organization_id = $1 AND i.team_id = $2 \
-               AND i.state_type IN ('completed', 'canceled', 'duplicate') \
-               AND i.archived_at IS NULL AND NOT i.trashed \
-               AND coalesce(i.completed_at, i.canceled_at, i.state_entered_at) <= $3 \
-               AND i.updated_at <= $3 \
-               AND NOT EXISTS (SELECT 1 FROM issue p WHERE p.id = i.parent_id \
-                               AND p.state_type IN ('triage', 'backlog', 'unstarted', 'started')) \
-               AND NOT EXISTS (SELECT 1 FROM issue c WHERE c.parent_id = i.id AND NOT c.trashed \
-                               AND c.state_type IN ('triage', 'backlog', 'unstarted', 'started')) \
-               AND (i.cycle_id IS NULL OR EXISTS (SELECT 1 FROM cycle c WHERE c.id = i.cycle_id \
-                               AND c.completed_at IS NOT NULL AND c.completed_at <= $3)) \
-               AND (i.project_id IS NULL OR EXISTS (SELECT 1 FROM project p JOIN project_status ps ON ps.id = p.status_id \
-                               WHERE p.id = i.project_id AND ps.type IN ('completed', 'canceled') \
-                               AND coalesce(p.completed_at, p.canceled_at, p.updated_at) <= $3)) \
-             ORDER BY i.id LIMIT $4",
+        let rows: Vec<Uuid> = sqlx::query_scalar(&auto_archive_sql(false))
+            .bind(self.org.0)
+            .bind(team.0)
+            .bind(cutoff)
+            .bind(limit)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(rows.into_iter().map(IssueId).collect())
+    }
+
+    async fn auto_archive_unwarned_candidates(
+        &mut self,
+        team: TeamId,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<IssueId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(&auto_archive_sql(true))
+            .bind(self.org.0)
+            .bind(team.0)
+            .bind(cutoff)
+            .bind(limit)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(rows.into_iter().map(IssueId).collect())
+    }
+
+    async fn purge_trashed_projects(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<lineal_domain::ids::ProjectId>> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM project WHERE organization_id = $1 AND trashed AND trashed_at IS NOT NULL \
+             AND trashed_at <= $2 ORDER BY trashed_at, id LIMIT $3",
         )
         .bind(self.org.0)
-        .bind(team.0)
         .bind(cutoff)
         .bind(limit)
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(rows.into_iter().map(IssueId).collect())
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query(
+            "UPDATE issue SET project_id = NULL, project_milestone_id = NULL, added_to_project_at = NULL, \
+               version = version + 1, updated_at = now() \
+             WHERE organization_id = $1 AND project_id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(&ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query("DELETE FROM project WHERE organization_id = $1 AND id = ANY($2)")
+            .bind(self.org.0)
+            .bind(&ids)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(ids.into_iter().map(lineal_domain::ids::ProjectId).collect())
     }
 
     async fn purge_candidates(
@@ -1073,6 +1110,33 @@ impl TriageRepo for PgTx {
         .map_err(db_err)?;
         Ok(rows.into_iter().map(IssueId).collect())
     }
+}
+
+/// SQL der Auto-Archive-Kandidaten; `unwarned` schließt Issues mit bereits erzeugter Vorwarnung aus.
+fn auto_archive_sql(unwarned: bool) -> String {
+    let warned = if unwarned {
+        " AND NOT EXISTS (SELECT 1 FROM notification w WHERE w.issue_id = i.id \
+           AND w.type = 'issueAutoArchiveWarning' AND w.created_at >= i.updated_at)"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT i.id FROM issue i \
+             WHERE i.organization_id = $1 AND i.team_id = $2 \
+               AND i.state_type IN ('completed', 'canceled', 'duplicate') \
+               AND i.archived_at IS NULL AND NOT i.trashed \
+               AND coalesce(i.completed_at, i.canceled_at, i.state_entered_at) <= $3 \
+               AND i.updated_at <= $3 \
+               AND NOT EXISTS (SELECT 1 FROM issue p WHERE p.id = i.parent_id \
+                               AND p.state_type IN ('triage', 'backlog', 'unstarted', 'started')) \
+               AND NOT EXISTS (SELECT 1 FROM issue c WHERE c.parent_id = i.id AND NOT c.trashed \
+                               AND c.state_type IN ('triage', 'backlog', 'unstarted', 'started')) \
+               AND (i.cycle_id IS NULL OR EXISTS (SELECT 1 FROM cycle c WHERE c.id = i.cycle_id \
+                               AND c.completed_at IS NOT NULL AND c.completed_at <= $3)) \
+               AND (i.project_id IS NULL OR EXISTS (SELECT 1 FROM project p JOIN project_status ps ON ps.id = p.status_id \
+                               WHERE p.id = i.project_id AND ps.type IN ('completed', 'canceled') \
+                               AND coalesce(p.completed_at, p.canceled_at, p.updated_at) <= $3)){warned} ORDER BY i.id LIMIT $4"
+    )
 }
 
 fn refs(rows: Vec<(Uuid, Uuid)>) -> Vec<TeamRef> {

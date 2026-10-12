@@ -38,6 +38,8 @@ pub struct CycleGql {
     pub is_future: bool,
     pub is_next: bool,
     pub is_previous: bool,
+    /// Kapazitätsschätzung (Velocity der letzten drei Cycles); nur laufende und künftige Cycles.
+    pub capacity: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -70,6 +72,7 @@ impl From<CycleView> for CycleGql {
             is_future: v.is_future,
             is_next: v.is_next,
             is_previous: v.is_previous,
+            capacity: v.capacity,
             created_at: c.created_at.to_rfc3339(),
             updated_at: c.updated_at.to_rfc3339(),
         }

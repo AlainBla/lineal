@@ -150,6 +150,9 @@ pub struct DocumentUpdateInput {
     pub sort_order: Option<f64>,
     /// Optimistische Sperre auf die Inhalts-Revision.
     pub expected_version: Option<i32>,
+    /// Automatisches Speichern des Editors: Inhaltsänderungen werden zu Snapshots gebündelt
+    /// (docs/06 §1.9). Ohne Angabe erzeugt jede Inhaltsänderung einen Snapshot.
+    pub autosave: Option<bool>,
 }
 
 fn cursor_of(c: &PageCursor) -> String {
@@ -366,30 +369,33 @@ impl DocumentMutation {
             .map(|p| serde_json::from_value(p.0))
             .transpose()
             .map_err(|e| gql_err(AppError::invalid_request(format!("invalid patch: {e}"))))?;
-        let v = app(ctx)?
-            .save_document(
-                request_ctx(ctx)?,
-                SaveDocumentInput {
-                    id: Some(id),
-                    title: input.title,
-                    content: input.content,
-                    patch,
-                    icon: input.icon,
-                    color: input.color,
-                    parent: ParentRefs {
-                        project: input.project_id,
-                        issue: input.issue_id,
-                        initiative: input.initiative_id,
-                        cycle: input.cycle_id,
-                        team: input.team_id,
-                    },
-                    sort_order: input.sort_order,
-                    expected_version: input.expected_version,
-                    template: None,
-                },
-            )
-            .await
-            .map_err(gql_err)?;
+        let autosave = input.autosave.unwrap_or(false);
+        let a = app(ctx)?;
+        let save_input = SaveDocumentInput {
+            id: Some(id),
+            title: input.title,
+            content: input.content,
+            patch,
+            icon: input.icon,
+            color: input.color,
+            parent: ParentRefs {
+                project: input.project_id,
+                issue: input.issue_id,
+                initiative: input.initiative_id,
+                cycle: input.cycle_id,
+                team: input.team_id,
+            },
+            sort_order: input.sort_order,
+            expected_version: input.expected_version,
+            template: None,
+        };
+        let v = if autosave {
+            a.save_document_autosave(request_ctx(ctx)?, save_input)
+                .await
+        } else {
+            a.save_document(request_ctx(ctx)?, save_input).await
+        }
+        .map_err(gql_err)?;
         Ok(payload(v))
     }
 

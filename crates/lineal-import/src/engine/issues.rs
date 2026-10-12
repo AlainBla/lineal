@@ -218,6 +218,14 @@ impl Session<'_, '_> {
             self.linear_identifier_link(n, team_src, up.id, created)
                 .await?;
         }
+        // Reaktionen auf das Issue (Emoji je Nutzer); bei Aktualisierung neu schreiben.
+        if up.outcome == Outcome::Updated {
+            self.tx()?
+                .imports()
+                .delete_rows_where(ImportTable::Reaction, "issue_id", up.id)
+                .await?;
+        }
+        self.reactions(n, "issue_id", up.id, created).await?;
         // Eltern-Bezug, dessen Elternteil noch nicht importiert ist: vormerken (Phase 4b).
         if let Some(p) = parent_src
             && parent.is_none()

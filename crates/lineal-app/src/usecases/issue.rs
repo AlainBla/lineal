@@ -5,7 +5,7 @@
 
 pub(crate) mod fields;
 pub(crate) mod history;
-mod mentions;
+pub(crate) mod mentions;
 mod relations;
 
 pub use fields::MAX_SUB_ISSUE_DEPTH;
@@ -17,6 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
+use crate::ports::repos::document::DocParent;
 use crate::ports::repos::issue::{
     HistoryEntry, HistorySource, Issue, IssueExtras, IssueListFilter, IssueShare,
 };
@@ -265,6 +266,11 @@ fn diff_issue(old: &Issue, new: &Issue) -> (Delta, Vec<String>) {
         "slaType",
         json!(old.sla_type.map(|t| t.as_str())),
         json!(new.sla_type.map(|t| t.as_str())),
+    );
+    d.set(
+        "snoozedUntilAt",
+        val_ts(old.snoozed_until_at),
+        val_ts(new.snoozed_until_at),
     );
     let mut changed: Vec<String> = d.changes.keys().cloned().collect();
     changed.retain(|k| k != "identifier");
@@ -942,6 +948,11 @@ impl App {
         if issue == old && !labels_changed && own.is_empty() {
             return load_view(tx, issue, true).await;
         }
+        // Aktivität eines anderen als des Snoozenden beendet das Triage-Snooze (docs/03 §10).
+        if issue != old && issue.snoozed_until_at.is_some() && issue.snoozed_by_id != actor {
+            issue.snoozed_until_at = None;
+            issue.snoozed_by_id = None;
+        }
         let saved = if issue != old {
             tx.issues().save(&issue, now).await?
         } else {
@@ -1372,6 +1383,9 @@ impl App {
         )
         .await?;
         let _ = old;
+        // Dokumente des Issues wandern mit in den Papierkorb (docs/06 §1.10).
+        self.trash_documents_of(&mut *tx, DocParent::Issue(saved.id))
+            .await?;
         emit(
             &mut *tx,
             ctx,
@@ -1425,6 +1439,10 @@ impl App {
         issue.trashed_at = None;
         issue.archived_at = None;
         let saved = tx.issues().save(&issue, now).await?;
+        if was_trashed {
+            self.restore_documents_of(&mut *tx, DocParent::Issue(saved.id))
+                .await?;
+        }
         let mut d = Delta::default();
         d.flag(if was_trashed {
             "restored"

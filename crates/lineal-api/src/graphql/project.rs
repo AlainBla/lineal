@@ -301,6 +301,10 @@ pub struct ProjectInput {
     pub target_date: MaybeUndefined<String>,
     pub target_date_resolution: MaybeUndefined<String>,
     pub links: Option<Vec<LinkInput>>,
+    /// Nur beim Anlegen: Template (UUID oder Name); hat Vorrang vor `useDefaultTemplate`.
+    pub template_id: Option<String>,
+    /// Nur beim Anlegen: wendet `defaultProjectTemplate` des Lead-Teams an (docs/06 §2.8).
+    pub use_default_template: Option<bool>,
 }
 
 #[derive(InputObject)]
@@ -376,7 +380,7 @@ fn project_input(id: Option<String>, i: ProjectInput) -> async_graphql::Result<S
         start_date_resolution: resolution("startDateResolution", i.start_date_resolution)?,
         target_date: date("targetDate", i.target_date)?,
         target_date_resolution: resolution("targetDateResolution", i.target_date_resolution)?,
-        template: None,
+        template: i.template_id,
         detach_issues_of_removed_teams: i.detach_issues_of_removed_teams.unwrap_or(false),
     })
 }
@@ -523,10 +527,19 @@ impl ProjectMutation {
         ctx: &Context<'_>,
         input: ProjectInput,
     ) -> async_graphql::Result<ProjectPayload> {
-        let v = app(ctx)?
-            .save_project(request_ctx(ctx)?, project_input(None, input)?)
-            .await
-            .map_err(gql_err)?;
+        let a = app(ctx)?;
+        let rctx = request_ctx(ctx)?;
+        let default_for = (input.template_id.is_none() && input.use_default_template == Some(true))
+            .then(|| input.lead_team.clone())
+            .flatten();
+        let mut save = project_input(None, input)?;
+        if let Some(lead) = default_for {
+            save.template = a
+                .default_template_for_project(rctx, &lead)
+                .await
+                .map_err(gql_err)?;
+        }
+        let v = a.save_project(rctx, save).await.map_err(gql_err)?;
         Ok(ProjectPayload {
             success: true,
             project: Some(v.into()),
