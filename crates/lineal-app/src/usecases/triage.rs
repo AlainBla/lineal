@@ -313,10 +313,16 @@ async fn persist(
     if old.state_id != saved.state_id {
         changed.push("triagedAt".into());
     }
+    let previous = lineal_domain::events::IssuePrevious::of(
+        &changed,
+        old.assignee_id,
+        old.state_type.as_str(),
+    );
     emit(
         tx,
         ctx,
         DomainEvent::IssueUpdated {
+            previous,
             issue_id: saved.id,
             team_id: saved.team_id,
             changed,

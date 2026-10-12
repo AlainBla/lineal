@@ -1572,6 +1572,7 @@ async fn delivery_context_is_reevaluated_for_every_event(pool: PgPool) {
         .await
         .unwrap();
     let ev = lineal_domain::events::DomainEvent::IssueUpdated {
+        previous: None,
         issue_id: sqlx::query_scalar::<_, uuid::Uuid>(
             "SELECT id FROM issue WHERE team_id = $1 LIMIT 1",
         )

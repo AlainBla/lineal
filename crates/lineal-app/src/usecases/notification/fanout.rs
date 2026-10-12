@@ -5,22 +5,29 @@
 //! prüfen, Notifications idempotent schreiben (`dedup_key`).
 
 use super::kinds::{category_of, is_always_priority, rank_of};
+use super::views::{ViewIssueEvent, ViewSubscriptionSource};
 use crate::app::App;
 use crate::context::Actor;
 use crate::error::AppResult;
 use crate::policy::{ActorView, TeamTree, compute_visible_team_ids};
 use crate::ports::Tx;
 use crate::ports::repos::notification::{
-    IssueFacts, NewNotification, ObjectKind, SubscriptionReason,
+    BundleMerge, DocumentFacts, IssueFacts, NewNotification, ObjectKind, SubscriptionReason,
 };
 use crate::ports::repos::{NewEvent, StoredEvent};
-use chrono::{DateTime, Utc};
-use lineal_domain::events::{DomainEvent, EventOrigin};
+use chrono::{DateTime, Duration, Utc};
+use lineal_domain::enums::UserRole;
+use lineal_domain::events::{DomainEvent, EventOrigin, IssuePrevious};
 use lineal_domain::ids::{CommentId, IssueId, NotificationId, ProjectId, TeamId, UserId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use uuid::Uuid;
 
 const CLOSED: [&str; 3] = ["completed", "canceled", "duplicate"];
+
+/// Fenster der Bündelung gleichartiger Notifications (docs/05 §6.6).
+const BUNDLE_WINDOW_SECS: i64 = 60;
+/// Höchstzahl der vermerkten gebündelten Typen je Notification.
+const MAX_BUNDLED_TYPES: usize = 20;
 
 /// Bezugsobjekt einer Notification.
 #[derive(Debug, Clone, Default)]
@@ -30,22 +37,43 @@ pub(crate) struct Refs {
     pub team_id: Option<TeamId>,
     pub project_id: Option<ProjectId>,
     pub project_update_id: Option<Uuid>,
+    pub project_milestone_id: Option<Uuid>,
+    pub initiative_id: Option<Uuid>,
+    pub initiative_update_id: Option<Uuid>,
+    pub document_id: Option<Uuid>,
     pub comment_id: Option<CommentId>,
     pub parent_comment_id: Option<CommentId>,
     pub reaction_emoji: Option<String>,
+}
+
+/// Gruppenschlüssel einer neuen Notification (wie die generierte Spalte `group_key`).
+fn group_key_of(n: &NewNotification) -> Option<String> {
+    match n.target_type.as_str() {
+        "issue" => n.issue_id.map(|i| format!("issue:{}", i.0)),
+        "project" => n.project_id.map(|i| format!("project:{}", i.0)),
+        "initiative" => n.initiative_id.map(|i| format!("initiative:{i}")),
+        "document" => n.document_id.map(|i| format!("document:{i}")),
+        _ => None,
+    }
 }
 
 /// Sammelt Kandidaten für genau ein Event bzw. eine Erinnerung.
 pub(crate) struct Fan<'a> {
     tx: &'a mut dyn Tx,
     tree: TeamTree,
-    visible: HashMap<UserId, Option<BTreeSet<TeamId>>>,
+    visible: HashMap<UserId, Option<(BTreeSet<TeamId>, UserRole)>>,
     now: DateTime<Utc>,
     pub refs: Refs,
     /// Sichtbar, wenn der Empfänger mindestens eines dieser Teams sieht (leer = immer).
     pub teams: Vec<TeamId>,
+    /// Bezugsobjekt ohne Team (Initiative, Workspace-Dokument): Gäste sehen es nie.
+    pub workspace_only: bool,
     pub actor: Option<UserId>,
     cands: BTreeMap<UserId, &'static str>,
+    /// Quelle für View-Abos (WP31); `None` = keine View-Benachrichtigungen.
+    views: Option<&'a dyn ViewSubscriptionSource>,
+    /// Issues, die durch das Ereignis frei geworden sind (`issueUnblocked`).
+    unblocked: Vec<IssueId>,
 }
 
 impl<'a> Fan<'a> {
@@ -62,9 +90,18 @@ impl<'a> Fan<'a> {
             now,
             refs: Refs::default(),
             teams: Vec::new(),
+            workspace_only: false,
             actor,
             cands: BTreeMap::new(),
+            views: None,
+            unblocked: Vec::new(),
         })
+    }
+
+    /// Hängt die Quelle für View-Abos ein.
+    pub fn with_views(mut self, views: Option<&'a dyn ViewSubscriptionSource>) -> Self {
+        self.views = views;
+        self
     }
 
     /// Ob `user` aktiv ist und mindestens eines der Teams sieht (`teams` leer → ja).
@@ -80,14 +117,16 @@ impl<'a> Fan<'a> {
                         },
                         &memberships,
                     );
-                    Some(compute_visible_team_ids(&view, &self.tree))
+                    Some((compute_visible_team_ids(&view, &self.tree), u.role))
                 }
                 _ => None,
             };
             self.visible.insert(user, set);
         }
+        let workspace_only = self.workspace_only;
         Ok(match self.visible.get(&user) {
-            Some(Some(set)) => teams.is_empty() || teams.iter().any(|t| set.contains(t)),
+            Some(Some((_, role))) if workspace_only && *role == UserRole::Guest => false,
+            Some(Some((set, _))) => teams.is_empty() || teams.iter().any(|t| set.contains(t)),
             _ => false,
         })
     }
@@ -117,6 +156,7 @@ impl<'a> Fan<'a> {
             ..Refs::default()
         };
         self.teams = vec![team];
+        self.workspace_only = false;
         self.cands.clear();
     }
 
@@ -132,7 +172,16 @@ impl<'a> Fan<'a> {
         self.refs.target_type = "project";
         self.refs.project_id = Some(project);
         self.teams = self.tx.notifications().project_team_ids(project).await?;
+        // Projekte ohne Team gehören dem Workspace: nichts für Gäste.
+        self.workspace_only = self.teams.is_empty();
         Ok(())
+    }
+
+    fn target_initiative(&mut self, initiative: Uuid) {
+        self.refs.target_type = "initiative";
+        self.refs.initiative_id = Some(initiative);
+        self.teams = Vec::new();
+        self.workspace_only = true;
     }
 
     /// Abo nachführen, aber nur für User, die das Issue sehen.
@@ -172,9 +221,10 @@ impl<'a> Fan<'a> {
                 issue_id,
                 changed,
                 mentioned_user_ids,
+                previous,
                 ..
             } => {
-                self.issue_updated(*issue_id, changed, mentioned_user_ids)
+                self.issue_updated(*issue_id, changed, mentioned_user_ids, previous.as_ref())
                     .await
             }
             DomainEvent::CommentCreated {
@@ -273,7 +323,36 @@ impl<'a> Fan<'a> {
         };
         self.add_all(created, "issueCreated");
         self.add_all(triage, "issueAddedToTriage");
+        self.add_view_recipients(&f, true, &[], None).await?;
         Ok(true)
+    }
+
+    /// Abonnenten abonnierter Views (WP31, siehe [`ViewSubscriptionSource`]).
+    async fn add_view_recipients(
+        &mut self,
+        f: &IssueFacts,
+        is_new: bool,
+        changed: &[String],
+        previous: Option<&IssuePrevious>,
+    ) -> AppResult<()> {
+        let Some(views) = self.views else {
+            return Ok(());
+        };
+        let found = views
+            .recipients(
+                &mut *self.tx,
+                &ViewIssueEvent {
+                    issue: f,
+                    is_new,
+                    changed,
+                    previous,
+                },
+            )
+            .await?;
+        for (user, kind) in found {
+            self.add(user, kind);
+        }
+        Ok(())
     }
 
     async fn issue_updated(
@@ -281,6 +360,7 @@ impl<'a> Fan<'a> {
         issue: IssueId,
         changed: &[String],
         mentioned: &[UserId],
+        previous: Option<&IssuePrevious>,
     ) -> AppResult<bool> {
         let Some(f) = self.tx.notifications().issue_facts(issue).await? else {
             return Ok(false);
@@ -298,6 +378,13 @@ impl<'a> Fan<'a> {
             self.subscribe(&f, a, None, SubscriptionReason::Assignee)
                 .await?;
             self.add(a, "issueAssignedToYou");
+        }
+        // Der bisherige Assignee erfährt von der Abgabe (docs/05 §6.2 `issueUnassignedFromYou`).
+        if has("assigneeId")
+            && let Some(old) = previous.and_then(|p| p.assignee_id)
+            && Some(old) != f.assignee_id
+        {
+            self.add(old, "issueUnassignedFromYou");
         }
         if has("priority")
             && f.priority == 1
@@ -318,6 +405,21 @@ impl<'a> Fan<'a> {
         }
         if has("stateId") {
             let closed = CLOSED.contains(&f.state_type.as_str());
+            let was_closed = previous
+                .and_then(|p| p.state_type.as_deref())
+                .is_some_and(|t| CLOSED.contains(&t));
+            if closed {
+                // Wer von diesem Issue blockiert wurde und nun keinen offenen Blocker mehr hat.
+                for blocked in self.tx.notifications().blocked_issues(f.id).await? {
+                    if self.tx.notifications().open_blockers(blocked).await? == 0 {
+                        self.unblocked.push(blocked);
+                    }
+                }
+            }
+            if was_closed && !closed {
+                let subs = self.tx.notifications().issue_subscribers(f.id).await?;
+                self.add_all(subs, "issueReopened");
+            }
             let notifications = self.tx.notifications();
             let mut subs = Vec::new();
             let mut all = notifications
@@ -361,6 +463,8 @@ impl<'a> Fan<'a> {
             self.add_all(all, "issueStatusChangedAll");
             self.add_all(triage, "issueAddedToTriage");
         }
+        self.add_view_recipients(&f, false, changed, previous)
+            .await?;
         Ok(true)
     }
 
@@ -420,8 +524,132 @@ impl<'a> Fan<'a> {
             }
             return Ok(true);
         }
-        // Kommentare an Initiativen, Dokumenten, Meilensteinen und Berichten: noch nicht abgedeckt.
+        if let Some(milestone) = c.project_milestone_id {
+            let Some(m) = self.tx.notifications().milestone_facts(milestone).await? else {
+                return Ok(false);
+            };
+            self.target_project(m.project_id).await?;
+            self.refs.project_milestone_id = Some(m.id);
+            self.add_all(mentioned.iter().copied(), "projectMilestoneCommentMention");
+            if is_new {
+                let notifications = self.tx.notifications();
+                let mut recipients = notifications
+                    .object_subscribers(ObjectKind::Project, m.project_id.0, "projectNewComment")
+                    .await?;
+                if c.parent_id.is_some() {
+                    recipients.extend(notifications.thread_participants(thread).await?);
+                }
+                self.add_all(recipients, "projectMilestoneNewComment");
+            }
+            return Ok(true);
+        }
+        if let Some(update) = c.project_update_id {
+            let Some(u) = self.tx.notifications().project_update_facts(update).await? else {
+                return Ok(false);
+            };
+            self.target_project(u.project_id).await?;
+            self.refs.project_update_id = Some(u.id);
+            self.add_all(mentioned.iter().copied(), "projectUpdateCommentMention");
+            if is_new {
+                let mut recipients = vec![u.author_id];
+                if c.parent_id.is_some() {
+                    recipients.extend(self.tx.notifications().thread_participants(thread).await?);
+                }
+                self.add_all(recipients, "projectUpdateNewComment");
+            }
+            return Ok(true);
+        }
+        if let Some(initiative) = c.initiative_id {
+            if !self
+                .tx
+                .notifications()
+                .initiative_exists(initiative)
+                .await?
+            {
+                return Ok(false);
+            }
+            self.target_initiative(initiative);
+            self.add_all(mentioned.iter().copied(), "initiativeCommentMention");
+            if is_new {
+                let notifications = self.tx.notifications();
+                let mut recipients = notifications
+                    .object_subscribers(ObjectKind::Initiative, initiative, "initiativeNewComment")
+                    .await?;
+                if c.parent_id.is_some() {
+                    recipients.extend(notifications.thread_participants(thread).await?);
+                }
+                self.add_all(recipients, "initiativeNewComment");
+            }
+            return Ok(true);
+        }
+        if let Some(update) = c.initiative_update_id {
+            let Some(u) = self
+                .tx
+                .notifications()
+                .initiative_update_facts(update)
+                .await?
+            else {
+                return Ok(false);
+            };
+            self.target_initiative(u.initiative_id);
+            self.refs.initiative_update_id = Some(u.id);
+            self.add_all(mentioned.iter().copied(), "initiativeUpdateCommentMention");
+            if is_new {
+                let mut recipients = vec![u.author_id];
+                if c.parent_id.is_some() {
+                    recipients.extend(self.tx.notifications().thread_participants(thread).await?);
+                }
+                self.add_all(recipients, "initiativeUpdateNewComment");
+            }
+            return Ok(true);
+        }
+        if let Some(document) = c.document_id {
+            let Some(d) = self.tx.notifications().document_facts(document).await? else {
+                return Ok(false);
+            };
+            if d.trashed {
+                return Ok(false);
+            }
+            self.refs.target_type = "document";
+            self.refs.document_id = Some(d.id);
+            self.teams = d.teams.clone();
+            self.workspace_only = d.workspace_only;
+            if is_new && let Some(author) = c.author_id {
+                self.subscribe_document(&d, author, SubscriptionReason::Comment)
+                    .await?;
+            }
+            for m in mentioned {
+                self.subscribe_document(&d, *m, SubscriptionReason::Mention)
+                    .await?;
+            }
+            self.add_all(mentioned.iter().copied(), "documentCommentMention");
+            if is_new {
+                let notifications = self.tx.notifications();
+                let mut recipients = notifications.document_subscribers(d.id).await?;
+                if c.parent_id.is_some() {
+                    recipients.extend(notifications.thread_participants(thread).await?);
+                }
+                self.add_all(recipients, "documentNewComment");
+            }
+            return Ok(true);
+        }
         Ok(false)
+    }
+
+    /// Dokument-Abo nachführen, aber nur für User, die das Dokument sehen (Gäste nur bei Teambezug).
+    async fn subscribe_document(
+        &mut self,
+        d: &DocumentFacts,
+        user: UserId,
+        reason: SubscriptionReason,
+    ) -> AppResult<()> {
+        if self.can_see_any(user, &d.teams).await? {
+            self.tx
+                .notifications()
+                .subscribe_document(d.id, user, reason, self.now)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn reaction(&mut self, ev: &StoredEvent, reaction: Uuid) -> AppResult<bool> {
@@ -547,6 +775,75 @@ impl<'a> Fan<'a> {
         Ok(true)
     }
 
+    /// Bündelung (docs/05 §6.6): Ereignisse desselben Akteurs am selben Objekt innerhalb einer
+    /// Minute gehen in die bestehende Notification des Empfängers ein (der spezifischere Typ
+    /// bleibt, `bundled_types` listet alle). `true`, wenn das Ereignis erledigt ist (zusammengeführt
+    /// oder bereits verarbeitet); die bestehende Notification meldet ein `NotificationUpdated`.
+    /// Ohne menschlichen Akteur (Jobs, Automationen, Erinnerungen) wird nie gebündelt.
+    async fn bundle(&mut self, n: &NewNotification) -> AppResult<bool> {
+        let (Some(actor), Some(key)) = (n.actor_id, group_key_of(n)) else {
+            return Ok(false);
+        };
+        if self
+            .tx
+            .notifications()
+            .dedup_seen(n.user_id, &n.dedup_key)
+            .await?
+        {
+            return Ok(true);
+        }
+        let since = self.now - Duration::seconds(BUNDLE_WINDOW_SECS);
+        let Some(target) = self
+            .tx
+            .notifications()
+            .find_bundle_target(n.user_id, &key, actor, since)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let wins = rank_of(&n.kind) < rank_of(&target.kind);
+        let mut types = if target.bundled_types.is_empty() {
+            vec![target.kind.clone()]
+        } else {
+            target.bundled_types.clone()
+        };
+        if types.len() < MAX_BUNDLED_TYPES {
+            types.push(n.kind.clone());
+        }
+        let kind = if wins { n.kind.clone() } else { target.kind };
+        let merge = BundleMerge {
+            target: target.id,
+            category: category_of(&kind).to_owned(),
+            kind,
+            take_refs: wins,
+            bundled_types: types,
+            is_priority: n.is_priority,
+        };
+        self.tx
+            .notifications()
+            .merge_notification(n, &merge)
+            .await?;
+        self.tx
+            .outbox()
+            .push(NewEvent::new(
+                DomainEvent::NotificationUpdated {
+                    notification_id: target.id,
+                    user_id: n.user_id,
+                },
+                EventOrigin::System,
+            ))
+            .await?;
+        Ok(true)
+    }
+
+    /// Richtet die Fakten auf ein anderes Issue aus (nach dem Hauptereignis, z. B. `issueUnblocked`).
+    fn retarget_issue(&mut self, f: &IssueFacts) {
+        self.refs = Refs::default();
+        self.cands.clear();
+        self.target_issue(f);
+        self.workspace_only = false;
+    }
+
     /// Self-Suppression, Sichtbarkeit, Schreiben. Liefert die Zahl neuer Notifications.
     pub async fn deliver(
         &mut self,
@@ -589,10 +886,10 @@ impl<'a> Fan<'a> {
                 team_id: self.refs.team_id,
                 project_id: self.refs.project_id,
                 project_update_id: self.refs.project_update_id,
-                project_milestone_id: None,
-                initiative_id: None,
-                initiative_update_id: None,
-                document_id: None,
+                project_milestone_id: self.refs.project_milestone_id,
+                initiative_id: self.refs.initiative_id,
+                initiative_update_id: self.refs.initiative_update_id,
+                document_id: self.refs.document_id,
                 comment_id: self.refs.comment_id,
                 parent_comment_id: self.refs.parent_comment_id,
                 reaction_emoji: self.refs.reaction_emoji.clone(),
@@ -600,6 +897,9 @@ impl<'a> Fan<'a> {
                 dedup_key: format!("{dedup_prefix}:{kind}"),
                 now: self.now,
             };
+            if self.bundle(&n).await? {
+                continue;
+            }
             if self.tx.notifications().insert_notification(&n).await? {
                 created += 1;
                 self.tx
@@ -640,18 +940,47 @@ impl App {
     /// Verarbeitet ein Outbox-Event für den Konsumenten `notifications` (idempotent).
     /// Events aus dem Import erzeugen nichts. Liefert die Zahl neuer Notifications.
     pub async fn fan_out_event(&self, ev: &StoredEvent) -> AppResult<usize> {
+        self.fan_out_event_with(ev, None).await
+    }
+
+    /// Wie [`App::fan_out_event`], zusätzlich mit der Quelle für View-Abos (WP31, siehe
+    /// [`ViewSubscriptionSource`]).
+    pub async fn fan_out_event_with(
+        &self,
+        ev: &StoredEvent,
+        views: Option<&dyn ViewSubscriptionSource>,
+    ) -> AppResult<usize> {
         if ev.origin == EventOrigin::Import || !is_relevant(&ev.event) {
             return Ok(0);
         }
         let mut tx = self.store.begin(ev.org_id).await?;
         let created = {
-            let mut fan = Fan::new(&mut *tx, self.clock.now(), ev.actor_id).await?;
-            if fan.plan(ev).await? {
+            let mut fan = Fan::new(&mut *tx, self.clock.now(), ev.actor_id)
+                .await?
+                .with_views(views);
+            let mut created = if fan.plan(ev).await? {
                 fan.deliver(self.ids.as_ref(), &format!("event:{}", ev.id))
                     .await?
             } else {
                 0
+            };
+            // Issues, die durch dieses Ereignis frei wurden (`issueUnblocked`).
+            for blocked in std::mem::take(&mut fan.unblocked) {
+                let Some(f) = fan.tx.notifications().issue_facts(blocked).await? else {
+                    continue;
+                };
+                fan.retarget_issue(&f);
+                let mut recipients = fan.tx.notifications().issue_subscribers(f.id).await?;
+                recipients.extend(f.assignee_id);
+                fan.add_all(recipients, "issueUnblocked");
+                created += fan
+                    .deliver(
+                        self.ids.as_ref(),
+                        &format!("event:{}:unblocked:{}", ev.id, f.id),
+                    )
+                    .await?;
             }
+            created
         };
         tx.commit().await?;
         Ok(created)

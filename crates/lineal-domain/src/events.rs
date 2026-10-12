@@ -41,6 +41,35 @@ impl std::str::FromStr for EventOrigin {
     }
 }
 
+/// Alte Werte einer Issue-Änderung (`IssueUpdated.previous`), damit Konsumenten Übergänge erkennen
+/// (`issueUnassignedFromYou`, `issueReopened`, `issueUnblocked`, docs/05 §6.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuePrevious {
+    /// Bisheriger Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = war unzugewiesen).
+    #[serde(default)]
+    pub assignee_id: Option<UserId>,
+    /// Bisheriger Statustyp (`triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`,
+    /// `duplicate`); gilt nur, wenn `stateId` in `changed` steht.
+    #[serde(default)]
+    pub state_type: Option<String>,
+}
+
+impl IssuePrevious {
+    /// Alte Werte für die in `changed` genannten Felder; `None`, wenn weder `assigneeId` noch
+    /// `stateId` betroffen ist.
+    pub fn of(
+        changed: &[String],
+        old_assignee: Option<UserId>,
+        old_state_type: &str,
+    ) -> Option<Self> {
+        let has = |f: &str| changed.iter().any(|c| c == f);
+        (has("assigneeId") || has("stateId")).then(|| Self {
+            assignee_id: has("assigneeId").then_some(old_assignee).flatten(),
+            state_type: has("stateId").then(|| old_state_type.to_owned()),
+        })
+    }
+}
+
 macro_rules! domain_events {
     ($($(#[$doc:meta])* $var:ident { $($f:ident : $t:ty),* $(,)? }),+ $(,)?) => {
         /// Alle Ereignisse, die Use-Cases in die Outbox schreiben.
@@ -66,7 +95,9 @@ domain_events! {
     IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId> },
     /// `changed`: geänderte Feldnamen (camelCase, z. B. `assigneeId`, `stateId`, `description`);
     /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen in der Beschreibung.
-    IssueUpdated { issue_id: IssueId, team_id: TeamId, changed: Vec<String>, mentioned_user_ids: Vec<UserId> },
+    /// `previous`: alte Werte der Felder `assigneeId`/`stateId` (WP32, nur wenn sie in `changed` stehen;
+    /// `None` = nicht erfasst, z. B. bei Altdaten oder Systemänderungen ohne Bedeutung für Notifications).
+    IssueUpdated { previous: Option<IssuePrevious>, issue_id: IssueId, team_id: TeamId, changed: Vec<String>, mentioned_user_ids: Vec<UserId> },
     IssueRemoved { issue_id: IssueId, team_id: TeamId },
     IssueRelationCreated { relation_id: IssueRelationId, issue_id: IssueId },
     IssueRelationRemoved { relation_id: IssueRelationId, issue_id: IssueId },

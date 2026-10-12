@@ -1313,6 +1313,7 @@ pub(crate) async fn emit_issue_detached(
         tx,
         ctx,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: team,
             changed: vec!["projectId".into(), "projectMilestoneId".into()],

@@ -1097,6 +1097,8 @@ Favoriten sind **persönliche** Einträge in der Seitenleiste oberhalb von „Yo
 
 Default bei Anlage: `["issueAddedToView"]`. Die Prüfung „erfüllt den Filter jetzt, vorher nicht“ erfolgt im Fan-out anhand der Vorher-/Nachher-Werte des Events (`updatedFrom`) gegen den View-Filter, ausgewertet mit den Rechten des Abonnenten. Eigene Aktionen lösen keine View-Benachrichtigung aus.
 
+> **Umsetzung:** Der Fan-out kennt keine View-Filter, sondern fragt eine `ViewSubscriptionSource` (`usecases::notification::views`, Details in `docs/dev/schnittstellen.md`) nach Abonnent und Typ je Issue-Ereignis (mit `is_new`, `changed` und `previous`) und übernimmt Self-Suppression, Sichtbarkeit, Bündelung und Idempotenz. Die Quelle liefert WP31 (Datenmodell der View-Abos).
+
 ---
 
 ## 5. Suche
@@ -1359,6 +1361,8 @@ MCP `get_notifications` liefert dagegen **einzelne** Notifications (neueste zuer
 | `notification:<id>` | `system` | einzeln |
 
 Mehrere Ereignisse desselben Akteurs am selben Objekt innerhalb von **1 Minute** werden zusätzlich zu **einer** Notification zusammengefasst (der Typ der spezifischsten bleibt, die Detailzeile listet die Änderungen; [09-api-events.md](09-api-events.md)). Der Link der Gruppe zeigt auf das Objekt, bei Kommentar-Typen mit Anker `#comment-<id>`.
+
+> **Umsetzung:** Die Zusammenfassung geschieht beim Erzeugen: Ereignisse desselben Akteurs im selben Gruppenschlüssel innerhalb von 60 s gehen in die jüngste Notification des Empfängers ein (spezifischster Typ bleibt in `type`, bei Gleichstand der bestehende). `Notification.bundledTypes` listet alle Typen der zusammengefassten Ereignisse (leer = nicht gebündelt, höchstens 20 Einträge); die Notification wird wieder ungelesen und beendet ein Snooze der Gruppe. Ohne menschlichen Akteur (Jobs, Automationen, Erinnerungen) wird nicht gebündelt.
 
 ### 6.7 Inbox-Anzeige und Filter
 

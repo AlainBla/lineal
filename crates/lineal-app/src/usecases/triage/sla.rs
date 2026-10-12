@@ -321,6 +321,7 @@ pub(crate) async fn process_issue(
         emit(
             tx,
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: issue.id,
                 team_id: issue.team_id,
                 changed: vec!["slaMediumRiskAt".into(), "slaHighRiskAt".into()],
@@ -381,6 +382,7 @@ pub(crate) async fn persist_rule_change(
         emit(
             tx,
             DomainEvent::IssueUpdated {
+                previous: None,
                 issue_id: saved.id,
                 team_id: saved.team_id,
                 changed,

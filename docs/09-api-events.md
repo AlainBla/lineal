@@ -830,6 +830,8 @@ _metadata_={"lastSyncId":184467,"subscribedSyncGroups":["org:1f2e…","team:c41f
 - Archivierte Objekte und große Felder (Kommentare alter Issues, `description`, Dokumentinhalte) werden **lazy** nachgeladen (`type=partial`, per Modell und ID-Liste) – Bootstrap enthält nur „hot“ Daten (offene Issues, Issues der letzten 90 Tage, alle Stammdaten).
 - `databaseVersion` ändert sich bei inkompatiblen Schemaänderungen → Client verwirft lokalen Cache und bootstrapt neu.
 
+> **Umsetzung:** Der Pfad ist `GET /sync/bootstrap?modelNames=A,B&limit=N&cursor=…` (Lese-Scope, Auth wie `/sync`, Antwort `application/x-ndjson`). Statt `type=full|partial` und lazy-Nachladen gibt es **Pakete**: `limit` (1–2000, Default 1000) begrenzt die Zeilen, `_metadata_` enthält `nextCursor`; Modelle und `lastSyncId` stecken im Cursor, `lastSyncId` bleibt über alle Pakete gleich (Stand **vor** dem ersten Lesen). Default-Modelle: Organization, Team, User, WorkflowState, IssueLabel, Cycle, Project, ProjectMilestone, Initiative, CustomView, Issue (ohne Papierkorb/Archiv); optional Template, Document. Zeilen tragen `syncGroups` (nur die des Empfängers). Kommentare, Anhänge und Verlauf werden weiter über GraphQL geladen; `databaseVersion` ist `1`. Der Web-Client nutzt den Bootstrap beim Erststart nur für das Personenverzeichnis (kein normalisierter Objektgraph, siehe docs/15 §4.2).
+
 ### 5.3 Delta-Stream
 
 ```text
@@ -844,7 +846,7 @@ Server-Regeln:
 2. Jede Action wird nur an Verbindungen geschickt, deren Gruppenmenge sich mit `syncGroups` überschneidet.
 3. Aufbewahrung des Sync-Logs: Default 14 Tage. Ist `lastSyncId` älter als der älteste Log-Eintrag, antwortet der Server mit `{"type":"resetRequired"}` → Client bootstrapt neu.
 
-> **Umsetzung:** Der Stream läuft unter `GET /sync?since=<lastSyncId>` (WebSocket; nach `{"type":"resetRequired"}` Close-Code 4001, bei nicht mehr gültigem Token Close-Code 4401). `/sync/bootstrap` ist **nicht** implementiert: der Client lädt den Stand über GraphQL und setzt danach `since` auf den `lastSyncId` des Servers. Aufbewahrung 14 Tage (Job `sync_purge`).
+> **Umsetzung:** Der Stream läuft unter `GET /sync?since=<lastSyncId>` (WebSocket; nach `{"type":"resetRequired"}` Close-Code 4001, bei nicht mehr gültigem Token Close-Code 4401). Aufbewahrung 14 Tage (Job `sync_purge`). Der Bootstrap läuft unter `GET /sync/bootstrap` (siehe 5.2).
 4. Pro Workspace ein geordneter Strom (Fan-out-Knoten abonnieren z. B. einen Pub/Sub-Kanal `sync:<orgId>`); Lücken in `id` (durch Gruppenfilter) sind normal, Clients prüfen nur Monotonie.
 
 ### 5.4 Optimistische Mutationen
@@ -893,10 +895,12 @@ on SyncAction a:
 
 | Modell | `syncGroups` |
 |---|---|
-| Issue, Comment, Attachment, Reaction, IssueRelation, IssueHistory | `team:<Issue.teamId>`; zusätzlich `user:<id>` für Nutzer mit `issueShare` |
+| Issue, Comment, Attachment, Reaction, IssueRelation, IssueHistory | `team:<Issue.teamId>`; zusätzlich `user:<id>` für Nutzer mit `issueShare` (Issue, Kommentare, Anhänge und Reaktionen; Entzug → `D` an `user:<id>`) |
 | WorkflowState, Cycle, team-Label, Template (team) | `team:<teamId>` |
 | Project, ProjectMilestone, ProjectUpdate | `team:<t>` für jedes beteiligte Team; ohne Team `org:` |
 | Initiative, InitiativeUpdate, Workspace-Label, User, Team (Metadaten öffentlicher Teams) | `org:<orgId>` |
+
+> **Umsetzung:** Die Gruppe `org` erhalten Nicht-Gäste. Gäste sehen Workspace-Metadaten und Workspace-Labels über `orgpub` (trägt Organisation und Workspace-Labels, alle User) und Personen über `tmem:<teamId>` (`User`-Aktionen tragen `tmem:<t>` je Mitgliedschaft der Person; Gäste erhalten sie für ihre Mitglieds-Teams). Damit bleiben Verzeichnis und Labels live, ohne dass ein Gast Personen oder Daten fremder Teams erfährt. Zugestellt wird nur der Schnitt der Gruppen; `syncGroups` einer Aktion enthält nur die Gruppen des Empfängers.
 | Team (privat) | `team:<teamId>` |
 | Notification, Favorite, private CustomView, NotificationSubscription | `user:<userId>` |
 | Document | Gruppen des Elternobjekts |

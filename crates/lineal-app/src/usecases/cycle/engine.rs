@@ -168,6 +168,7 @@ pub(crate) async fn emit_issue_cycle(
         tx,
         env,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: team,
             changed: vec!["cycleId".into()],

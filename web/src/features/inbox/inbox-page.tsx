@@ -16,6 +16,7 @@ import { IssueDetailPage } from "@/features/issues/issue-detail";
 import { relativeTime } from "@/features/issues/model";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 
+import { bundleSummary, targetKind, typeLabel } from "./notification-types";
 import { snoozePresets, useInboxAction, useNotifications } from "./queries";
 
 function SnoozeMenu({ onPick, children }: { onPick: (until: Date) => void; children: ReactNode }) {
@@ -43,6 +44,7 @@ function Row({
   onSelect: () => void;
 }) {
   const unread = !n.readAt;
+  const bundle = bundleSummary(n);
   return (
     <button
       type="button"
@@ -64,6 +66,21 @@ function Row({
           <span className="text-xs text-muted-foreground">{n.issueIdentifier}</span>
         )}
         <span className={cn("truncate", unread && "font-semibold")}>{n.title}</span>
+        <span
+          data-testid="type-badge"
+          className="shrink-0 rounded bg-surface-hover px-1 text-[10px] tracking-wide text-muted-foreground uppercase"
+        >
+          {typeLabel(n.type)}
+        </span>
+        {bundle.count > 1 && (
+          <span
+            data-testid="bundle-badge"
+            title={bundle.labels.join(", ")}
+            className="shrink-0 rounded-full bg-primary/15 px-1.5 text-[10px] font-medium text-primary"
+          >
+            {bundle.count}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-subtle-foreground">
           {relativeTime(n.createdAt)}
         </span>
@@ -231,6 +248,14 @@ export function InboxPage({ ws }: { ws: string }) {
             <div className="flex h-full flex-col">
               <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3">
                 <span className="truncate text-sm text-muted-foreground">{selected.title}</span>
+                {bundleSummary(selected).count > 1 && (
+                  <span
+                    data-testid="bundle-detail"
+                    className="truncate text-xs text-subtle-foreground"
+                  >
+                    {bundleSummary(selected).labels.join(" · ")}
+                  </span>
+                )}
                 <div className="ml-auto flex items-center gap-1">
                   <SnoozeMenu
                     onPick={(d) =>
@@ -256,7 +281,20 @@ export function InboxPage({ ws }: { ws: string }) {
                   <IssueDetailPage key={selected.id} ws={ws} splat={selected.issueIdentifier} />
                 ) : (
                   <div className="p-6 text-sm">
+                    <p className="mb-1 text-xs tracking-wide text-muted-foreground uppercase">
+                      {targetKind(selected)}
+                    </p>
                     <p className="mb-3">{selected.subtitle}</p>
+                    {bundleSummary(selected).count > 1 && (
+                      <ul
+                        aria-label="Changes"
+                        className="mb-3 list-disc pl-5 text-muted-foreground"
+                      >
+                        {bundleSummary(selected).labels.map((l) => (
+                          <li key={l}>{l}</li>
+                        ))}
+                      </ul>
+                    )}
                     <Link to={selected.url as "/"} className="text-primary hover:underline">
                       Open
                     </Link>

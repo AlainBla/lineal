@@ -84,6 +84,12 @@ export interface SyncClientOptions {
   deadAfterMs?: number;
   random?: () => number;
   onStatus?: (status: SyncStatus) => void;
+  /**
+   * Erstbefüllung beim ersten Start (ohne gespeicherte `lastSyncId`): lädt den Bestand über
+   * `/sync/bootstrap`, befüllt die Caches und liefert die `lastSyncId`, ab der der Strom läuft.
+   * Schlägt sie fehl oder liefert `null`, gilt der bisherige Ablauf (alles neu laden).
+   */
+  bootstrap?: () => Promise<number | null>;
 }
 
 const MAX_ACTIONS_PER_MESSAGE = 5000;
@@ -107,7 +113,27 @@ export class SyncClient {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    this.connect();
+    if (this.o.bootstrap && this.o.storage.get() === null) {
+      void this.bootstrapThenConnect(this.o.bootstrap);
+    } else {
+      this.connect();
+    }
+  }
+
+  private async bootstrapThenConnect(bootstrap: () => Promise<number | null>): Promise<void> {
+    try {
+      const id = await bootstrap();
+      if (this.stopped) return;
+      if (id !== null && Number.isSafeInteger(id) && id >= 0) {
+        this.o.storage.set(id);
+        // Anfragen, die vor dem Stand `id` gelesen haben, können Änderungen verpasst haben: alles
+        // außer dem frisch befüllten Verzeichnis neu laden (der Strom spielt ab `id` nach).
+        void this.o.qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "users" });
+      }
+    } catch {
+      /* Rückfall: ohne gespeicherte ID verbindet connect() live und lädt alles neu */
+    }
+    if (!this.stopped) this.connect();
   }
 
   stop(): void {

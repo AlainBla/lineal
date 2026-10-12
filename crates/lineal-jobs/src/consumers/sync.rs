@@ -3,7 +3,8 @@
 //!
 //! Aktionen: `I` insert, `U` update, `A` archive, `V` unarchive, `D` delete. `data` ist der
 //! Objektzustand zum Verarbeitungszeitpunkt (Issue exakt in der GraphQL-Form), `groups` sind die
-//! Berechtigungsschlüssel `team:<id>`, `org`, `user:<id>`; der Sync-Adapter filtert beim Zustellen
+//! Berechtigungsschlüssel `team:<id>`, `org`, `orgpub`, `tmem:<id>`, `user:<id>` (siehe
+//! `lineal-sync`: Freigaben, Gäste); der Sync-Adapter filtert beim Zustellen
 //! gegen die dann sichtbaren Teams. Events mit `origin = import` werden normal synchronisiert.
 //!
 //! Die Verarbeitung ist idempotent (`UNIQUE (event_id, n)`), je Event eine Transaktion.
@@ -247,20 +248,40 @@ fn plan(ev: &StoredEvent) -> Vec<Plan> {
         E::OrganizationUpdated {} => model("Organization", ev.org_id.0, Updated),
         // Mitgliedschaft: Mitglieder des Teams und der betroffene User selbst. Der User erhält die
         // Aktion auch nach dem Entfernen (persönliche Gruppe), das Team danach nicht mehr.
-        E::TeamMembershipCreated { team_id, user_id } => vec![Plan::Direct {
-            model: "TeamMembership",
-            id: user_id.0,
-            action: "I",
-            data: json!({ "teamId": team_id.0, "userId": user_id.0 }),
-            groups: vec![team_group(team_id.0), user_group(user_id.0)],
-        }],
-        E::TeamMembershipRemoved { team_id, user_id } => vec![Plan::Direct {
-            model: "TeamMembership",
-            id: user_id.0,
-            action: "D",
-            data: json!({ "teamId": team_id.0, "userId": user_id.0 }),
-            groups: vec![team_group(team_id.0), user_group(user_id.0)],
-        }],
+        // Zusätzlich die Person selbst: ihre Gruppen enthalten `tmem:<team>` je Mitgliedschaft, damit
+        // Gäste des Teams sie (nicht mehr) im Verzeichnis haben (Entzug → `D` an `tmem:<team>`).
+        E::TeamMembershipCreated { team_id, user_id } => vec![
+            Plan::Direct {
+                model: "TeamMembership",
+                id: user_id.0,
+                action: "I",
+                data: json!({ "teamId": team_id.0, "userId": user_id.0 }),
+                groups: vec![team_group(team_id.0), user_group(user_id.0)],
+            },
+            Plan::Model {
+                model: "User",
+                id: user_id.0,
+                op: Updated,
+                known_groups: vec![],
+                changed: vec![],
+            },
+        ],
+        E::TeamMembershipRemoved { team_id, user_id } => vec![
+            Plan::Direct {
+                model: "TeamMembership",
+                id: user_id.0,
+                action: "D",
+                data: json!({ "teamId": team_id.0, "userId": user_id.0 }),
+                groups: vec![team_group(team_id.0), user_group(user_id.0)],
+            },
+            Plan::Model {
+                model: "User",
+                id: user_id.0,
+                op: Updated,
+                known_groups: vec![],
+                changed: vec![],
+            },
+        ],
         E::IssueSubscriptionCreated { issue_id, user_id } => vec![Plan::Direct {
             model: "IssueSubscription",
             id: issue_id.0,
@@ -349,6 +370,8 @@ async fn notification_data(
                 "issueId": n.issue_id.map(|a| a.0), "issueIdentifier": item.view.issue_identifier,
                 "projectId": n.project_id.map(|a| a.0), "initiativeId": n.initiative_id,
                 "documentId": n.document_id, "commentId": n.comment_id,
+                "projectMilestoneId": n.project_milestone_id, "projectUpdateId": n.project_update_id,
+                "initiativeUpdateId": n.initiative_update_id, "bundledTypes": n.bundled_types,
                 "isPriority": n.is_priority,
                 "readAt": n.read_at.map(ts), "snoozedUntilAt": n.snoozed_until_at.map(ts),
                 "unsnoozedAt": n.unsnoozed_at.map(ts), "archivedAt": n.archived_at.map(ts),

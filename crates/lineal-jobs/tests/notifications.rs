@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use lineal_app::ports::repos::notification::SubscriptionReason;
 use lineal_app::ports::repos::{NewEvent, StoredEvent};
-use lineal_app::ports::{Mail, Mailer, Store};
+use lineal_app::ports::{Clock, Mail, Mailer, Store};
 use lineal_app::usecases::notification::{
     ListNotificationsInput, MarkNotificationInput, NotificationSettingsPatch,
     SetObjectSubscriptionInput,
@@ -23,6 +23,7 @@ use lineal_jobs::{EventConsumer, PeriodicJob};
 use lineal_testkit::seed::identity::seed_workflow_state_ids;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -37,11 +38,26 @@ impl Mailer for RecordingMailer {
     }
 }
 
+/// Uhr, die nur über `Env::advance` vorrückt (Basis wie `FixedClock::default()`).
+struct ManualClock {
+    base: DateTime<Utc>,
+    offset: Arc<AtomicI64>,
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.base + Duration::seconds(self.offset.load(Ordering::SeqCst))
+    }
+}
+
 struct Env {
     app: Arc<App>,
     pool: PgPool,
     d: SeedData,
     mails: Arc<RecordingMailer>,
+    /// Sekunden, die `handle` nach jedem Event vorrückt (nur bei der Standard-Uhr): Ereignisse
+    /// liegen dann außerhalb des Bündelungsfensters von einer Minute (docs/05 §6.6).
+    tick: Option<Arc<AtomicI64>>,
 }
 
 fn t(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
@@ -56,14 +72,26 @@ async fn env_at(pool: PgPool, clock: Option<DateTime<Utc>>) -> Env {
     let mails = Arc::new(RecordingMailer::default());
     let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
     app.mailer = mails.clone();
-    if let Some(c) = clock {
-        app.clock = Arc::new(lineal_testkit::fake::FixedClock(c));
-    }
+    let tick = match clock {
+        Some(c) => {
+            app.clock = Arc::new(lineal_testkit::fake::FixedClock(c));
+            None
+        }
+        None => {
+            let offset = Arc::new(AtomicI64::new(0));
+            app.clock = Arc::new(ManualClock {
+                base: lineal_testkit::fake::FixedClock::default().0,
+                offset: offset.clone(),
+            });
+            Some(offset)
+        }
+    };
     Env {
         app: Arc::new(app),
         pool,
         d: SeedData::acme(),
         mails,
+        tick,
     }
 }
 
@@ -90,6 +118,14 @@ impl Env {
 
     async fn handle(&self, e: &StoredEvent) {
         NotificationsConsumer.handle(&self.app, e).await.unwrap();
+        self.advance(120);
+    }
+
+    /// Rückt die Standard-Uhr vor (No-op bei fester Uhr).
+    fn advance(&self, secs: i64) {
+        if let Some(t) = &self.tick {
+            t.fetch_add(secs, Ordering::SeqCst);
+        }
     }
 
     /// Issue per SQL; `slot` 1 = ENG, 2 = WEB, 3 = DES; Status-Index 1 = Todo, 3 = Done.
@@ -263,6 +299,7 @@ async fn assignee_change_notifies_new_assignee_and_subscribes_them(pool: PgPool)
     e.handle(&e.user_ev(
         e.d.alice,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.eng,
             changed: vec!["assigneeId".into()],
@@ -287,6 +324,7 @@ async fn assignee_change_notifies_new_assignee_and_subscribes_them(pool: PgPool)
     e.handle(&e.user_ev(
         e.d.bob,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: own,
             team_id: e.d.eng,
             changed: vec!["assigneeId".into()],
@@ -344,6 +382,7 @@ async fn private_team_issue_notifies_only_members(pool: PgPool) {
     e.handle(&e.user_ev(
         bob,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.des,
             changed: vec!["assigneeId".into()],
@@ -1041,6 +1080,7 @@ async fn comment_does_not_revive_unsubscription_but_assignment_does(pool: PgPool
     e.handle(&e.user_ev(
         alice,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.eng,
             changed: vec!["assigneeId".into()],
@@ -1128,6 +1168,7 @@ async fn status_change_to_closed_notifies_subscribers_and_team_subscribers(pool:
         EventOrigin::User,
         Some(carol_actor),
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.eng,
             changed: vec!["stateId".into()],
@@ -1144,6 +1185,7 @@ async fn status_change_to_closed_notifies_subscribers_and_team_subscribers(pool:
     e.handle(&e.user_ev(
         alice,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: open,
             team_id: e.d.eng,
             changed: vec!["stateId".into()],
@@ -1440,8 +1482,11 @@ async fn email_digest_respects_delay_category_and_read_state(pool: PgPool) {
     ))
     .await;
     let c2 = e.comment(issue, alice, None).await;
-    e.handle(&e.user_ev(
-        alice,
+    // Ohne menschlichen Akteur (Integration): wird nicht mit der Erwähnung gebündelt (docs/05 §6.6).
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::System,
+        None,
         DomainEvent::CommentCreated {
             comment_id: c2,
             mentioned_user_ids: vec![],
@@ -1772,6 +1817,7 @@ async fn mention_in_issue_description_and_priority_urgent(pool: PgPool) {
     e.handle(&e.user_ev(
         alice,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: other,
             team_id: e.d.eng,
             changed: vec!["priority".into()],

@@ -158,6 +158,7 @@ async fn team_move_tells_the_old_team_that_the_issue_is_gone(pool: PgPool) {
         e.d.org,
         EventOrigin::User,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.web,
             changed: vec!["teamId".into()],
@@ -203,6 +204,7 @@ async fn removal_archive_and_restore(pool: PgPool) {
         e.d.org,
         EventOrigin::User,
         DomainEvent::IssueUpdated {
+            previous: None,
             issue_id: issue,
             team_id: e.d.eng,
             changed: vec!["trashed".into(), "archivedAt".into()],
@@ -367,7 +369,8 @@ async fn membership_actions_reach_team_and_affected_user(pool: PgPool) {
     ))
     .await;
     let log = e.log().await;
-    assert_eq!(log.len(), 1);
+    // Mitgliedschaft + die Person selbst (ihre Gruppen enthalten `tmem:<team>` je Mitgliedschaft).
+    assert_eq!(log.len(), 2);
     assert_eq!(log[0].model_name, "TeamMembership");
     assert_eq!(log[0].action, "D");
     let mut groups = log[0].groups.clone();
@@ -375,6 +378,10 @@ async fn membership_actions_reach_team_and_affected_user(pool: PgPool) {
     let mut want = vec![team(e.d.des), format!("user:{}", e.d.bob.0)];
     want.sort();
     assert_eq!(groups, want);
+    assert_eq!(
+        (log[1].model_name.as_str(), log[1].action.as_str()),
+        ("User", "U")
+    );
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
@@ -414,13 +421,44 @@ async fn every_model_loader_is_valid_sql(pool: PgPool) {
             seed_workflow_state_ids(3)[0].0,
             team(e.d.des),
         ),
-        ("User", e.d.bob.0, "org".to_owned()),
         ("Organization", e.d.org.0, "org".to_owned()),
     ] {
         let s = tx.outbox().sync_model(name, id).await.unwrap().unwrap();
-        assert_eq!(s.groups, vec![group], "{name}");
+        assert!(s.groups.contains(&group), "{name}: {:?}", s.groups);
         assert_eq!(s.data["id"], id.to_string());
     }
+    // Workspace-Metadaten sind auch für Gäste lesbar (`orgpub`); Personen tragen `org`, sich selbst
+    // und ein `tmem:<team>` je Mitgliedschaft (Gäste sehen nur Personen ihrer Teams).
+    let org = tx
+        .outbox()
+        .sync_model("Organization", e.d.org.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(org.groups.contains(&"orgpub".to_owned()));
+    let bob = tx
+        .outbox()
+        .sync_model("User", e.d.bob.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bob.groups.contains(&"org".to_owned()));
+    assert!(bob.groups.contains(&format!("user:{}", e.d.bob.0)));
+    for t in [e.d.eng, e.d.web, e.d.des] {
+        assert!(
+            bob.groups.contains(&format!("tmem:{}", t.0)),
+            "{:?}",
+            bob.groups
+        );
+    }
+    let carol = tx
+        .outbox()
+        .sync_model("User", e.d.carol.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!carol.groups.contains(&format!("tmem:{}", e.d.eng.0)));
+    assert!(carol.groups.contains(&format!("tmem:{}", e.d.web.0)));
     // `User` verrät keine E-Mail.
     let u = tx
         .outbox()
@@ -515,4 +553,295 @@ async fn worker_feeds_sync_log_and_notification_use_cases_emit_events(pool: PgPo
             .head,
         log[1].id
     );
+}
+
+// --- WP32: Freigaben und Gäste ----------------------------------------------------------------
+
+fn group(g: &str, id: Uuid) -> String {
+    format!("{g}:{id}")
+}
+
+fn updated(issue: IssueId, team: TeamId, changed: &[&str]) -> DomainEvent {
+    DomainEvent::IssueUpdated {
+        previous: None,
+        issue_id: issue,
+        team_id: team,
+        changed: changed.iter().map(|c| (*c).to_owned()).collect(),
+        mentioned_user_ids: vec![],
+    }
+}
+
+async fn share(e: &Env, issue: IssueId, user: UserId) {
+    sqlx::query(
+        "INSERT INTO issue_share (organization_id, issue_id, user_id, shared_by_id) VALUES ($1,$2,$3,$4)",
+    )
+    .bind(e.d.org.0)
+    .bind(issue.0)
+    .bind(user.0)
+    .bind(e.d.bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn shared_issue_carries_the_recipients_user_group_and_unshare_removes_it(pool: PgPool) {
+    let e = env(pool).await;
+    let issue = e.issue(e.d.eng, 1, 150, e.d.bob).await;
+    let carol = group("user", e.d.carol.0);
+
+    // Freigabe an Carol: das Issue (und nur dieses) trägt `user:<carol>` zusätzlich zum Team.
+    share(&e, issue, e.d.carol).await;
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::User,
+        updated(issue, e.d.eng, &["sharedWith"]),
+    ))
+    .await;
+    let log = e.log().await;
+    assert_eq!(log.len(), 1);
+    assert_eq!(
+        (log[0].action.as_str(), log[0].model_name.as_str()),
+        ("U", "Issue")
+    );
+    let mut groups = log[0].groups.clone();
+    groups.sort();
+    let mut want = vec![team(e.d.eng), carol.clone()];
+    want.sort();
+    assert_eq!(groups, want);
+    assert!(
+        !log[0].groups.contains(&team(e.d.web)),
+        "keine weiteren Teams"
+    );
+
+    // Weitere Änderungen am Issue erreichen Carol weiter.
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::User,
+        updated(issue, e.d.eng, &["title"]),
+    ))
+    .await;
+    let log = e.log().await;
+    assert!(log.last().unwrap().groups.contains(&carol));
+
+    // Entzug: Carol erhält ein `D` (nur an ihre Gruppe), das Team ein normales `U` ohne `user:`.
+    sqlx::query("DELETE FROM issue_share WHERE issue_id = $1 AND user_id = $2")
+        .bind(issue.0)
+        .bind(e.d.carol.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::User,
+        updated(issue, e.d.eng, &["sharedWith"]),
+    ))
+    .await;
+    let log = e.log().await;
+    let n = log.len();
+    let (d, u) = (&log[n - 2], &log[n - 1]);
+    assert_eq!(d.action, "D");
+    assert_eq!(d.groups, vec![carol.clone()]);
+    assert_eq!(u.action, "U");
+    assert_eq!(u.groups, vec![team(e.d.eng)]);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn comments_on_shared_issues_follow_the_share_and_unshared_ones_stay_in_the_team(
+    pool: PgPool,
+) {
+    let e = env(pool).await;
+    let shared = e.issue(e.d.eng, 1, 151, e.d.bob).await;
+    let private = e.issue(e.d.eng, 1, 152, e.d.bob).await;
+    share(&e, shared, e.d.carol).await;
+    let mut comments = vec![];
+    for issue in [shared, private] {
+        let id = CommentId::new_v7();
+        sqlx::query(
+            "INSERT INTO comment (id, organization_id, body, user_id, issue_id) VALUES ($1,$2,'Hallo',$3,$4)",
+        )
+        .bind(id.0)
+        .bind(e.d.org.0)
+        .bind(e.d.bob.0)
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+        comments.push(id);
+    }
+    for c in &comments {
+        e.handle(&ev(
+            e.d.org,
+            EventOrigin::User,
+            DomainEvent::CommentCreated {
+                comment_id: *c,
+                mentioned_user_ids: vec![],
+            },
+        ))
+        .await;
+    }
+    let log = e.log().await;
+    let carol = group("user", e.d.carol.0);
+    assert!(
+        log[0].groups.contains(&carol),
+        "Kommentar am geteilten Issue"
+    );
+    assert!(
+        !log[1].groups.contains(&carol),
+        "Kommentar am nicht geteilten Issue bleibt im Team"
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn guest_groups_expose_only_workspace_labels_and_people_of_own_teams(pool: PgPool) {
+    let e = env(pool).await;
+    let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+    // Workspace-Label: `org` und `orgpub`; Team-Label: nur das Team.
+    let ws_label = Uuid::now_v7();
+    let team_label = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue_label (id, organization_id, name, color) VALUES ($1,$2,'WP32 Workspace','#ff0000')",
+    )
+    .bind(ws_label)
+    .bind(e.d.org.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_label (id, organization_id, team_id, name, color) VALUES ($1,$2,$3,'Intern','#00ff00')")
+        .bind(team_label)
+        .bind(e.d.org.0)
+        .bind(e.d.eng.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let ws = tx
+        .outbox()
+        .sync_model("IssueLabel", ws_label)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ws.groups.contains(&"orgpub".to_owned()) && ws.groups.contains(&"org".to_owned()));
+    let tl = tx
+        .outbox()
+        .sync_model("IssueLabel", team_label)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tl.groups,
+        vec![team(e.d.eng)],
+        "Team-Labels sind keine Workspace-Daten"
+    );
+    // Personen tragen `team:`-Gruppen nie, sondern `tmem:` (nur für Gäste des Teams lesbar).
+    let alice = tx
+        .outbox()
+        .sync_model("User", e.d.alice.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        alice.groups.iter().all(|g| !g.starts_with("team:")),
+        "{:?}",
+        alice.groups
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn membership_creation_refreshes_the_person_for_team_guests(pool: PgPool) {
+    let e = env(pool).await;
+    sqlx::query("INSERT INTO team_membership (organization_id, team_id, user_id, owner) VALUES ($1,$2,$3,false) ON CONFLICT DO NOTHING")
+        .bind(e.d.org.0)
+        .bind(e.d.web.0)
+        .bind(e.d.alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::User,
+        DomainEvent::TeamMembershipCreated {
+            team_id: e.d.web,
+            user_id: e.d.alice,
+        },
+    ))
+    .await;
+    let log = e.log().await;
+    assert_eq!(log.len(), 2);
+    assert_eq!(log[0].model_name, "TeamMembership");
+    let user = &log[1];
+    assert_eq!(
+        (user.model_name.as_str(), user.action.as_str()),
+        ("User", "U")
+    );
+    assert!(user.groups.contains(&format!("tmem:{}", e.d.web.0)));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_pages_cover_models_and_resume_after_the_cursor(pool: PgPool) {
+    let e = env(pool).await;
+    let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+    // Seite für Seite, bis nichts mehr kommt: jede Teamzeile genau einmal.
+    let mut after = None;
+    let mut seen = Vec::new();
+    loop {
+        let page = tx
+            .outbox()
+            .sync_bootstrap_page("Team", after, 2)
+            .await
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().map(|r| r.id);
+        seen.extend(page.into_iter().map(|r| r.id));
+    }
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM team WHERE NOT trashed")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(seen.len() as i64, total);
+    let mut sorted = seen.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, seen, "aufsteigend und ohne Dubletten");
+    // Der Workspace selbst ist eine Zeile; unbekannte Modelle liefern nichts.
+    assert_eq!(
+        tx.outbox()
+            .sync_bootstrap_page("Organization", None, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        tx.outbox()
+            .sync_bootstrap_page("Organization", Some(Uuid::nil()), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        tx.outbox()
+            .sync_bootstrap_page("Nonsense", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Issues: Papierkorb bleibt draußen.
+    let live = e.issue(e.d.eng, 1, 160, e.d.bob).await;
+    let trashed = e.issue(e.d.eng, 1, 161, e.d.bob).await;
+    sqlx::query("UPDATE issue SET trashed = true, trashed_at = now() WHERE id = $1")
+        .bind(trashed.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let ids: Vec<Uuid> = tx
+        .outbox()
+        .sync_bootstrap_page("Issue", None, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(ids.contains(&live.0) && !ids.contains(&trashed.0));
 }

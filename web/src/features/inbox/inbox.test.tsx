@@ -25,6 +25,10 @@ function note(id: string, over: Partial<Notification> = {}): Notification {
     initiativeId: null,
     documentId: null,
     commentId: null,
+    projectMilestoneId: null,
+    projectUpdateId: null,
+    initiativeUpdateId: null,
+    bundledTypes: [],
     isPriority: false,
     readAt: null,
     snoozedUntilAt: null,
@@ -90,6 +94,38 @@ describe("InboxPage", () => {
     expect(gql.of("InboxArchive")[0]!.variables).toEqual({ id: "n1" });
     await waitFor(() => expect(screen.queryByText("Note n1")).not.toBeInTheDocument());
     expect(spy).toHaveBeenCalledWith({ queryKey: ["sidebar-data"] });
+  });
+
+  it("shows type badges for new types and a bundle counter with the merged changes", async () => {
+    mockGraphql({
+      InboxNotifications: () => ({
+        notifications: {
+          nodes: [
+            note("n1", { type: "issueUnassignedFromYou", title: "Login kaputt" }),
+            note("n2", {
+              type: "issueAssignedToYou",
+              title: "Checkout hängt",
+              bundledTypes: ["issueAssignedToYou", "issueNewComment", "issueStatusChanged"],
+            }),
+            note("n3", { type: "documentNewComment", title: "Spezifikation", documentId: "d1" }),
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      }),
+    });
+    await renderWithApp(<InboxPage ws="acme" />, newClient(), "/acme/inbox");
+    await screen.findByText("Login kaputt");
+    const badges = screen.getAllByTestId("type-badge").map((b) => b.textContent);
+    expect(badges).toEqual(["Unassigned", "Assigned to you", "Document comment"]);
+    // Nur die gebündelte Notification trägt den Zähler; Tooltip nennt alle Änderungen.
+    const counter = screen.getAllByTestId("bundle-badge");
+    expect(counter).toHaveLength(1);
+    expect(counter[0]).toHaveTextContent("3");
+    expect(counter[0]).toHaveAttribute("title", "Assigned to you, Comment, Status changed");
+    // Im Detail (nicht-Issue-Eintrag) erscheint die Art des Bezugsobjekts.
+    const user = userEvent.setup();
+    await user.click(screen.getByText("Spezifikation"));
+    expect(await screen.findByText("document")).toBeInTheDocument();
   });
 
   it("mark all as read sends the batch mutation", async () => {

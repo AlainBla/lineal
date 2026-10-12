@@ -44,6 +44,9 @@ pub struct Notification {
     pub is_priority: bool,
     /// `issue:<id>`, `project:<id>`, `initiative:<id>`, `document:<id>` oder `notification:<id>`.
     pub group_key: String,
+    /// Typen aller zusammengefassten Ereignisse (docs/05 §6.6, 1-Minuten-Bündelung); leer, wenn
+    /// die Notification nicht gebündelt wurde. `kind` ist der spezifischste davon.
+    pub bundled_types: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
@@ -177,13 +180,18 @@ pub struct IssueFacts {
     pub due_date: Option<NaiveDate>,
 }
 
-/// Fakten eines Kommentars (Elternobjekt, Thread).
+/// Fakten eines Kommentars (Elternobjekt, Thread). Genau eines der Elternfelder ist gesetzt.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommentFacts {
     pub id: CommentId,
     pub author_id: Option<UserId>,
     pub issue_id: Option<IssueId>,
     pub project_id: Option<ProjectId>,
+    pub project_milestone_id: Option<Uuid>,
+    pub project_update_id: Option<Uuid>,
+    pub initiative_id: Option<Uuid>,
+    pub initiative_update_id: Option<Uuid>,
+    pub document_id: Option<Uuid>,
     /// Elternkommentar (Thread-Wurzel), `None` bei Top-Level-Kommentaren.
     pub parent_id: Option<CommentId>,
 }
@@ -211,6 +219,54 @@ pub struct ProjectUpdateFacts {
     pub id: Uuid,
     pub project_id: ProjectId,
     pub author_id: UserId,
+}
+
+/// Fakten eines Meilensteins.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneFacts {
+    pub id: Uuid,
+    pub project_id: ProjectId,
+}
+
+/// Fakten eines Initiative-Statusberichts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InitiativeUpdateFacts {
+    pub id: Uuid,
+    pub initiative_id: Uuid,
+    pub author_id: UserId,
+}
+
+/// Fakten eines Dokuments: wer es sehen darf und wer es abonniert hat (docs/06, docs/05 §6.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentFacts {
+    pub id: Uuid,
+    pub creator_id: Option<UserId>,
+    pub trashed: bool,
+    /// Teams des Elternobjekts (Issue-Team, Projekt-Teams, Team); leer bei Initiative/Workspace.
+    pub teams: Vec<TeamId>,
+    /// Elternobjekt ohne Team (Initiative oder Workspace): nur Nicht-Gäste.
+    pub workspace_only: bool,
+}
+
+/// Bündelungs-Kandidat: jüngste Notification desselben Akteurs in derselben Gruppe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundleTarget {
+    pub id: NotificationId,
+    pub kind: String,
+    pub bundled_types: Vec<String>,
+}
+
+/// Zusammenführung eines Ereignisses in eine bestehende Notification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundleMerge {
+    pub target: NotificationId,
+    /// Neuer Haupttyp samt Kategorie (der spezifischere von beiden).
+    pub kind: String,
+    pub category: String,
+    /// `true`: die Bezugs-Felder (Kommentar, Reaktion) des neuen Ereignisses ersetzen die alten.
+    pub take_refs: bool,
+    pub bundled_types: Vec<String>,
+    pub is_priority: bool,
 }
 
 /// User-Daten für den Fan-out (Sichtbarkeit, Priorität).
@@ -330,6 +386,33 @@ pub trait NotificationRepo: Send {
     /// Schreibt die Benachrichtigung (idempotent über `dedup_key`) und beendet ein laufendes
     /// Snooze der Gruppe (docs/05 §6.4 Regel 3). `false`, wenn sie schon existierte.
     async fn insert_notification(&mut self, _n: &NewNotification) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Ob zu `dedup_key` bereits eine Notification existiert oder das Ereignis in eine andere
+    /// eingegangen ist (Idempotenz der Bündelung).
+    async fn dedup_seen(&mut self, _user: UserId, _dedup_key: &str) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Jüngste nicht archivierte Notification von `actor` für `user` in der Gruppe, erzeugt nach `since`.
+    async fn find_bundle_target(
+        &mut self,
+        _user: UserId,
+        _group_key: &str,
+        _actor: UserId,
+        _since: DateTime<Utc>,
+    ) -> AppResult<Option<BundleTarget>> {
+        unimplemented_repo()
+    }
+
+    /// Führt das Ereignis `n` in die Ziel-Notification zusammen: Typ/Refs/`bundled_types` setzen,
+    /// wieder ungelesen, laufendes Snooze der Gruppe beenden, `dedup_key` vermerken.
+    async fn merge_notification(
+        &mut self,
+        _n: &NewNotification,
+        _m: &BundleMerge,
+    ) -> AppResult<()> {
         unimplemented_repo()
     }
 
@@ -499,6 +582,26 @@ pub trait NotificationRepo: Send {
     async fn project_update_facts(&mut self, _id: Uuid) -> AppResult<Option<ProjectUpdateFacts>> {
         unimplemented_repo()
     }
+    async fn milestone_facts(&mut self, _id: Uuid) -> AppResult<Option<MilestoneFacts>> {
+        unimplemented_repo()
+    }
+    async fn initiative_update_facts(
+        &mut self,
+        _id: Uuid,
+    ) -> AppResult<Option<InitiativeUpdateFacts>> {
+        unimplemented_repo()
+    }
+    async fn document_facts(&mut self, _id: Uuid) -> AppResult<Option<DocumentFacts>> {
+        unimplemented_repo()
+    }
+    /// Issues, die `issue` blockiert (`blocks`-Relation ausgehend).
+    async fn blocked_issues(&mut self, _issue: IssueId) -> AppResult<Vec<IssueId>> {
+        unimplemented_repo()
+    }
+    /// Anzahl noch offener Issues, die `issue` blockieren (`blocks`-Relation eingehend).
+    async fn open_blockers(&mut self, _issue: IssueId) -> AppResult<i64> {
+        unimplemented_repo()
+    }
     /// Teams eines Projekts (`project_team`).
     async fn project_team_ids(&mut self, _project: ProjectId) -> AppResult<Vec<TeamId>> {
         unimplemented_repo()
@@ -555,6 +658,40 @@ pub trait NotificationRepo: Send {
     }
     /// Autoren der Wurzel und aller Antworten des Threads.
     async fn thread_participants(&mut self, _thread: CommentId) -> AppResult<Vec<UserId>> {
+        unimplemented_repo()
+    }
+
+    // --- Dokument-Abos (`document_subscription`) ---
+
+    /// Legt das Abo an bzw. reaktiviert es je nach `reason` (wie bei Issues); `reason` darf nicht
+    /// `Assignee` sein.
+    async fn subscribe_document(
+        &mut self,
+        _document: Uuid,
+        _user: UserId,
+        _reason: SubscriptionReason,
+        _now: DateTime<Utc>,
+    ) -> AppResult<SubscribeOutcome> {
+        unimplemented_repo()
+    }
+
+    /// Setzt das Abo auf `active = false`; `true`, wenn es aktiv war.
+    async fn unsubscribe_document(
+        &mut self,
+        _document: Uuid,
+        _user: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Aktive Abonnenten des Dokuments.
+    async fn document_subscribers(&mut self, _document: Uuid) -> AppResult<Vec<UserId>> {
+        unimplemented_repo()
+    }
+
+    /// Ob `user` das Dokument aktiv abonniert hat.
+    async fn is_document_subscriber(&mut self, _document: Uuid, _user: UserId) -> AppResult<bool> {
         unimplemented_repo()
     }
 

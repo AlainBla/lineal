@@ -173,8 +173,31 @@ pub fn render(v: &NotificationView, base: &str) -> Rendered {
         "issueCreated" => format!("{who} created {ident}"),
         "issueAddedToTriage" => format!("{ident} was added to triage"),
         "projectUpdateCreated" => format!("{who} posted a project update"),
-        "projectNewComment" | "projectCommentMention" => format!("{who} commented on a project"),
+        "projectNewComment" => format!("{who} commented on a project"),
+        "projectCommentMention" => format!("{who} mentioned you in a project comment"),
+        "projectMilestoneNewComment" => format!("{who} commented on a project milestone"),
+        "projectMilestoneCommentMention" => {
+            format!("{who} mentioned you in a project milestone comment")
+        }
+        "projectUpdateNewComment" => format!("{who} commented on a project update"),
+        "projectUpdateCommentMention" => {
+            format!("{who} mentioned you in a comment on a project update")
+        }
+        "initiativeNewComment" => format!("{who} commented on an initiative"),
+        "initiativeCommentMention" => format!("{who} mentioned you in an initiative comment"),
+        "initiativeUpdateNewComment" => format!("{who} commented on an initiative update"),
+        "initiativeUpdateCommentMention" => {
+            format!("{who} mentioned you in a comment on an initiative update")
+        }
+        "initiativeUpdateCreated" => format!("{who} posted an initiative update"),
+        "documentNewComment" => format!("{who} commented on a document"),
+        "documentCommentMention" => format!("{who} mentioned you in a document comment"),
         other => format!("{who}: {other}"),
+    };
+    // Gebündelte Ereignisse (docs/05 §6.6): der spezifischste Typ bleibt, der Rest wird gezählt.
+    let subtitle = match n.bundled_types.len() {
+        0 | 1 => subtitle,
+        more => format!("{subtitle} (+{} more)", more - 1),
     };
     Rendered {
         title,

@@ -10,6 +10,17 @@
 //! berechnet, also verliert ein aus einem privaten Team entfernter User sofort den Strom dieses
 //! Teams). Persönliche Objekte (Notifications) tragen nur `user:<id>`.
 //!
+//! **Gruppen für Gäste und Freigaben.** Geteilte Issues tragen zusätzlich `user:<id>` jedes
+//! Empfängers einer Freigabe (der Entzug erreicht ihn als `D`). Gäste haben keine Gruppe `org`;
+//! stattdessen erhalten alle User die Gruppe `orgpub` (Workspace-Metadaten und Workspace-Labels)
+//! und Gäste für jedes ihrer (Mitglieds-)Teams `tmem:<id>`: damit laufen User-Verzeichnis und
+//! Labels live, ohne etwas über fremde Teams preiszugeben (`User`-Aktionen tragen `tmem:<t>` je
+//! Mitgliedschaft des Users, also sieht ein Gast nur Personen seiner eigenen Teams).
+//!
+//! **Bootstrap.** `GET /sync/bootstrap?modelNames=…&limit=…&cursor=…` liefert den Bestand in
+//! Paketen als zeilenweises JSON (`__class` je Objekt, letzte Zeile `_metadata_={…}`), gefiltert
+//! mit denselben Gruppen wie der Strom. Siehe [`bootstrap`].
+//!
 //! **Re-Validierung.** Das Token der Verbindung wird alle `revalidate_interval` (60 s) und nach
 //! jeder Zustellung von User-/Team-/Organisations-Änderungen neu geprüft; widerrufene oder
 //! abgelaufene Tokens und suspendierte User beenden die Verbindung mit Close-Code 4401.
@@ -26,6 +37,8 @@
 //! Ping/Idle-Timeout und ein Sende-Timeout (langsame Clients werden getrennt).
 #![forbid(unsafe_code)]
 
+mod bootstrap;
+
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -33,6 +46,7 @@ use axum::http::header::{AUTHORIZATION, COOKIE, HOST, ORIGIN, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use bootstrap::bootstrap;
 use lineal_app::policy::PolicySnapshot;
 use lineal_app::ports::repos::outbox::SyncActionRow;
 use lineal_app::usecases::auth::hash_token;
@@ -229,6 +243,7 @@ pub fn router_with(app: Arc<App>, cfg: SyncConfig) -> Router {
     });
     Router::new()
         .route("/sync", get(sync_socket))
+        .route("/sync/bootstrap", get(bootstrap))
         .with_state(shared)
 }
 
@@ -590,13 +605,15 @@ async fn drive(
 
 /// Erlaubte Gruppen eines Users **jetzt**: sichtbare Teams, Workspace (nicht für Gäste), persönlich.
 fn allowed_groups(snap: &PolicySnapshot, ctx: &RequestCtx) -> Vec<String> {
-    let mut groups: Vec<String> = snap
-        .visible_team_ids()
-        .into_iter()
-        .map(|t| format!("team:{}", t.0))
-        .collect();
+    let visible = snap.visible_team_ids();
+    let mut groups: Vec<String> = visible.iter().map(|t| format!("team:{}", t.0)).collect();
+    // Workspace-Metadaten und Workspace-Labels sehen alle, auch Gäste.
+    groups.push("orgpub".to_owned());
     if let Actor::User { id, role } = ctx.actor {
-        if role != UserRole::Guest {
+        if role == UserRole::Guest {
+            // Gäste sehen nur Personen ihrer eigenen Teams (docs/02 §6.5).
+            groups.extend(visible.iter().map(|t| format!("tmem:{}", t.0)));
+        } else {
             groups.push("org".to_owned());
         }
         groups.push(format!("user:{}", id.0));
@@ -629,7 +646,20 @@ async fn fetch(shared: &Shared, ctx: &RequestCtx, cursor: i64) -> Result<Option<
     Ok(Some(Batch { head, rows, groups }))
 }
 
+/// Entfernt Verweise auf Objekte, die der Empfänger nicht sehen darf (z. B. `Team.parentId` eines
+/// unsichtbaren Eltern-Teams, wie GraphQL es schwärzt).
+pub(crate) fn redact(model: &str, data: &mut Value, allowed: &[String]) {
+    if model == "Team"
+        && let Some(parent) = data["parentId"].as_str()
+        && !allowed.contains(&format!("team:{parent}"))
+    {
+        data["parentId"] = Value::Null;
+    }
+}
+
 fn wire(row: &SyncActionRow, allowed: &[String]) -> Value {
+    let mut data = row.data.clone();
+    redact(&row.model_name, &mut data, allowed);
     // Gruppen auf die des Empfängers beschränken: fremde Team-IDs werden nicht verraten.
     let groups: Vec<&String> = row.groups.iter().filter(|g| allowed.contains(g)).collect();
     json!({
@@ -638,7 +668,7 @@ fn wire(row: &SyncActionRow, allowed: &[String]) -> Value {
         "action": row.action,
         "modelName": row.model_name,
         "modelId": row.model_id,
-        "data": row.data,
+        "data": data,
         "syncGroups": groups,
         "transactionId": Value::Null,
     })

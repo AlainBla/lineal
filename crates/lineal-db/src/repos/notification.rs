@@ -16,7 +16,7 @@ use uuid::Uuid;
 const VIEW_SELECT: &str = "SELECT n.id, n.user_id, n.type AS kind, n.category, n.target_type, n.actor_id, \
     n.issue_id, n.team_id, n.project_id, n.project_update_id, n.project_milestone_id, n.initiative_id, \
     n.initiative_update_id, n.document_id, n.comment_id, n.parent_comment_id, n.reaction_emoji, n.read_at, \
-    n.snoozed_until_at, n.unsnoozed_at, n.emailed_at, n.is_priority, n.group_key, n.created_at, n.updated_at, \
+    n.snoozed_until_at, n.unsnoozed_at, n.emailed_at, n.is_priority, n.group_key, n.bundled_types, n.created_at, n.updated_at, \
     n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.team_id AS issue_team_id, i.title AS issue_title, \
     p.name AS project_name, ini.name AS initiative_name, d.title AS document_title, u.email AS recipient_email \
     FROM notification n \
@@ -32,7 +32,23 @@ fn visible_sql(vis: &str) -> String {
     format!(
         "(n.issue_id IS NULL OR i.team_id = ANY({vis})) \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
-              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis})))"
+              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
+         AND {}",
+        doc_visible_sql("n", vis)
+    )
+}
+
+/// Dokument-Notifications: das Dokument muss über sein Elternobjekt (Issue, Projekt, Team) sichtbar
+/// sein; Dokumente ohne Teambezug (Initiative, Workspace) sind für Nicht-Gäste immer sichtbar
+/// (der Fan-out erzeugt sie nicht für Gäste).
+fn doc_visible_sql(n: &str, vis: &str) -> String {
+    format!(
+        "({n}.document_id IS NULL OR EXISTS (SELECT 1 FROM document dv WHERE dv.id = {n}.document_id AND ( \
+           (dv.issue_id IS NOT NULL AND EXISTS (SELECT 1 FROM issue dvi WHERE dvi.id = dv.issue_id AND dvi.team_id = ANY({vis}))) \
+           OR (dv.issue_id IS NULL AND dv.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_team dvp \
+                WHERE dvp.project_id = dv.project_id AND dvp.team_id = ANY({vis}))) \
+           OR (dv.issue_id IS NULL AND dv.project_id IS NULL AND dv.team_id IS NOT NULL AND dv.team_id = ANY({vis})) \
+           OR (dv.issue_id IS NULL AND dv.project_id IS NULL AND dv.team_id IS NULL))))"
     )
 }
 
@@ -41,7 +57,9 @@ fn visible_sub_sql(vis: &str) -> String {
     format!(
         "((n.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue vi WHERE vi.id = n.issue_id AND vi.team_id = ANY({vis}))) \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
-              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))))"
+              WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
+         AND {})",
+        doc_visible_sql("n", vis)
     )
 }
 
@@ -91,6 +109,7 @@ struct ViewRow {
     emailed_at: Option<DateTime<Utc>>,
     is_priority: bool,
     group_key: String,
+    bundled_types: Vec<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     archived_at: Option<DateTime<Utc>>,
@@ -131,6 +150,7 @@ impl From<ViewRow> for NotificationView {
                 emailed_at: r.emailed_at,
                 is_priority: r.is_priority,
                 group_key: r.group_key,
+                bundled_types: r.bundled_types,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
                 archived_at: r.archived_at,
@@ -308,6 +328,110 @@ impl NotificationRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(true)
+    }
+
+    async fn dedup_seen(&mut self, user: UserId, dedup_key: &str) -> AppResult<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM notification WHERE user_id = $1 AND dedup_key = $2) \
+                 OR EXISTS (SELECT 1 FROM notification_merge WHERE user_id = $1 AND dedup_key = $2)",
+        )
+        .bind(user.0)
+        .bind(dedup_key)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn find_bundle_target(
+        &mut self,
+        user: UserId,
+        group_key: &str,
+        actor: UserId,
+        since: DateTime<Utc>,
+    ) -> AppResult<Option<BundleTarget>> {
+        let row: Option<(Uuid, String, Vec<String>)> = sqlx::query_as(
+            "SELECT id, type, bundled_types FROM notification \
+             WHERE organization_id = $1 AND user_id = $2 AND group_key = $3 AND actor_id = $4 \
+               AND archived_at IS NULL AND created_at >= $5 \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(group_key)
+        .bind(actor.0)
+        .bind(since)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(id, kind, bundled_types)| BundleTarget {
+            id: NotificationId(id),
+            kind,
+            bundled_types,
+        }))
+    }
+
+    async fn merge_notification(&mut self, n: &NewNotification, m: &BundleMerge) -> AppResult<()> {
+        let claimed = sqlx::query(
+            "INSERT INTO notification_merge (user_id, dedup_key, notification_id) VALUES ($1,$2,$3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(n.user_id.0)
+        .bind(&n.dedup_key)
+        .bind(m.target.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if claimed.rows_affected() == 0 {
+            return Ok(());
+        }
+        let (comment, parent, emoji) = if m.take_refs {
+            (
+                n.comment_id.map(|c| c.0),
+                n.parent_comment_id.map(|c| c.0),
+                n.reaction_emoji.clone(),
+            )
+        } else {
+            (None, None, None)
+        };
+        sqlx::query(
+            "UPDATE notification SET type = $3, category = $4, bundled_types = $5, \
+               is_priority = $6, read_at = NULL, updated_at = $7, version = version + 1, \
+               comment_id = CASE WHEN $8 THEN $9 ELSE comment_id END, \
+               parent_comment_id = CASE WHEN $8 THEN $10 ELSE parent_comment_id END, \
+               reaction_emoji = CASE WHEN $8 THEN $11 ELSE reaction_emoji END, \
+               unsnoozed_at = CASE WHEN snoozed_until_at > $7 AND unsnoozed_at IS NULL THEN $7 \
+                                   ELSE unsnoozed_at END \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(m.target.0)
+        .bind(&m.kind)
+        .bind(&m.category)
+        .bind(&m.bundled_types)
+        .bind(m.is_priority)
+        .bind(n.now)
+        .bind(m.take_refs)
+        .bind(comment)
+        .bind(parent)
+        .bind(emoji)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        // Neue Aktivität beendet ein Snooze der übrigen Notifications der Gruppe (docs/05 §6.4 Regel 3).
+        sqlx::query(
+            "UPDATE notification SET unsnoozed_at = $3, updated_at = $3, version = version + 1 \
+             WHERE organization_id = $1 AND user_id = $2 AND id <> $4 \
+               AND group_key = (SELECT group_key FROM notification WHERE id = $4) \
+               AND snoozed_until_at > $3 AND unsnoozed_at IS NULL AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(n.user_id.0)
+        .bind(n.now)
+        .bind(m.target.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn get_notification(
@@ -692,23 +816,141 @@ impl NotificationRepo for PgTx {
     }
 
     async fn comment_facts(&mut self, id: CommentId) -> AppResult<Option<CommentFacts>> {
-        let row: Option<(Uuid, Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> =
-            sqlx::query_as(
-                "SELECT id, user_id, issue_id, project_id, parent_id FROM comment \
+        type Row = (
+            Uuid,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+        );
+        let row: Option<Row> = sqlx::query_as(
+            "SELECT id, user_id, issue_id, project_id, parent_id, project_milestone_id, project_update_id, \
+             initiative_id, initiative_update_id, document_id FROM comment \
              WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(
+            row.map(|(id, u, i, p, par, pm, pu, ini, iu, doc)| CommentFacts {
+                id: CommentId(id),
+                author_id: u.map(UserId),
+                issue_id: i.map(IssueId),
+                project_id: p.map(ProjectId),
+                project_milestone_id: pm,
+                project_update_id: pu,
+                initiative_id: ini,
+                initiative_update_id: iu,
+                document_id: doc,
+                parent_id: par.map(CommentId),
+            }),
+        )
+    }
+
+    async fn milestone_facts(&mut self, id: Uuid) -> AppResult<Option<MilestoneFacts>> {
+        let row: Option<Uuid> = sqlx::query_scalar(
+            "SELECT project_id FROM project_milestone WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|p| MilestoneFacts {
+            id,
+            project_id: ProjectId(p),
+        }))
+    }
+
+    async fn initiative_update_facts(
+        &mut self,
+        id: Uuid,
+    ) -> AppResult<Option<InitiativeUpdateFacts>> {
+        let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT initiative_id, user_id FROM initiative_update WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(|(i, u)| InitiativeUpdateFacts {
+            id,
+            initiative_id: i,
+            author_id: UserId(u),
+        }))
+    }
+
+    async fn document_facts(&mut self, id: Uuid) -> AppResult<Option<DocumentFacts>> {
+        type Row = (Option<Uuid>, bool, Option<Uuid>, Option<Uuid>, Option<Uuid>);
+        let row: Option<Row> = sqlx::query_as(
+            "SELECT d.creator_id, d.trashed, \
+                    (SELECT i.team_id FROM issue i WHERE i.id = d.issue_id), d.project_id, d.team_id \
+             FROM document d WHERE d.organization_id = $1 AND d.id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let Some((creator, trashed, issue_team, project, team)) = row else {
+            return Ok(None);
+        };
+        let teams: Vec<Uuid> = if let Some(t) = issue_team {
+            vec![t]
+        } else if let Some(p) = project {
+            sqlx::query_scalar(
+                "SELECT team_id FROM project_team WHERE organization_id = $1 AND project_id = $2",
             )
             .bind(self.org.0)
-            .bind(id.0)
-            .fetch_optional(&mut *self.tx)
+            .bind(p)
+            .fetch_all(&mut *self.tx)
             .await
-            .map_err(db_err)?;
-        Ok(row.map(|(id, u, i, p, par)| CommentFacts {
-            id: CommentId(id),
-            author_id: u.map(UserId),
-            issue_id: i.map(IssueId),
-            project_id: p.map(ProjectId),
-            parent_id: par.map(CommentId),
+            .map_err(db_err)?
+        } else {
+            team.into_iter().collect()
+        };
+        let workspace_only = teams.is_empty();
+        Ok(Some(DocumentFacts {
+            id,
+            creator_id: creator.map(UserId),
+            trashed,
+            teams: teams.into_iter().map(TeamId).collect(),
+            workspace_only,
         }))
+    }
+
+    async fn blocked_issues(&mut self, issue: IssueId) -> AppResult<Vec<IssueId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT related_issue_id FROM issue_relation \
+             WHERE organization_id = $1 AND issue_id = $2 AND type = 'blocks'",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(IssueId).collect())
+    }
+
+    async fn open_blockers(&mut self, issue: IssueId) -> AppResult<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM issue_relation r JOIN issue b ON b.id = r.issue_id \
+             WHERE r.organization_id = $1 AND r.related_issue_id = $2 AND r.type = 'blocks' \
+               AND b.state_type NOT IN ('completed','canceled','duplicate') AND NOT b.trashed",
+        )
+        .bind(self.org.0)
+        .bind(issue.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
     }
 
     async fn reaction_facts(&mut self, id: Uuid) -> AppResult<Option<ReactionFacts>> {
@@ -790,6 +1032,102 @@ impl NotificationRepo for PgTx {
                 })
             })
             .collect()
+    }
+
+    async fn subscribe_document(
+        &mut self,
+        document: Uuid,
+        user: UserId,
+        reason: SubscriptionReason,
+        now: DateTime<Utc>,
+    ) -> AppResult<SubscribeOutcome> {
+        let existing: Option<(Uuid, bool)> = sqlx::query_as(
+            "SELECT id, active FROM document_subscription WHERE organization_id = $1 \
+             AND document_id = $2 AND user_id = $3",
+        )
+        .bind(self.org.0)
+        .bind(document)
+        .bind(user.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        match existing {
+            None => {
+                sqlx::query(
+                    "INSERT INTO document_subscription (organization_id, document_id, user_id, active, \
+                     reason, created_at, updated_at) VALUES ($1,$2,$3,true,$4,$5,$5)",
+                )
+                .bind(self.org.0)
+                .bind(document)
+                .bind(user.0)
+                .bind(reason.as_str())
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                Ok(SubscribeOutcome::Created)
+            }
+            Some((id, false)) if reason.reactivates() => {
+                sqlx::query(
+                    "UPDATE document_subscription SET active = true, reason = $2, updated_at = $3, \
+                     version = version + 1 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(reason.as_str())
+                .bind(now)
+                .execute(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                Ok(SubscribeOutcome::Reactivated)
+            }
+            Some(_) => Ok(SubscribeOutcome::Unchanged),
+        }
+    }
+
+    async fn unsubscribe_document(
+        &mut self,
+        document: Uuid,
+        user: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE document_subscription SET active = false, updated_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND document_id = $2 AND user_id = $3 AND active",
+        )
+        .bind(self.org.0)
+        .bind(document)
+        .bind(user.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn document_subscribers(&mut self, document: Uuid) -> AppResult<Vec<UserId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT user_id FROM document_subscription WHERE organization_id = $1 \
+             AND document_id = $2 AND active AND archived_at IS NULL ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(document)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
+    async fn is_document_subscriber(&mut self, document: Uuid, user: UserId) -> AppResult<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM document_subscription WHERE organization_id = $1 \
+             AND document_id = $2 AND user_id = $3 AND active AND archived_at IS NULL)",
+        )
+        .bind(self.org.0)
+        .bind(document)
+        .bind(user.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
     }
 
     async fn subscribe_issue(
