@@ -85,7 +85,8 @@ pub fn default_security_settings_json() -> Value {
         "apiSettingsRole": "admin",
         "workspaceInitiativesRole": "user",
         "pinnedViewManagementRole": "admin",
-        "importRole": "admin"
+        "importRole": "admin",
+        "allowedInviteDomains": []
     })
 }
 
@@ -102,6 +103,9 @@ pub struct OrgPolicy {
     pub workspace_initiatives_role: UserRole,
     pub pinned_view_management_role: UserRole,
     pub import_role: UserRole,
+    /// Erlaubte E-Mail-Domains für Einladungen und `create_user` (klein geschrieben);
+    /// leer = alle Domains.
+    pub allowed_invite_domains: Vec<String>,
     pub limits: Limits,
 }
 
@@ -162,6 +166,16 @@ impl OrgPolicy {
                 UserRole::Admin,
             ),
             import_role: role_of(security, "importRole", UserRole::Admin),
+            allowed_invite_domains: security
+                .get("allowedInviteDomains")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_lowercase)
+                        .collect()
+                })
+                .unwrap_or_default(),
             limits: Limits {
                 max_teams: opt_int(limits, &["maxTeams"], d.max_teams),
                 sub_teams_enabled: flag(limits, "subTeamsEnabled", d.sub_teams_enabled),
@@ -217,6 +231,18 @@ impl OrgPolicy {
         }
     }
 
+    /// Ob Einladungen an diese E-Mail-Adresse erlaubt sind (leere Liste = alle Domains).
+    pub fn invite_domain_allowed(&self, email: &str) -> bool {
+        if self.allowed_invite_domains.is_empty() {
+            return true;
+        }
+        let domain = email
+            .rsplit_once('@')
+            .map(|(_, d)| d.trim().to_lowercase())
+            .unwrap_or_default();
+        self.allowed_invite_domains.iter().any(|d| *d == domain)
+    }
+
     /// Ob `role` mindestens die Rolle `min` hat.
     pub fn role_at_least(role: UserRole, min: UserRole) -> bool {
         role_rank(role) >= role_rank(min)
@@ -244,6 +270,17 @@ mod tests {
         assert_eq!(p.limits.max_team_depth, 3);
         assert_eq!(p.limits.max_active_issues_per_team, None);
         assert_eq!(p.limits.max_teams, Some(2));
+    }
+
+    #[test]
+    fn invite_domains_empty_means_all() {
+        let mut p = OrgPolicy::default();
+        assert!(p.invite_domain_allowed("x@anything.example"));
+        p.allowed_invite_domains = vec!["acme.example".into()];
+        assert!(p.invite_domain_allowed("Bob@ACME.example"));
+        assert!(!p.invite_domain_allowed("bob@evil.example"));
+        assert!(!p.invite_domain_allowed("bob@sub.acme.example"));
+        assert!(!p.invite_domain_allowed("no-at-sign"));
     }
 
     #[test]

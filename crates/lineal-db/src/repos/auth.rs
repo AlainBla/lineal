@@ -274,4 +274,24 @@ impl AuthRepo for PgTx {
         .map_err(db_err)?;
         Ok(res.rows_affected() > 0)
     }
+
+    async fn revoke_all_credentials_of_user(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        for table in ["user_session", "api_key", "oauth_token"] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET revoked_at = $3, version = version + 1, updated_at = $3 \
+                 WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL"
+            ))
+            .bind(self.org.0)
+            .bind(user_id.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        }
+        Ok(())
+    }
 }

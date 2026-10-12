@@ -127,4 +127,13 @@ pub trait AuthRepo: Send {
     async fn revoke_api_key(&mut self, _id: ApiKeyId, _now: DateTime<Utc>) -> AppResult<bool> {
         unimplemented_repo()
     }
+    /// Widerruft alle Web-Sessions, API-Keys und OAuth-Tokens des Users (beim Sperren, damit eine
+    /// Entsperrung keine alten Zugangsdaten wiederbelebt).
+    async fn revoke_all_credentials_of_user(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
 }

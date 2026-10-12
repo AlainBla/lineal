@@ -101,6 +101,8 @@ pub struct UserFilter {
     pub team_id: Option<TeamId>,
     /// Nur User, die in mindestens einem dieser Teams Mitglied sind (Gast-Sicht).
     pub in_any_team: Option<Vec<TeamId>>,
+    /// Auch suspendierte User liefern (nur für die Admin-Mitgliederliste).
+    pub include_suspended: bool,
 }
 
 /// Persistenzzugriff des Bereichs `user`.

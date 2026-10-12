@@ -155,9 +155,13 @@ impl UserRepo for PgTx {
         match filter.query.as_deref().filter(|q| !q.is_empty()) {
             Some(q) => {
                 // Deaktivierte User nur bei exakter E-Mail.
-                qb.push(" AND (u.active OR lower(u.email) = lower(");
-                qb.push_bind(q.to_owned());
-                qb.push("))");
+                if filter.include_suspended {
+                    qb.push(" AND TRUE");
+                } else {
+                    qb.push(" AND (u.active OR lower(u.email) = lower(");
+                    qb.push_bind(q.to_owned());
+                    qb.push("))");
+                }
                 let pattern = format!("%{}%", escape_like(&q.to_lowercase()));
                 qb.push(" AND (lower(u.name) LIKE ");
                 qb.push_bind(pattern.clone());
@@ -168,7 +172,9 @@ impl UserRepo for PgTx {
                 qb.push(" ESCAPE '\\')");
             }
             None => {
-                qb.push(" AND u.active");
+                if !filter.include_suspended {
+                    qb.push(" AND u.active");
+                }
             }
         }
         if let Some(team) = filter.team_id {

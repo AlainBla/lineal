@@ -147,6 +147,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::InviteUsers)?;
+        for e in &emails {
+            super::user::check_invite_domain(&snap.org, e, "emails")?;
+        }
         match role {
             UserRole::Admin => snap.require_workspace(ctx, Action::GrantAdminRole)?,
             UserRole::User | UserRole::Guest => {}
@@ -274,6 +277,7 @@ impl App {
             return Err(AppError::conflict("The invitation can no longer be resent")
                 .with_details(json!({ "status": inv.status })));
         }
+        super::user::check_invite_domain(&snap.org, &inv.email, "id")?;
         let now = self.clock.now();
         let token = random_token();
         tx.webhooks()
