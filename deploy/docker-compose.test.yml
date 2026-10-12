@@ -1,0 +1,28 @@
+# Override für einen getrennten Test-Stack (Testläufe, Demo-Daten), parallel zum Betriebs-Stack:
+#   docker compose -p lineal-test -f docker-compose.yml -f deploy/docker-compose.test.yml \
+#     --profile app up -d --build app-db migrate server worker web
+# Eigenes Netz (172.31.97.0/24), Port 127.0.0.1:8097, Dev-Modus (Seed erlaubt), eigene Volumes
+# über den Projektnamen. Den Dev-`postgres` (Port 5440) nicht mitstarten.
+services:
+  migrate:
+    environment: &test-env
+      DATABASE_URL: postgres://lineal:${LINEAL_DB_PASSWORD:-}@app-db:5432/lineal
+      LINEAL_BASE_URL: http://localhost:8097
+      LINEAL_TRUSTED_PROXIES: 172.31.97.10/32
+      LINEAL_DEV: "1"
+      LINEAL_WORKSPACE_CREATION: all
+  server:
+    environment: *test-env
+  worker:
+    environment: *test-env
+  web:
+    ports: !override
+      - "127.0.0.1:8097:8080"
+    networks: !override
+      edge: { ipv4_address: 172.31.97.10 }
+
+networks:
+  edge:
+    ipam:
+      config: !override
+        - subnet: 172.31.97.0/24
