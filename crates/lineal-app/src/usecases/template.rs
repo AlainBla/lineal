@@ -282,6 +282,14 @@ impl App {
         ctx: &RequestCtx,
         input: SaveTemplateInput,
     ) -> AppResult<TemplateView> {
+        crate::error::with_retry(|| self.save_template_once(ctx, input.clone())).await
+    }
+
+    async fn save_template_once(
+        &self,
+        ctx: &RequestCtx,
+        input: SaveTemplateInput,
+    ) -> AppResult<TemplateView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
@@ -318,7 +326,21 @@ impl App {
                     .await?;
                 let sort_order = match input.sort_order {
                     Some(s) => s,
-                    None => now.timestamp_millis() as f64,
+                    None => {
+                        // Eindeutig auch bei paralleler Anlage im selben Scope (Millisekunde).
+                        let scope = team.as_ref().map(|t| t.id);
+                        tx.advisory_lock("template_sort", scope.map(|t| t.0))
+                            .await?;
+                        let max = tx
+                            .templates()
+                            .list_active()
+                            .await?
+                            .into_iter()
+                            .filter(|t| t.team_id == scope)
+                            .map(|t| t.sort_order)
+                            .fold(f64::MIN, f64::max);
+                        (now.timestamp_millis() as f64).max(max + 1.0)
+                    }
                 };
                 let t = tx
                     .templates()
@@ -352,7 +374,10 @@ impl App {
                         "type and team cannot be changed after creation",
                     ));
                 }
-                let mut t = load_template(&mut *tx, &snap, reference, None).await?;
+                let found = load_template(&mut *tx, &snap, reference, None).await?;
+                // Serialisieren und frischen Stand lesen (Lost Update bei parallelen Änderungen).
+                tx.advisory_lock("template", Some(found.id.0)).await?;
+                let mut t = load_template(&mut *tx, &snap, &found.id.to_string(), None).await?;
                 // Anpassung eines geerbten Templates durch ein Sub-Team: Kopie mit `inheritedFrom`.
                 if let Some(as_team) = &input.as_team {
                     let sub =

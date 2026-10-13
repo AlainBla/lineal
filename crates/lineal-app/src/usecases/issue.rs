@@ -10,7 +10,7 @@ pub(crate) mod mentions;
 mod relations;
 
 pub use batch::{BatchFailure, BatchPatch, BatchResult, BatchUpdateInput, MAX_BATCH};
-pub use fields::MAX_SUB_ISSUE_DEPTH;
+pub use fields::{ISSUE_GRAPH_LOCK, MAX_SUB_ISSUE_DEPTH};
 pub use relations::{RelatedIssue, RelationChanges, RelationsView};
 
 use crate::app::App;
@@ -439,10 +439,13 @@ impl App {
         ctx: &RequestCtx,
         input: CreateIssueInput,
     ) -> AppResult<IssueView> {
-        let mut tx = self.store.begin(ctx.org_id).await?;
-        let view = self.create_issue_in(&mut *tx, ctx, input).await?;
-        tx.commit().await?;
-        Ok(view)
+        crate::error::with_retry(|| async {
+            let mut tx = self.store.begin(ctx.org_id).await?;
+            let view = self.create_issue_in(&mut *tx, ctx, input.clone()).await?;
+            tx.commit().await?;
+            Ok(view)
+        })
+        .await
     }
 
     /// Wie [`App::create_issue`] in einer vorhandenen Transaktion (z. B. für Templates, Import).
@@ -513,6 +516,8 @@ impl App {
                 }
             }
         };
+
+        let state = lock_fresh_state(tx, state).await?;
 
         let id = input.id.unwrap_or_else(|| IssueId(self.ids.new_uuid()));
         let mut issue = Issue {
@@ -765,10 +770,13 @@ impl App {
         ctx: &RequestCtx,
         input: UpdateIssueInput,
     ) -> AppResult<IssueView> {
-        let mut tx = self.store.begin(ctx.org_id).await?;
-        let view = self.update_issue_in(&mut *tx, ctx, input).await?;
-        tx.commit().await?;
-        Ok(view)
+        crate::error::with_retry(|| async {
+            let mut tx = self.store.begin(ctx.org_id).await?;
+            let view = self.update_issue_in(&mut *tx, ctx, input.clone()).await?;
+            tx.commit().await?;
+            Ok(view)
+        })
+        .await
     }
 
     /// Wie [`App::update_issue`] in einer vorhandenen Transaktion.
@@ -866,6 +874,19 @@ impl App {
             ));
         }
         snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        // Issue-Graph (Parent/Kinder): Änderungen, die mehrere Issue-Zeilen betreffen (Parent
+        // setzen, Auto-Close-Kaskade), laufen seriell und VOR der ersten Zeilensperre. Sonst sperren
+        // gegenläufige Transaktionen (Kind->Parent und Parent->Kind) in entgegengesetzter
+        // Reihenfolge (Deadlock). Eine einzige Advisory-Sperre für beide Fälle vermeidet auch
+        // Reihenfolgeprobleme zwischen mehreren Sperren.
+        if input.parent.is_some()
+            || !input.relations.blocks.is_empty()
+            || !input.relations.blocked_by.is_empty()
+            || (input.state.is_some()
+                && (found.parent_id.is_some() || !tx.issues().children(found.id).await?.is_empty()))
+        {
+            tx.advisory_lock(ISSUE_GRAPH_LOCK, None).await?;
+        }
         // Zeile sperren und frischen Stand lesen.
         let mut issue = tx
             .issues()
@@ -958,6 +979,7 @@ impl App {
         }
         if let Some(r) = &input.state {
             let s = resolve::state::resolve(tx, &team, r).await?;
+            let s = lock_fresh_state(tx, s).await?;
             change_state(
                 tx,
                 &team,
@@ -1216,6 +1238,26 @@ impl App {
         issue.assignee_id = keep_person_after_move(tx, z, issue.assignee_id).await?;
         issue.delegate_id = keep_person_after_move(tx, z, issue.delegate_id).await?;
         let _ = estimation_of(&snap.tree, z);
+        // docs/02 §7 Schritt 12: Abonnenten ohne Zugriff auf ein nicht öffentliches Zielteam
+        // werden entfernt.
+        if z.visibility != lineal_domain::enums::TeamVisibility::Public {
+            let subscribers = tx.notifications().issue_subscribers(issue.id).await?;
+            let mut without_access = Vec::new();
+            {
+                let mut fan =
+                    crate::usecases::notification::fanout::Fan::new(&mut *tx, now, None).await?;
+                for u in subscribers {
+                    if !fan.can_see_any(u, &[z.id]).await? {
+                        without_access.push(u);
+                    }
+                }
+            }
+            for u in without_access {
+                tx.notifications()
+                    .unsubscribe_issue(issue.id, u, now)
+                    .await?;
+            }
+        }
         labels_available_in(tx, &snap.tree, z.id, old_labels).await
     }
 
@@ -1445,6 +1487,15 @@ impl App {
 
     /// Legt ein Issue in den Papierkorb (`permanently` = endgültig löschen, nur Admins).
     pub async fn delete_issue(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+        permanently: bool,
+    ) -> AppResult<Issue> {
+        crate::error::with_retry(|| self.delete_issue_once(ctx, reference, permanently)).await
+    }
+
+    async fn delete_issue_once(
         &self,
         ctx: &RequestCtx,
         reference: &str,
@@ -1904,4 +1955,22 @@ async fn state_spans(tx: &mut dyn Tx, issue: &Issue) -> AppResult<Vec<StateSpan>
         });
     }
     Ok(out)
+}
+
+/// Sperrt den Status gegen paralleles Archivieren (`delete_workflow_state` hält dieselbe Sperre)
+/// und liest ihn frisch: sonst entstehen Issues in einem Status, der gleichzeitig archiviert wird.
+async fn lock_fresh_state(
+    tx: &mut dyn Tx,
+    state: crate::ports::repos::state::WorkflowState,
+) -> AppResult<crate::ports::repos::state::WorkflowState> {
+    tx.advisory_lock("workflow_state", Some(state.id.0)).await?;
+    let fresh = tx
+        .states()
+        .get(state.id)
+        .await?
+        .ok_or_else(|| invalid("state", "state_archived", "state is archived"))?;
+    if fresh.archived_at.is_some() {
+        return Err(invalid("state", "state_archived", "state is archived"));
+    }
+    Ok(fresh)
 }

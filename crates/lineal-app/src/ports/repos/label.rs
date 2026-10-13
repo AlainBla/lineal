@@ -168,6 +168,13 @@ pub trait LabelRepo: Send {
     ) -> AppResult<Vec<(IssueId, TeamId)>> {
         unimplemented_repo()
     }
+    /// Wie [`LabelRepo::issues_with_issue_labels`], ohne Issues im Papierkorb (Anzeige der Nutzung).
+    async fn active_issues_with_issue_labels(
+        &mut self,
+        _labels: &[LabelId],
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        unimplemented_repo()
+    }
     /// Hängt alle Issues von `source` an `target` um (ohne Duplikate) und ersetzt die ID in
     /// Templates und gespeicherten Views; `source` bleibt bestehen.
     async fn merge_issue_label(&mut self, _source: LabelId, _target: LabelId) -> AppResult<()> {

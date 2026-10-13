@@ -379,6 +379,27 @@ impl LabelRepo for PgTx {
             .collect())
     }
 
+    async fn active_issues_with_issue_labels(
+        &mut self,
+        labels: &[LabelId],
+    ) -> AppResult<Vec<(lineal_domain::ids::IssueId, TeamId)>> {
+        let ids: Vec<Uuid> = labels.iter().map(|l| l.0).collect();
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT DISTINCT i.id, i.team_id FROM issue_to_label l \
+             JOIN issue i ON i.organization_id = l.organization_id AND i.id = l.issue_id \
+             WHERE l.organization_id = $1 AND l.label_id = ANY($2) AND NOT i.trashed ORDER BY i.id",
+        )
+        .bind(self.org.0)
+        .bind(ids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(i, t)| (lineal_domain::ids::IssueId(i), TeamId(t)))
+            .collect())
+    }
+
     async fn merge_issue_label(&mut self, source: LabelId, target: LabelId) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO issue_to_label (organization_id, issue_id, label_id, single_select_group_id, created_at) \

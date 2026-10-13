@@ -452,8 +452,26 @@ async fn notify_wakes_connections_without_polling(pool: PgPool) {
     .await;
     let mut ws = e.connect("bob", None).await;
     assert_eq!(next_json(&mut ws, WAIT).await.unwrap()["type"], "hello");
-    // Dem LISTEN-Task Zeit zum Verbinden geben.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Warten, bis der LISTEN-Task wirklich lauscht (unter Last kann das deutlich länger als
+    // ein paar hundert Millisekunden dauern; ein NOTIFY davor ginge verloren).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let listening: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND query ILIKE 'LISTEN%lineal_sync%'",
+        )
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+        if listening > 0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "LISTEN-Task hat nicht rechtzeitig gelauscht"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     e.append(
         "U",
         "Issue",

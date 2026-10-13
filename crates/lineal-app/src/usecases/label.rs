@@ -694,13 +694,22 @@ impl App {
             );
         }
         let visible = snap.visible_team_ids();
-        let issues = tx.labels().issues_with_issue_labels(&ids).await?;
+        let issues = tx.labels().active_issues_with_issue_labels(&ids).await?;
         Ok(issues.iter().filter(|(_, t)| visible.contains(t)).count() as i64)
     }
 
     /// Führt das Issue-Label `source` in `target` zusammen (docs/03 §5.4): Issues, Templates und
     /// Views werden umgehängt, danach wird `source` gelöscht.
     pub async fn merge_issue_label(
+        &self,
+        ctx: &RequestCtx,
+        source: &str,
+        target: &str,
+    ) -> AppResult<LabelBulkResult> {
+        crate::error::with_retry(|| self.merge_issue_label_once(ctx, source, target)).await
+    }
+
+    async fn merge_issue_label_once(
         &self,
         ctx: &RequestCtx,
         source: &str,
@@ -718,6 +727,8 @@ impl App {
         require_manage(&snap, ctx, &src)?;
         require_manage(&snap, ctx, &dst)?;
         require_destroy(&snap, &src)?;
+        // Zuordnungen des Quell-Labels anhalten, bis der Merge committet ist (siehe apply_labels).
+        tx.advisory_lock("issue_label", Some(src.id.0)).await?;
         if src.id == dst.id {
             return Err(invalid(
                 "target",
@@ -808,6 +819,14 @@ impl App {
         ctx: &RequestCtx,
         reference: &str,
     ) -> AppResult<LabelBulkResult> {
+        crate::error::with_retry(|| self.delete_issue_label_once(ctx, reference)).await
+    }
+
+    async fn delete_issue_label_once(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<LabelBulkResult> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
@@ -825,6 +844,11 @@ impl App {
                     .into_iter()
                     .map(|c| c.id),
             );
+        }
+        let mut locks: Vec<_> = ids.iter().map(|l| l.0).collect();
+        locks.sort();
+        for l in locks {
+            tx.advisory_lock("issue_label", Some(l)).await?;
         }
         let issues = tx.labels().issues_with_issue_labels(&ids).await?;
         let visible = snap.visible_team_ids();

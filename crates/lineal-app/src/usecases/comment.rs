@@ -635,6 +635,18 @@ impl App {
         input: CreateCommentInput,
         anchor: Option<(String, String)>,
     ) -> AppResult<CommentMutation> {
+        crate::error::with_retry(|| {
+            self.create_comment_anchored_once(ctx, input.clone(), anchor.clone())
+        })
+        .await
+    }
+
+    async fn create_comment_anchored_once(
+        &self,
+        ctx: &RequestCtx,
+        input: CreateCommentInput,
+        anchor: Option<(String, String)>,
+    ) -> AppResult<CommentMutation> {
         let body = clean_body(&input.body)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;

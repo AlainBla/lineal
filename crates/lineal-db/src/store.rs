@@ -9,6 +9,42 @@ use lineal_domain::ids::OrgId;
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+/// Wiederholt eine komplette Transaktion bei Deadlock (40P01) bzw. Serialisierungsfehler (40001);
+/// siehe [`lineal_app::error::with_retry`].
+pub use lineal_app::error::with_retry;
+
+/// Zentrale Fehlerabbildung für Datenbankfehler:
+/// - 40P01 (Deadlock) und 40001 (Serialisierung): `conflict` mit `details.retryable = true`
+///   (wird von [`with_retry`] wiederholt; nach erschöpften Versuchen so gemeldet, nie `internal`);
+/// - 23503 (Fremdschlüssel): `not_found`, wenn das referenzierte Objekt fehlt bzw. inzwischen
+///   gelöscht wurde, `conflict`, wenn der Datensatz noch referenziert wird;
+/// - 23505 (Unique) und 23P01 (Exclusion): `conflict`;
+/// - alles andere: `internal` (Details nur im Log).
+pub fn map_db_error(e: &sqlx::Error) -> AppError {
+    let db = e.as_database_error();
+    match db.and_then(|d| d.code()).as_deref() {
+        Some(code @ ("40P01" | "40001")) => AppError::retryable_conflict(code),
+        Some("23503") => {
+            let msg = db.map(|d| d.message()).unwrap_or_default();
+            if msg.contains("update or delete on table") {
+                AppError::conflict("The object is still referenced by other objects.")
+            } else {
+                AppError::not_found("A referenced object does not exist (anymore).")
+            }
+        }
+        Some("23505") => AppError::conflict("An object with these values already exists."),
+        Some("23P01") => AppError::conflict("The change conflicts with an existing object."),
+        // B8.02: NUL-Zeichen in Texten (22021, bei JSON 22P05) sind ein Eingabefehler.
+        Some("22021" | "22P05") => {
+            AppError::invalid_request("Text must not contain NUL characters.")
+        }
+        _ => {
+            tracing::error!(error = %e, "database error");
+            AppError::internal("database error")
+        }
+    }
+}
+
 /// Postgres-Implementierung von [`Store`].
 #[derive(Clone)]
 pub struct PgStore {
@@ -67,6 +103,24 @@ pub struct PgTx {
 }
 
 impl PgTx {
+    /// Siehe [`Tx::advisory_lock`].
+    pub(crate) async fn advisory_lock_inner(
+        &mut self,
+        scope: &str,
+        key: Option<uuid::Uuid>,
+    ) -> AppResult<()> {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!(
+                "lineal:{}:{scope}:{}",
+                self.org.0,
+                key.map(|k| k.to_string()).unwrap_or_default()
+            ))
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Zieht beim ersten Aufruf `nextval('sync_seq')` und liefert danach denselben Wert.
     pub(crate) async fn last_sync_id_inner(&mut self) -> AppResult<i64> {
         if let Some(id) = self.sync_id {
@@ -89,6 +143,10 @@ impl Tx for PgTx {
 
     async fn last_sync_id(&mut self) -> AppResult<i64> {
         self.last_sync_id_inner().await
+    }
+
+    async fn advisory_lock(&mut self, scope: &str, key: Option<uuid::Uuid>) -> AppResult<()> {
+        self.advisory_lock_inner(scope, key).await
     }
 
     fn orgs(&mut self) -> &mut dyn OrgRepo {

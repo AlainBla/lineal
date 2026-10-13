@@ -687,12 +687,28 @@ impl App {
         ctx: &RequestCtx,
         input: UpdateViewInput,
     ) -> AppResult<ViewInfo> {
+        crate::error::with_retry(|| self.update_view_once(ctx, input.clone())).await
+    }
+
+    async fn update_view_once(
+        &self,
+        ctx: &RequestCtx,
+        input: UpdateViewInput,
+    ) -> AppResult<ViewInfo> {
         require_write(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let access = view_access(&snap, ctx)?;
         let now = self.clock.now();
-        let mut view = resolve_view_in(&mut *tx, &access, &input.reference).await?;
+        let found = resolve_view_in(&mut *tx, &access, &input.reference).await?;
+        // Zeile serialisieren und frischen Stand lesen: sonst überschreiben parallele Updates mit
+        // disjunkten Feldern einander (Lost Update) und `expectedVersion` ist nicht atomar.
+        tx.advisory_lock("custom_view", Some(found.id.0)).await?;
+        let mut view = tx
+            .views()
+            .get_view(&access, found.id)
+            .await?
+            .ok_or_else(|| view_not_found(&input.reference))?;
         require_edit(&snap, access.user_id, &view)?;
         let was_shared_before = view.shared;
         if let Some(v) = input.expected_version
