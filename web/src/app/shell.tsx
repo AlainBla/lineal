@@ -27,7 +27,11 @@ export function Shell({ session, children }: { session: Session; children: React
     });
   };
 
-  useGlobalActions({ ws: session.workspace.urlKey, onLogout });
+  useGlobalActions({
+    ws: session.workspace.urlKey,
+    onLogout,
+    guest: session.user.role === "guest",
+  });
   useEffect(() => attachShortcuts(), []);
   useSyncStream();
 

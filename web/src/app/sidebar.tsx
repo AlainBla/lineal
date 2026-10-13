@@ -286,6 +286,7 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
   const { data, isLoading } = useSidebarData();
   const ws = session.workspace.urlKey;
   const p = workspacePaths(ws);
+  const guest = session.user.role === "guest";
 
   return (
     <motion.aside
@@ -356,12 +357,14 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
 
           <SectionLabel>Workspace</SectionLabel>
           <ul className="flex flex-col gap-px">
-            <li>
-              <NavLink to={p.overview}>
-                <LayoutDashboard />
-                Overview
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.overview}>
+                  <LayoutDashboard />
+                  Overview
+                </NavLink>
+              </li>
+            )}
             <li>
               <NavLink to={p.issues}>
                 <Layers />
@@ -374,30 +377,36 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
                 Projects
               </NavLink>
             </li>
-            <li>
-              <NavLink to={p.initiatives}>
-                <Target />
-                Initiatives
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.initiatives}>
+                  <Target />
+                  Initiatives
+                </NavLink>
+              </li>
+            )}
             <li>
               <NavLink to={p.views}>
                 <Layers />
                 Views
               </NavLink>
             </li>
-            <li>
-              <NavLink to={p.workload}>
-                <Gauge />
-                Workload
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to={p.cycles}>
-                <RefreshCw />
-                Cycles
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.workload}>
+                  <Gauge />
+                  Workload
+                </NavLink>
+              </li>
+            )}
+            {!guest && (
+              <li>
+                <NavLink to={p.cycles}>
+                  <RefreshCw />
+                  Cycles
+                </NavLink>
+              </li>
+            )}
           </ul>
 
           <FavoritesSection ws={ws} />

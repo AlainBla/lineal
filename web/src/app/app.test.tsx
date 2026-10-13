@@ -33,13 +33,24 @@ const ME = {
   })),
 };
 
-function mockFetch(authed: boolean) {
+function mockFetch(authed: boolean, opts: { role?: string; graphql401?: boolean } = {}) {
   const fn = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/auth/me") {
       return authed
-        ? new Response(JSON.stringify(ME), { status: 200 })
+        ? new Response(
+            JSON.stringify(opts.role ? { ...ME, user: { ...ME.user, role: opts.role } } : ME),
+            { status: 200 },
+          )
         : new Response("{}", { status: 401 });
+    }
+    if (url.endsWith("/graphql") && opts.graphql401) {
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: "Sign in", extensions: { code: "unauthenticated" } }],
+        }),
+        { status: 401 },
+      );
     }
     if (url.endsWith("/graphql")) {
       return new Response(JSON.stringify({ data: { notificationsUnreadCount: 3 } }), {
@@ -151,6 +162,32 @@ describe("shell", () => {
     expect(screen.queryByText(/not built yet/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     expect(screen.getByRole("link", { name: "Go to my issues" })).toBeInTheDocument();
+  });
+
+  it("Gäste sehen keine Workspace-Übersichten in der Navigation (B4.31)", async () => {
+    mockFetch(true, { role: "guest" });
+    await renderApp("/acme/inbox");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    for (const name of ["Overview", "Initiatives", "Workload", "Cycles"]) {
+      expect(within(nav).queryByRole("link", { name })).toBeNull();
+    }
+    expect(within(nav).getByRole("link", { name: "Projects" })).toBeInTheDocument();
+  });
+
+  it("Mitglieder sehen Overview, Initiatives, Workload und Cycles", async () => {
+    mockFetch(true, { role: "user" });
+    await renderApp("/acme/inbox");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    for (const name of ["Overview", "Initiatives", "Workload", "Cycles"]) {
+      expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("401 auf GraphQL leitet zum Login mit Rücksprungadresse um (B4.11)", async () => {
+    mockFetch(true, { graphql401: true });
+    const router = await renderApp("/acme/inbox");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toMatchObject({ redirect: "/acme/inbox" });
   });
 
   it("navigates with key sequences (g i, g m)", async () => {
