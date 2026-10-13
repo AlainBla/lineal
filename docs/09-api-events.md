@@ -83,6 +83,8 @@ Die Konvention aus [00 §5](00-konventionen.md#5-listen-und-paginierung) (`{issu
 | `orderBy` Default `updatedAt` absteigend | identisch |
 | kein `totalCount` | kein `totalCount` |
 
+> **Umsetzung (Entscheidung zu B8.13):** Die implementierte GraphQL-Schicht ist vereinfacht und weicht von der obigen Relay-SDL ab; maßgeblich ist `web/schema.graphql`. Connections tragen `nodes`, `hasNextPage` und `endCursor` (kein `pageInfo`-Objekt, kein `totalCount`, keine `edges`); `last`/`before` werden nicht unterstützt (`invalid_request`). Kleine Listen (`teams`, `workflowStates` u. a.) liefern direkt ein Array mit `first`. `filter`/`orderBy` gibt es nur dort, wo das Schema sie nennt (z. B. Views mit `filterData`). `first` außerhalb 1..250 (Projekte 1..50) und ungültige Cursor sind `invalid_request`; `after: \"\"` gilt wie `null`. Cursor-Formate sind je Connection verschieden und für Clients opak. Eine Angleichung an die Relay-Form ist nicht geplant (docs/15 §2).
+
 **Abweichung von Linear:** Linears Default-`orderBy` ist `createdAt`. Lineal nutzt `updatedAt` (00 ist verbindlich). Cursor sind opak (base64 von `{sortKey, id}`); ein Cursor ist nur mit derselben `orderBy`/`filter`-Kombination gültig, sonst `invalid_request`.
 
 ### 1.4 Kern-SDL: Query-Root
@@ -212,7 +214,7 @@ type Mutation {
   # Issues (Regeln: 03)
   issueCreate(input: IssueCreateInput!): IssuePayload!
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
-  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 50 IDs, atomar
+  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 250 IDs, je Issue eigene Transaktion (nicht atomar); Fehler je Eintrag in `failures`
   issueArchive(id: String!, trash: Boolean): IssueArchivePayload!
   issueUnarchive(id: String!): IssueArchivePayload!
   issueDelete(id: String!, permanentlyDelete: Boolean): IssueArchivePayload!       # Default: Papierkorb 30 Tage

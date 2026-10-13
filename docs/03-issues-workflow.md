@@ -775,8 +775,8 @@ Mitgliedschaft im Parent-Team zählt für ein Sub-Team nicht automatisch als Mit
 
 | Aktion | Voraussetzung | Wirkung |
 |---|---|---|
-| **Accept** | Team-Mitglied; ggf. `priority != 0` | optionaler Kommentar wird angelegt; Wechsel auf `defaultIssueState` oder einen vom User gewählten Status (`backlog`, `unstarted`, `started`); `triagedAt` gesetzt |
-| **Decline** | Team-Mitglied | optionaler Kommentar mit Begründung; Wechsel auf ersten `canceled`-Status (oder gewählten `canceled`-Status); `triagedAt` gesetzt |
+| **Accept** | Zugriff auf das Team (Recht wie „Issue bearbeiten“, [02 §6.5](02-teams-rechte.md); Gäste nur als Mitglied; Mitgliedschaft ist nicht nötig); ggf. `priority != 0` | optionaler Kommentar wird angelegt; Wechsel auf `defaultIssueState` oder einen vom User gewählten Status (`backlog`, `unstarted`, `started`); `triagedAt` gesetzt |
+| **Decline** | Zugriff auf das Team (wie Accept) | optionaler Kommentar mit Begründung; Wechsel auf ersten `canceled`-Status (oder gewählten `canceled`-Status); `triagedAt` gesetzt |
 | **Mark as duplicate** | kanonisches Issue gewählt | `markAsDuplicate(…, fromTriage = true)` (4.3): Duplicate-State, Relation `duplicate`, Anhänge wandern zum kanonischen Issue |
 | **Snooze** | bis Zeitpunkt `snoozedUntilAt` | `snoozedUntilAt`, `snoozedBy` gesetzt; Issue für **alle** User aus der Triage-Liste ausgeblendet |
 | **Move to team** | Zugriff auf Zielteam | Teamwechsel; im Zielteam gilt 10.2 erneut (bei Nicht-Mitgliedschaft wieder Triage, sonst Status-Mapping) |

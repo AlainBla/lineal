@@ -692,9 +692,11 @@ impl V {
         })
     }
 
+    /// Die Wurzel zählt nicht als Verschachtelungsebene: 10 verschachtelte `and`/Relationen
+    /// unter der Wurzel sind zulässig, 11 nicht (docs/05 §1.1 Regel 8; B8.30).
     fn enter(&mut self) -> R {
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
+        if self.depth > MAX_DEPTH + 1 {
             return self.fail(format!("nesting deeper than {MAX_DEPTH} levels"));
         }
         Ok(())
@@ -726,8 +728,8 @@ impl V {
     /// Wie [`V::field`] für `and`/`or`-Listen.
     fn list<T: Check>(&mut self, name: &str, val: &Option<Vec<T>>, nullable: bool) -> R {
         if let Some(items) = val {
+            // `and`/`or` sind keine Bedingungen; gezählt werden nur die Felder darunter (B8.30).
             self.path.push(name.to_owned());
-            self.cond()?;
             for (i, x) in items.iter().enumerate() {
                 self.path.push(i.to_string());
                 x.check(self, nullable)?;
@@ -1290,7 +1292,7 @@ fn shape_error(
     key: Option<&str>,
     path: &mut Vec<String>,
 ) -> Option<(String, String)> {
-    const LIMIT: usize = MAX_DEPTH + 3;
+    const LIMIT: usize = MAX_DEPTH + 4;
     let here = |path: &Vec<String>| path.iter().map(|s| format!("/{s}")).collect::<String>();
     match value {
         Value::Object(map) => {
@@ -1788,12 +1790,13 @@ mod tests {
 
     #[test]
     fn depth_limit_is_ten() {
-        ok(nested_and(10));
-        let e = bad(nested_and(11));
+        // 10 Ebenen unterhalb der Wurzel sind zulässig, 11 nicht.
+        ok(nested_and(11));
+        let e = bad(nested_and(12));
         assert!(e.reason.contains("nesting"), "{e}");
         // Tiefe über Relationen zählt ebenso: labels -> some -> parent -> ...
         let mut deep = json!({"id": {"eq": "x"}});
-        for _ in 0..8 {
+        for _ in 0..9 {
             deep = json!({"parent": deep});
         }
         assert!(parse(json!({"labels": {"some": deep}})).is_err());
@@ -1809,16 +1812,16 @@ mod tests {
             }
             v
         };
-        ok(chain(10));
-        assert!(parse(chain(11)).is_err());
+        ok(chain(11));
+        assert!(parse(chain(12)).is_err());
     }
 
     #[test]
     fn condition_limit_is_200() {
         let conds = |n: usize| json!({"and": (0..n - 1).map(|_| json!({"priority": {"eq": 1}})).collect::<Vec<_>>()});
-        // `and` selbst zählt als Bedingung + n-1 Elemente mit je 1 Feld.
-        ok(conds(200));
-        let e = bad(conds(201));
+        // `and` selbst zählt nicht, nur die n-1 Elemente mit je 1 Feld.
+        ok(conds(201));
+        let e = bad(conds(202));
         assert!(e.reason.contains("200"), "{e}");
     }
 

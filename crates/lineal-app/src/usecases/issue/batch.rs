@@ -7,7 +7,7 @@ use super::history::{self, Delta};
 use super::{IssueView, UpdateIssueInput, emit, invalid, load_view};
 use crate::app::App;
 use crate::context::RequestCtx;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorKind};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::repos::issue::HistorySource;
 use crate::resolve;
@@ -82,9 +82,10 @@ fn validate(input: &BatchUpdateInput) -> AppResult<Vec<String>> {
         .ids
         .iter()
         .map(|i| i.trim().to_owned())
-        .filter(|i| !i.is_empty() && seen.insert(i.to_lowercase()))
+        // Leere IDs bleiben erhalten und werden je Eintrag als Fehler gemeldet (B8.23).
+        .filter(|i| i.is_empty() || seen.insert(i.to_lowercase()))
         .collect();
-    if ids.is_empty() {
+    if ids.iter().all(String::is_empty) {
         return Err(invalid("ids", "empty", "select at least one issue"));
     }
     if ids.len() > MAX_BATCH {
@@ -139,6 +140,14 @@ impl App {
         let p = &input.patch;
         let mut result = BatchResult::default();
         for id in ids {
+            if id.is_empty() {
+                result.failures.push(BatchFailure {
+                    id,
+                    code: ErrorKind::InvalidRequest.code().to_owned(),
+                    message: "the issue id must not be empty".to_owned(),
+                });
+                continue;
+            }
             let outcome = if p.delete {
                 Box::pin(self.delete_issue(ctx, &id, false))
                     .await
