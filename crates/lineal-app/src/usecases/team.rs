@@ -255,6 +255,11 @@ pub struct UpdateTeamInput {
     pub cycle_lock_to_active: Option<bool>,
 }
 
+/// Advisory-Sperre für alle Änderungen am Teambaum und an Mitgliedschaften (Zyklus, Tiefe und die
+/// Invariante „Mitglied eines Sub-Teams ist Mitglied aller Vorfahren“). Wird VOR dem Laden des
+/// `PolicySnapshot` genommen, damit Baum und Mitgliedschaften frisch gelesen werden.
+pub const TEAM_HIERARCHY_LOCK: &str = "team_hierarchy";
+
 /// Optionen für `nest_team` (docs/02 §3.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestOptions {
@@ -444,6 +449,9 @@ impl App {
         ctx: &RequestCtx,
         input: CreateTeamInput,
     ) -> AppResult<TeamId> {
+        if input.parent.is_some() {
+            tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
+        }
         let snap = PolicySnapshot::load(tx, ctx).await?;
         let wants_private = matches!(
             input.visibility,
@@ -1056,6 +1064,7 @@ impl App {
         owner: bool,
     ) -> AppResult<TeamMember> {
         let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
@@ -1130,6 +1139,7 @@ impl App {
     ) -> AppResult<TeamMember> {
         let me = actor_id(ctx).ok_or_else(|| AppError::forbidden("Only users can join teams"))?;
         let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
         let view = snap.require_team(ctx, Action::JoinTeam, team.id)?;
@@ -1179,6 +1189,7 @@ impl App {
     ) -> AppResult<()> {
         let me = actor_id(ctx).ok_or_else(|| AppError::forbidden("Only users can leave teams"))?;
         let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Content).await?;
         snap.require_team(ctx, Action::LeaveTeam, team.id)?;
@@ -1202,6 +1213,7 @@ impl App {
         user: &str,
     ) -> AppResult<()> {
         let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
         let target = resolve::user::resolve_in(&mut *tx, &snap, ctx, user).await?;
@@ -1303,6 +1315,7 @@ impl App {
         options: NestOptions,
     ) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.advisory_lock(TEAM_HIERARCHY_LOCK, None).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let team = resolve::team::resolve_in(&mut *tx, &snap, team, Visibility::Management).await?;
         snap.require_team(ctx, Action::SetTeamParent, team.id)?;
