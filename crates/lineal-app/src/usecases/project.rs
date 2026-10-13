@@ -260,7 +260,7 @@ fn dedupe<T: Copy + Eq + std::hash::Hash>(v: impl IntoIterator<Item = T>) -> Vec
 }
 
 /// Löst Projekt-Labels auf (UUID, Name oder `Gruppe/Label`). Verfügbar: Workspace-Labels plus
-/// Team-Labels der Projekt-Teams und ihrer Vorfahren; höchstens ein Label je Gruppe.
+/// Team-Labels der Projekt-Teams und ihrer Vorfahren; Projekt-Gruppen sind immer multiSelect.
 pub(crate) async fn resolve_labels(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
@@ -324,17 +324,6 @@ pub(crate) async fn resolve_labels(
         }
         if !out.iter().any(|o| o.id == label.id) {
             out.push(label);
-        }
-    }
-    let mut groups = HashSet::new();
-    for l in &out {
-        if let Some(g) = l.parent_id
-            && !groups.insert(g)
-        {
-            return Err(AppError::invalid_request(
-                "A project can carry at most one label from a label group.",
-            )
-            .with_details(json!({ "field": "labels", "group": g.to_string() })));
         }
     }
     Ok(out)

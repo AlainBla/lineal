@@ -562,11 +562,8 @@ async fn project_lifecycle_status_dates_lead_team_and_labels(pool: PgPool) {
             },
         )
         .await;
-    assert_eq!(
-        kind(two),
-        ErrorKind::InvalidRequest,
-        "höchstens ein Label je Gruppe"
-    );
+    // B5.18: Projekt-Gruppen sind multiSelect – mehrere Labels einer Gruppe sind erlaubt.
+    assert_eq!(two.unwrap().labels.len(), 2);
     assert_eq!(
         kind(
             app.save_project(

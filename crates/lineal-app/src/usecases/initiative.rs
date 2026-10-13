@@ -27,7 +27,7 @@ use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{InitiativeId, ProjectId};
 use lineal_domain::rules::patch::{self, PatchOp};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Ein direkt zugeordnetes, für den Betrachter sichtbares Projekt.
@@ -175,7 +175,7 @@ fn validate_name(name: &str) -> AppResult<String> {
     )?)
 }
 
-/// Löst Initiative-Labels auf (UUID, Name oder `Gruppe/Label`); höchstens ein Label je Gruppe.
+/// Löst Initiative-Labels auf (UUID, Name oder `Gruppe/Label`); Initiative-Gruppen sind immer multiSelect.
 async fn resolve_labels(
     tx: &mut dyn Tx,
     refs: &[String],
@@ -224,17 +224,6 @@ async fn resolve_labels(
         }
         if !out.iter().any(|o| o.id == label.id) {
             out.push(label);
-        }
-    }
-    let mut groups = HashSet::new();
-    for l in &out {
-        if let Some(g) = l.parent_id
-            && !groups.insert(g)
-        {
-            return Err(AppError::invalid_request(
-                "An initiative can carry at most one label from a label group.",
-            )
-            .with_details(json!({ "field": "labels" })));
         }
     }
     Ok(out)
