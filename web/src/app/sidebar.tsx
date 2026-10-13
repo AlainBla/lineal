@@ -16,6 +16,7 @@ import {
   Settings,
   SquarePen,
   Target,
+  Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -236,6 +237,12 @@ function TeamEntry({
                   Views
                 </NavLink>
               </li>
+              <li>
+                <NavLink to={p.trash}>
+                  <Trash2 />
+                  Recently deleted
+                </NavLink>
+              </li>
               {node.children.length > 0 && (
                 <li>
                   <ul
@@ -419,6 +426,12 @@ export function Sidebar({
                 </NavLink>
               </li>
             )}
+            <li>
+              <NavLink to={p.trash}>
+                <Trash2 />
+                Recently deleted
+              </NavLink>
+            </li>
           </ul>
 
           <FavoritesSection ws={ws} />

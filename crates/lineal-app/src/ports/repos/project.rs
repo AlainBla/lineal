@@ -167,6 +167,8 @@ pub struct ProjectFilter {
     /// Teilstring in Name oder Kurzbeschreibung.
     pub query: Option<String>,
     pub include_archived: bool,
+    /// `Some(t)`: nur Projekte im Papierkorb, die seit `t` gelöscht wurden („Recently deleted“).
+    pub trashed_since: Option<DateTime<Utc>>,
     pub created_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
     /// Filterbaum einer Custom View (WP11); setzt `eval` voraus, immer UND mit der Sichtbarkeit.

@@ -452,6 +452,33 @@ impl IssueQuery {
             nodes: page.items.into_iter().map(Into::into).collect(),
         })
     }
+
+    /// „Recently deleted“: gelöschte Issues innerhalb der Aufbewahrungsfrist in sichtbaren Teams
+    /// (`team` = ein Team, sonst workspaceweit; neueste zuerst). Wiederherstellen: `issueUnarchive`.
+    async fn trashed_issues(
+        &self,
+        ctx: &Context<'_>,
+        team: Option<String>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<IssueGql>> {
+        let page = app(ctx)?
+            .list_issues(
+                request_ctx(ctx)?,
+                ListIssuesInput {
+                    team,
+                    trashed: true,
+                    order_by: OrderBy::UpdatedAt,
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 100, 250),
+                        ctx,
+                    )?),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(page.items.into_iter().map(Into::into).collect())
+    }
 }
 
 #[derive(Default)]

@@ -208,6 +208,9 @@ pub struct IssueListFilter {
     pub updated_after: Option<DateTime<Utc>>,
     pub triaged_after: Option<DateTime<Utc>>,
     pub include_archived: bool,
+    /// `Some(t)`: stattdessen nur Issues im Papierkorb, die seit `t` gelöscht wurden („Recently
+    /// deleted“); der Archiv-Filter entfällt (Gelöschte sind zugleich archiviert).
+    pub trashed_since: Option<DateTime<Utc>>,
     /// Nur Issues, die mit diesen IDs geteilt sind, zusätzlich zu `team_ids` (Sharing).
     pub shared_with: Option<UserId>,
     /// Filterbaum (Custom View, Ad-hoc-Filter; WP11). Setzt `eval` voraus. Wird im Adapter

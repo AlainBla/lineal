@@ -126,6 +126,8 @@ pub struct InitiativeFilter {
     pub label_ids: Option<Vec<Uuid>>,
     pub query: Option<String>,
     pub include_archived: bool,
+    /// `Some(t)`: nur Initiativen im Papierkorb, die seit `t` gelöscht wurden.
+    pub trashed_since: Option<DateTime<Utc>>,
     pub created_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
     /// Sichtbarkeit: Initiativen ohne Lead-Team oder mit Lead-Team aus dieser Menge.

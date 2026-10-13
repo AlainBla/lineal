@@ -537,6 +537,7 @@ fn list_input(args: &Value, now: DateTime<Utc>) -> AppResult<(ListIssuesInput, S
     Ok((
         ListIssuesInput {
             custom_view: arg_str(args, "customView")?.map(str::to_owned),
+            trashed: false,
             query: arg_str(args, "query")?.map(str::to_owned),
             filter: None,
             team: arg_str(args, "team")?.map(str::to_owned),

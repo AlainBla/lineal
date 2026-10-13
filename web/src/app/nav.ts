@@ -15,6 +15,7 @@ export interface WorkspaceNav {
   projects: string;
   initiatives: string;
   views: string;
+  trash: string;
   settings: string;
 }
 
@@ -31,6 +32,7 @@ export function workspacePaths(ws: string): WorkspaceNav {
     projects: `/${ws}/projects/all`,
     initiatives: `/${ws}/initiatives/active`,
     views: `/${ws}/views/issues`,
+    trash: `/${ws}/trash/issues`,
     settings: `/${ws}/settings/workspace`,
   };
 }
@@ -47,6 +49,7 @@ export interface TeamNav {
   upcomingCycle: string;
   projects: string;
   views: string;
+  trash: string;
   settings: string;
 }
 
@@ -64,6 +67,7 @@ export function teamPaths(ws: string, key: string): TeamNav {
     upcomingCycle: `${base}/cycle/upcoming`,
     projects: `${base}/projects/all`,
     views: `${base}/views/issues`,
+    trash: `${base}/trash`,
     settings: `/${ws}/settings/teams/${key}/general`,
   };
 }
@@ -96,7 +100,7 @@ const SEGMENT_TITLES: Record<string, string> = {
   all: "All issues",
   archive: "Archive",
   assigned: "Assigned",
-  trash: "Trash",
+  trash: "Recently deleted",
 };
 
 const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, " ");

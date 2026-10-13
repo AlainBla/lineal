@@ -320,6 +320,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 label: arg_str(&args, "label").map(str::to_owned),
                 query: arg_str(&args, "query").map(str::to_owned),
                 include_archived: arg_bool(&args, "includeArchived"),
+                trashed: false,
                 created_after: time("createdAt")?,
                 updated_after: time("updatedAt")?,
                 include_members,

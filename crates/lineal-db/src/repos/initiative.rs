@@ -392,9 +392,14 @@ impl InitiativeRepo for PgTx {
             "SELECT {INIT_COLS}, {order_col} AS sort_key FROM initiative i WHERE i.organization_id = "
         ));
         qb.push_bind(self.org.0);
-        qb.push(" AND NOT i.trashed");
-        if !f.include_archived {
-            qb.push(" AND i.archived_at IS NULL");
+        if let Some(since) = f.trashed_since {
+            qb.push(" AND i.trashed AND i.trashed_at >= ")
+                .push_bind(since);
+        } else {
+            qb.push(" AND NOT i.trashed");
+            if !f.include_archived {
+                qb.push(" AND i.archived_at IS NULL");
+            }
         }
         if let Some(ast) = &f.ast {
             let ev = f

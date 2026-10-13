@@ -1360,9 +1360,9 @@ type Mutation {
 	initiativeToProjectDelete(initiativeId: String!, projectId: String!): InitiativeSuccessPayload!
 	initiativeArchive(id: String!, archived: Boolean): InitiativeSuccessPayload!
 	"""
-	Papierkorb (30 Tage).
+	Papierkorb (30 Tage) bzw. Wiederherstellen (`restore: true`, nur per UUID).
 	"""
-	initiativeDelete(id: String!): InitiativeSuccessPayload!
+	initiativeDelete(id: String!, restore: Boolean): InitiativeSuccessPayload!
 	initiativeUpdateCreate(initiativeId: String!, body: String!, health: String, isDiffHidden: Boolean): InitiativeUpdatePayload!
 	initiativeUpdateEdit(id: String!, body: String, health: String): InitiativeUpdatePayload!
 	initiativeUpdateDelete(id: String!): InitiativeSuccessPayload!
@@ -2036,6 +2036,11 @@ type Query {
 	"""
 	issues(teamId: String, assigneeId: String, state: String, label: String, projectId: String, cycleId: String, priority: Int, includeArchived: Boolean, first: Int, after: String): IssueConnection!
 	"""
+	„Recently deleted“: gelöschte Issues innerhalb der Aufbewahrungsfrist in sichtbaren Teams
+	(`team` = ein Team, sonst workspaceweit; neueste zuerst). Wiederherstellen: `issueUnarchive`.
+	"""
+	trashedIssues(team: String, first: Int): [Issue!]!
+	"""
 	Anzahl der (für den Aufrufer sichtbaren) Issues mit diesem Label bzw. dieser Gruppe;
 	setzt das Recht zum Verwalten des Labels voraus (Bestätigung vor Merge/Delete).
 	"""
@@ -2075,6 +2080,11 @@ type Query {
 	"""
 	projectsPage(team: String, includeSubTeams: Boolean, initiative: String, member: String, state: String, label: String, query: String, includeArchived: Boolean, first: Int, after: String): ProjectConnection!
 	"""
+	„Recently deleted“: gelöschte Projekte innerhalb der Aufbewahrungsfrist, nur mit Sicht auf
+	mindestens eines ihrer Teams (neueste Änderung zuerst). Wiederherstellen: `projectDelete(restore)`.
+	"""
+	trashedProjects(first: Int): [Project!]!
+	"""
 	Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.
 	"""
 	project(id: String!): Project!
@@ -2087,6 +2097,11 @@ type Query {
 	"""
 	projectUpdates(projectId: String, includeArchived: Boolean, first: Int): [ProjectUpdate!]!
 	initiatives(status: String, owner: String, leadTeam: String, parentInitiative: String, label: String, query: String, includeArchived: Boolean, first: Int): [Initiative!]!
+	"""
+	„Recently deleted“: gelöschte Initiativen innerhalb der Aufbewahrungsfrist.
+	Wiederherstellen: `initiativeDelete(restore: true)`.
+	"""
+	trashedInitiatives(first: Int): [Initiative!]!
 	"""
 	Eine Initiative per UUID, Kennung (`I-4`), Slug oder Name.
 	"""

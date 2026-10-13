@@ -24,7 +24,7 @@ use crate::ports::repos::user::{Page, PageRequest, User};
 use crate::resolve;
 use crate::resolve::project::ResolvedProject;
 use crate::resolve::team::Visibility;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use lineal_domain::enums::{DateResolution, ProjectStatusType, UserRole};
 use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{InitiativeId, IssueId, ProjectId, TeamId, UserId};
@@ -90,6 +90,8 @@ pub struct ListProjectsInput {
     pub label: Option<String>,
     pub query: Option<String>,
     pub include_archived: bool,
+    /// Nur gelöschte Projekte innerhalb der Aufbewahrungsfrist („Recently deleted“).
+    pub trashed: bool,
     pub created_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
     pub include_members: bool,
@@ -395,6 +397,9 @@ impl App {
         let mut filter = ProjectFilter {
             visible_teams: snap.visible_team_ids().into_iter().collect(),
             include_archived: input.include_archived,
+            trashed_since: input
+                .trashed
+                .then(|| now - Duration::days(snap.org.limits.trash_retention_days.clamp(1, 3650))),
             created_after: input.created_after,
             updated_after: input.updated_after,
             query: input.query.clone(),

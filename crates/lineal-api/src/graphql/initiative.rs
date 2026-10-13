@@ -316,6 +316,33 @@ impl InitiativeQuery {
         Ok(views.into_iter().map(Into::into).collect())
     }
 
+    /// „Recently deleted“: gelöschte Initiativen innerhalb der Aufbewahrungsfrist.
+    /// Wiederherstellen: `initiativeDelete(restore: true)`.
+    async fn trashed_initiatives(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<InitiativeGql>> {
+        let (_, views) = app(ctx)?
+            .list_initiatives(
+                request_ctx(ctx)?,
+                ListInitiativesInput {
+                    trashed: true,
+                    page: PageRequest {
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(views.into_iter().map(Into::into).collect())
+    }
+
     /// Eine Initiative per UUID, Kennung (`I-4`), Slug oder Name.
     async fn initiative(
         &self,
@@ -450,16 +477,24 @@ impl InitiativeMutation {
         Ok(InitiativeSuccessPayload { success: true })
     }
 
-    /// Papierkorb (30 Tage).
+    /// Papierkorb (30 Tage) bzw. Wiederherstellen (`restore: true`, nur per UUID).
     async fn initiative_delete(
         &self,
         ctx: &Context<'_>,
         id: String,
+        restore: Option<bool>,
     ) -> async_graphql::Result<InitiativeSuccessPayload> {
-        app(ctx)?
-            .trash_initiative(request_ctx(ctx)?, &id)
-            .await
-            .map_err(gql_err)?;
+        if restore.unwrap_or(false) {
+            app(ctx)?
+                .restore_initiative(request_ctx(ctx)?, &id)
+                .await
+                .map_err(gql_err)?;
+        } else {
+            app(ctx)?
+                .trash_initiative(request_ctx(ctx)?, &id)
+                .await
+                .map_err(gql_err)?;
+        }
         Ok(InitiativeSuccessPayload { success: true })
     }
 

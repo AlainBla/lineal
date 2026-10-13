@@ -562,6 +562,34 @@ impl ProjectQuery {
         })
     }
 
+    /// „Recently deleted“: gelöschte Projekte innerhalb der Aufbewahrungsfrist, nur mit Sicht auf
+    /// mindestens eines ihrer Teams (neueste Änderung zuerst). Wiederherstellen: `projectDelete(restore)`.
+    async fn trashed_projects(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+    ) -> async_graphql::Result<Vec<ProjectGql>> {
+        let (_, views) = app(ctx)?
+            .list_projects(
+                request_ctx(ctx)?,
+                ListProjectsInput {
+                    trashed: true,
+                    page: PageRequest {
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
+                        cursor: None,
+                        order_by: OrderBy::UpdatedAt,
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(views.into_iter().map(Into::into).collect())
+    }
+
     /// Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.
     async fn project(&self, ctx: &Context<'_>, id: String) -> async_graphql::Result<ProjectGql> {
         Ok(app(ctx)?

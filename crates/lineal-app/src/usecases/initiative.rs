@@ -92,6 +92,8 @@ pub struct ListInitiativesInput {
     pub label: Option<String>,
     pub query: Option<String>,
     pub include_archived: bool,
+    /// Nur gelöschte Initiativen innerhalb der Aufbewahrungsfrist („Recently deleted“).
+    pub trashed: bool,
     pub created_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
     pub page: PageRequest,
@@ -398,6 +400,10 @@ impl App {
         let mut filter = InitiativeFilter {
             visible_teams: snap.visible_team_ids().into_iter().collect(),
             include_archived: input.include_archived,
+            trashed_since: input.trashed.then(|| {
+                self.clock.now()
+                    - chrono::Duration::days(snap.org.limits.trash_retention_days.clamp(1, 3650))
+            }),
             created_after: input.created_after,
             updated_after: input.updated_after,
             query: input.query.clone(),
@@ -867,6 +873,48 @@ impl App {
                 i.id,
                 &InitiativePatch {
                     archived_at: Some(archived.then_some(now)),
+                    ..Default::default()
+                },
+                now,
+            )
+            .await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::InitiativeUpdated {
+                initiative_id: i.id,
+            },
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    /// Stellt eine gelöschte Initiative wieder her (nur per UUID auffindbar, innerhalb der
+    /// Aufbewahrungsfrist; gleiche Rechte wie das Löschen).
+    pub async fn restore_initiative(&self, ctx: &RequestCtx, reference: &str) -> AppResult<()> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        snap.require_workspace(ctx, Action::ManageInitiatives)?;
+        let gone = || AppError::not_found("Could not find the trashed initiative.");
+        let id = Uuid::parse_str(reference.trim()).map_err(|_| gone())?;
+        let i = tx
+            .initiatives()
+            .get(InitiativeId(id))
+            .await?
+            .filter(|i| i.trashed && resolve::initiative::is_visible(&snap, i))
+            .ok_or_else(gone)?;
+        let now = self.clock.now();
+        let days = snap.org.limits.trash_retention_days.clamp(1, 3650);
+        if i.trashed_at
+            .is_some_and(|t| now - t > chrono::Duration::days(days))
+        {
+            return Err(gone());
+        }
+        tx.initiatives()
+            .update(
+                i.id,
+                &InitiativePatch {
+                    trashed: Some(false),
                     ..Default::default()
                 },
                 now,

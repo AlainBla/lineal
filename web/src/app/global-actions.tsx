@@ -21,6 +21,7 @@ import {
   SquarePen,
   Sun,
   Target,
+  Trash2,
   Users,
   FileText,
 } from "lucide-react";
@@ -181,6 +182,13 @@ export function buildGlobalActions(args: {
       section: nav,
       icon: RefreshCw,
       perform: () => go(w.cycles),
+    },
+    {
+      id: "nav.trash",
+      title: "Go to Recently deleted",
+      section: nav,
+      icon: Trash2,
+      perform: () => go(w.trash),
     },
     {
       id: "nav.projects",

@@ -175,6 +175,8 @@ pub struct ListIssuesInput {
     pub updated_after: Option<DateTime<Utc>>,
     pub triaged_after: Option<DateTime<Utc>>,
     pub include_archived: bool,
+    /// Nur gelöschte Issues innerhalb der Aufbewahrungsfrist („Recently deleted“).
+    pub trashed: bool,
     pub order_by: OrderBy,
     pub limit: i64,
     pub cursor: Option<PageCursor>,
@@ -1317,12 +1319,19 @@ impl App {
         let mut f = IssueListFilter {
             team_ids: visible.iter().copied().collect(),
             include_archived: input.include_archived,
+            trashed_since: input.trashed.then(|| {
+                self.clock.now()
+                    - Duration::days(snap.org.limits.trash_retention_days.clamp(1, 3650))
+            }),
             created_after: input.created_after,
             updated_after: input.updated_after,
             triaged_after: input.triaged_after,
             shared_with: resolve::issue::share_recipient(&snap, ctx),
             ..Default::default()
         };
+        if input.trashed {
+            f.shared_with = None;
+        }
         let mut scope_team: Option<Team> = None;
         if let Some(r) = &input.team {
             let team = resolve::team::resolve_in(tx, &snap, r, Visibility::Content).await?;

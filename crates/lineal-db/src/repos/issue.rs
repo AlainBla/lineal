@@ -292,7 +292,12 @@ fn push_list_filters<'a>(
     f: &IssueListFilter,
 ) -> AppResult<()> {
     qb.push_bind(org);
-    qb.push(" AND NOT i.trashed");
+    if let Some(since) = f.trashed_since {
+        qb.push(" AND i.trashed AND i.trashed_at >= ")
+            .push_bind(since);
+    } else {
+        qb.push(" AND NOT i.trashed");
+    }
     qb.push(" AND (i.team_id = ANY(");
     qb.push_bind(ids(&f.team_ids));
     qb.push(")");
@@ -302,7 +307,7 @@ fn push_list_filters<'a>(
         qb.push(")");
     }
     qb.push(")");
-    if !f.include_archived {
+    if !f.include_archived && f.trashed_since.is_none() {
         qb.push(" AND i.archived_at IS NULL");
     }
     match f.assignee {

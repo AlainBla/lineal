@@ -571,9 +571,14 @@ impl ProjectRepo for PgTx {
             "SELECT {PROJECT_COLS}, {order_col} AS sort_key FROM project p WHERE p.organization_id = "
         ));
         qb.push_bind(self.org.0);
-        qb.push(" AND NOT p.trashed");
-        if !f.include_archived {
-            qb.push(" AND p.archived_at IS NULL");
+        if let Some(since) = f.trashed_since {
+            qb.push(" AND p.trashed AND p.trashed_at >= ")
+                .push_bind(since);
+        } else {
+            qb.push(" AND NOT p.trashed");
+            if !f.include_archived {
+                qb.push(" AND p.archived_at IS NULL");
+            }
         }
         let visible: Vec<Uuid> = f.visible_teams.iter().map(|t| t.0).collect();
         qb.push(
