@@ -5,12 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
 import { openCreateIssue, setCreateContext } from "@/features/issues/create-store";
-import { useTeamMetas } from "@/features/issues/hooks";
-import { IssueList } from "@/features/issues/issue-list";
-import { useIssueLookup } from "@/features/issues/issue-lookup";
-import { groupByState, relativeTime } from "@/features/issues/model";
+import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
-import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
+import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Project } from "@/gql/graphql";
 
 import {
@@ -20,10 +17,10 @@ import {
   usePostProjectUpdate,
   useProject,
   useProjectUpdates,
-  useScopedIssues,
   type Health,
 } from "./queries";
 import { useRemindAction } from "@/features/inbox/remind";
+import { IssueView } from "@/features/views/issue-view";
 import { DateText, HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
@@ -203,44 +200,18 @@ function Milestones({ project }: { project: Project }) {
 }
 
 function ProjectIssues({ ws, project }: { ws: string; project: Project }) {
-  const issues = useScopedIssues({ projectId: project.id });
-  const metas = useTeamMetas(project.teams.flatMap((t) => (t.key ? [t.key] : [])));
-  const lookup = useIssueLookup(metas);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  const groups = useMemo(
-    () =>
-      metas.flatMap((m) =>
-        m
-          ? groupByState(
-              m.states,
-              (issues.data?.issues ?? []).filter((i) => i.teamId === m.team.id),
-              "all",
-            )
-          : [],
-      ),
-    [metas, issues.data],
-  );
   const teamKey = project.leadTeam?.key ?? project.teams[0]?.key ?? undefined;
-  if (issues.isLoading) return <ListSkeleton />;
-  if (issues.isError) return <ErrorState error={issues.error} />;
+  const scope = useMemo(() => ({ project: { id: { in: [project.id] } } }), [project.id]);
   return (
-    <div>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex justify-end border-b border-border px-3 py-1">
         <Button size="sm" onClick={() => openCreateIssue({ teamKey, projectId: project.id })}>
           <Plus /> New issue
         </Button>
       </div>
-      {groups.length === 0 ? (
-        <EmptyState title="No issues" description="Issues added to this project show up here." />
-      ) : (
-        <IssueList
-          groups={groups}
-          ws={ws}
-          lookup={lookup}
-          focusedId={focusedId}
-          onFocus={setFocusedId}
-        />
-      )}
+      <div className="min-h-0 flex-1">
+        <IssueView ws={ws} title="Issues" scope={scope} />
+      </div>
     </div>
   );
 }
