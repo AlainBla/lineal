@@ -763,7 +763,7 @@ async fn milestones_order_progress_and_delete(pool: PgPool) {
             )
             .await
         ),
-        ErrorKind::InvalidRequest,
+        ErrorKind::Conflict,
         "Name je Projekt eindeutig"
     );
     // Issues: Alpha mit einem erledigten Issue = done; Beta (überfällig, ohne Issues).

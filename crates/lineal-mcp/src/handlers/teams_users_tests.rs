@@ -46,10 +46,11 @@ async fn workspace_and_teams(pool: sqlx::PgPool) {
         .iter()
         .map(|t| t["key"].as_str().unwrap().to_string())
         .collect();
+    // Alice (Owner) sieht das private DES als Metadaten (B8.05).
     assert!(
         keys.contains(&"ENG".into())
             && keys.contains(&"WEB".into())
-            && !keys.contains(&"DES".into())
+            && keys.contains(&"DES".into())
     );
     assert_eq!(list["hasNextPage"], false);
     assert!(list.get("cursor").is_none());
@@ -126,7 +127,12 @@ async fn workspace_and_teams(pool: sqlx::PgPool) {
     }
     assert_eq!(by_key["timezone"], "Europe/Berlin");
     assert_eq!(by_key["issueEstimationType"], "notUsed");
-    for who in [SeedUser::Alice, SeedUser::Carol] {
+    assert!(
+        call(&app, SeedUser::Alice, "get_team", json!({ "query": "DES" }))
+            .await
+            .is_ok()
+    );
+    for who in [SeedUser::Carol] {
         let e = call(&app, who, "get_team", json!({ "query": "DES" }))
             .await
             .unwrap_err();

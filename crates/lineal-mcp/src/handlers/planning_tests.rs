@@ -330,7 +330,7 @@ async fn milestones_and_cycles_contract(pool: sqlx::PgPool) {
             )
             .await
         ),
-        ErrorKind::InvalidRequest
+        ErrorKind::Conflict
     );
     assert_eq!(
         err_kind(

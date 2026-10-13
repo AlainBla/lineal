@@ -128,7 +128,7 @@ impl App {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::invalid_request(
+                    return Err(AppError::conflict(
                         "A milestone with this name already exists in the project.",
                     )
                     .with_details(json!({ "field": "name" })));

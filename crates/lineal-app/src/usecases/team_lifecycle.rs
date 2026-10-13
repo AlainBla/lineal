@@ -198,6 +198,12 @@ impl App {
         let now = self.clock.now();
         tx.webhooks().set_team_retired(team.id, None, now).await?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new("team.restored", "team", Some(team.id.0), json!({})),
+        )
+        .await?;
         let tree = TeamTree::new(tx.teams().list_all().await?);
         let v = view(&tree, team.id)?;
         tx.commit().await?;
@@ -477,6 +483,17 @@ impl App {
             }
             emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: t.id }).await?;
         }
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.restored",
+                "team",
+                Some(team.id.0),
+                json!({ "from_trash": true }),
+            ),
+        )
+        .await?;
         let tree = TeamTree::new(tx.teams().list_all().await?);
         let v = view(&tree, team.id)?;
         tx.commit().await?;

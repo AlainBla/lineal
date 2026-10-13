@@ -244,6 +244,12 @@ fn validate_name(name: &str) -> AppResult<String> {
     )?)
 }
 
+/// Namenskollision: `conflict` wie bei Labels und Teams (B8.19).
+fn duplicate_name() -> AppError {
+    AppError::conflict("A status with this name already exists in the team")
+        .with_details(json!({ "field": "name", "reason": "duplicate_name" }))
+}
+
 fn reason(message: &str, reason: &str) -> AppError {
     AppError::invalid_request(message).with_details(json!({ "reason": reason }))
 }
@@ -380,10 +386,7 @@ impl App {
             .iter()
             .any(|s| s.name.to_lowercase() == name.to_lowercase())
         {
-            return Err(reason(
-                "A status with this name already exists in the team",
-                "duplicate_name",
-            ));
+            return Err(duplicate_name());
         }
         if input.state_type == StateType::Triage
             && existing.iter().any(|s| s.state_type == StateType::Triage)
@@ -392,6 +395,9 @@ impl App {
                 "The team already has a triage status",
                 "triage_exists",
             ));
+        }
+        if let Some(p) = input.position {
+            lineal_domain::rules::sort_order::validate("position", p)?;
         }
         let position = input.position.unwrap_or_else(|| {
             existing
@@ -459,6 +465,9 @@ impl App {
         if let Some(c) = &input.color {
             validate_color(c)?;
         }
+        if let Some(p) = input.position {
+            lineal_domain::rules::sort_order::validate("position", p)?;
+        }
         if state.state_type == StateType::Duplicate
             && (name.is_some() || input.description.is_some() || input.position.is_some())
         {
@@ -473,10 +482,7 @@ impl App {
                 .iter()
                 .any(|s| s.id != state.id && s.name.to_lowercase() == n.to_lowercase())
             {
-                return Err(reason(
-                    "A status with this name already exists in the team",
-                    "duplicate_name",
-                ));
+                return Err(duplicate_name());
             }
         }
         let patch = StatePatch {
