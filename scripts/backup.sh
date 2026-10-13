@@ -17,6 +17,8 @@
 #                       werden nach erfolgreichem Lauf gelöscht
 #   COMPOSE_PROJECT_NAME  Compose-Projekt (Default lineal). Das Volume heißt
 #                       "<Projekt>_blobs". Für einen zweiten Stack (Test) anders setzen.
+#   COMPOSE_FILE        Compose-Dateien (":"-getrennt), z. B. docker-compose.yml:deploy/docker-compose.test.yml
+#                       für den Zweitstack; sonst legt Compose Dienste mit falscher Konfiguration an.
 #
 # Keine Passwörter auf der Kommandozeile oder in Dateien: pg_dump läuft im Container über den
 # lokalen Socket.
@@ -47,6 +49,7 @@ load_from_dotenv() {
 load_from_dotenv LINEAL_BACKUP_DIR
 load_from_dotenv LINEAL_BACKUP_KEEP
 load_from_dotenv COMPOSE_PROJECT_NAME
+load_from_dotenv COMPOSE_FILE
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-lineal}"
 KEEP="${LINEAL_BACKUP_KEEP:-14}"

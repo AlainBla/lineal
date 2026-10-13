@@ -1,20 +1,33 @@
 #!/usr/bin/env bash
 # Wiederherstellung eines Backups aus scripts/backup.sh in den Docker-App-Stack.
 #
-# Nutzung:  scripts/restore.sh [--yes] <backup-verzeichnis>
-#   --yes   ohne Rückfrage (Automatisierung); sonst muss "restore" eingegeben werden.
+# Nutzung:  scripts/restore.sh [--yes] [-f <compose-datei>]... [--allow-newer] <backup-verzeichnis>
+#   --yes           ohne Rückfrage (Automatisierung); sonst muss "restore" eingegeben werden.
+#   -f, --file F    Compose-Datei (wiederholbar), z. B. das Overlay des Zweitstacks; entspricht
+#                   COMPOSE_FILE. Ohne -f gelten COMPOSE_FILE aus der Umgebung bzw. aus .env.
+#   --allow-newer   Backup mit neuerem Migrationsstand als dieser Checkout trotzdem einspielen
+#                   (Standard: Abbruch vor jeder Änderung).
+#
+# Zweitstack (z. B. Test): dieselben Dateien und denselben Projektnamen wie beim Start verwenden,
+# sonst würde Compose die Container mit falscher Konfiguration (Ports, Netze) neu anlegen:
+#   COMPOSE_PROJECT_NAME=lineal-test scripts/restore.sh --yes \
+#     -f docker-compose.yml -f deploy/docker-compose.test.yml backups/lineal-<ts>
 #
 # Ablauf:
 #   1. manifest.txt lesen, sha256 und Größen von database.dump und blobs.tar.gz prüfen
 #   2. Warnung, wenn der Migrationsstand des Backups neuer ist als die Migrationen dieses
 #      Checkouts (die Images bauen aus demselben Stand; sonst bricht migrate ab)
-#   3. Bestätigung; danach: server, worker, web stoppen
-#   4. DB per pg_restore --clean --if-exists --no-owner (über app-db, Passwort nicht nötig)
+#   3. Bestätigung, Vorabprüfung (DB-Verbindung der Anwendung, Passwort passt), Sicherung des
+#      Ist-Zustands (pg_dump nach <Backup-Verzeichnis>/../pre-restore-<Zeitstempel>.dump);
+#      danach: server, worker, web stoppen (Container werden nie neu angelegt)
+#   4. DB per pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error
+#      (atomar: bei einem Fehler bleibt der alte Datenstand)
 #   5. Inhalt des Volumes "<Projekt>_blobs" durch das Archiv ersetzen
 #   6. migrate ausführen (vor dem Start der Anwendung, damit das Schema zum Image passt)
 #   7. server, worker, web wieder starten
 #
-# Umgebung: COMPOSE_PROJECT_NAME (Default lineal), wie bei scripts/backup.sh.
+# Umgebung: COMPOSE_PROJECT_NAME (Default lineal) und COMPOSE_FILE, wie bei scripts/backup.sh;
+# beide werden ggf. aus .env übernommen.
 # Exit-Code ungleich 0 bei jedem Fehler. Wird vor Schritt 3 abgebrochen, bleibt der Stack
 # unverändert.
 set -euo pipefail
@@ -38,15 +51,24 @@ load_from_dotenv() {
   export "$key=$value"
 }
 load_from_dotenv COMPOSE_PROJECT_NAME
+load_from_dotenv COMPOSE_FILE
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-lineal}"
 BLOB_VOLUME="${COMPOSE_PROJECT_NAME}_blobs"
 
 ASSUME_YES=0
+ALLOW_NEWER=0
 BACKUP_ARG=""
-for arg in "$@"; do
+FILES=()
+while (( $# > 0 )); do
+  arg="$1"; shift
   case "$arg" in
     --yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --allow-newer) ALLOW_NEWER=1 ;;
+    -f|--file)
+      (( $# > 0 )) || die "$arg braucht eine Datei"
+      FILES+=("$1"); shift
+      ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     -*) die "unbekannte Option: $arg" ;;
     *)
       [[ -z "$BACKUP_ARG" ]] || die "nur ein Backup-Verzeichnis angeben"
@@ -54,6 +76,10 @@ for arg in "$@"; do
       ;;
   esac
 done
+if (( ${#FILES[@]} > 0 )); then
+  COMPOSE_FILE="$(IFS=:; echo "${FILES[*]}")"
+  export COMPOSE_FILE
+fi
 [[ -n "$BACKUP_ARG" ]] || die "Aufruf: scripts/restore.sh [--yes] <backup-verzeichnis>"
 [[ -d "$BACKUP_ARG" ]] || die "kein Verzeichnis: $BACKUP_ARG"
 BACKUP_DIR="$(cd "$BACKUP_ARG" && pwd)"
@@ -116,11 +142,13 @@ if (( BACKUP_VERSION > IMAGE_VERSION )); then
   warn "Das Backup hat den Migrationsstand $BACKUP_VERSION, die Migrationen dieses Checkouts reichen nur bis $IMAGE_VERSION."
   warn "Das Backup stammt aus einer neueren Version des Codes. Images bzw. Checkout zuerst auf diesen Stand bringen;"
   warn "mit älterem Code kann die Anwendung nach dem Restore fehlerhaft laufen."
+  (( ALLOW_NEWER == 1 )) || die "Abbruch (keine Änderung vorgenommen). Mit --allow-newer trotzdem einspielen."
 fi
 
 # 3. Bestätigung
 echo
 echo "Ziel: Projekt '$COMPOSE_PROJECT_NAME' – Datenbank 'lineal' und Volume '$BLOB_VOLUME' werden ÜBERSCHRIEBEN."
+echo "Compose-Dateien: ${COMPOSE_FILE:-<Standard: docker-compose.yml>}"
 echo "Backup-Volume laut Manifest: $BLOB_VOLUME_BACKUP"
 if (( ASSUME_YES == 0 )); then
   printf "Zum Fortfahren 'restore' eingeben: " >&2
@@ -131,13 +159,30 @@ fi
 docker volume inspect "$BLOB_VOLUME" >/dev/null 2>&1 \
   || die "Volume '$BLOB_VOLUME' nicht gefunden (Projekt '$COMPOSE_PROJECT_NAME')"
 
-info "app-db starten, server/worker/web stoppen"
-dc up -d --wait app-db
+# Container nie neu anlegen (kein Recreate von app-db durch abweichende Compose-Konfiguration).
+info "app-db starten"
+dc up -d --no-recreate --wait app-db \
+  || die "app-db ließ sich nicht starten (keine Änderung vorgenommen). Stimmen -f/COMPOSE_FILE und COMPOSE_PROJECT_NAME mit dem laufenden Stack überein?"
+
+# Vorabprüfung VOR dem Überschreiben: Verbindet sich die Anwendung mit ihren Zugangsdaten
+# (DATABASE_URL, Passwort) mit der Datenbank? Sonst scheiterte migrate erst nach dem Restore.
+info "Vorabprüfung: Datenbankverbindung der Anwendung (migrate)"
+dc run --rm --no-deps migrate >/dev/null \
+  || die "migrate kann sich vor dem Restore nicht mit der Datenbank verbinden (Passwort/Konfiguration?). Nichts wurde verändert."
+
+# Ist-Zustand sichern, damit ein fehlgeschlagener oder falscher Restore umkehrbar ist.
+PRE_DUMP="$(dirname "$BACKUP_DIR")/pre-restore-$(date -u +%Y%m%dT%H%M%SZ).dump"
+info "Sichere den Ist-Zustand nach $PRE_DUMP"
+( umask 077; dc exec -T app-db pg_dump -U lineal -Fc lineal > "$PRE_DUMP" ) \
+  || { rm -f "$PRE_DUMP"; die "Sicherung des Ist-Zustands fehlgeschlagen (keine Änderung vorgenommen)."; }
+
+info "server, worker, web stoppen"
 dc stop server worker web >/dev/null 2>&1 || true
 
-info "Datenbank wiederherstellen (pg_restore --clean --if-exists --no-owner)"
-dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner < "$DUMP" \
-  || die "pg_restore ist fehlgeschlagen. server/worker/web bleiben gestoppt; Ursache beheben und erneut ausführen."
+info "Datenbank wiederherstellen (pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error)"
+dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
+    --single-transaction --exit-on-error < "$DUMP" \
+  || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). server/worker/web bleiben gestoppt; Ursache beheben und erneut ausführen. Ist-Zustand: $PRE_DUMP"
 
 info "Blob-Volume $BLOB_VOLUME ersetzen"
 docker run --rm \
@@ -152,8 +197,8 @@ dc run --rm migrate \
 
 info "server, worker, web starten"
 # worker hat keinen Healthcheck (--wait würde scheitern); server und web werden geprüft.
-dc up -d worker
-dc up -d --wait server web
+dc up -d --no-recreate worker
+dc up -d --no-recreate --wait server web
 
 echo
 echo "Restore abgeschlossen. Backup: $BACKUP_DIR"
