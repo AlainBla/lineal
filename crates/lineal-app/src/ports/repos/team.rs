@@ -7,7 +7,7 @@ use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_domain::enums::{EstimationType, TeamVisibility};
-use lineal_domain::ids::{OrgId, StateId, TeamId, UserId};
+use lineal_domain::ids::{IssueId, OrgId, StateId, TeamId, UserId};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -279,6 +279,19 @@ pub trait TeamRepo: Send {
     }
     /// Entfernt die Mitgliedschaft; `true`, wenn eine existierte.
     async fn delete_membership(&mut self, _team: TeamId, _user: UserId) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
+    /// Räumt nach dem Austritt von `user` aus den (nicht öffentlichen) `teams` auf (docs/02 §4.2):
+    /// `assignee = null` bei offenen Issues dieser Teams (liefert deren IDs für die History),
+    /// Issue-Abos auf Issues dieser Teams werden entfernt, und ein Projekt-Lead ohne verbleibenden
+    /// Zugriff (kein Projektteam öffentlich oder mit Mitgliedschaft) wird geleert.
+    async fn release_member_assets(
+        &mut self,
+        _teams: &[TeamId],
+        _user: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<IssueId>> {
         unimplemented_repo()
     }
 

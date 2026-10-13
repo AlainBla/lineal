@@ -682,6 +682,69 @@ fn leave_closure(tree: &TeamTree, team: TeamId, also_parents: bool, guest: bool)
     out
 }
 
+/// Räumt nach dem Austritt von `user` aus `left` auf (docs/02 §4.2, Tabelle „Effekte des
+/// Austritts“): In nicht öffentlichen Teams (`restricted`, `private`) verlieren offene Issues
+/// den Assignee (mit History), seine Abos auf Issues des Teams entfernt und ein
+/// Projekt-Lead ohne verbleibenden Zugriff geleert. Öffentliche Teams bleiben unberührt.
+async fn release_after_leave(
+    tx: &mut dyn Tx,
+    ctx: &RequestCtx,
+    snap: &PolicySnapshot,
+    left: &[TeamId],
+    user: UserId,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    use crate::ports::repos::issue::HistorySource;
+    use crate::usecases::issue::history::{self, Delta};
+    let closed: Vec<TeamId> = left
+        .iter()
+        .copied()
+        .filter(|t| {
+            snap.tree
+                .get(*t)
+                .is_some_and(|t| t.visibility != TeamVisibility::Public)
+        })
+        .collect();
+    if closed.is_empty() {
+        return Ok(());
+    }
+    let issues = tx.teams().release_member_assets(&closed, user, now).await?;
+    for id in issues {
+        let Some(issue) = tx.issues().get(id, false).await? else {
+            continue;
+        };
+        let mut delta = Delta::default();
+        delta.set(
+            "assigneeId",
+            json!(user.to_string()),
+            serde_json::Value::Null,
+        );
+        history::record(
+            tx,
+            uuid::Uuid::now_v7(),
+            &issue,
+            crate::resolve::user::actor_user_id(ctx),
+            HistorySource::System,
+            &delta,
+            now,
+        )
+        .await?;
+        emit(
+            tx,
+            ctx,
+            DomainEvent::IssueUpdated {
+                previous: None,
+                issue_id: issue.id,
+                team_id: issue.team_id,
+                changed: vec!["assigneeId".into()],
+                mentioned_user_ids: vec![],
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 impl App {
     /// Ändert Team-Einstellungen (docs/02 §2.5). Rechte je Feldgruppe: `key` → Owner,
     /// `visibility`/`allMembersCanJoin`/`securitySettings` → Owner, Rest → `teamManagement`.
@@ -1197,9 +1260,11 @@ impl App {
             return Err(invalid("team", "you are not a member of this team"));
         }
         let guest = snap.actor.role == UserRole::Guest;
-        for t in leave_closure(&snap.tree, team.id, also_leave_parent_teams, guest) {
-            tx.teams().delete_membership(t, me).await?;
+        let closure = leave_closure(&snap.tree, team.id, also_leave_parent_teams, guest);
+        for t in &closure {
+            tx.teams().delete_membership(*t, me).await?;
         }
+        release_after_leave(&mut *tx, ctx, &snap, &closure, me, self.clock.now()).await?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
         Ok(())
@@ -1233,9 +1298,11 @@ impl App {
                 .with_details(json!({ "type": "TeamMembership" })));
         }
         let guest = target.role == UserRole::Guest;
-        for t in leave_closure(&snap.tree, team.id, false, guest) {
-            tx.teams().delete_membership(t, target.id).await?;
+        let closure = leave_closure(&snap.tree, team.id, false, guest);
+        for t in &closure {
+            tx.teams().delete_membership(*t, target.id).await?;
         }
+        release_after_leave(&mut *tx, ctx, &snap, &closure, target.id, self.clock.now()).await?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
         Ok(())

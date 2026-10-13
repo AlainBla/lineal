@@ -473,6 +473,58 @@ impl TeamRepo for PgTx {
         Ok(res.rows_affected() > 0)
     }
 
+    async fn release_member_assets(
+        &mut self,
+        teams: &[TeamId],
+        user: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<lineal_domain::ids::IssueId>> {
+        let team_ids: Vec<Uuid> = teams.iter().map(|t| t.0).collect();
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "UPDATE issue SET assignee_id = NULL, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND team_id = ANY($2) AND assignee_id = $3 AND NOT trashed \
+               AND archived_at IS NULL AND state_type IN ('triage', 'backlog', 'unstarted', 'started') \
+             RETURNING id",
+        )
+        .bind(self.org.0)
+        .bind(&team_ids)
+        .bind(user.0)
+        .bind(now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "DELETE FROM issue_subscription WHERE organization_id = $1 AND user_id = $2 \
+             AND issue_id IN (SELECT id FROM issue WHERE organization_id = $1 AND team_id = ANY($3))",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(&team_ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE project p SET lead_id = NULL, version = version + 1, updated_at = $4 \
+             WHERE p.organization_id = $1 AND p.lead_id = $2 \
+               AND EXISTS (SELECT 1 FROM project_team pt WHERE pt.project_id = p.id AND pt.team_id = ANY($3)) \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM project_team pt JOIN team t ON t.id = pt.team_id \
+                 WHERE pt.project_id = p.id AND (t.visibility = 'public' OR EXISTS ( \
+                   SELECT 1 FROM team_membership m WHERE m.team_id = t.id AND m.user_id = $2)))",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(&team_ids)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(i,)| lineal_domain::ids::IssueId(i))
+            .collect())
+    }
+
     async fn allocate_issue_numbers(&mut self, team: TeamId, count: i32) -> AppResult<i32> {
         if count < 1 {
             return Err(AppError::invalid_request("count must be at least 1"));

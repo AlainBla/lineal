@@ -1125,3 +1125,152 @@ async fn b1_13_purge_parallel_to_dependent_inserts(pool: PgPool) {
         }
     }
 }
+
+/// B1.15: Austritt aus einem privaten Team entzieht Assignee, Abos und Projekt-Lead.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_15_leaving_private_team_releases_assets(pool: PgPool) {
+    let fx = setup(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    // Issue im privaten Team DES (Bob ist Mitglied), Bob ist Assignee und Abonnent.
+    let issue = fx
+        .app
+        .create_issue(
+            &bob,
+            CreateIssueInput {
+                team: "DES".into(),
+                title: Some("Logo".into()),
+                assignee: Some("me".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue;
+    fx.app
+        .subscribe_issue(&bob, &issue.id.to_string(), None)
+        .await
+        .unwrap();
+    let project = fx
+        .app
+        .save_project(
+            &bob,
+            SaveProjectInput {
+                name: Some("Brand".into()),
+                add_teams: vec!["DES".into()],
+                lead: Some(Some("me".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    // Zweites Issue im öffentlichen Team ENG bleibt zugewiesen.
+    let public = fx
+        .app
+        .create_issue(
+            &bob,
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Public".into()),
+                assignee: Some("me".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue;
+
+    // Ein Admin entfernt Bob (anderer Akteur als der Ersteller: History-Eintrag entsteht).
+    fx.app
+        .remove_team_member(&alice(), "DES", &fx.data.bob.to_string())
+        .await
+        .unwrap();
+
+    let assignee: Option<Uuid> = sqlx::query_scalar("SELECT assignee_id FROM issue WHERE id = $1")
+        .bind(issue.id.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(assignee, None, "Assignee bleibt stehen");
+    let subs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issue_subscription WHERE issue_id = $1 AND user_id = $2",
+    )
+    .bind(issue.id.0)
+    .bind(fx.data.bob.0)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(subs, 0, "Abo bleibt stehen");
+    let lead: Option<Uuid> = sqlx::query_scalar("SELECT lead_id FROM project WHERE id = $1")
+        .bind(project.project.id.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(lead, None, "Projekt-Lead bleibt stehen");
+    let hist: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issue_history WHERE issue_id = $1 AND changes ? 'assigneeId'",
+    )
+    .bind(issue.id.0)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert!(hist >= 1, "History-Eintrag fehlt");
+    let still: Option<Uuid> = sqlx::query_scalar("SELECT assignee_id FROM issue WHERE id = $1")
+        .bind(public.id.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        still,
+        Some(fx.data.bob.0),
+        "öffentliches Team bleibt unberührt"
+    );
+}
+
+/// B1.15: Bestandsmigration 3400 bereinigt vorhandene Daten (hier: SQL erneut gegen Testdaten).
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_15_bestandsmigration_cleans_existing_rows(pool: PgPool) {
+    let fx = setup(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    let issue = fx
+        .app
+        .create_issue(
+            &bob,
+            CreateIssueInput {
+                team: "DES".into(),
+                title: Some("Alt".into()),
+                assignee: Some("me".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue;
+    fx.app
+        .subscribe_issue(&bob, &issue.id.to_string(), None)
+        .await
+        .unwrap();
+    // Zustand vor dem Fix simulieren: Mitgliedschaft ohne Aufräumen entfernen.
+    sqlx::query("DELETE FROM team_membership WHERE team_id = $1 AND user_id = $2")
+        .bind(fx.data.des.0)
+        .bind(fx.data.bob.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/3400_member_leave_cleanup.sql"))
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let assignee: Option<Uuid> = sqlx::query_scalar("SELECT assignee_id FROM issue WHERE id = $1")
+        .bind(issue.id.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(assignee, None);
+    let subs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issue_subscription WHERE issue_id = $1")
+            .bind(issue.id.0)
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(subs, 0);
+}
