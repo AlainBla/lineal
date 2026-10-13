@@ -119,3 +119,77 @@ async fn detached_job_does_not_block_outbox_delivery(pool: PgPool) {
     }
     panic!("the detached job did not finish");
 }
+
+/// B7.05: Erledigte Jobs und verarbeitete Outbox-Events werden nach der Aufbewahrungsfrist
+/// gelöscht; frische, offene und Dead-Letter-Einträge (bis 30 Tage) bleiben.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn retention_purges_old_finished_jobs_and_processed_events(pool: PgPool) {
+    let app = test_app(Arc::new(PgStore::new(pool.clone())));
+    for (status, age_days) in [
+        ("done", 3),
+        ("done", 0),
+        ("failed", 20),
+        ("failed", 2),
+        ("queued", 40),
+    ] {
+        sqlx::query(
+            "INSERT INTO job (id, kind, status, run_at, completed_at) \
+             VALUES (gen_random_uuid(), 'k', $1, now() - make_interval(days => $2), \
+                     CASE WHEN $1 = 'done' THEN now() - make_interval(days => $2) END)",
+        )
+        .bind(status)
+        .bind(age_days)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // Events: (Alter in Tagen, verarbeitet, Dead-Letter)
+    for (age, processed, dead) in [
+        (10, true, false),
+        (10, true, true),
+        (40, true, true),
+        (1, true, false),
+        (10, false, false),
+    ] {
+        let id = uuid::Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO outbox_event (event_id, organization_id, origin, type, payload, sync_id, \
+               created_at, processed_at) \
+             VALUES ($1, gen_random_uuid(), 'user', 't', '{}', 1, now() - make_interval(days => $2), \
+               CASE WHEN $3 THEN now() - make_interval(days => $2) END)",
+        )
+        .bind(id)
+        .bind(age)
+        .bind(processed)
+        .execute(&pool)
+        .await
+        .unwrap();
+        if dead {
+            sqlx::query(
+                "INSERT INTO outbox_delivery (consumer, event_id, delivered_at, attempts, last_error) \
+                 VALUES ('c', $1, now(), 10, 'boom')",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+    let (jobs, events) = lineal_jobs::periodic::purge::purge_queues(&app, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(jobs, 2, "old done and old failed jobs");
+    assert_eq!(events, 2, "old processed event and the 40-day dead letter");
+    let count = |table: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(count("job").await, 3);
+    assert_eq!(count("outbox_event").await, 3);
+    assert_eq!(count("outbox_delivery").await, 1, "deliveries of purged events are gone");
+}

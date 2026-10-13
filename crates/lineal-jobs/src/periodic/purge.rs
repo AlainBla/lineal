@@ -41,6 +41,50 @@ impl PeriodicJob for PurgeJob {
         if reservations > 0 {
             tracing::info!(reservations, "purged expired upload reservations");
         }
+        purge_queues(app, now).await?;
         Ok(())
     }
+}
+
+/// Aufbewahrung erledigter Jobs (1 Tag), fehlgeschlagener Jobs (14 Tage) und verarbeiteter
+/// Outbox-Events (7 Tage; mit Dead-Letter 30 Tage). In Blöcken, damit kein Löschlauf lange sperrt.
+pub const JOB_DONE_RETENTION_DAYS: i64 = 1;
+pub const JOB_FAILED_RETENTION_DAYS: i64 = 14;
+pub const OUTBOX_RETENTION_DAYS: i64 = 7;
+pub const OUTBOX_DEAD_LETTER_RETENTION_DAYS: i64 = 30;
+const PURGE_BLOCK: i64 = 5_000;
+const PURGE_MAX_BLOCKS: usize = 20;
+
+pub async fn purge_queues(app: &App, now: DateTime<Utc>) -> AppResult<(u64, u64)> {
+    let days = chrono::Duration::days;
+    let (mut jobs, mut events) = (0u64, 0u64);
+    for _ in 0..PURGE_MAX_BLOCKS {
+        let mut tx = app.store.begin_system().await?;
+        let j = tx
+            .jobs()
+            .purge_finished(
+                now - days(JOB_DONE_RETENTION_DAYS),
+                now - days(JOB_FAILED_RETENTION_DAYS),
+                PURGE_BLOCK,
+            )
+            .await?;
+        let e = tx
+            .outbox()
+            .purge_processed(
+                now - days(OUTBOX_RETENTION_DAYS),
+                now - days(OUTBOX_DEAD_LETTER_RETENTION_DAYS),
+                PURGE_BLOCK,
+            )
+            .await?;
+        tx.commit().await?;
+        jobs += j;
+        events += e;
+        if j < PURGE_BLOCK as u64 && e < PURGE_BLOCK as u64 {
+            break;
+        }
+    }
+    if jobs > 0 || events > 0 {
+        tracing::info!(jobs, events, "purged finished jobs and processed outbox events");
+    }
+    Ok((jobs, events))
 }

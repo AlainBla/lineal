@@ -32,6 +32,28 @@ impl JobRepo for PgTx {
         Ok(inserted.map(JobId))
     }
 
+    async fn purge_finished(
+        &mut self,
+        done_before: DateTime<Utc>,
+        failed_before: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "DELETE FROM job WHERE id IN ( \
+               SELECT id FROM job \
+               WHERE (status = 'done' AND completed_at < $1) \
+                  OR (status = 'failed' AND COALESCE(locked_at, run_at) < $2) \
+               LIMIT $3 FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(done_before)
+        .bind(failed_before)
+        .bind(limit)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
     async fn claim(&mut self, worker: &str, limit: i64, now: DateTime<Utc>) -> AppResult<Vec<Job>> {
         let rows: Vec<(Uuid, Option<Uuid>, String, Value, i32, i32)> = sqlx::query_as(
             "UPDATE job SET status = 'running', locked_by = $1, locked_at = $3, attempts = attempts + 1 \
