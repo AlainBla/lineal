@@ -153,6 +153,22 @@ describe("MembersSettingsPage", () => {
     });
   });
 
+  it("B5.14: the invite dialog scrolls internally so the actions stay reachable", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(
+      <MembersSettingsPage ws="acme" />,
+      clientWithRole("admin"),
+      "/acme/settings/members",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Invite people/ }));
+    expect(screen.getByRole("dialog").className).toContain("max-h-[90vh]");
+    expect(screen.getByTestId("invite-teams").className).toContain("overflow-y-auto");
+    expect(screen.getByRole("form", { name: "Invite people" }).className).toContain(
+      "overflow-y-auto",
+    );
+  });
+
   it("validates addresses client-side and shows server errors", async () => {
     const h = handlers();
     const gql = mockGraphql({

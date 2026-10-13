@@ -99,7 +99,7 @@ function InviteDialog({
         onOpenChange(o);
       }}
     >
-      <DialogContent>
+      <DialogContent className="flex max-h-[90vh] flex-col">
         <DialogHeader>
           <DialogTitle>Invite people</DialogTitle>
           <DialogDescription>
@@ -111,7 +111,11 @@ function InviteDialog({
             </p>
           )}
         </DialogHeader>
-        <form onSubmit={onSubmit} className="flex flex-col gap-3 p-4" aria-label="Invite people">
+        <form
+          onSubmit={onSubmit}
+          className="flex min-h-0 flex-col gap-3 overflow-y-auto p-4"
+          aria-label="Invite people"
+        >
           <Field label="Email addresses">
             <textarea
               aria-label="Email addresses"
@@ -133,7 +137,10 @@ function InviteDialog({
               {isAdmin(session.user.role) && <option value="admin">Admin</option>}
             </select>
           </Field>
-          <fieldset className="flex flex-col gap-1">
+          <fieldset
+            className="flex max-h-48 flex-col gap-1 overflow-y-auto"
+            data-testid="invite-teams"
+          >
             <legend className="mb-1 text-xs text-muted-foreground">
               Teams{role === "guest" ? " (at least one)" : ""}
             </legend>
