@@ -48,7 +48,9 @@ export function ViewBuilderDialog({
   const { sources } = useFilterSources();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [saveTo, setSaveTo] = useState<string>(teamId ?? "personal");
+  // Gäste dürfen nur persönliche Views anlegen (Server: guest_scope).
+  const isGuest = session?.user.role === "guest";
+  const [saveTo, setSaveTo] = useState<string>(isGuest ? "personal" : (teamId ?? "personal"));
   const [chips, setChips] = useState<FilterChip[]>(initialChips);
   const filter = buildFilter(chips);
   const preview = useViewIssues({ filter });
@@ -108,12 +110,13 @@ export function ViewBuilderDialog({
               className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
             >
               <option value="personal">Personal</option>
-              <option value="workspace">Workspace</option>
-              {(session?.teams ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
+              {!isGuest && <option value="workspace">Workspace</option>}
+              {!isGuest &&
+                (session?.teams ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
             </select>
           </label>
           <FilterBar chips={chips} onChange={setChips} sources={sources} />
