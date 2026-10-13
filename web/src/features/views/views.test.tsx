@@ -136,7 +136,7 @@ describe("resolveFavorite", () => {
   it("maps custom and predefined views", () => {
     expect(resolveFavorite(fav({ targetId: "v1" }), "acme", ctx)).toEqual({
       label: "My bugs",
-      to: "/acme/view/abc",
+      to: "/acme/view/my-bugs-abc",
     });
     expect(
       resolveFavorite(
@@ -378,6 +378,15 @@ describe("IssueView mit gespeicherter View (WP31)", () => {
     await user.click(screen.getByRole("button", { name: "Transfer" }));
     await waitFor(() =>
       expect(calls).toEqual([{ id: "v-1", input: { ownerId: "u-bob", expectedVersion: 3 } }]),
+    );
+  });
+});
+
+describe("viewPath (B4.20)", () => {
+  it("hängt den Namens-Slug vor die slugId", async () => {
+    const { viewPath } = await import("./view-path");
+    expect(viewPath("acme", { name: "Offene Bugs (Web)", slugId: "77aa00bb11cc" })).toBe(
+      "/acme/view/offene-bugs-web-77aa00bb11cc",
     );
   });
 });

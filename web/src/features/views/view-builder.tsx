@@ -13,6 +13,7 @@ import { FilterBar } from "./filter-bar";
 import { buildFilter, type FilterChip } from "./filter-model";
 import { useCreateView, useViewIssues } from "./queries";
 import { useFilterSources } from "./use-filter-sources";
+import { viewPath } from "./view-path";
 
 /** Preferences, die beim Anlegen als Standard der View gespeichert werden (docs/05 §2.2 Nr. 4). */
 export function displayToPreferences(o: DisplayOptions): Record<string, unknown> {
@@ -68,7 +69,7 @@ export function ViewBuilderDialog({
       {
         onSuccess: (v) => {
           onClose();
-          void navigate({ to: `/${ws}/view/${v.slugId}` as "/" });
+          void navigate({ to: viewPath(ws, v) as "/" });
         },
       },
     );

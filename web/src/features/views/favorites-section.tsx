@@ -25,6 +25,7 @@ import type { Favorite } from "@/gql/graphql";
 
 import { computeFavoriteMove } from "./favorites-order";
 import { useCustomViews, useFavorites, useMoveFavorite, useToggleFavorite } from "./queries";
+import { viewPath } from "./view-path";
 
 const PREDEFINED: Record<string, { label: string; path: (ws: string, key: string) => string }> = {
   activeIssues: { label: "Active", path: (ws, k) => teamPaths(ws, k).active },
@@ -49,7 +50,7 @@ export function resolveFavorite(
   switch (f.type) {
     case "customView": {
       const v = f.targetId ? ctx.views.get(f.targetId) : undefined;
-      return v ? { label: v.name, to: `/${ws}/view/${v.slugId}` } : null;
+      return v ? { label: v.name, to: viewPath(ws, v) } : null;
     }
     case "predefinedView": {
       const p = f.predefinedViewType ? PREDEFINED[f.predefinedViewType] : undefined;
