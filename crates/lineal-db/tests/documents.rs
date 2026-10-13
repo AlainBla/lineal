@@ -1206,3 +1206,33 @@ async fn replace_range_with_swapped_anchors_gets_a_hint(pool: PgPool) {
         .unwrap();
     assert_eq!(ok.doc.content, "x\n\nDelta");
 }
+
+/// B2.11: Der gelesene (bereits bereinigte) Inhalt, erneut gesendet, ist keine Änderung – auch
+/// bei Markdown, das die Bereinigung anfasst (HTML, unsichere Links, CRLF, nachgestellte Leerzeichen).
+#[sqlx::test(migrations = "./migrations")]
+async fn resending_read_content_does_not_bump_the_version(pool: PgPool) {
+    let env = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let raw = "# Titel  \r\n\r\n<b>fett</b> [x](javascript:alert(1)) & <script>1</script>\r\n\r\n* a\r\n* b  \r\n\r\n```\r\n<i>code</i>\r\n```\r\n";
+    let d = create(&env, SeedUser::Alice, in_team("ENG", "Roundtrip", raw)).await;
+    let id = d.doc.id.to_string();
+    let v0 = d.doc.content_version;
+    for _ in 0..2 {
+        let read = env.app.get_document(&alice, &id).await.unwrap();
+        let v = env
+            .app
+            .save_document(
+                &alice,
+                SaveDocumentInput {
+                    id: Some(id.clone()),
+                    content: Some(read.doc.content.clone()),
+                    title: Some(read.doc.title.clone()),
+                    expected_version: Some(read.doc.content_version),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(v.doc.content_version, v0, "content {:?}", read.doc.content);
+    }
+}
