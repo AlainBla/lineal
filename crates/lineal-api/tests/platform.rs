@@ -718,6 +718,140 @@ async fn credentialed_requests_without_peer_fail_closed_in_production() {
 }
 
 #[tokio::test]
+async fn parallel_requests_never_exceed_the_account_budget() {
+    // (a) Prüfen und Abziehen sind atomar: 40 gleichzeitige Anfragen, Budget 10.
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.api_key = ClassLimits {
+        requests: 10.0,
+        complexity: 100.0,
+    };
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let mut tasks = Vec::new();
+    for _ in 0..40 {
+        let router = router.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut req = from_peer("203.0.113.30", "");
+            req.headers_mut()
+                .insert("authorization", KEY_RW.parse().unwrap());
+            send(&router, req).await.status
+        }));
+    }
+    let mut ok = 0;
+    for t in tasks {
+        if t.await.unwrap() == StatusCode::OK {
+            ok += 1;
+        }
+    }
+    assert_eq!(ok, 10);
+}
+
+#[tokio::test]
+async fn every_adapter_path_is_limited_and_scheme_or_case_changes_do_not_evade() {
+    // (b) /mcp, /sync, /collab, /oauth/token, /invite/accept, /files, /uploads laufen durch
+    // dieselbe Plattform-Middleware wie /graphql; (d) Schema-/Schreibweisenwechsel führen zum
+    // selben Konto-Bucket bzw. zählen als ungültig gegen die IP.
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous.requests = 1.0;
+    cfg.rate.ip_credentialed = 2.0;
+    cfg.rate.api_key = ClassLimits {
+        requests: 5.0,
+        complexity: 100.0,
+    };
+    let paths = [
+        "/mcp",
+        "/sync",
+        "/sync/bootstrap",
+        "/collab/doc",
+        "/oauth/token",
+        "/invite/accept",
+        "/files/x",
+        "/uploads/x",
+    ];
+    let mut r = Router::new();
+    for p in paths {
+        r = r.route(p, axum::routing::any(|| async { "ok" }));
+    }
+    let router = apply_with(r, app, cfg);
+    let req = |peer: &str, path: &str, auth: Option<&str>| {
+        let mut req = from_peer(peer, "");
+        *req.uri_mut() = path.parse().unwrap();
+        if let Some(a) = auth {
+            req.headers_mut()
+                .insert("authorization", a.parse().unwrap());
+        }
+        req
+    };
+    // Anonym: jeder Pfad teilt das IP-Limit (1).
+    assert_eq!(
+        send(&router, req("203.0.113.40", "/mcp", None))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    for p in paths {
+        assert_eq!(
+            send(&router, req("203.0.113.40", p, None)).await.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{p}"
+        );
+    }
+    // Gültiger Key in vier Schreibweisen: ein Konto-Bucket über alle Pfade (5).
+    let variants = [
+        format!("Bearer {KEY_RW}"),
+        format!("bearer {KEY_RW}"),
+        format!("BEARER  {KEY_RW}"),
+        KEY_RW.to_string(),
+        format!("Bearer {KEY_RW}"),
+    ];
+    for (i, v) in variants.iter().enumerate() {
+        let r = send(&router, req("203.0.113.41", paths[i], Some(v))).await;
+        assert_eq!(r.status, StatusCode::OK, "{v}");
+    }
+    let r = send(&router, req("203.0.113.41", "/mcp", Some(KEY_RW))).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    // Fremdes Schema/erfundene Werte: gelten als ungültige Zugangsdaten, zählen gegen die IP
+    // (hier 2) und kosten keinen Konto-Bucket.
+    let bogus = ["Basic Zm9vOmJhcg==", "Token abc", "Digest x"];
+    let mut codes = Vec::new();
+    for b in bogus {
+        codes.push(
+            send(&router, req("203.0.113.42", "/mcp", Some(b)))
+                .await
+                .status,
+        );
+    }
+    assert_eq!(codes[2], StatusCode::TOO_MANY_REQUESTS, "{codes:?}");
+}
+
+#[tokio::test]
+async fn forged_forwarded_for_does_not_evade_credentialed_ip_limits() {
+    // (c) Ein untrusted Peer kann per X-Forwarded-For weder das Netz (ip_authenticated) noch
+    // das Ungültig-Limit auf andere "IPs" verteilen.
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.ip_authenticated = 3.0;
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let mut statuses = Vec::new();
+    for i in 0..5 {
+        let mut req = from_peer("203.0.113.50", &format!("9.9.9.{i}"));
+        req.headers_mut()
+            .insert("authorization", format!("lin_api_fake{i}").parse().unwrap());
+        statuses.push(send(&router, req).await.status);
+    }
+    assert_eq!(statuses[3], StatusCode::TOO_MANY_REQUESTS, "{statuses:?}");
+}
+
+#[tokio::test]
 async fn many_keys_of_one_account_share_one_bucket() {
     // Gleicher Principal über zwei verschiedene Tokens: ein gemeinsamer Konto-Bucket.
     let shared = principal(Scopes::read_write());

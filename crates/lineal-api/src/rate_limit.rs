@@ -403,7 +403,9 @@ pub async fn middleware(
                 }
                 lineal_app::Actor::System => ctx.org_id.to_string(),
             };
-            (*class, format!("user:{id}"))
+            // Je Klasse ein Bucket (die Kapazität hängt an der Klasse); alle Credentials eines
+            // Users derselben Klasse (viele Keys/Sessions) teilen ihn.
+            (*class, format!("user:{class:?}:{id}"))
         }
         // Anonym/ungültig: bereits von Stufe 1 (IP) begrenzt.
         _ => return next.run(req).await,
