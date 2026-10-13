@@ -60,3 +60,13 @@
   white-space: nowrap;
   user-select: none;
 }
+
+/* Inline-Kommentare im Dokument (F.06) */
+.inline-comment-mark {
+  background-color: rgb(250 204 21 / 0.28);
+  border-bottom: 2px solid rgb(250 204 21 / 0.7);
+  cursor: pointer;
+}
+.inline-comment-active {
+  background-color: rgb(250 204 21 / 0.5);
+}

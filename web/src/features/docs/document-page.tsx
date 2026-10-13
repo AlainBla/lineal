@@ -1,7 +1,14 @@
-import { History } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { History, MessageSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { CommentsSection, useScrollToCommentHash } from "@/features/comments/comments-section";
+import {
+  type InlineAnchor,
+  useCommentMutations,
+  useTargetComments,
+} from "@/features/comments/queries";
+import type { InlineMark } from "@/features/collab/inline-comments";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { type CollabSession, useCollab } from "@/features/collab/use-collab";
 import { Input } from "@/components/ui/input";
@@ -11,6 +18,13 @@ import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import { useKnownUsers } from "@/features/issues/users";
 import type { Document } from "@/gql/graphql";
 
+import {
+  DocumentSettingsPanel,
+  SettingsToggle,
+  SubscribeButton,
+  TrashButton,
+} from "./document-actions";
+import { InlineThreadsPanel } from "./inline-threads-panel";
 import { useDocument, useDocumentHistory, useRestoreDocument, useSaveDocument } from "./queries";
 
 const AUTOSAVE_MS = 1000;
@@ -35,6 +49,45 @@ function Editor({
   const [title, setTitle] = useState(doc.title);
   const [status, setStatus] = useState<Status>("saved");
   const [showHistory, setShowHistory] = useState(false);
+  const [showThreads, setShowThreads] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [pendingAnchor, setPendingAnchor] = useState<InlineAnchor | null>(null);
+  const comments = useTargetComments({ documentId: doc.id }, 5000);
+  const commentMutations = useCommentMutations({ documentId: doc.id });
+  const inlineMarks = useMemo<InlineMark[]>(
+    () =>
+      (comments.data ?? []).flatMap((c) =>
+        !c.parentId && c.quotedText != null && c.anchorStart && c.anchorEnd
+          ? [
+              {
+                id: c.id,
+                anchorStart: c.anchorStart,
+                anchorEnd: c.anchorEnd,
+                resolved: !!c.resolvedAt,
+              },
+            ]
+          : [],
+      ),
+    [comments.data],
+  );
+  const inlineCount = (comments.data ?? []).filter(
+    (c) => !c.parentId && c.quotedText != null && !c.resolvedAt,
+  ).length;
+  // Benachrichtigungslink auf einen Inline-Thread: Seitenleiste öffnen, dann hinscrollen.
+  const hashId = /^#comment-(.+)$/.exec(window.location.hash)?.[1];
+  const hashIsInline = useMemo(() => {
+    const all = comments.data ?? [];
+    const c = all.find((x) => x.id === hashId);
+    const root = c?.parentId ? all.find((x) => x.id === c.parentId) : c;
+    return root?.quotedText != null;
+  }, [comments.data, hashId]);
+  const [seenHash, setSeenHash] = useState<string | null>(null);
+  if (hashIsInline && hashId && seenHash !== hashId) {
+    setSeenHash(hashId);
+    setShowThreads(true);
+  }
+  useScrollToCommentHash(comments.isSuccess && (!hashIsInline || showThreads));
   const version = useRef(doc.contentVersion);
   const pending = useRef<{ title?: string; content?: string }>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -115,16 +168,30 @@ function Editor({
               {statusText[status]}
             </span>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto"
-            aria-pressed={showHistory}
-            onClick={() => setShowHistory((v) => !v)}
-          >
-            <History /> History
-          </Button>
+          <span className="ml-auto flex items-center gap-1">
+            <SubscribeButton documentId={doc.id} />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={showThreads}
+              onClick={() => setShowThreads((v) => !v)}
+            >
+              <MessageSquare /> Comments{inlineCount > 0 ? ` (${inlineCount})` : ""}
+            </Button>
+            <SettingsToggle open={showSettings} onToggle={() => setShowSettings((v) => !v)} />
+            {!doc.trashed && <TrashButton doc={doc} />}
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={showHistory}
+              onClick={() => setShowHistory((v) => !v)}
+            >
+              <History /> History
+            </Button>
+          </span>
         </header>
+        {doc.trashed && <TrashButton doc={doc} />}
+        {showSettings && <DocumentSettingsPanel doc={doc} docRef={docRef} />}
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-6">
           <Input
             aria-label="Document title"
@@ -148,12 +215,39 @@ function Editor({
                 ? { provider: collab.provider, canWrite: collab.canWrite }
                 : undefined
             }
+            inline={
+              collab?.provider
+                ? {
+                    marks: inlineMarks,
+                    activeId: activeThread,
+                    onMarkClick: (id) => {
+                      setActiveThread(id);
+                      setShowThreads(true);
+                    },
+                    onComment: (a) => {
+                      setPendingAnchor(a);
+                      setShowThreads(true);
+                    },
+                  }
+                : undefined
+            }
           />
           {doc.warnings.length > 0 && (
             <p className="text-xs text-amber-500">{doc.warnings.join(" ")}</p>
           )}
+          <CommentsSection target={{ documentId: doc.id }} title="Comments" scope="regular" />
         </div>
       </div>
+      {showThreads && (
+        <InlineThreadsPanel
+          comments={comments.data ?? []}
+          mutations={commentMutations}
+          activeId={activeThread}
+          onSelect={setActiveThread}
+          pending={pendingAnchor}
+          onCancelPending={() => setPendingAnchor(null)}
+        />
+      )}
       {showHistory && <HistoryPanel doc={doc} docRef={docRef} onRestored={onRestored} />}
     </div>
   );

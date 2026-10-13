@@ -15,6 +15,12 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
 
+import {
+  InlineComments,
+  type InlineMark,
+  inlineCommentsKey,
+  selectionAnchor,
+} from "@/features/collab/inline-comments";
 import type { CollabProvider } from "@/features/collab/provider";
 import { cn } from "@/lib/cn";
 
@@ -41,6 +47,16 @@ export interface RichEditorProps {
    * ist der Editor schreibgeschützt.
    */
   collab?: { provider: CollabProvider; canWrite: boolean };
+  /**
+   * Inline-Kommentare (nur mit `collab`, F.06): Markierungen im Text, Klick darauf wählt den Thread,
+   * und eine Auswahl bietet „Comment“ an (liefert Zitat und Anker).
+   */
+  inline?: {
+    marks: InlineMark[];
+    activeId: string | null;
+    onMarkClick: (id: string) => void;
+    onComment: (a: { quotedText: string; anchorStart: string; anchorEnd: string }) => void;
+  };
 }
 
 interface Suggestion {
@@ -62,6 +78,7 @@ export function RichEditor({
   editable = true,
   className,
   collab,
+  inline,
 }: RichEditorProps) {
   const usersRef = useRef(users);
   const submitRef = useRef(onSubmit);
@@ -73,6 +90,11 @@ export function RichEditor({
     blurRef.current = onBlur;
     changeRef.current = onChange;
   });
+  const inlineRef = useRef(inline);
+  useEffect(() => {
+    inlineRef.current = inline;
+  });
+  const [selBox, setSelBox] = useState<{ left: number; top: number } | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const suggestionRef = useRef<Suggestion | null>(null);
   const setSug = (s: Suggestion | null) => {
@@ -102,6 +124,13 @@ export function RichEditor({
             CollaborationCaret.configure({
               provider: collab.provider,
               user: collab.provider.identity ?? { name: "You", color: "#888888" },
+            }),
+            // Die Refs werden erst in Editor-Callbacks gelesen, nie beim Rendern.
+            // eslint-disable-next-line react-hooks/refs
+            InlineComments.configure({
+              getMarks: () => inlineRef.current?.marks ?? [],
+              getActiveId: () => inlineRef.current?.activeId ?? null,
+              onMarkClick: (id) => inlineRef.current?.onMarkClick(id),
             }),
           ]
         : []),
@@ -178,7 +207,20 @@ export function RichEditor({
       if (!collab) changeRef.current?.(ed.getMarkdown());
     },
     onBlur: () => blurRef.current?.(),
+    onSelectionUpdate: ({ editor: ed }) => {
+      if (!inlineRef.current || ed.state.selection.empty) return setSelBox(null);
+      const c = ed.view.coordsAtPos(ed.state.selection.to);
+      setSelBox({ left: c.left, top: c.bottom + 4 });
+    },
   });
+
+  // Markierungen neu zeichnen, wenn sich die Kommentare oder die aktive Auswahl ändern.
+  const marksKey = inline ? `${inline.activeId}|${JSON.stringify(inline.marks)}` : "";
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || !inline) return;
+    editor.view.dispatch(editor.state.tr.setMeta(inlineCommentsKey, true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, marksKey]);
 
   return (
     <div
@@ -188,6 +230,23 @@ export function RichEditor({
       )}
     >
       <EditorContent editor={editor} />
+      {inline && selBox && editor && (
+        <button
+          type="button"
+          aria-label="Comment on selection"
+          className="fixed z-[70] rounded-md border border-border-strong bg-popover px-2 py-1 text-xs shadow-popover hover:bg-surface-hover"
+          style={{ left: selBox.left, top: selBox.top }}
+          // Die Auswahl muss erhalten bleiben (kein Fokuswechsel).
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const a = selectionAnchor(editor.state);
+            setSelBox(null);
+            if (a) inline.onComment(a);
+          }}
+        >
+          Comment
+        </button>
+      )}
       {suggestion && suggestion.items.length > 0 && (
         <ul
           role="listbox"

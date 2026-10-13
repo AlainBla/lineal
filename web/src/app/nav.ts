@@ -47,6 +47,7 @@ export interface TeamNav {
   upcomingCycle: string;
   projects: string;
   views: string;
+  documents: string;
   settings: string;
 }
 
@@ -64,6 +65,7 @@ export function teamPaths(ws: string, key: string): TeamNav {
     upcomingCycle: `${base}/cycle/upcoming`,
     projects: `${base}/projects/all`,
     views: `${base}/views/issues`,
+    documents: `${base}/documents`,
     settings: `/${ws}/settings/teams/${key}/general`,
   };
 }
@@ -88,6 +90,7 @@ const SEGMENT_TITLES: Record<string, string> = {
   initiatives: "Initiatives",
   initiative: "Initiative",
   views: "Views",
+  documents: "Documents",
   view: "View",
   settings: "Settings",
   triage: "Triage",

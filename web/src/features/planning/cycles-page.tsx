@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { teamPaths } from "@/app/nav";
+import { DocumentsSection } from "@/features/docs/documents-section";
 import { setCreateContext } from "@/features/issues/create-store";
 import { useTeamMeta } from "@/features/issues/hooks";
 import { IssueList } from "@/features/issues/issue-list";
@@ -169,6 +170,7 @@ export function CyclePage({
             onFocus={setFocusedId}
           />
         )}
+        <DocumentsSection ws={ws} scope={{ cycleId: cycle.id }} teamId={meta.data?.team.id} />
       </div>
     </div>
   );

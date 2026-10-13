@@ -16,6 +16,8 @@ import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
 
 import { DueDateDialog } from "./due-date-dialog";
+import { DocumentsSection } from "@/features/docs/documents-section";
+
 import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
@@ -407,6 +409,9 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               dialog={relationDialog}
               onDialog={setRelationDialog}
             />
+            <div className="rounded-lg border border-border">
+              <DocumentsSection ws={ws} scope={{ issueId: issue.id }} teamId={issue.teamId} />
+            </div>
             <ActivitySection issue={issue} lookup={lookup} />
           </div>
         </article>

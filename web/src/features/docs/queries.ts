@@ -13,7 +13,7 @@ export const docKeys = {
   history: (id: string) => ["docs", "history", id] as const,
 };
 
-const DOC_FIELDS = `id slugId title content icon color url projectId issueId initiativeId cycleId teamId
+export const DOC_FIELDS = `id slugId title content icon color url projectId issueId initiativeId cycleId teamId
   contentVersion trashed createdAt updatedAt archivedAt warnings`;
 
 export function useDocument(ref: string) {
