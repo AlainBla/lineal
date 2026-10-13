@@ -79,3 +79,36 @@ async fn names_reject_line_breaks_and_invisible_characters(pool: sqlx::PgPool) {
     let v = r.data.into_json().unwrap();
     assert_eq!(v["viewerUpdate"]["viewer"]["name"], "Caf\u{e9} Alice");
 }
+
+const ISSUE_CREATE: &str = "mutation($i: IssueCreateInput!) { issueCreate(input: $i) { success } }";
+
+/// B8.02: NUL-Zeichen in beliebigen Textfeldern liefern `invalid_request` statt `internal`.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn nul_characters_are_invalid_request_not_internal(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let alice = || ctx_for(SeedUser::Alice);
+    let r = run(
+        &schema,
+        alice(),
+        ISSUE_CREATE,
+        json!({"i": {"teamId": "ENG", "title": "ok", "description": "a\u{0}b"}}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+    let r = run(
+        &schema,
+        alice(),
+        TEAM_CREATE,
+        json!({"i": {"name": "Nul Team", "description": "x\u{0}y"}}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+    let r = run(
+        &schema,
+        alice(),
+        LABEL_CREATE,
+        json!({"i": {"name": "n", "description": "x\u{0}y"}}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+}
