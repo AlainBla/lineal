@@ -20,6 +20,11 @@ impl PeriodicJob for ImportRunnerJob {
         Schedule::Every(Duration::from_secs(10))
     }
 
+    /// Ein Import dauert Stunden: eigene Task, der Worker-Takt bleibt frei (B7.02).
+    fn detached(&self) -> bool {
+        true
+    }
+
     async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()> {
         // Ein Lauf je Takt; langlaufende Importe halten ihre Lease selbst.
         lineal_import::runner::tick(app, now).await.map(|_| ())
