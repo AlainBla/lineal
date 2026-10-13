@@ -4,7 +4,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
-import { COMPLETED_WINDOWS, GROUPINGS, ORDERINGS, type DisplayOptions } from "./display-options";
+import {
+  COMPLETED_WINDOWS,
+  GROUPINGS,
+  ORDERINGS,
+  defaultDirection,
+  type DisplayOptions,
+} from "./display-options";
 
 const LABEL: Record<string, string> = {
   none: "No grouping",
@@ -83,9 +89,10 @@ export function DisplayMenu({
                 aria-label="Ordering"
                 className={selectCls}
                 value={options.ordering}
-                onChange={(e) =>
-                  onChange({ ordering: e.target.value as DisplayOptions["ordering"] })
-                }
+                onChange={(e) => {
+                  const ordering = e.target.value as DisplayOptions["ordering"];
+                  onChange({ ordering, orderDirection: defaultDirection(ordering) });
+                }}
               >
                 {ORDERINGS.map((g) => (
                   <option key={g} value={g}>
@@ -97,6 +104,7 @@ export function DisplayMenu({
             <Row label="Direction">
               <select
                 aria-label="Direction"
+                disabled={options.ordering === "manual"}
                 className={selectCls}
                 value={options.orderDirection}
                 onChange={(e) =>

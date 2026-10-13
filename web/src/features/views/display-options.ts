@@ -103,29 +103,46 @@ export function applyVisibility(
   return { visible, hidden: issues.length - visible.length };
 }
 
+/** Natürliche, groß-/kleinschreibungsunabhängige Titelsortierung (docs/05 §2.5). */
+const compareTitles = (a: string, b: string): number =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+/**
+ * Sortierung nach docs/05 §2.5: Richtung wirkt nur auf vorhandene Werte, leere Werte (No priority,
+ * keine Fälligkeit) stehen in beiden Richtungen zuletzt; `manual` ist nicht umkehrbar. Zeitpunkte
+ * sind ihrer Richtung gemäß sortiert (createdAt asc = ältestes zuerst). Tie-Breaker: createdAt
+ * absteigend, dann id.
+ */
 export function sortIssues(issues: Issue[], o: DisplayOptions): Issue[] {
   const dir = o.orderDirection === "desc" ? -1 : 1;
   const cmp = (a: Issue, b: Issue): number => {
     switch (o.ordering) {
       case "title":
-        return a.title.localeCompare(b.title);
+        return dir * compareTitles(a.title, b.title);
       case "updatedAt":
-        return b.updatedAt.localeCompare(a.updatedAt);
+        return dir * a.updatedAt.localeCompare(b.updatedAt);
       case "createdAt":
-        return b.createdAt.localeCompare(a.createdAt);
-      case "dueDate":
-        return (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999");
+        return dir * a.createdAt.localeCompare(b.createdAt);
+      case "dueDate": {
+        if (!a.dueDate || !b.dueDate) return (a.dueDate ? 0 : 1) - (b.dueDate ? 0 : 1);
+        return dir * a.dueDate.localeCompare(b.dueDate);
+      }
       case "manual":
         return a.sortOrder - b.sortOrder;
-      default:
-        return priorityRank(a.priority) - priorityRank(b.priority);
+      default: {
+        if ((a.priority === 0) !== (b.priority === 0)) return a.priority === 0 ? 1 : -1;
+        return dir * (priorityRank(a.priority) - priorityRank(b.priority));
+      }
     }
   };
   return [...issues].sort(
-    (a, b) =>
-      dir * cmp(a, b) || a.identifier.localeCompare(b.identifier, undefined, { numeric: true }),
+    (a, b) => cmp(a, b) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id),
   );
 }
+
+/** Voreingestellte Richtung je Sortierung (docs/05 §2.5): Zeitpunkte absteigend, sonst aufsteigend. */
+export const defaultDirection = (o: Ordering): DisplayOptions["orderDirection"] =>
+  o === "createdAt" || o === "updatedAt" ? "desc" : "asc";
 
 export interface IssueGroup {
   key: string;
