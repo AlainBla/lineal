@@ -91,7 +91,10 @@ export function useCommentMutations(target: CommentTarget) {
           `mutation TargetCommentCreate($input: CommentCreateInput!) {
             commentCreate(input: $input) { success }
           }`,
-          { input: { ...target, ...v } },
+          {
+            // Eine Antwort nennt nur den Eltern-Kommentar, nicht zusätzlich das Elternobjekt.
+            input: v.parentId ? v : { ...target, ...v },
+          },
         ),
       onSuccess: done,
     }),

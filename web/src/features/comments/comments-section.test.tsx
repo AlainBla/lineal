@@ -109,7 +109,7 @@ describe("CommentsSection", () => {
     await user.keyboard("A reply");
     await user.click(within(section).getByRole("button", { name: "Reply" }));
     await waitFor(() => expect(created).toHaveLength(2));
-    expect(created[1]).toMatchObject({ parentId: "c1", body: "A reply" });
+    expect(created[1]).toEqual({ parentId: "c1", body: "A reply" });
   });
 
   it("bearbeitet und löscht nur eigene Kommentare, löst Threads auf", async () => {
