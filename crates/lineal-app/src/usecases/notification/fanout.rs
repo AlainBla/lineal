@@ -46,6 +46,19 @@ pub(crate) struct Refs {
     pub reaction_emoji: Option<String>,
 }
 
+/// Ob zwei Typen einander aufheben.
+fn is_opposite(a: &str, b: &str) -> bool {
+    matches!(
+        (a, b),
+        ("issueAssignedToYou", "issueUnassignedFromYou")
+            | ("issueUnassignedFromYou", "issueAssignedToYou")
+            | ("issueSubscribed", "issueUnsubscribed")
+            | ("issueUnsubscribed", "issueSubscribed")
+            | ("documentSubscribed", "documentUnsubscribed")
+            | ("documentUnsubscribed", "documentSubscribed")
+    )
+}
+
 /// Gruppenschlüssel einer neuen Notification (wie die generierte Spalte `group_key`).
 fn group_key_of(n: &NewNotification) -> Option<String> {
     match n.target_type.as_str() {
@@ -131,6 +144,21 @@ impl<'a> Fan<'a> {
         })
     }
 
+    /// Wie [`Fan::can_see_any`] für ein Issue; zusätzlich sieht es, wem es freigegeben wurde
+    /// (`issue_share`, docs/09 §5.6).
+    pub async fn can_see_issue(
+        &mut self,
+        user: UserId,
+        issue: IssueId,
+        team: TeamId,
+    ) -> AppResult<bool> {
+        if self.can_see_any(user, &[team]).await? {
+            return Ok(true);
+        }
+        let active = matches!(self.visible.get(&user), Some(Some(_)));
+        Ok(active && self.tx.documents().issue_shared_with(issue, user).await?)
+    }
+
     /// Fügt einen Kandidaten hinzu; bei mehreren Gründen gewinnt der spezifischste Typ.
     pub fn add(&mut self, user: UserId, kind: &'static str) {
         match self.cands.get(&user) {
@@ -204,7 +232,7 @@ impl<'a> Fan<'a> {
         thread: Option<CommentId>,
         reason: SubscriptionReason,
     ) -> AppResult<()> {
-        if self.can_see_any(user, &[f.team_id]).await? {
+        if self.can_see_issue(user, f.id, f.team_id).await? {
             self.tx
                 .notifications()
                 .subscribe_issue(f.id, user, thread, reason, self.now)
@@ -408,7 +436,7 @@ impl<'a> Fan<'a> {
         if has("teamId") {
             // Abos von Usern, die das neue Team nicht sehen dürfen, entfallen (docs/05 §6.3).
             for s in self.tx.notifications().issue_subscribers(f.id).await? {
-                if !self.can_see_any(s, &[f.team_id]).await? {
+                if !self.can_see_issue(s, f.id, f.team_id).await? {
                     self.tx
                         .notifications()
                         .unsubscribe_issue(f.id, s, self.now)
@@ -814,13 +842,15 @@ impl<'a> Fan<'a> {
         else {
             return Ok(false);
         };
-        let wins = rank_of(&n.kind) < rank_of(&target.kind);
+        // Gegenläufige Ereignisse (zugewiesen/abgegeben, abonniert/abbestellt) ersetzen sich: der
+        // Endzustand gewinnt (docs/05 §6.6).
+        let wins = rank_of(&n.kind) < rank_of(&target.kind) || is_opposite(&n.kind, &target.kind);
         let mut types = if target.bundled_types.is_empty() {
             vec![target.kind.clone()]
         } else {
             target.bundled_types.clone()
         };
-        if types.len() < MAX_BUNDLED_TYPES {
+        if types.len() < MAX_BUNDLED_TYPES && !types.contains(&n.kind) {
             types.push(n.kind.clone());
         }
         let kind = if wins { n.kind.clone() } else { target.kind };
@@ -830,7 +860,8 @@ impl<'a> Fan<'a> {
             kind,
             take_refs: wins,
             bundled_types: types,
-            is_priority: n.is_priority,
+            // isPriority = any(...) (docs/05 §6.5): die Bündelung darf es nie zurücknehmen.
+            is_priority: n.is_priority || target.is_priority,
         };
         self.tx
             .notifications()
@@ -880,7 +911,11 @@ impl<'a> Fan<'a> {
         let teams = self.teams.clone();
         let mut created = 0;
         for (user, kind) in cands {
-            if !self.can_see_any(user, &teams).await? {
+            let visible = match (self.refs.issue_id, self.refs.team_id) {
+                (Some(issue), Some(team)) => self.can_see_issue(user, issue, team).await?,
+                _ => self.can_see_any(user, &teams).await?,
+            };
+            if !visible {
                 continue;
             }
             let category = category_of(kind);

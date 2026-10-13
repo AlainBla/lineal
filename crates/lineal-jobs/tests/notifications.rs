@@ -456,7 +456,7 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         "eine Gruppe"
     );
 
-    // gelesen / ungelesen (einzeln)
+    // gelesen / ungelesen (gilt für die ganze Gruppe, docs/05 §6.7)
     let id = list.items[0].view.n.id;
     let read = e
         .app
@@ -482,7 +482,8 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
             .unwrap()
             .items
             .len(),
-        1
+        0,
+        "die ganze Gruppe ist gelesen"
     );
     let back = e
         .app
@@ -497,6 +498,15 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         .await
         .unwrap();
     assert!(back.view.n.read_at.is_none());
+    assert_eq!(
+        e.app
+            .list_notifications(&ctx, unread_only.clone())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
 
     // Öffnen liest die ganze Gruppe.
     e.app.open_notification(&ctx, id).await.unwrap();
@@ -2097,4 +2107,351 @@ async fn read_only_token_cannot_change_inbox_or_subscriptions(pool: PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.kind, lineal_app::ErrorKind::Forbidden);
+}
+
+// --- Paket 6: Bündelung, Dringlichkeit, Freigaben, Gruppen ---
+
+fn assignee_changed(issue: IssueId, d: &SeedData) -> DomainEvent {
+    DomainEvent::IssueUpdated {
+        previous: None,
+        issue_id: issue,
+        team_id: d.eng,
+        changed: vec!["assigneeId".into()],
+        mentioned_user_ids: vec![],
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bundling_keeps_priority_and_does_not_duplicate_types(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    // Issue ist bereits erledigt: der Statuswechsel erzeugt für den Assignee `issueStatusChanged`
+    // (Kategorie statusChanges, kein Priority-Default).
+    let issue = e.issue(e.d.eng, 1, 950, alice, Some(bob), 3).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: None,
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["stateId".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    // Doppelte Zuweisung (Anlage + Zuweisung) erzeugt keinen zweiten gleichen Eintrag.
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    let rows: Vec<(String, bool, Vec<String>)> = sqlx::query_as(
+        "SELECT type, is_priority, bundled_types FROM notification WHERE user_id = $1",
+    )
+    .bind(bob.0)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "issueAssignedToYou");
+    assert!(
+        rows[0].1,
+        "isPriority darf durch die Bündelung nicht fallen"
+    );
+    assert_eq!(
+        rows[0].2,
+        vec!["issueAssignedToYou", "issueStatusChanged"],
+        "keine doppelten Typen"
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn opposite_events_end_in_the_final_state(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 951, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    sqlx::query("UPDATE issue SET assignee_id = NULL WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: Some(lineal_domain::events::IssuePrevious {
+                assignee_id: Some(bob),
+                ..Default::default()
+            }),
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["assigneeId".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["issueUnassignedFromYou"]);
+}
+
+async fn make_urgent(e: &Env, issue: IssueId) {
+    sqlx::query("UPDATE issue SET priority = 1 WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn urgent_assignment_is_mailed_immediately_unless_disabled(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let urgent = e.issue(e.d.eng, 1, 952, alice, Some(bob), 1).await;
+    make_urgent(&e, urgent).await;
+    e.handle(&e.user_ev(alice, assignee_changed(urgent, &e.d)))
+        .await;
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        1,
+        "Urgent-Zuweisung geht sofort raus"
+    );
+
+    // Normale Zuweisung: 5 Minuten Verzögerung.
+    let normal = e.issue(e.d.eng, 1, 953, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(normal, &e.d)))
+        .await;
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Mit abgeschalteter Sofort-Regel gilt auch Urgent die 5 Minuten.
+    e.app
+        .update_notification_settings(
+            &ctx_for(SeedUser::Bob),
+            NotificationSettingsPatch {
+                email_immediate_urgent: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let urgent2 = e.issue(e.d.eng, 1, 954, alice, Some(bob), 1).await;
+    make_urgent(&e, urgent2).await;
+    e.handle(&e.user_ev(alice, assignee_changed(urgent2, &e.d)))
+        .await;
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(20))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::minutes(6))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn priority_change_bundled_into_assignment_still_mails_immediately(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 955, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    make_urgent(&e, issue).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: None,
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["priority".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 1, "gebündelt");
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn guest_with_share_is_mentioned_and_notified(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, carol) = (e.d.alice, e.d.carol);
+    let _issue = e.issue(e.d.eng, 1, 956, alice, None, 1).await;
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": true}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let actx = ctx_for(SeedUser::Alice);
+    let input = |body: &str| lineal_app::usecases::comment::CreateCommentInput {
+        parent: Some(lineal_app::usecases::comment::ParentSpec::Issue(
+            "ENG-956".into(),
+        )),
+        reply_to: None,
+        body: body.into(),
+        quoted_text: None,
+    };
+    // Ohne Freigabe: keine Erwähnung.
+    let m = e
+        .app
+        .create_comment(&actx, input("Bitte ansehen @carol"))
+        .await
+        .unwrap();
+    assert!(m.mentioned_user_ids.is_empty());
+    e.app.share_issue(&actx, "ENG-956", "carol").await.unwrap();
+    let m = e
+        .app
+        .create_comment(&actx, input("Jetzt geteilt @carol"))
+        .await
+        .unwrap();
+    assert_eq!(m.mentioned_user_ids, vec![carol]);
+    let comment: CommentId = m.view.comment.id;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![carol],
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(carol).await, vec!["issueCommentMention"]);
+    let cctx = ctx_for(SeedUser::Carol);
+    assert_eq!(
+        e.app
+            .list_notifications(&cctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1,
+        "Inbox zeigt die Notification des geteilten Issues"
+    );
+    let id = e.first_notification(carol).await;
+    e.app.get_notification(&cctx, id).await.unwrap();
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn read_state_applies_to_the_whole_group(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 957, alice, None, 1).await;
+    e.subscribe(issue, bob).await;
+    let c1 = e.comment(issue, alice, None).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: c1,
+            mentioned_user_ids: vec![bob],
+        },
+    ))
+    .await;
+    // Anderer Akteur: wird nicht mit der ersten Notification gebündelt, bleibt aber in derselben Gruppe.
+    let c2 = e.comment(issue, e.d.carol, None).await;
+    e.handle(&e.user_ev(
+        e.d.carol,
+        DomainEvent::CommentCreated {
+            comment_id: c2,
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 2);
+    let ctx = ctx_for(SeedUser::Bob);
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 1);
+    let id = e.first_notification(bob).await;
+    e.app
+        .mark_notification(
+            &ctx,
+            id,
+            MarkNotificationInput {
+                read: Some(true),
+                snoozed_until_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    let unread: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notification WHERE user_id = $1 AND read_at IS NULL",
+    )
+    .bind(bob.0)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(unread, 0, "gelesen gilt für die ganze Gruppe");
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn notifications_of_deleted_comments_and_trashed_issues_are_hidden_and_not_mailed(
+    pool: PgPool,
+) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 958, alice, None, 1).await;
+    e.subscribe(issue, bob).await;
+    let comment = e.comment(issue, alice, None).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![bob],
+        },
+    ))
+    .await;
+    let ctx = ctx_for(SeedUser::Bob);
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 1);
+    sqlx::query("UPDATE comment SET deleted_at = now() WHERE id = $1")
+        .bind(comment.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 0);
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::minutes(10))
+            .await
+            .unwrap(),
+        0,
+        "keine Mail zu gelöschtem Kommentar"
+    );
+    sqlx::query("UPDATE comment SET deleted_at = NULL WHERE id = $1")
+        .bind(comment.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE issue SET trashed = true WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert!(
+        e.app
+            .list_notifications(&ctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }

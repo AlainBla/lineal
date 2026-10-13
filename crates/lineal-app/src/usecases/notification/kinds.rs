@@ -92,6 +92,36 @@ pub fn urgency_of(kind: &str) -> Urgency {
     }
 }
 
+/// Dringlichkeit einer gespeicherten Notification (docs/05 §6.9): berücksichtigt alle
+/// gebündelten Typen und die Priorität des Issues (`issueAssignedToYou` bei Urgent-Issues ist
+/// hoch). Ohne `immediate_urgent` (Einstellung `emailImmediateUrgent`) gilt "hoch" nur als "mittel".
+pub fn urgency_of_view(v: &NotificationView, immediate_urgent: bool) -> Urgency {
+    let own = [v.n.kind.clone()];
+    let kinds: &[String] = if v.n.bundled_types.is_empty() {
+        &own
+    } else {
+        &v.n.bundled_types
+    };
+    let mut best = Urgency::Low;
+    for k in kinds.iter().chain(std::iter::once(&v.n.kind)) {
+        let u = if k == "issueAssignedToYou" && v.issue_priority == Some(1) {
+            Urgency::High
+        } else {
+            urgency_of(k)
+        };
+        best = match (best, u) {
+            (Urgency::High, _) | (_, Urgency::High) => Urgency::High,
+            (Urgency::Medium, _) | (_, Urgency::Medium) => Urgency::Medium,
+            _ => Urgency::Low,
+        };
+    }
+    if best == Urgency::High && !immediate_urgent {
+        Urgency::Medium
+    } else {
+        best
+    }
+}
+
 /// Standard für Kanäle ohne gespeicherte Einstellung (docs/05 §6.9).
 pub fn channel_default(category: &str, channel: &str) -> bool {
     match channel {

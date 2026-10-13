@@ -165,7 +165,13 @@ async fn fetch_visible(
         .ok_or_else(not_found)?;
     let visible = snap.visible_team_ids();
     let ok = match (&view.issue_team_id, view.n.project_id) {
-        (Some(team), _) => visible.contains(team),
+        (Some(team), _) => {
+            visible.contains(team)
+                || match view.n.issue_id {
+                    Some(issue) => tx.documents().issue_shared_with(issue, user).await?,
+                    None => false,
+                }
+        }
         (None, Some(project)) if view.n.target_type == "project" => tx
             .notifications()
             .project_team_ids(project)
@@ -308,21 +314,31 @@ impl App {
                 .snooze_group(user, &view.n.group_key, until, now)
                 .await?;
         }
+        // Gelesen/ungelesen gilt für die ganze Gruppe (docs/05 §6.7/6.8).
+        let mut changed: Vec<NotificationId> = vec![id];
         if let Some(read) = input.read {
-            tx.notifications().set_read(user, id, read, now).await?;
+            changed.extend(
+                tx.notifications()
+                    .set_read(user, id, read, now)
+                    .await?
+                    .into_iter()
+                    .filter(|c| *c != id),
+            );
         }
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let view = fetch_visible(&mut *tx, &snap, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
-        push_notification_event(
-            &mut *tx,
-            ctx,
-            DomainEvent::NotificationUpdated {
-                notification_id: id,
-                user_id: user,
-            },
-        )
-        .await?;
+        for notification_id in changed {
+            push_notification_event(
+                &mut *tx,
+                ctx,
+                DomainEvent::NotificationUpdated {
+                    notification_id,
+                    user_id: user,
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(to_item(view, &base))
     }

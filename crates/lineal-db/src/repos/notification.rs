@@ -17,7 +17,7 @@ const VIEW_SELECT: &str = "SELECT n.id, n.user_id, n.type AS kind, n.category, n
     n.issue_id, n.team_id, n.project_id, n.project_update_id, n.project_milestone_id, n.initiative_id, \
     n.initiative_update_id, n.document_id, n.comment_id, n.parent_comment_id, n.reaction_emoji, n.read_at, \
     n.snoozed_until_at, n.unsnoozed_at, n.emailed_at, n.is_priority, n.group_key, n.bundled_types, n.created_at, n.updated_at, \
-    n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.team_id AS issue_team_id, i.title AS issue_title, \
+    n.archived_at, a.name AS actor_name, i.identifier AS issue_identifier, i.team_id AS issue_team_id, i.title AS issue_title, i.priority AS issue_priority, \
     p.name AS project_name, ini.name AS initiative_name, d.title AS document_title, u.email AS recipient_email \
     FROM notification n \
     JOIN \"user\" u ON u.organization_id = n.organization_id AND u.id = n.user_id \
@@ -27,10 +27,15 @@ const VIEW_SELECT: &str = "SELECT n.id, n.user_id, n.type AS kind, n.category, n
     LEFT JOIN initiative ini ON ini.organization_id = n.organization_id AND ini.id = n.initiative_id \
     LEFT JOIN document d ON d.organization_id = n.organization_id AND d.id = n.document_id ";
 
+/// Der Kommentar, auf den sich die Notification bezieht, ist nicht gelöscht (B6.16).
+const ALIVE_COMMENT_SQL: &str = "(n.comment_id IS NULL OR EXISTS (SELECT 1 FROM comment dc \
+     WHERE dc.organization_id = n.organization_id AND dc.id = n.comment_id AND dc.archived_at IS NULL AND dc.deleted_at IS NULL))";
+
 /// Bezugsobjekt sichtbar (`$vis` = Array sichtbarer Team-IDs).
 fn visible_sql(vis: &str) -> String {
     format!(
-        "(n.issue_id IS NULL OR i.team_id = ANY({vis})) \
+        "(n.issue_id IS NULL OR i.team_id = ANY({vis}) OR EXISTS (SELECT 1 FROM issue_share ish WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)) \
+         AND (i.id IS NULL OR NOT i.trashed) AND {ALIVE_COMMENT_SQL} \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
               WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
          AND {}",
@@ -55,7 +60,10 @@ fn doc_visible_sql(n: &str, vis: &str) -> String {
 /// Wie [`visible_sql`], aber ohne Joins (für UPDATE-Statements).
 fn visible_sub_sql(vis: &str) -> String {
     format!(
-        "((n.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue vi WHERE vi.id = n.issue_id AND vi.team_id = ANY({vis}))) \
+        "((n.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue vi WHERE vi.id = n.issue_id AND NOT vi.trashed \
+              AND (vi.team_id = ANY({vis}) OR EXISTS (SELECT 1 FROM issue_share ish \
+                   WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)))) \
+         AND {ALIVE_COMMENT_SQL} \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
               WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
          AND {})",
@@ -117,6 +125,7 @@ struct ViewRow {
     issue_identifier: Option<String>,
     issue_team_id: Option<Uuid>,
     issue_title: Option<String>,
+    issue_priority: Option<i32>,
     project_name: Option<String>,
     initiative_name: Option<String>,
     document_title: Option<String>,
@@ -159,6 +168,7 @@ impl From<ViewRow> for NotificationView {
             issue_identifier: r.issue_identifier,
             issue_team_id: r.issue_team_id.map(TeamId),
             issue_title: r.issue_title,
+            issue_priority: r.issue_priority,
             project_name: r.project_name,
             initiative_name: r.initiative_name,
             document_title: r.document_title,
@@ -352,8 +362,8 @@ impl NotificationRepo for PgTx {
         actor: UserId,
         since: DateTime<Utc>,
     ) -> AppResult<Option<BundleTarget>> {
-        let row: Option<(Uuid, String, Vec<String>)> = sqlx::query_as(
-            "SELECT id, type, bundled_types FROM notification \
+        let row: Option<(Uuid, String, Vec<String>, bool)> = sqlx::query_as(
+            "SELECT id, type, bundled_types, is_priority FROM notification \
              WHERE organization_id = $1 AND user_id = $2 AND group_key = $3 AND actor_id = $4 \
                AND archived_at IS NULL AND created_at >= $5 \
              ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -366,11 +376,14 @@ impl NotificationRepo for PgTx {
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(row.map(|(id, kind, bundled_types)| BundleTarget {
-            id: NotificationId(id),
-            kind,
-            bundled_types,
-        }))
+        Ok(
+            row.map(|(id, kind, bundled_types, is_priority)| BundleTarget {
+                id: NotificationId(id),
+                kind,
+                bundled_types,
+                is_priority,
+            }),
+        )
     }
 
     async fn merge_notification(&mut self, n: &NewNotification, m: &BundleMerge) -> AppResult<()> {
@@ -539,21 +552,24 @@ impl NotificationRepo for PgTx {
         id: NotificationId,
         read: bool,
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
-        sqlx::query(
+    ) -> AppResult<Vec<NotificationId>> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
             "UPDATE notification SET read_at = CASE WHEN $4 THEN $5 ELSE NULL END, updated_at = $5, \
              version = version + 1 \
-             WHERE organization_id = $1 AND user_id = $2 AND id = $3 AND (read_at IS NULL) = $4",
+             WHERE organization_id = $1 AND user_id = $2 AND archived_at IS NULL AND (read_at IS NULL) = $4 \
+               AND group_key = (SELECT g.group_key FROM notification g \
+                                WHERE g.organization_id = $1 AND g.user_id = $2 AND g.id = $3) \
+             RETURNING id",
         )
         .bind(self.org.0)
         .bind(user.0)
         .bind(id.0)
         .bind(read)
         .bind(now)
-        .execute(&mut *self.tx)
+        .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(())
+        Ok(ids.into_iter().map(NotificationId).collect())
     }
 
     async fn mark_group_read(
@@ -734,6 +750,7 @@ impl NotificationRepo for PgTx {
         let sql = format!(
             "{VIEW_SELECT} WHERE n.organization_id = $1 AND n.read_at IS NULL AND n.emailed_at IS NULL \
              AND n.archived_at IS NULL AND u.active AND n.created_at >= $2 AND {} \
+             AND (i.id IS NULL OR NOT i.trashed) AND {ALIVE_COMMENT_SQL} \
              ORDER BY n.created_at, n.id LIMIT $4",
             awake_sql("$3")
         );

@@ -61,6 +61,8 @@ pub struct NotificationView {
     /// Aktuelles Team des Issues (für Sichtbarkeitsprüfungen zum Lesezeitpunkt).
     pub issue_team_id: Option<TeamId>,
     pub issue_title: Option<String>,
+    /// Aktuelle Priorität des Issues (1 = Urgent; für die E-Mail-Dringlichkeit).
+    pub issue_priority: Option<i32>,
     pub project_name: Option<String>,
     pub initiative_name: Option<String>,
     pub document_title: Option<String>,
@@ -254,6 +256,7 @@ pub struct BundleTarget {
     pub id: NotificationId,
     pub kind: String,
     pub bundled_types: Vec<String>,
+    pub is_priority: bool,
 }
 
 /// Zusammenführung eines Ereignisses in eine bestehende Notification.
@@ -446,14 +449,15 @@ pub trait NotificationRepo: Send {
         unimplemented_repo()
     }
 
-    /// Setzt `readAt` einer einzelnen Notification.
+    /// Setzt `readAt` für die ganze (nicht archivierte) Gruppe der Notification (docs/05 §6.7);
+    /// liefert die geänderten IDs (für die Sync-Events).
     async fn set_read(
         &mut self,
         _user: UserId,
         _id: NotificationId,
         _read: bool,
         _now: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<Vec<NotificationId>> {
         unimplemented_repo()
     }
 
