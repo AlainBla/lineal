@@ -259,6 +259,16 @@ async fn registration_validates_redirect_uris(pool: PgPool) {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {text}");
         assert!(text.contains("invalid_client_metadata"));
     }
+    for bad in [
+        "mailto:x@y.z",
+        "view-source:https://a.example",
+        "intent://x#Intent;end",
+        "tel:123",
+        "sms:123",
+    ] {
+        assert!(!valid_redirect_uri(bad), "{bad}");
+    }
+    assert!(valid_redirect_uri("com.example.app:/oauth2redirect"));
     assert!(valid_redirect_uri("https://app.example/cb"));
     assert!(valid_redirect_uri(
         "cursor://anysphere.cursor-retrieval/oauth/callback"
@@ -423,7 +433,7 @@ async fn full_flow_pkce_failures_and_mcp_with_oauth_token(pool: PgPool) {
     let (s, v) = exchange(&fx, &client, &code, VERIFIER).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["token_type"], "Bearer");
-    assert_eq!(v["expires_in"], 86400);
+    assert_eq!(v["expires_in"], 3600);
     assert_eq!(v["scope"], "read write");
     let access = v["access_token"].as_str().unwrap().to_string();
     let refresh_tok = v["refresh_token"].as_str().unwrap().to_string();
@@ -496,17 +506,25 @@ async fn refresh_rotation_and_family_revocation_on_reuse(pool: PgPool) {
         v["access_token"].as_str().unwrap().to_string(),
         v["refresh_token"].as_str().unwrap().to_string(),
     );
-    // Nach der Gnadenfrist: Wiederverwendung eines alten Tokens widerruft die ganze Familie.
+    // B3.05: Die Frist ist fest (ab Ablösung von r1) und wird durch Wiederverwendung nicht
+    // verlängert; das nie ausgelieferte r2 ist nicht mehr gültig.
     let (s, v) = refresh(&fx, &client, &r2).await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    let r4 = v["refresh_token"].as_str().unwrap().to_string();
-    fx.clock.advance(31 * 60);
-    let (s, v) = refresh(&fx, &client, &r3).await;
     assert_eq!(
         (s, v["error"].as_str()),
         (StatusCode::BAD_REQUEST, Some("invalid_grant")),
         "{v}"
     );
+    fx.clock.advance(30);
+    assert_eq!(refresh(&fx, &client, &r1).await.0, StatusCode::OK);
+    fx.clock.advance(31);
+    // 61 s nach der Ablösung von r1: Wiederverwendung = Diebstahl, Familie widerrufen.
+    let (s, v) = refresh(&fx, &client, &r1).await;
+    assert_eq!(
+        (s, v["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_grant")),
+        "{v}"
+    );
+    let r4 = r3.clone();
     assert_eq!(mcp_call(&fx, &a3).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(
         refresh(&fx, &client, &r4).await.0,
@@ -568,6 +586,52 @@ async fn revoking_the_access_token_also_kills_the_refresh_token(pool: PgPool) {
         (StatusCode::BAD_REQUEST, Some("invalid_grant")),
         "{v}"
     );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn resource_parameter_must_be_the_mcp_resource_and_ttl_is_one_hour(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    // Fremde Ressource: invalid_target per Redirect, kein Code.
+    let uri = authorize_uri(&client, "&resource=http%3A%2F%2Fevil.example%2Fmcp");
+    let (s, h, _) = send(&fx.api, get(&uri, Some(&fx.alice_cookie))).await;
+    assert!(s.is_redirection());
+    let loc = h.get(header::LOCATION).unwrap().to_str().unwrap();
+    assert!(
+        loc.contains("error=invalid_target") && !loc.contains("code="),
+        "{loc}"
+    );
+    // Token-Endpunkt prüft ebenfalls.
+    let (s, _, text) = send(
+        &fx.api,
+        form(
+            "/oauth/token",
+            &format!("grant_type=refresh_token&client_id={client}&refresh_token=x&resource=http%3A%2F%2Fevil.example%2Fmcp"),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(text.contains("invalid_target"));
+    // Korrekte Ressource (Basis-URL der Test-App) funktioniert, expires_in = 3600.
+    let res = pct(&resource_uri(&fx.app));
+    let uri = authorize_uri(&client, &format!("&resource={res}"));
+    let (s, _, page) = send(&fx.api, get(&uri, Some(&fx.alice_cookie))).await;
+    assert_eq!(s, StatusCode::OK, "{page}");
+    let (_, headers, _) = send(&fx.api, consent_post(&page, "allow", &fx.alice_cookie)).await;
+    let loc = headers
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let q: HashMap<_, _> = url::Url::parse(&loc)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect();
+    let (s, v) = exchange(&fx, &client, &q["code"], VERIFIER).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["expires_in"], 3600);
 }
 
 #[test]

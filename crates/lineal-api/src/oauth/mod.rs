@@ -2,7 +2,7 @@
 //! RFC 7591), `/oauth/authorize` (Consent über die Session), `/oauth/token`
 //! (`authorization_code` + PKCE S256 Pflicht, `refresh_token` mit Rotation) und `/oauth/revoke`.
 //!
-//! Tokens: `lin_oauth_…` (Access, 24 h) und `lin_refresh_…`; gespeichert wird nur
+//! Tokens: `lin_oauth_…` (Access, 1 h) und `lin_refresh_…`; gespeichert wird nur
 //! `hash_token` (SHA-256, exakt wie `middleware::auth::hash_token`). Die Validierung der
 //! Access-Tokens übernimmt der bestehende Bearer-Pfad (`find_principal_by_token_hash`).
 
@@ -35,10 +35,12 @@ mod tests;
 
 /// Gültigkeit des Autorisierungscodes.
 pub const CODE_TTL_MIN: i64 = 10;
-/// Gültigkeit des Access-Tokens.
-pub const ACCESS_TTL_SECS: i64 = 24 * 3600;
-/// Gnadenfrist, in der das vorherige Refresh-Token noch gilt.
-pub const REFRESH_GRACE_MIN: i64 = 30;
+/// Gültigkeit des Access-Tokens (docs/07 §1.3: 1 h).
+pub const ACCESS_TTL_SECS: i64 = 3600;
+/// Gnadenfrist in Sekunden, in der das vorherige Refresh-Token nach seiner Ablösung noch gilt
+/// (verlorene Antwort/Retry). Feste Frist ab Ablösung, wird durch Wiederverwendung nicht
+/// verlängert; danach gilt die Wiederverwendung als Diebstahl (Familienwiderruf).
+pub const REFRESH_GRACE_SECS: i64 = 60;
 /// Gültigkeit des Consent-Nonce.
 const CONSENT_TTL_MIN: i64 = 10;
 const SCOPES: [&str; 3] = ["read", "write", "admin"];
@@ -117,11 +119,34 @@ pub fn valid_redirect_uri(uri: &str) -> bool {
     match u.scheme() {
         "https" => u.host().is_some(),
         "http" => matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
-        "javascript" | "data" | "file" | "vbscript" | "about" | "blob" | "ftp" | "ws" | "wss" => {
-            false
+        // Private Schemata (RFC 8252 §7.1): Reverse-DNS-Name (enthält einen Punkt) oder ein
+        // bekannter Client-Schema-Name. Alles andere (mailto:, intent:, view-source: ...) nicht.
+        s => {
+            (s.contains('.') || PRIVATE_SCHEMES.contains(&s))
+                && !matches!(s, "javascript" | "data" | "file" | "vbscript" | "blob")
         }
-        s => s.contains('.') || s.len() >= 3,
     }
+}
+
+/// Bekannte Schemata nativer MCP-Clients ohne Punkt.
+const PRIVATE_SCHEMES: [&str; 7] = [
+    "cursor",
+    "vscode",
+    "vscode-insiders",
+    "windsurf",
+    "zed",
+    "claude",
+    "claude-desktop",
+];
+
+/// Die einzige Ressource dieses Servers (RFC 8707): `<base_url>/mcp`.
+fn resource_uri(app: &App) -> String {
+    format!("{}/mcp", app.config.base_url.trim_end_matches('/'))
+}
+
+/// `resource` ist optional; wenn angegeben, muss es genau auf die MCP-Ressource zeigen.
+fn resource_ok(app: &App, given: &str) -> bool {
+    given.is_empty() || given.trim_end_matches('/') == resource_uri(app)
 }
 
 fn oauth_error(status: StatusCode, code: &str, description: &str) -> Response {
@@ -456,6 +481,12 @@ async fn authorize_inner(
     {
         return err("invalid_request", "malformed code_challenge");
     }
+    if !resource_ok(&app, get("resource")) {
+        return err(
+            "invalid_target",
+            "resource must be the MCP resource of this server",
+        );
+    }
     let Some(mut scopes) = parse_scopes(get("scope")) else {
         return err(
             "invalid_scope",
@@ -572,6 +603,13 @@ pub async fn token(
     Form(p): Form<HashMap<String, String>>,
 ) -> Response {
     let get = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
+    if !resource_ok(&app, get("resource")) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_target",
+            "resource must be the MCP resource of this server",
+        );
+    }
     match get("grant_type") {
         "authorization_code" => grant_code(&app, &p).await,
         "refresh_token" => grant_refresh(&app, &p).await,
@@ -689,9 +727,10 @@ async fn grant_refresh(app: &App, p: &HashMap<String, String>) -> Response {
         let is_current = rec.refresh_token_hash.as_deref() == Some(hash.as_str());
         if !is_current {
             // Vorheriges Token: nur innerhalb der Gnadenfrist; danach Wiederverwendung = Diebstahl.
-            let in_grace = rec
-                .rotated_at
-                .is_some_and(|at| now - at < Duration::minutes(REFRESH_GRACE_MIN));
+            let in_grace = rec.previous_refresh_token_hash.as_deref() == Some(hash.as_str())
+                && rec
+                    .rotated_at
+                    .is_some_and(|at| now - at < Duration::seconds(REFRESH_GRACE_SECS));
             if !in_grace {
                 tx.webhooks()
                     .oauth_revoke_family(rec.family_id, now)
@@ -728,6 +767,9 @@ async fn grant_refresh(app: &App, p: &HashMap<String, String>) -> Response {
                     access_expires_at: now + Duration::seconds(ACCESS_TTL_SECS),
                     refresh_token_hash: hash_token(&refresh),
                     now,
+                    // Wiederverwendung in der Gnadenfrist: Ablösezeitpunkt und vorheriges Token
+                    // bleiben, die Frist wird nicht verlängert.
+                    keep_previous: !is_current,
                 },
             )
             .await?;

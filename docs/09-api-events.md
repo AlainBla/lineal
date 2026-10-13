@@ -473,7 +473,7 @@ Regeln:
 | Token | Laufzeit | Regel |
 |---|---|---|
 | Authorization Code | 10 min | einmal verwendbar; zweite Verwendung widerruft alle daraus entstandenen Tokens |
-| Access Token | 24 h | |
+| Access Token | 1 h | |
 | Refresh Token | unbegrenzt bis Widerruf | **Rotation**: jeder Refresh liefert ein neues Paar; das alte Refresh-Token bleibt **30 min** (Grace Period) gültig, damit verlorene Antworten wiederholt werden können. Danach Wiederverwendung → gesamte Token-Familie widerrufen. |
 | Client-Credentials-Token | 30 Tage | `actor=app`, kein Refresh-Token |
 
@@ -491,7 +491,7 @@ sequenceDiagram
   L-->>B: Redirect redirect_uri?code&state
   B->>C: code
   C->>L: POST /oauth/token (code, code_verifier)
-  L-->>C: access_token (24 h), refresh_token
+  L-->>C: access_token (1 h), refresh_token
   C->>L: POST /graphql (Authorization: Bearer access_token)
   L-->>C: data
   C->>L: POST /oauth/token (grant_type=refresh_token)

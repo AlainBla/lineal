@@ -219,6 +219,8 @@ pub struct TokenRotation {
     pub access_expires_at: DateTime<Utc>,
     pub refresh_token_hash: String,
     pub now: DateTime<Utc>,
+    /// Gnadenfrist-Wiederverwendung: `previous_refresh_token_hash` und `rotated_at` bleiben.
+    pub keep_previous: bool,
 }
 
 // ---------------------------------------------------------------------------

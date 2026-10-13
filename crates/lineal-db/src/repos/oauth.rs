@@ -314,7 +314,8 @@ impl PgTx {
     ) -> AppResult<bool> {
         let res = sqlx::query(
             "UPDATE oauth_token SET access_token_hash = $4, access_expires_at = $5, \
-             previous_refresh_token_hash = refresh_token_hash, refresh_token_hash = $6, rotated_at = $7, \
+             previous_refresh_token_hash = CASE WHEN $8 THEN previous_refresh_token_hash ELSE refresh_token_hash END, \
+             refresh_token_hash = $6, rotated_at = CASE WHEN $8 THEN rotated_at ELSE $7 END, \
              version = version + 1, updated_at = $7 \
              WHERE organization_id = $1 AND id = $2 AND refresh_token_hash = $3 AND revoked_at IS NULL",
         )
@@ -325,6 +326,7 @@ impl PgTx {
         .bind(r.access_expires_at)
         .bind(&r.refresh_token_hash)
         .bind(r.now)
+        .bind(r.keep_previous)
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
