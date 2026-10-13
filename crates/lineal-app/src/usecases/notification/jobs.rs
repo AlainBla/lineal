@@ -252,7 +252,7 @@ impl App {
                     .filter(|v| !only_priority || v.n.is_priority)
                     .filter(|v| {
                         // Auch gebündelte Typen zählen: ein Prioritätswechsel auf Urgent in einer
-                        // Zuweisung hebt die Dringlichkeit (updated_at = letzte Bündelung).
+                        // Zuweisung hebt die Dringlichkeit (created_at bleibt der Bezug der Verzögerung).
                         release_at(
                             v.n.created_at,
                             urgency_of_view(v, immediate_urgent),

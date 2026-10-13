@@ -2872,3 +2872,41 @@ async fn project_update_prompt_is_priority_and_due_text_distinguishes_stages(poo
     .unwrap();
     assert!(p);
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn self_assigned_lead_is_not_reported_after_later_edits(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let project = e.project_in_eng(130, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        bob,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 0);
+    let initiative = e.initiative(131, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        bob,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeUpdated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 0);
+}
