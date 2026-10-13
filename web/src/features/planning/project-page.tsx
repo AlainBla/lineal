@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CommentsSection } from "@/features/comments/comments-section";
+import { DocumentsSection } from "@/features/docs/documents-section";
 import { errorText } from "@/features/issues/error-text";
 import { openCreateIssue, setCreateContext } from "@/features/issues/create-store";
 import { relativeTime } from "@/features/issues/model";
@@ -23,8 +25,14 @@ import { useRemindAction } from "@/features/inbox/remind";
 import { IssueView } from "@/features/views/issue-view";
 import { DateText, HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
-export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
-export const PROJECT_TABS: ProjectTab[] = ["overview", "issues", "updates", "milestones"];
+export type ProjectTab = "overview" | "issues" | "updates" | "milestones" | "resources";
+export const PROJECT_TABS: ProjectTab[] = [
+  "overview",
+  "issues",
+  "updates",
+  "milestones",
+  "resources",
+];
 export const isProjectTab = (v: string): v is ProjectTab => (PROJECT_TABS as string[]).includes(v);
 
 const TAB_LABEL: Record<ProjectTab, string> = {
@@ -32,6 +40,7 @@ const TAB_LABEL: Record<ProjectTab, string> = {
   issues: "Issues",
   updates: "Updates",
   milestones: "Milestones",
+  resources: "Resources",
 };
 
 function Prop({ label, children }: { label: string; children: React.ReactNode }) {
@@ -116,6 +125,12 @@ function UpdatesFeed({ projectId }: { projectId: string }) {
             <span>{relativeTime(u.createdAt)}</span>
           </div>
           <RichEditor key={u.id} value={u.body} editable={false} ariaLabel="Update" />
+          <div className="mt-3">
+            <CommentsSection
+              target={{ projectUpdateId: u.id }}
+              title={`Comments on update ${relativeTime(u.createdAt)}`}
+            />
+          </div>
         </li>
       ))}
     </ul>
@@ -307,6 +322,7 @@ export function ProjectPage({
                 />
               </section>
             )}
+            <CommentsSection target={{ projectId: p.id }} title="Project comments" />
             <section aria-label="Milestones">
               <h2 className="mb-2 text-xs font-medium text-muted-foreground">Milestones</h2>
               {p.milestones.length === 0 ? (
@@ -334,6 +350,13 @@ export function ProjectPage({
           </div>
         )}
         {tab === "milestones" && <Milestones project={p} />}
+        {tab === "resources" && (
+          <DocumentsSection
+            ws={ws}
+            scope={{ projectId: p.id }}
+            teamId={p.leadTeam?.id ?? p.teams[0]?.id}
+          />
+        )}
       </div>
     </div>
   );

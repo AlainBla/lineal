@@ -915,6 +915,23 @@ type Issue {
 	createdAt: String!
 	updatedAt: String!
 	"""
+	Seit wann der Status gilt („Time in status“).
+	"""
+	stateEnteredAt: String!
+	"""
+	Triage: bis wann gesnoozt (`null` = nicht gesnoozt).
+	"""
+	snoozedUntilAt: String
+	"""
+	Triage: Eintritt in die Triage.
+	"""
+	startedTriageAt: String
+	triagedAt: String
+	"""
+	Anzahl der Anhänge/Links („Link count“).
+	"""
+	linkCount: Int!
+	"""
 	Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
 	"""
 	children(first: Int): [Issue!]!
@@ -922,6 +939,10 @@ type Issue {
 	Relationen dieses Issues.
 	"""
 	relations: IssueRelations!
+	"""
+	Anhänge und Links des Issues (Uploads mit frisch signierter Download-URL).
+	"""
+	attachments: [Attachment!]!
 	"""
 	Ob der Aufrufer dieses Issue abonniert hat.
 	"""
@@ -2054,6 +2075,12 @@ type Query {
 	"""
 	attachment(id: String!): Attachment!
 	"""
+	Bildet `assetUrl`s (Markdown-Bilder in Beschreibungen/Kommentaren) auf kurzlebig signierte
+	Download-URLs ab. Nur lesbare Dateien des eigenen Workspaces; unbekannte oder nicht
+	lesbare URLs fehlen im Ergebnis (höchstens 100 URLs je Aufruf).
+	"""
+	resolveAssets(urls: [String!]!): [ResolvedAsset!]!
+	"""
 	Cycles eines Teams (Key, Name oder UUID), aufsteigend nach Nummer; `type`:
 	`current` | `previous` | `next`. Ohne aktivierte Cycles leer.
 	"""
@@ -2387,6 +2414,18 @@ type ReminderPayload {
 	Die gesetzte Erinnerung; `null` nach dem Entfernen.
 	"""
 	reminder: Reminder
+}
+
+"""
+Aufgelöste `assetUrl` (Bilder in Markdown): kurzlebig signierte Download-URL.
+"""
+type ResolvedAsset {
+	assetUrl: String!
+	downloadUrl: String!
+	title: String!
+	contentType: String
+	size: Float
+	expiresAt: String!
 }
 
 """

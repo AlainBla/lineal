@@ -1,6 +1,6 @@
 /**
  * Tastaturkürzel für Property-Picker (docs/08 §3.2): S Status, A Assignee, I mir zuweisen, P Priority,
- * L Labels, ⇧E (und E) Estimate, ⇧C Cycle, ⇧P Projekt, Strg ⇧ M Teamwechsel. Wirken auf das Issue,
+ * L Labels, ⇧E (und E) Estimate, ⇧C Cycle, ⇧P Projekt, Strg ⇧ M Teamwechsel, Strg ⇧ P Parent. Wirken auf das Issue,
  * das `getIssue` liefert (fokussierte Zeile bzw. geöffnetes Detail).
  */
 import { useCallback } from "react";
@@ -31,6 +31,7 @@ const PICKERS: Array<{ id: string; kind: PickerKind; keys: string; title: string
   { id: "issue.cycle", kind: "cycle", keys: "shift+c", title: "Add to cycle…" },
   { id: "issue.project", kind: "project", keys: "shift+p", title: "Add to project…" },
   { id: "issue.team", kind: "team", keys: "mod+shift+m", title: "Move to a different team…" },
+  { id: "issue.parent", kind: "parent", keys: "mod+shift+p", title: "Set parent issue…" },
 ];
 
 export function useIssueShortcuts({ context, target, open, actions }: Args): void {
@@ -52,6 +53,14 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
       enabled,
       perform: () => run(p.kind),
     })),
+    {
+      id: "issue.parent-remove",
+      title: "Remove parent issue",
+      section: "Issues",
+      context,
+      enabled: enabled && target?.parentId != null,
+      perform: () => target && actions.setParent(target, null),
+    },
     {
       id: "issue.assign-me",
       title: "Assign to me",

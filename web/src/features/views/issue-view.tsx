@@ -121,7 +121,10 @@ export function IssueView({
 
   const { groups, hidden, flat } = useMemo(() => {
     const { visible, hidden } = applyVisibility(q.data?.issues ?? [], options);
-    const sorted = sortIssues(visible, options);
+    const sorted = sortIssues(visible, options, {
+      assignee: (id) => lookup.assigneeName(id),
+      statePosition: (id) => lookup.state(id)?.position,
+    });
     const teamName = new Map((teams.data ?? []).map((t) => [t.id, t.name]));
     const cycleName = new Map(
       metas.flatMap((m) =>

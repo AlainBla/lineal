@@ -17,6 +17,9 @@ import {
   createIssue,
   batchUpdateIssues,
   createReaction,
+  deleteComment,
+  setCommentResolved,
+  updateComment,
   deleteReaction,
   fetchComments,
   fetchIssue,
@@ -208,6 +211,23 @@ export function useCreateComment(issueId: string) {
     mutationFn: (args: { body: string; parentId?: string }) => createComment({ issueId, ...args }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: keys.comments(issueId) }),
   });
+}
+
+/** Bearbeiten, Löschen und Auflösen von Kommentaren; danach wird die Kommentarliste neu geladen. */
+export function useCommentActions(issueId: string) {
+  const qc = useQueryClient();
+  const done = () => void qc.invalidateQueries({ queryKey: keys.comments(issueId) });
+  return {
+    update: useMutation({
+      mutationFn: (a: { id: string; body: string }) => updateComment(a.id, a.body),
+      onSuccess: done,
+    }),
+    remove: useMutation({ mutationFn: (id: string) => deleteComment(id), onSuccess: done }),
+    resolve: useMutation({
+      mutationFn: (a: { id: string; resolve: boolean }) => setCommentResolved(a.id, a.resolve),
+      onSuccess: done,
+    }),
+  };
 }
 
 export function useReactions(issueId: string) {

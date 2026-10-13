@@ -1,7 +1,7 @@
 /**
  * Filterleiste und Display options an den Team-Seiten Active/Backlog/All (F.18, docs/05 §1.6, §2).
  * Filter laufen serverseitig (`viewIssues` mit Team-Scope), Anzeigeoptionen werden je Team und
- * Ansicht persönlich gespeichert (`viewPreferences` mit `viewType` und `teamId`). Tasten:
+ * Ansicht persönlich (inkl. Sortierung, Standard Priorität) gespeichert (`viewPreferences` mit `viewType` und `teamId`). Tasten:
  * `F` Add filter, `⇧ V` Display options.
  */
 import { useMemo, useRef, useState } from "react";
@@ -11,7 +11,6 @@ import type { IssueLookup } from "./issue-lookup";
 import { IssueRow } from "./issue-row";
 import { DisplayMenu } from "@/features/views/display-menu";
 import {
-  DEFAULT_DISPLAY,
   type IssueGroup,
   mergeDisplay,
   type DisplayOptions,
@@ -44,14 +43,9 @@ export interface TeamViewControlsState {
   filter: Filter;
   active: boolean;
   options: DisplayOptions;
-  /** `true`, wenn die Anzeige von der Standarddarstellung (Status-Gruppen, manuell sortiert) abweicht. */
-  customDisplay: boolean;
   onOptions: (patch: Partial<DisplayOptions>) => void;
   onReset: () => void;
 }
-
-/** Team-Standard: Gruppen nach Status, manuelle Reihenfolge (der Server liefert `sortOrder`). */
-const TEAM_DEFAULT: DisplayOptions = { ...DEFAULT_DISPLAY, ordering: "manual" };
 
 export function useTeamViewControls(
   teamId: string | undefined,
@@ -65,20 +59,11 @@ export function useTeamViewControls(
   const update = useUpdatePreferences(target);
   const reset = useResetPreferences(target);
   const options = useMemo(() => {
+    // Standard: Gruppen nach Status, Sortierung nach Priorität (docs/05 §2.5, F.13).
     const saved = prefs.data?.values as Record<string, unknown> | undefined;
-    const merged = mergeDisplay(saved);
-    return {
-      ...merged,
-      ordering: saved && "ordering" in saved ? merged.ordering : TEAM_DEFAULT.ordering,
-      ...local,
-    };
+    return { ...mergeDisplay(saved), ...local };
   }, [prefs.data, local]);
   const filter = useMemo(() => combineFilter(buildFilter(chips), advanced), [chips, advanced]);
-  const customDisplay =
-    options.grouping !== "status" ||
-    options.ordering !== "manual" ||
-    !options.showSubIssues ||
-    options.showCompletedIssues !== "all";
   return {
     chips,
     setChips,
@@ -87,7 +72,6 @@ export function useTeamViewControls(
     filter,
     active: chips.length > 0 || advanced.length > 0,
     options,
-    customDisplay,
     onOptions: (patch) => {
       setLocal((l) => ({ ...l, ...patch }));
       if (target) update.mutate(patch);

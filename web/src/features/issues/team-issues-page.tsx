@@ -6,7 +6,12 @@ import { useActions } from "@/app/commands";
 import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
 import { NotFound } from "@/components/not-found";
-import { applyVisibility, groupIssues, sortIssues } from "@/features/views/display-options";
+import {
+  applyVisibility,
+  groupIssues,
+  sortIssues,
+  type SortContext,
+} from "@/features/views/display-options";
 import { useViewIssues } from "@/features/views/queries";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
@@ -101,10 +106,20 @@ export function TeamIssuesPage({
   );
   const visible = shown.visible;
   const ordered = controls.options.ordering !== "manual";
+  // Sortierkontext (Assignee-Name, Status-Position) für alle Sortierungen und Gruppierungen.
+  const sortCtx = useMemo<SortContext>(
+    () => ({
+      assignee: (id) => lookup.assigneeName(id),
+      statePosition: (id) => lookup.state(id)?.position,
+    }),
+    [lookup],
+  );
   const sortColumns = useCallback(
     <T extends { issues: Issue[] }>(cols: T[]): T[] =>
-      ordered ? cols.map((c) => ({ ...c, issues: sortIssues(c.issues, controls.options) })) : cols,
-    [ordered, controls.options],
+      ordered
+        ? cols.map((c) => ({ ...c, issues: sortIssues(c.issues, controls.options, sortCtx) }))
+        : cols,
+    [ordered, controls.options, sortCtx],
   );
   const columns = useMemo(
     () => sortColumns(buildBoardColumns(states, visible, view)),
@@ -121,13 +136,13 @@ export function TeamIssuesPage({
     const cycles = new Map(
       (meta.data?.cycles ?? []).map((c) => [c.id, c.name ?? `Cycle ${c.number}`]),
     );
-    return groupIssues(sortIssues(visible, controls.options), controls.options.grouping, {
+    return groupIssues(sortIssues(visible, controls.options, sortCtx), controls.options.grouping, {
       assignee: lookup.assigneeName,
       project: lookup.projectName,
       team: () => meta.data?.team.name ?? null,
       cycle: (id) => cycles.get(id) ?? null,
     });
-  }, [customGrouping, visible, controls.options, lookup, meta.data]);
+  }, [customGrouping, visible, controls.options, sortCtx, lookup, meta.data]);
 
   const grid = useMemo(
     () =>
@@ -148,7 +163,8 @@ export function TeamIssuesPage({
   const openPicker = useCallback(
     (req: PickerRequest) => {
       // Fälligkeit hat keine Bulk-Aktion: immer für das fokussierte Issue.
-      if (selection.size > 0 && req.kind !== "due") setBulkRequest(req.kind);
+      if (selection.size > 0 && req.kind !== "due" && req.kind !== "parent")
+        setBulkRequest(req.kind);
       else setRequest(req);
     },
     [selection.size],
@@ -264,6 +280,11 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInGroup={create}
         selection={selection}
+        onDrop={
+          controls.options.ordering === "manual"
+            ? ({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)
+            : undefined
+        }
       />
     );
   }

@@ -33,7 +33,7 @@ import { errorMessage, showToast } from "./toast-store";
 import { inverseBulk, recordUndo } from "./undo";
 import { useKnownUsers } from "./users";
 
-export type BulkKind = Exclude<PickerKind, "due"> | "labels-remove" | "delete";
+export type BulkKind = Exclude<PickerKind, "due" | "parent"> | "labels-remove" | "delete";
 
 const TITLES: Record<Exclude<BulkKind, "delete" | "team">, string> = {
   status: "Change status…",

@@ -120,7 +120,8 @@ function MyIssuesList({
   // Mit Auswahl wirken die Picker-Kürzel auf alle markierten Issues (wie in den Team-Listen).
   const openPicker = useCallback(
     (req: PickerRequest) => {
-      if (selection.size > 0 && req.kind !== "due") setBulkRequest(req.kind);
+      if (selection.size > 0 && req.kind !== "due" && req.kind !== "parent")
+        setBulkRequest(req.kind);
       else setRequest(req);
     },
     [selection.size],
