@@ -345,6 +345,16 @@ impl App {
                             now,
                         })
                         .await?;
+                    // B4.41: Mitgliedschaft per Admin-Anlage meldet das Membership-Ereignis.
+                    emit(
+                        &mut *tx,
+                        ctx,
+                        DomainEvent::TeamMembershipCreated {
+                            team_id: t,
+                            user_id: id,
+                        },
+                    )
+                    .await?;
                 }
             }
         }

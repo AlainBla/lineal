@@ -546,3 +546,38 @@ async fn acceptance_rechecks_domains_and_suspension_revokes_invitations(pool: Pg
         ErrorKind::NotFound
     );
 }
+
+/// B4.41: Der Beitritt per Einladung meldet `TeamMembershipCreated` je neuer Mitgliedschaft.
+#[sqlx::test(migrations = "./migrations")]
+async fn accepting_an_invitation_emits_membership_events(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let inv = app
+        .invite_users(
+            &alice,
+            InviteUsersInput {
+                emails: vec!["gina@acme.example".into()],
+                role: Some(UserRole::Guest),
+                teams: vec!["WEB".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let accepted = app
+        .accept_invitation(AcceptInvitationInput {
+            token: inv[0].token.clone(),
+            email: "gina@acme.example".into(),
+            name: Some("Gina".into()),
+            password: Some("correct-horse".into()),
+        })
+        .await
+        .unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE type = 'TeamMembershipCreated' AND payload->>'user_id' = $1",
+    )
+    .bind(accepted.user_id.0.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+}

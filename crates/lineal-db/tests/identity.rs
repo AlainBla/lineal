@@ -594,7 +594,7 @@ async fn workflow_state_crud_and_deletion_rules(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn users_and_references(pool: PgPool) {
-    let (app, data, _pool) = setup(pool).await;
+    let (app, data, pool) = setup(pool).await;
     let alice = ctx_for(SeedUser::Alice);
     let carol = ctx_for(SeedUser::Carol);
     let me = app.get_user(&alice, "me").await.unwrap();
@@ -717,6 +717,15 @@ async fn users_and_references(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(dan.display_name, "dan");
+    // B4.41: die Anlage mit Team meldet TeamMembershipCreated für die neue Mitgliedschaft.
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE type = 'TeamMembershipCreated' AND payload->>'user_id' = $1",
+    )
+    .bind(dan.id.0.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created, 1);
     // Der letzte Owner kann weder herabgestuft noch suspendiert werden
     assert_eq!(
         kind(app.set_user_role(&alice, "alice", UserRole::Admin).await),
