@@ -164,7 +164,9 @@ describe("TeamSettingsPage", () => {
   it("B5.35: removing a member asks first; the picker is sorted and searchable", async () => {
     const gql = mockGraphql({
       ...handlers(),
-      SettingsTeamMembers: () => ({ users: [{ id: "u1", name: "zed", displayName: "Zed" }] }),
+      SettingsTeamMemberInfos: () => ({
+        teamMembers: [{ id: "u1", name: "zed", displayName: "Zed", owner: false, role: "user" }],
+      }),
       SettingsWorkspaceMembers: () => ({
         users: [
           { id: "u1", name: "zed", displayName: "Zed" },
@@ -202,6 +204,58 @@ describe("TeamSettingsPage", () => {
         .map((o) => o.textContent),
     ).toEqual(["Choose a person…", "Carl"]);
     confirm.mockRestore();
+  });
+
+  it("F.14: owners are shown and can be appointed or revoked; guests have no owner button", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsTeam: () => ({
+        team: { ...TEAM_META.team, viewer: { isMember: true, isOwner: true, canJoin: false } },
+      }),
+      SettingsTeamMemberInfos: () => ({
+        teamMembers: [
+          { id: "u1", name: "zed", displayName: "Zed", owner: false, role: "user" },
+          { id: "u2", name: "ann", displayName: "Ann", owner: true, role: "user" },
+          { id: "u3", name: "gus", displayName: "Gus", owner: false, role: "guest" },
+        ],
+      }),
+      SettingsTeamOwnerSet: () => ({ teamMembershipUpdate: { success: true } }),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="members" />,
+      newClient(),
+      "/acme/settings/teams/ENG/members",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Make owner Zed" }));
+    await waitFor(() => expect(gql.of("SettingsTeamOwnerSet")).toHaveLength(1));
+    expect(gql.of("SettingsTeamOwnerSet")[0]!.variables).toMatchObject({
+      userId: "u1",
+      owner: true,
+    });
+    expect(screen.getByRole("button", { name: "Revoke owner from Ann" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /owner.*Gus/ })).toBeNull();
+  });
+
+  it("F.19: join button appears when canJoin and leave button for members", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsTeam: () => ({
+        team: { ...TEAM_META.team, viewer: { isMember: false, isOwner: false, canJoin: true } },
+      }),
+      SettingsTeamMemberInfos: () => ({ teamMembers: [] }),
+      SettingsTeamJoin: () => ({ teamMembershipCreate: { success: true } }),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="members" />,
+      newClient(),
+      "/acme/settings/teams/ENG/members",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Join team" }));
+    await waitFor(() => expect(gql.of("SettingsTeamJoin")).toHaveLength(1));
+    expect(gql.of("SettingsTeamJoin")[0]!.variables).toMatchObject({ userId: SESSION.user.id });
+    expect(screen.queryByRole("button", { name: "Leave team" })).toBeNull();
   });
 
   it("B5.36: non-admins see the workspace form read-only", async () => {

@@ -1218,6 +1218,10 @@ type Mutation {
 	"""
 	nestTeam(teamId: String!, parentId: String, options: NestTeamOptions): TeamPayload!
 	teamMembershipCreate(teamId: String!, userId: String!, owner: Boolean): SuccessPayload!
+	"""
+	Ernennt oder entzieht Team-Owner (Owner und Admins; Gäste/Apps nie Owner, docs/02 §6.4).
+	"""
+	teamMembershipUpdate(teamId: String!, userId: String!, owner: Boolean!): SuccessPayload!
 	teamMembershipDelete(teamId: String!, userId: String!): SuccessPayload!
 	workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
 	workflowStateUpdate(id: String!, input: WorkflowStateUpdateInput!): WorkflowStatePayload!
@@ -2016,6 +2020,10 @@ type Query {
 	"""
 	team(id: String!): Team!
 	"""
+	Mitglieder eines Teams mit Owner-Flag (nur mit Sicht auf die Team-Metadaten).
+	"""
+	teamMembers(team: String!): [TeamMemberInfo!]!
+	"""
 	Workflow-Status eines Teams.
 	"""
 	workflowStates(teamId: String!): [WorkflowState!]!
@@ -2521,6 +2529,11 @@ type Team {
 	Anzahl der Mitglieder; `null`, wenn der Aufrufer die Mitglieder nicht sehen darf.
 	"""
 	memberCount: Int
+	"""
+	Mitgliedschaft des Aufrufers (Beitreten/Verlassen/Owner-Verwaltung); Entscheidung der
+	zentralen Policy, die Mutationen prüfen unabhängig davon erneut.
+	"""
+	viewer: TeamViewer!
 }
 
 input TeamCreateInput {
@@ -2576,6 +2589,20 @@ type TeamExtraSuccessPayload {
 type TeamLifecyclePayload {
 	success: Boolean!
 	team: Team
+}
+
+"""
+`TeamMemberInfo`: Mitglied mit Owner-Flag (ohne E-Mail).
+"""
+type TeamMemberInfo {
+	id: String!
+	name: String!
+	displayName: String!
+	owner: Boolean!
+	"""
+	Gäste können nicht Owner werden.
+	"""
+	role: String!
 }
 
 type TeamMetrics {
@@ -2648,6 +2675,21 @@ input TeamUpdateInput {
 	autoArchivePeriod: Int
 	autoCloseParentIssues: Boolean
 	autoCloseChildIssues: Boolean
+}
+
+"""
+`TeamViewer`: Beziehung des Aufrufers zum Team.
+"""
+type TeamViewer {
+	isMember: Boolean!
+	"""
+	Effektiver Team-Owner (inkl. Workspace-Admins).
+	"""
+	isOwner: Boolean!
+	"""
+	`canJoin` (docs/02 §4.2).
+	"""
+	canJoin: Boolean!
 }
 
 type Template {

@@ -4,7 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
-import type { IssueLabel, Organization, Team, WorkflowState } from "@/gql/graphql";
+import type { IssueLabel, Organization, Team, TeamMemberInfo, WorkflowState } from "@/gql/graphql";
 import { gqlRequest } from "@/lib/graphql";
 
 import { refreshTeams } from "./teams-queries";
@@ -21,7 +21,8 @@ const TEAM_FIELDS = `id key name displayName parentId description icon color vis
   cyclesEnabled cycleDuration cycleCooldownTime cycleStartDay upcomingCycleCount
   issueEstimationType inheritWorkflowStatuses retiredAt
   issueEstimationExtended issueEstimationAllowZero defaultIssueEstimate inheritIssueEstimation
-  autoClosePeriod autoCloseStateId autoArchivePeriod autoCloseParentIssues autoCloseChildIssues`;
+  autoClosePeriod autoCloseStateId autoArchivePeriod autoCloseParentIssues autoCloseChildIssues
+  viewer { isMember isOwner canJoin }`;
 
 function refresh(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: ["settings"] });
@@ -104,6 +105,36 @@ export function useTeamMembers(teamKey: string) {
   });
 }
 
+/** Mitglieder mit Owner-Flag (nur mit Sicht auf die Team-Metadaten). */
+export function useTeamMemberInfos(teamKey: string) {
+  return useQuery({
+    queryKey: [...settingsKeys.members(teamKey), "info"] as const,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ teamMembers: TeamMemberInfo[] }, { team: string }>(
+          `query SettingsTeamMemberInfos($team: String!) { teamMembers(team: $team) { id name displayName owner role } }`,
+          { team: teamKey },
+          { signal },
+        )
+      ).teamMembers,
+  });
+}
+
+/** Owner ernennen/entziehen (F.14); Rechte prüft der Server (docs/02 §6.4). */
+export function useSetTeamOwner(teamId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { userId: string; owner: boolean }) =>
+      gqlRequest(
+        `mutation SettingsTeamOwnerSet($teamId: String!, $userId: String!, $owner: Boolean!) {
+          teamMembershipUpdate(teamId: $teamId, userId: $userId, owner: $owner) { success }
+        }`,
+        { teamId, ...v },
+      ),
+    onSuccess: () => refresh(qc),
+  });
+}
+
 export function useWorkspaceMembers(enabled: boolean) {
   return useQuery({
     queryKey: ["settings", "workspace-members"] as const,
@@ -132,6 +163,20 @@ export function useMembership(teamId: string) {
         ),
       onSuccess: () => refresh(qc),
     }),
+    /** Selbstbeitritt (`canJoin`, B8.06): der Server prüft die Policy erneut. */
+    join: useMutation({
+      mutationFn: async (userId: string) =>
+        gqlRequest(
+          `mutation SettingsTeamJoin($teamId: String!, $userId: String!) {
+            teamMembershipCreate(teamId: $teamId, userId: $userId) { success }
+          }`,
+          { teamId, userId },
+        ),
+      onSuccess: async () => {
+        refresh(qc);
+        await refreshTeams(qc);
+      },
+    }),
     remove: useMutation({
       mutationFn: async (userId: string) =>
         gqlRequest(
@@ -140,7 +185,10 @@ export function useMembership(teamId: string) {
           }`,
           { teamId, userId },
         ),
-      onSuccess: () => refresh(qc),
+      onSuccess: async () => {
+        refresh(qc);
+        await refreshTeams(qc);
+      },
     }),
   };
 }

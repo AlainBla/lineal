@@ -102,3 +102,118 @@ async fn explicit_null_clears_icon_and_color_but_absent_keeps_them(pool: sqlx::P
     let t = res.data.into_json().unwrap()["teamUpdate"]["team"].clone();
     assert!(t["color"].is_null());
 }
+
+const SET_OWNER: &str = "mutation($t: String!, $u: String!, $o: Boolean!) { teamMembershipUpdate(teamId: $t, userId: $u, owner: $o) { success } }";
+const MEMBERS: &str = "query($t: String!) { teamMembers(team: $t) { id name owner role } team(id: $t) { viewer { isMember isOwner canJoin } } }";
+
+/// F.14: Owner ernennen/entziehen; Rechte laut docs/02 §6.4.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn owner_can_be_set_and_revoked_with_rules(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let bob_id = SeedData::acme().bob.to_string();
+    // Bob ist in ENG nur Mitglied: er darf keine Owner ernennen.
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        SET_OWNER,
+        json!({"t": "ENG", "u": bob_id, "o": true}),
+    )
+    .await;
+    assert!(!res.errors.is_empty(), "member must not set owner");
+    // Alice (Owner/Admin) ernennt Bob.
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        SET_OWNER,
+        json!({"t": "ENG", "u": bob_id, "o": true}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        MEMBERS,
+        json!({"t": "ENG"}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let v = res.data.into_json().unwrap();
+    let bob = v["teamMembers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == bob_id)
+        .unwrap();
+    assert_eq!(bob["owner"], true);
+    assert_eq!(v["team"]["viewer"]["isOwner"], true);
+    assert_eq!(v["team"]["viewer"]["isMember"], true);
+    assert_eq!(v["team"]["viewer"]["canJoin"], false);
+    // Entziehen (kein Pflicht-Owner, docs/02 §4.3).
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        SET_OWNER,
+        json!({"t": "ENG", "u": bob_id, "o": false}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    // Gast wird nie Owner.
+    let carol_id = SeedData::acme().carol.to_string();
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        SET_OWNER,
+        json!({"t": "WEB", "u": carol_id, "o": true}),
+    )
+    .await;
+    assert!(!res.errors.is_empty());
+    // Gast sieht Team-Mitglieder von ENG nicht.
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Carol),
+        MEMBERS,
+        json!({"t": "ENG"}),
+    )
+    .await;
+    assert!(!res.errors.is_empty());
+}
+
+/// F.19: `viewer.canJoin` folgt `allMembersCanJoin`; Selbstbeitritt und Verlassen per Mutation.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn viewer_can_join_and_leave(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        CREATE,
+        json!({"i": {"name": "Offen", "key": "OPN", "allMembersCanJoin": true}}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let bob_id = SeedData::acme().bob.to_string();
+    let q = "query { team(id: \"OPN\") { viewer { isMember canJoin } } }";
+    let res = run(&schema, ctx_for(SeedUser::Bob), q, json!({})).await;
+    let v = res.data.into_json().unwrap();
+    assert_eq!(v["team"]["viewer"]["canJoin"], true);
+    let join = "mutation($t: String!, $u: String!) { teamMembershipCreate(teamId: $t, userId: $u) { success } }";
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        join,
+        json!({"t": "OPN", "u": bob_id}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let res = run(&schema, ctx_for(SeedUser::Bob), q, json!({})).await;
+    let v = res.data.into_json().unwrap();
+    assert_eq!(v["team"]["viewer"]["isMember"], true);
+    let leave = "mutation($t: String!, $u: String!) { teamMembershipDelete(teamId: $t, userId: $u) { success } }";
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        leave,
+        json!({"t": "OPN", "u": bob_id}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+}

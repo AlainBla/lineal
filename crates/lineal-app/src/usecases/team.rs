@@ -195,6 +195,14 @@ pub struct TeamMember {
     pub membership: Membership,
 }
 
+/// Sicht des Aufrufers auf ein Team (Join-/Leave-/Owner-Schaltflächen, F.14/F.19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeamViewerState {
+    pub is_member: bool,
+    pub is_owner: bool,
+    pub can_join: bool,
+}
+
 /// Filter für `list_teams`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ListTeamsInput {
@@ -1166,6 +1174,24 @@ impl App {
         .await?;
         tx.commit().await?;
         Ok(view)
+    }
+
+    /// Mitgliedschafts-Sicht des Aufrufers (`canJoin` usw. aus der zentralen Policy).
+    pub async fn team_viewer_state(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<TeamViewerState> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let team =
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
+        let view = snap.view(team.id)?;
+        Ok(TeamViewerState {
+            is_member: view.is_member,
+            is_owner: view.is_team_owner,
+            can_join: view.can_join,
+        })
     }
 
     /// Mitglieder eines Teams (Verwaltungssicht).

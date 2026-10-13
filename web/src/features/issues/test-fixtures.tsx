@@ -111,6 +111,7 @@ export const TEAM_META: TeamMeta = {
     visibility: "public",
     allMembersCanJoin: true,
     memberCount: 2,
+    viewer: { isMember: true, isOwner: false, canJoin: false },
     timezone: "UTC",
     triageEnabled: false,
     cyclesEnabled: true,

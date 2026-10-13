@@ -22,13 +22,14 @@ import {
 } from "@/features/issues/model";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import { StatusIcon } from "@/features/issues/icons";
-import type { Team, WorkflowState } from "@/gql/graphql";
+import type { Team, TeamViewer, WorkflowState } from "@/gql/graphql";
 
 import {
   type CycleSettings,
   useMembership,
+  useSetTeamOwner,
   useTeamLabels,
-  useTeamMembers,
+  useTeamMemberInfos,
   useUpdateCycleSettings,
   useUpdateTeam,
   useWorkflowMutations,
@@ -226,8 +227,12 @@ export function GeneralSection({ team }: { team: Team }) {
 }
 
 export function MembersSection({ team }: { team: Team }) {
-  const members = useTeamMembers(team.key);
-  const { add, remove } = useMembership(team.id);
+  const members = useTeamMemberInfos(team.key);
+  const { add, remove, join } = useMembership(team.id);
+  const setOwner = useSetTeamOwner(team.id);
+  const session = useSession();
+  // `viewer` entscheidet nur über die Anzeige; Beitritt, Verlassen und Owner prüft der Server.
+  const viewer = team.viewer as TeamViewer | undefined;
   const [adding, setAdding] = useState(false);
   const all = useWorkspaceMembers(adding);
   const [search, setSearch] = useState("");
@@ -240,19 +245,62 @@ export function MembersSection({ team }: { team: Team }) {
       .sort((a, b) => (a.displayName || a.name).localeCompare(b.displayName || b.name));
   }, [all.data, members.data, search]);
   const [pick, setPick] = useState("");
+  const me = session?.user.id;
   return (
     <>
       <Section title="Members" description="People who belong to this team.">
+        {me && (viewer?.canJoin || viewer?.isMember) && (
+          <div className="flex items-center gap-2">
+            {viewer.canJoin && (
+              <Button size="sm" disabled={join.isPending} onClick={() => join.mutate(me)}>
+                Join team
+              </Button>
+            )}
+            {viewer.isMember && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm(`Leave ${team.name}?`)) remove.mutate(me);
+                }}
+              >
+                Leave team
+              </Button>
+            )}
+            {join.isError && (
+              <span role="alert" className="text-xs text-destructive">
+                {errorText(join.error)}
+              </span>
+            )}
+          </div>
+        )}
         {members.isLoading && <ListSkeleton rows={3} />}
         {members.isError && <ErrorState error={members.error} title="Could not load members" />}
         <ul className="divide-y divide-border rounded-lg border border-border">
           {(members.data ?? []).map((m) => (
             <li key={m.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
               {m.displayName || m.name}
+              {m.owner && (
+                <span className="rounded bg-surface-active px-1.5 py-0.5 text-xs">Owner</span>
+              )}
+              {viewer?.isOwner && m.role !== "guest" && m.role !== "app" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
+                  aria-label={`${m.owner ? "Revoke owner from" : "Make owner"} ${m.displayName || m.name}`}
+                  disabled={setOwner.isPending}
+                  onClick={() => setOwner.mutate({ userId: m.id, owner: !m.owner })}
+                >
+                  {m.owner ? "Revoke owner" : "Make owner"}
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
-                className="ml-auto"
+                className={
+                  viewer?.isOwner && m.role !== "guest" && m.role !== "app" ? undefined : "ml-auto"
+                }
                 aria-label={`Remove ${m.displayName || m.name}`}
                 onClick={() => {
                   if (window.confirm(`Remove ${m.displayName || m.name} from ${team.name}?`))
@@ -264,9 +312,9 @@ export function MembersSection({ team }: { team: Team }) {
             </li>
           ))}
         </ul>
-        {remove.isError && (
+        {(remove.isError || setOwner.isError) && (
           <p role="alert" className="text-xs text-destructive">
-            {errorText(remove.error)}
+            {errorText(remove.error ?? setOwner.error)}
           </p>
         )}
         {adding ? (

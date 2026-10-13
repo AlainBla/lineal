@@ -115,6 +115,43 @@ impl TeamGql {
             .ok()?;
         i32::try_from(members.len()).ok()
     }
+
+    /// Mitgliedschaft des Aufrufers (Beitreten/Verlassen/Owner-Verwaltung); Entscheidung der
+    /// zentralen Policy, die Mutationen prüfen unabhängig davon erneut.
+    async fn viewer(&self, ctx: &Context<'_>) -> async_graphql::Result<TeamViewerGql> {
+        let st = app(ctx)?
+            .team_viewer_state(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)?;
+        Ok(TeamViewerGql {
+            is_member: st.is_member,
+            is_owner: st.is_owner,
+            can_join: st.can_join,
+        })
+    }
+}
+
+/// `TeamViewer`: Beziehung des Aufrufers zum Team.
+#[derive(SimpleObject)]
+#[graphql(name = "TeamViewer")]
+pub struct TeamViewerGql {
+    pub is_member: bool,
+    /// Effektiver Team-Owner (inkl. Workspace-Admins).
+    pub is_owner: bool,
+    /// `canJoin` (docs/02 §4.2).
+    pub can_join: bool,
+}
+
+/// `TeamMemberInfo`: Mitglied mit Owner-Flag (ohne E-Mail).
+#[derive(SimpleObject)]
+#[graphql(name = "TeamMemberInfo")]
+pub struct TeamMemberInfoGql {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub owner: bool,
+    /// Gäste können nicht Owner werden.
+    pub role: String,
 }
 
 /// `WorkflowState`.
@@ -407,6 +444,28 @@ impl TeamQuery {
             .into())
     }
 
+    /// Mitglieder eines Teams mit Owner-Flag (nur mit Sicht auf die Team-Metadaten).
+    async fn team_members(
+        &self,
+        ctx: &Context<'_>,
+        team: String,
+    ) -> async_graphql::Result<Vec<TeamMemberInfoGql>> {
+        let members = app(ctx)?
+            .list_team_members(request_ctx(ctx)?, &team)
+            .await
+            .map_err(gql_err)?;
+        Ok(members
+            .into_iter()
+            .map(|m| TeamMemberInfoGql {
+                id: m.user.id.to_string(),
+                name: m.user.name.clone(),
+                display_name: m.user.display_name.clone(),
+                owner: m.membership.owner,
+                role: m.user.role.as_str().into(),
+            })
+            .collect())
+    }
+
     /// Workflow-Status eines Teams.
     async fn workflow_states(
         &self,
@@ -547,6 +606,21 @@ impl TeamMutation {
                 &user_id,
                 owner.unwrap_or(false),
             )
+            .await
+            .map_err(gql_err)?;
+        Ok(SuccessPayload { success: true })
+    }
+
+    /// Ernennt oder entzieht Team-Owner (Owner und Admins; Gäste/Apps nie Owner, docs/02 §6.4).
+    async fn team_membership_update(
+        &self,
+        ctx: &Context<'_>,
+        team_id: String,
+        user_id: String,
+        owner: bool,
+    ) -> async_graphql::Result<SuccessPayload> {
+        app(ctx)?
+            .set_team_owner(request_ctx(ctx)?, &team_id, &user_id, owner)
             .await
             .map_err(gql_err)?;
         Ok(SuccessPayload { success: true })
