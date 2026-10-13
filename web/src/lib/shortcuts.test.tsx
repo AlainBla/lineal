@@ -94,7 +94,7 @@ describe("ShortcutRegistry", () => {
     const run = vi.fn();
     reg.register({ id: "inbox", keys: "g i", description: "Inbox", run });
     reg.handleKeyDown(key("g"));
-    expect(reg.handleKeyDown(key("z"))).toBe(true);
+    expect(reg.handleKeyDown(key("z"))).toBe(false);
     expect(reg.handleKeyDown(key("i"))).toBe(false);
     reg.handleKeyDown(key("g"));
     reg.handleKeyDown(key("i"));
@@ -109,6 +109,9 @@ describe("ShortcutRegistry", () => {
     reg.handleKeyDown(key("o"));
     expect(reg.handleKeyDown(key("p"))).toBe(true);
     expect(priority).not.toHaveBeenCalled();
+    // Tasten ohne Kürzel (Tab, Enter) behalten nach abgebrochener Folge ihr Browserverhalten
+    reg.handleKeyDown(key("o"));
+    expect(reg.handleKeyDown(key("Tab"))).toBe(false);
     // danach funktioniert p wieder normal
     reg.handleKeyDown(key("p"));
     expect(priority).toHaveBeenCalledTimes(1);

@@ -304,4 +304,17 @@ describe("Create-Issue-Modal", () => {
       setCreateContext(null);
     }
   });
+
+  it("Strg+Enter wirkt auch direkt nach der Auswahl im Picker (B4.25)", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql(handlers((i) => created.push(i)));
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    await userEvent.type(title, "Fokus bleibt");
+    await userEvent.click(screen.getByRole("button", { name: /^Priority/ }));
+    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "1");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ title: "Fokus bleibt", priority: 1 });
+  });
 });
