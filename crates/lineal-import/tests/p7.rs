@@ -314,6 +314,44 @@ async fn second_run_for_the_same_teams_is_rejected_and_errors_are_flagged(pool: 
         .unwrap();
 }
 
+/// B7.08: Zwei gleichzeitig gestartete Läufe ins selbe Team: genau einer gewinnt, der andere wird
+/// atomar abgelehnt (keine Race zwischen Prüfung und Statuswechsel).
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn concurrent_starts_for_the_same_team_let_exactly_one_win(pool: PgPool) {
+    let e = env(pool).await;
+    let source = fake();
+    for _ in 0..3 {
+        let a = e.scan(&source).await;
+        let b = e.scan(&source).await;
+        let ctx = e.alice_ctx();
+        let start = |id: uuid::Uuid| {
+            e.app.import_start(
+                &ctx,
+                ImportStartInput {
+                    run_id: id,
+                    ..Default::default()
+                },
+            )
+        };
+        let (ra, rb) = tokio::join!(start(a.id), start(b.id));
+        assert_eq!(
+            u8::from(ra.is_ok()) + u8::from(rb.is_ok()),
+            1,
+            "genau ein Start gewinnt: {ra:?} / {rb:?}"
+        );
+        let loser = if ra.is_err() { ra } else { rb };
+        assert_eq!(
+            loser.unwrap_err().kind,
+            lineal_app::error::ErrorKind::Conflict
+        );
+        // Aufräumen für die nächste Runde: laufende Läufe beenden.
+        sqlx::query("UPDATE import_run SET status = 'canceled' WHERE status = 'running'")
+            .execute(&e.pool)
+            .await
+            .unwrap();
+    }
+}
+
 /// B7.07: Der CSV-Import meldet jede stille Datenänderung (Duplikat, Kürzung, ungültige Werte).
 #[sqlx::test(migrator = "lineal_db::MIGRATOR")]
 async fn csv_import_reports_every_data_change(pool: PgPool) {
