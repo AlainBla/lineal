@@ -58,7 +58,7 @@ pub async fn run_claimed(app: &App, run: &ImportRun) -> AppResult<()> {
         )
         .await;
     };
-    let source = match LinearSource::new(&token) {
+    let source = match LinearSource::from_env(&token) {
         Ok(s) => s,
         Err(e) => return fail_run(app, org, run.id, &e.to_string()).await,
     };

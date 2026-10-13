@@ -382,6 +382,56 @@ impl Default for LinearConfig {
     }
 }
 
+/// Umgebungsvariable: alternativer Linear-GraphQL-Endpunkt (z. B. Mock-Server).
+pub const ENDPOINT_ENV: &str = "LINEAL_IMPORT_LINEAR_ENDPOINT";
+/// Umgebungsvariable: erlaubt `ENDPOINT_ENV` außerhalb des Dev-Modus (`LINEAL_DEV`).
+pub const ALLOW_CUSTOM_ENDPOINT_ENV: &str = "LINEAL_IMPORT_ALLOW_CUSTOM_ENDPOINT";
+
+fn truthy(v: Option<String>) -> bool {
+    v.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
+/// Konfiguration aus Umgebungsvariablen. Ohne `LINEAL_IMPORT_LINEAR_ENDPOINT` gilt der echte
+/// Linear-Endpunkt. Ein eigener Endpunkt (nur Betreiber-Konfiguration, nie Benutzereingabe) ist nur
+/// im Dev-Modus (`LINEAL_DEV`) oder mit `LINEAL_IMPORT_ALLOW_CUSTOM_ENDPOINT=1` erlaubt, muss
+/// `http(s)` ohne Zugangsdaten in der URL sein und wird protokolliert. Der Zugangs-Token geht an
+/// diesen Endpunkt: nur vertrauenswürdige Ziele eintragen. Downloads bleiben auf die Hosts von
+/// `UrlPolicy::linear()` beschränkt (kein SSRF über importierte URLs), Redirects werden nie
+/// verfolgt.
+pub fn config_from_env_with(get: impl Fn(&str) -> Option<String>) -> SourceResult<LinearConfig> {
+    let mut cfg = LinearConfig::default();
+    let Some(raw) = get(ENDPOINT_ENV).filter(|v| !v.trim().is_empty()) else {
+        return Ok(cfg);
+    };
+    if !(truthy(get("LINEAL_DEV")) || truthy(get(ALLOW_CUSTOM_ENDPOINT_ENV))) {
+        return Err(SourceError::Invalid(format!(
+            "{ENDPOINT_ENV} is only allowed in dev mode (LINEAL_DEV=1) or with {ALLOW_CUSTOM_ENDPOINT_ENV}=1"
+        )));
+    }
+    let url = url::Url::parse(raw.trim())
+        .map_err(|_| SourceError::Invalid(format!("{ENDPOINT_ENV} is not a valid URL")))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(SourceError::Invalid(format!(
+            "{ENDPOINT_ENV} must be an http(s) URL without credentials"
+        )));
+    }
+    tracing::warn!(
+        host = url.host_str().unwrap_or_default(),
+        "the import uses a custom Linear endpoint ({ENDPOINT_ENV})"
+    );
+    cfg.endpoint = url.to_string();
+    Ok(cfg)
+}
+
+/// [`config_from_env_with`] mit der Prozessumgebung.
+pub fn config_from_env() -> SourceResult<LinearConfig> {
+    config_from_env_with(|k| std::env::var(k).ok())
+}
+
 /// Linear als Importquelle.
 pub struct LinearSource {
     client: reqwest::Client,
@@ -409,6 +459,11 @@ impl LinearSource {
     /// Quelle mit Standardkonfiguration.
     pub fn new(token: &Secret) -> SourceResult<Self> {
         Self::with_config(token, LinearConfig::default())
+    }
+
+    /// Quelle mit Konfiguration aus der Umgebung (siehe [`config_from_env`]).
+    pub fn from_env(token: &Secret) -> SourceResult<Self> {
+        Self::with_config(token, config_from_env()?)
     }
 
     /// Quelle mit eigener Konfiguration (z. B. Mock-Server in Tests).
@@ -770,5 +825,56 @@ mod tests {
         let key = Secret::new("lin_api_SUPERSECRET99").unwrap();
         let s = LinearSource::new(&key).unwrap();
         assert!(!format!("{s:?}").contains("SUPERSECRET"));
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    fn cfg(vars: &[(&str, &str)]) -> SourceResult<LinearConfig> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        config_from_env_with(|k| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()))
+    }
+
+    #[test]
+    fn default_endpoint_without_override() {
+        assert_eq!(cfg(&[]).unwrap().endpoint, LINEAR_ENDPOINT);
+        assert_eq!(
+            cfg(&[(ENDPOINT_ENV, "  ")]).unwrap().endpoint,
+            LINEAR_ENDPOINT
+        );
+    }
+
+    #[test]
+    fn override_needs_dev_mode_or_explicit_permission() {
+        let url = "http://127.0.0.1:9999/graphql";
+        assert!(cfg(&[(ENDPOINT_ENV, url)]).is_err());
+        assert!(cfg(&[(ENDPOINT_ENV, url), ("LINEAL_DEV", "0")]).is_err());
+        assert_eq!(
+            cfg(&[(ENDPOINT_ENV, url), ("LINEAL_DEV", "1")])
+                .unwrap()
+                .endpoint,
+            url
+        );
+        assert!(cfg(&[(ENDPOINT_ENV, url), (ALLOW_CUSTOM_ENDPOINT_ENV, "true")]).is_ok());
+    }
+
+    #[test]
+    fn override_must_be_a_plain_http_url() {
+        for bad in [
+            "ftp://x/graphql",
+            "file:///etc/passwd",
+            "http://user:pw@host/graphql",
+            "not a url",
+        ] {
+            assert!(
+                cfg(&[(ENDPOINT_ENV, bad), ("LINEAL_DEV", "1")]).is_err(),
+                "{bad}"
+            );
+        }
     }
 }
