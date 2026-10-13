@@ -1282,6 +1282,60 @@ async fn upload_content_must_match_the_declared_image_type() {
     assert_eq!(r.status, StatusCode::OK);
 }
 
+#[tokio::test]
+async fn oversized_graphql_body_is_413_with_consistent_error_and_byte_limit() {
+    let router = api(app_with_keys());
+    let huge = format!(
+        r#"{{"query":"{{ __typename }}","pad":"{}"}}"#,
+        "x".repeat(3 * 1024 * 1024)
+    );
+    let mut req = Request::post("/graphql")
+        .header("content-type", "application/json")
+        .header("authorization", KEY_RW)
+        .body(Body::from(huge))
+        .unwrap();
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "203.0.113.60:4000".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    let r = send(&router, req).await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE, "{}", r.body);
+    let ext = &r.json()["errors"][0]["extensions"];
+    assert_eq!(ext["code"], "limit_exceeded");
+    assert_eq!(ext["status"], 413);
+    assert_eq!(ext["details"]["maxBytes"], 2 * 1024 * 1024);
+    assert!(
+        r.json()["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bytes")
+    );
+}
+
+#[tokio::test]
+async fn schema_sdl_is_served_to_authenticated_clients_only() {
+    let router = api(app_with_keys());
+    let sdl = |auth: Option<&str>| {
+        let mut req = from_peer("203.0.113.61", "");
+        *req.uri_mut() = "/graphql/schema.graphql".parse().unwrap();
+        if let Some(a) = auth {
+            req.headers_mut()
+                .insert("authorization", a.parse().unwrap());
+        }
+        req
+    };
+    assert_eq!(
+        send(&router, sdl(None)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let r = send(&router, sdl(Some(KEY_RW))).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.body.contains("type Query"),
+        "{}",
+        &r.body[..200.min(r.body.len())]
+    );
+}
+
 // ---------------------------------------------------------------- Brute-Force
 
 #[tokio::test]

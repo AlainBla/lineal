@@ -144,8 +144,27 @@ fn operation<'a>(
     }
 }
 
+/// Axum-Standardgrenze für JSON-Bodies (2 MiB), hier für die Fehlermeldung.
+const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Antwort auf einen unlesbaren Request-Body (Fehlermodell, Status der Rejection).
 pub fn bad_body(rejection: &JsonRejection) -> Response {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        // B3.20: Code, Status in Body und HTTP-Status stimmen überein, die Meldung nennt das Limit.
+        let e = AppError::limit_exceeded(format!(
+            "Request body exceeds the maximum of {MAX_BODY_BYTES} bytes."
+        ))
+        .with_details(serde_json::json!({ "maxBytes": MAX_BODY_BYTES }));
+        let rid = crate::middleware::request_id::current();
+        let mut err = crate::error::gql_error(&e, &rid);
+        if let Some(ext) = err.extensions.as_mut() {
+            ext.set("status", 413);
+        }
+        let mut server_error = err.into_server_error(Default::default());
+        server_error.locations.clear();
+        let body = async_graphql::Response::from_errors(vec![server_error]);
+        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+    }
     let mut res = graphql_error_response(&AppError::invalid_request(rejection.body_text()));
     *res.status_mut() = rejection.status();
     res
