@@ -14,7 +14,7 @@ use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput};
 use lineal_app::usecases::initiative::{ListInitiativesInput, SaveInitiativeInput};
 use lineal_app::usecases::project::milestone::SaveMilestoneInput;
 use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpts};
-use lineal_app::usecases::team::CreateTeamInput;
+use lineal_app::usecases::team::{CreateTeamInput, UpdateTeamInput};
 use lineal_app::{App, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
 use lineal_domain::enums::{Health, TeamVisibility};
@@ -153,4 +153,41 @@ async fn b5_01_shift_all_rejects_out_of_range_days_without_panic(pool: PgPool) {
         assert_eq!(e.details["field"], "daysToShift");
     }
     app.shift_cycles(&alice, &c3, 3660).await.unwrap();
+}
+
+async fn windows(pool: &PgPool, team: Uuid) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    sqlx::query_as("SELECT starts_at, ends_at FROM cycle WHERE team_id = $1 ORDER BY starts_at")
+        .bind(team)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_03_timezone_change_with_gapless_cycles_recomputes_future(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    // Fingerprint des Zeitplans setzen (Seed legt keinen an).
+    app.configure_team_cycles(&alice, "ENG", CycleSettingsInput::default())
+        .await
+        .unwrap();
+    for tz in ["Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland"] {
+        app.update_team(
+            &alice,
+            "ENG",
+            UpdateTeamInput {
+                timezone: Some(tz.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{tz}: {e:?}"));
+        let w = windows(&pool, data.eng.0).await;
+        for pair in w.windows(2) {
+            assert!(pair[0].1 <= pair[1].0, "{tz}: Überlappung {pair:?}");
+            assert!(pair[1].0 < pair[1].1);
+        }
+        // Aktiver Cycle (#2) bleibt unverändert.
+        assert_eq!(w[1], (utc(2026, 10, 4, 22, 0), utc(2026, 10, 18, 22, 0)));
+    }
 }

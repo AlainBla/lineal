@@ -221,6 +221,14 @@ fn window_utc(w: &CycleWindow) -> (DateTime<Utc>, DateTime<Utc>) {
     (w.starts_at, w.ends_at)
 }
 
+/// Fenster eines Folge-Cycles, das nie vor dem Ende des Vorgängers beginnt. Nach einem
+/// Zeitzonenwechsel (z. B. nach Osten) liegt die lokale Mitternacht des Folgetags sonst vor dem
+/// unveränderten Ende des laufenden Cycles (Überlappung); dann beginnt der Folge-Cycle exakt dort.
+fn after_prev(prev_end: DateTime<Utc>, w: &CycleWindow) -> (DateTime<Utc>, DateTime<Utc>) {
+    let start = w.starts_at.max(prev_end);
+    (start, w.ends_at.max(start + Duration::hours(1)))
+}
+
 /// Überlappung zweier Zeitfenster in Sekunden (negativ/0 = keine).
 fn overlap_secs(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)) -> i64 {
     let start = a.0.max(b.0);
@@ -303,12 +311,18 @@ pub async fn ensure_upcoming(
                 future.len(),
             )?,
         };
-        let moves: Vec<_> = future
-            .iter()
-            .zip(&windows)
-            .filter(|(c, w)| (c.starts_at, c.ends_at) != window_utc(w))
-            .map(|(c, w)| (c.id, w.starts_at, w.ends_at))
-            .collect();
+        let mut prev_end = base.map(|b| b.ends_at);
+        let mut moves = Vec::new();
+        for (c, w) in future.iter().zip(&windows) {
+            let (s, e) = match prev_end {
+                Some(p) => after_prev(p, w),
+                None => window_utc(w),
+            };
+            prev_end = Some(e);
+            if (c.starts_at, c.ends_at) != (s, e) {
+                moves.push((c.id, s, e));
+            }
+        }
         move_windows(tx, env, &moves).await?;
     }
     if stored.as_deref() != Some(fp.as_str()) {
@@ -333,8 +347,11 @@ pub async fn ensure_upcoming(
             }
         }
         .remove(0);
-        let created =
-            create_cycle(tx, env, team.id, window.starts_at, window.ends_at, None).await?;
+        let (ws, we) = match &last {
+            Some(l) => after_prev(l.ends_at, &window),
+            None => window_utc(&window),
+        };
+        let created = create_cycle(tx, env, team.id, ws, we, None).await?;
         if created.starts_at > env.now {
             future_count += 1;
         }
