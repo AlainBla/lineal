@@ -499,38 +499,27 @@ async fn refresh_rotation_and_family_revocation_on_reuse(pool: PgPool) {
     // Falscher Client.
     let other = register_client(&fx).await;
     assert_eq!(refresh(&fx, &other, &r2).await.0, StatusCode::BAD_REQUEST);
-    // Gnadenfrist: das vorherige Refresh-Token funktioniert noch (verlorene Antwort).
-    let (s, v) = refresh(&fx, &client, &r1).await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    let (a3, r3) = (
-        v["access_token"].as_str().unwrap().to_string(),
-        v["refresh_token"].as_str().unwrap().to_string(),
-    );
-    // B3.05: Die Frist ist fest (ab Ablösung von r1) und wird durch Wiederverwendung nicht
-    // verlängert; das nie ausgelieferte r2 ist nicht mehr gültig.
-    let (s, v) = refresh(&fx, &client, &r2).await;
-    assert_eq!(
-        (s, v["error"].as_str()),
-        (StatusCode::BAD_REQUEST, Some("invalid_grant")),
-        "{v}"
-    );
-    fx.clock.advance(30);
-    assert_eq!(refresh(&fx, &client, &r1).await.0, StatusCode::OK);
-    fx.clock.advance(31);
-    // 61 s nach der Ablösung von r1: Wiederverwendung = Diebstahl, Familie widerrufen.
+    // Zweiter Einsatz des abgelösten r1 (auch sofort, ohne Gnadenfrist): Diebstahlverdacht,
+    // die ganze Familie (inkl. a2/r2) wird widerrufen.
     let (s, v) = refresh(&fx, &client, &r1).await;
     assert_eq!(
         (s, v["error"].as_str()),
         (StatusCode::BAD_REQUEST, Some("invalid_grant")),
         "{v}"
     );
-    let r4 = r3.clone();
-    assert_eq!(mcp_call(&fx, &a3).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(mcp_call(&fx, &a2).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(
-        refresh(&fx, &client, &r4).await.0,
+        refresh(&fx, &client, &r2).await.0,
         StatusCode::BAD_REQUEST,
         "Familie ist widerrufen"
     );
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE action = 'oauth_app.refresh_reuse_revoked'",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap_or(0);
+    assert_eq!(audits, 1);
     let events: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM outbox_event WHERE payload->>'type' = 'OAuthAuthorizationRevoked'",
     )
@@ -568,6 +557,38 @@ async fn revoke_endpoint_and_scope_clamping(pool: PgPool) {
     .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(text.contains("unsupported_grant_type"));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn parallel_refresh_uses_yield_exactly_one_success_and_revoke_the_family(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    let code = obtain_code(&fx, &client, &fx.alice_cookie, "read").await;
+    let (_, v) = exchange(&fx, &client, &code, VERIFIER).await;
+    let r1 = v["refresh_token"].as_str().unwrap().to_string();
+    let (a, b) = tokio::join!(refresh(&fx, &client, &r1), refresh(&fx, &client, &r1));
+    let ok = [&a, &b].iter().filter(|x| x.0 == StatusCode::OK).count();
+    assert_eq!(ok, 1, "{a:?} {b:?}");
+    // Der Verlierer hat die Familie als wiederverwendet widerrufen: auch der Gewinner ist tot.
+    let winner = if a.0 == StatusCode::OK { &a } else { &b };
+    let r2 = winner.1["refresh_token"].as_str().unwrap();
+    assert_eq!(refresh(&fx, &client, r2).await.0, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn refresh_tokens_expire_after_30_days(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    let code = obtain_code(&fx, &client, &fx.alice_cookie, "read").await;
+    let (_, v) = exchange(&fx, &client, &code, VERIFIER).await;
+    let r1 = v["refresh_token"].as_str().unwrap().to_string();
+    fx.clock.advance(31 * 24 * 3600);
+    let (s, v) = refresh(&fx, &client, &r1).await;
+    assert_eq!(
+        (s, v["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_grant")),
+        "{v}"
+    );
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

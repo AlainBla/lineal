@@ -259,10 +259,11 @@ impl PgTx {
             Option<DateTime<Utc>>,
             Uuid,
             Option<DateTime<Utc>>,
+            DateTime<Utc>,
         );
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.id, t.organization_id, t.application_id, a.dcr_client_id, t.user_id, t.actor, t.scopes, \
-             t.refresh_token_hash, t.previous_refresh_token_hash, t.rotated_at, t.family_id, t.revoked_at \
+             t.refresh_token_hash, t.previous_refresh_token_hash, t.rotated_at, t.family_id, t.revoked_at, t.updated_at \
              FROM oauth_token t JOIN oauth_application a \
                ON a.organization_id = t.organization_id AND a.id = t.application_id \
              WHERE (t.refresh_token_hash = $1 OR t.previous_refresh_token_hash = $1) AND EXISTS (SELECT 1 FROM \"user\" u WHERE u.organization_id = t.organization_id \
@@ -287,6 +288,7 @@ impl PgTx {
                 rotated_at,
                 family,
                 revoked_at,
+                updated_at,
             )| {
                 OauthTokenRecord {
                     id,
@@ -301,6 +303,7 @@ impl PgTx {
                     rotated_at,
                     family_id: family,
                     revoked_at,
+                    updated_at,
                 }
             },
         ))
@@ -314,8 +317,7 @@ impl PgTx {
     ) -> AppResult<bool> {
         let res = sqlx::query(
             "UPDATE oauth_token SET access_token_hash = $4, access_expires_at = $5, \
-             previous_refresh_token_hash = CASE WHEN $8 THEN previous_refresh_token_hash ELSE refresh_token_hash END, \
-             refresh_token_hash = $6, rotated_at = CASE WHEN $8 THEN rotated_at ELSE $7 END, \
+             previous_refresh_token_hash = refresh_token_hash, refresh_token_hash = $6, rotated_at = $7, \
              version = version + 1, updated_at = $7 \
              WHERE organization_id = $1 AND id = $2 AND refresh_token_hash = $3 AND revoked_at IS NULL",
         )
@@ -326,7 +328,6 @@ impl PgTx {
         .bind(r.access_expires_at)
         .bind(&r.refresh_token_hash)
         .bind(r.now)
-        .bind(r.keep_previous)
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
