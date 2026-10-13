@@ -124,7 +124,7 @@ impl SearchQuery {
         order_by: Option<PaginationOrderBy>,
         relevance: Option<bool>,
     ) -> async_graphql::Result<IssueSearchConnection> {
-        let offset = offset_of(after.as_deref()).gql(ctx)?;
+        let offset = offset_of(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let order = match (relevance.unwrap_or(true), order_by) {
             (true, _) => SearchOrder::Relevance,
             (false, Some(PaginationOrderBy::CreatedAt)) => SearchOrder::CreatedAt,
@@ -142,7 +142,10 @@ impl SearchQuery {
                     include_archived: include_archived.unwrap_or(true),
                     order,
                     offset,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                 },
             )
             .await
@@ -172,7 +175,7 @@ impl SearchQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<EntitySearchConnection> {
-        let offset = offset_of(after.as_deref()).gql(ctx)?;
+        let offset = offset_of(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let page = app(ctx)?
             .search(
                 request_ctx(ctx)?,
@@ -180,7 +183,10 @@ impl SearchQuery {
                     term,
                     kinds: vec![SearchKind::Project],
                     offset,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )
@@ -196,7 +202,7 @@ impl SearchQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<EntitySearchConnection> {
-        let offset = offset_of(after.as_deref()).gql(ctx)?;
+        let offset = offset_of(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let page = app(ctx)?
             .search(
                 request_ctx(ctx)?,
@@ -204,7 +210,10 @@ impl SearchQuery {
                     term,
                     kinds: vec![SearchKind::Document],
                     offset,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )
@@ -224,7 +233,7 @@ impl SearchQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<EntitySearchConnection> {
-        let offset = offset_of(after.as_deref()).gql(ctx)?;
+        let offset = offset_of(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let kinds = types
             .unwrap_or_default()
             .iter()
@@ -247,7 +256,10 @@ impl SearchQuery {
                     kinds,
                     include_comments: include_comments.unwrap_or(false),
                     offset,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )

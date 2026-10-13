@@ -88,6 +88,19 @@ pub fn gql_error(e: &AppError, request_id: &str) -> async_graphql::Error {
     err
 }
 
+/// Fehler für ungültige Eingaben eines Resolvers (`invalid_request`, nicht `internal`; B8.15).
+pub fn invalid_input(message: impl Into<String>) -> async_graphql::Error {
+    gql_error(&AppError::invalid_request(message), &request_id::current())
+}
+
+/// Ist `message` ein Eingabefehler der GraphQL-Engine (Argument-/Variablen-Coercion)?
+pub fn is_engine_input_error(message: &str) -> bool {
+    message.starts_with("Failed to parse ")
+        || message.starts_with("Invalid value for argument")
+        || (message.starts_with("Variable ")
+            && (message.ends_with("is not defined.") || message.contains("required")))
+}
+
 /// Für Resolver: `use_case(..).await.gql(ctx)?` liefert Fehler mit `extensions.code`.
 pub trait GqlResultExt<T> {
     fn gql(self, ctx: &Context<'_>) -> async_graphql::Result<T>;

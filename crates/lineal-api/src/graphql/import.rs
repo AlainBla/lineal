@@ -259,7 +259,13 @@ impl ImportQuery {
         first: Option<i32>,
     ) -> async_graphql::Result<Vec<ImportRunGql>> {
         let runs = app(ctx)?
-            .import_list_runs(request_ctx(ctx)?, i64::from(first.unwrap_or(20)))
+            .import_list_runs(
+                request_ctx(ctx)?,
+                i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 20, 250),
+                    ctx,
+                )?),
+            )
             .await
             .map_err(gql_err)?;
         Ok(runs.into_iter().map(Into::into).collect())
@@ -279,7 +285,10 @@ impl ImportQuery {
                 request_ctx(ctx)?,
                 parse_id(&run_id)?,
                 severity.as_deref(),
-                i64::from(first.unwrap_or(100)),
+                i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 100, 250),
+                    ctx,
+                )?),
                 i64::from(offset.unwrap_or(0)),
             )
             .await

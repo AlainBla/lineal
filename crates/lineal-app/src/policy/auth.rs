@@ -285,7 +285,9 @@ fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppRe
         ManageWebhooks => !guest_or_app && at_least(org.api_settings_role),
         CreatePersonalApiKey => !guest_or_app && at_least(org.personal_api_keys_role),
         ViewInitiatives => role != UserRole::Guest,
-        ManageInitiatives | ManageWorkspaceViews | ViewWorkspaceOverview => role != UserRole::Guest,
+        ManageInitiatives | ViewWorkspaceOverview => role != UserRole::Guest,
+        // docs/05 §4.4, docs/15 §5: Workspace-Views (geteilt, ohne Team) nur Admin/Owner.
+        ManageWorkspaceViews => is_admin(role),
         ManageWorkspaceProjectLabels => {
             role != UserRole::Guest && at_least(org.label_management_role)
         }
@@ -375,6 +377,20 @@ fn require_one_team(ctx: &RequestCtx, action: Action, view: &TeamPolicyView) -> 
     } else {
         Err(forbidden(action, "role"))
     }
+}
+
+/// Initiative ohne Lead-Team anlegen: Mindestrolle `workspaceInitiativesRole` (docs/02 §6.3).
+pub fn require_initiative_without_lead_team(ctx: &RequestCtx, org: &OrgPolicy) -> AppResult<()> {
+    let Some(role) = actor_role(ctx) else {
+        return Ok(()); // System
+    };
+    if role_rank(role) >= role_rank(org.workspace_initiatives_role) {
+        return Ok(());
+    }
+    Err(forbidden(
+        Action::ManageInitiatives,
+        "workspaceInitiativesRole",
+    ))
 }
 
 /// Prüft, ob `ctx` die Aktion auf der Ressource ausführen darf (docs/02 §6.5).

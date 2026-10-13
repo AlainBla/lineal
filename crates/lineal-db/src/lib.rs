@@ -28,7 +28,15 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
 }
 
 /// Bildet einen sqlx-Fehler auf `AppError::internal` ab (Details nur im Log).
+///
+/// Ausnahme (B8.02): NUL-Zeichen in Texten (SQLSTATE 22021 bzw. 22P05 bei JSON) sind ein
+/// Eingabefehler des Aufrufers und werden zu `invalid_request` statt `internal`.
 pub(crate) fn db_err(e: sqlx::Error) -> AppError {
+    if let Some(code) = e.as_database_error().and_then(|d| d.code())
+        && matches!(code.as_ref(), "22021" | "22P05")
+    {
+        return AppError::invalid_request("Text must not contain NUL characters.");
+    }
     tracing::error!(error = %e, "database error");
     AppError::internal("database error")
 }

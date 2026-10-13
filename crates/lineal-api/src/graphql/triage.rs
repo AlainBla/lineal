@@ -168,7 +168,10 @@ impl TriageQuery {
                 request_ctx(ctx)?,
                 &team_id,
                 include_snoozed.unwrap_or(false),
-                i64::from(first.unwrap_or(50)),
+                i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 50, 250),
+                    ctx,
+                )?),
             )
             .await
             .map_err(gql_err)?;
@@ -188,7 +191,10 @@ impl TriageQuery {
                 request_ctx(ctx)?,
                 &team_id,
                 user_id.as_deref(),
-                i64::from(first.unwrap_or(10)),
+                i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 10, 250),
+                    ctx,
+                )?),
             )
             .await
             .map_err(gql_err)?;

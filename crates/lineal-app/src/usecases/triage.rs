@@ -912,7 +912,8 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
-        let name = name.trim();
+        let name = lineal_domain::rules::text::validate_single_line_name("name", name, 120)?;
+        let name = name.as_str();
         if name.is_empty() || name.chars().count() > 120 {
             return Err(invalid(
                 "name",

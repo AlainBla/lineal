@@ -663,7 +663,7 @@ Die Rollen und Team-Mitgliedschaften sind in [02-teams-rechte.md](02-teams-recht
 | Dokument eines archivierten Elternobjekts bearbeiten | niemand (schreibgeschützt) | `invalid_request` |
 | Dokument endgültig aus dem Papierkorb löschen | Anleger, Team-Owner, Admins | `forbidden` |
 | Team-Template anlegen, ändern, löschen; Default-Templates des Teams setzen | Team-Mitglieder; wenn die Team-Einstellung `templateManagementRestrictedToOwners = true` gesetzt ist, nur Team-Owner und Workspace-Admins/Owner | `forbidden` |
-| Workspace-Template anlegen, ändern, löschen | Workspace-Admins und -Owner | `forbidden` |
+| Workspace-Template anlegen, ändern, löschen | Workspace-Admins und -Owner sowie Member, wenn die Workspace-Einstellung `templateManagementRole` (Default `user`) es zulässt; Gäste und Apps nie. Festlegung Lineal: Maßgeblich ist [02 §6.3/§6.5](02-teams-rechte.md); wer Workspace-Templates auf Admins beschränken will, setzt `templateManagementRole = admin`. | `forbidden` |
 | Template auflisten und anwenden | Jeder, der im Zielteam Issues/Projekte/Dokumente anlegen darf | `not_found` (Template aus nicht sichtbarem Team) |
 
 `templateManagementRestrictedToOwners` ist ein Boolean-Feld am Team (Default `false`), Teil der Gruppe von Team-Einstellungen, die laut Linear-Doku „auf Owner beschränkt“ werden können (Team-Einstellungen, Labels, Templates, Mitgliederverwaltung). Sub-Teams erben den Wert nicht automatisch; jede Ebene konfiguriert ihn selbst.

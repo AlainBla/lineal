@@ -9,6 +9,9 @@ use lineal_app::usecases::attachment::{AttachmentView, PrepareUploadInput};
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 use serde_json::{Map, Value, json};
 
+/// Größtes Objekt, dessen Inhalt `get_attachment` direkt ausliefert (5 MiB).
+const MAX_CONTENT_BYTES: u64 = 5 * 1024 * 1024;
+
 /// Maximale Zahl der Bilder, die `extract_images` bearbeitet.
 const MAX_IMAGES: usize = 10;
 
@@ -132,7 +135,51 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             Ok(attachment_json(&m.view))
         }
         "get_attachment" => {
-            let v = app.get_attachment(ctx, required_str(&args, "id")?).await?;
+            let id = required_str(&args, "id")?;
+            let v = app.get_attachment(ctx, id).await?;
+            // `format: "content"` (Default): Bilder als image-Element, Text als Text-Inhalt
+            // (docs/07 §3.6); alles andere und Links liefern Metadaten mit Download-URL.
+            if arg_str(&args, "format")? != Some("url")
+                && v.expires_at.is_some()
+                && let Some((bytes, content_type)) = app
+                    .read_attachment_content(ctx, id, MAX_CONTENT_BYTES)
+                    .await?
+            {
+                let mime = content_type
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                let is_text = mime.starts_with("text/")
+                    || mime == "application/json"
+                    || mime.ends_with("+json");
+                let mut meta = attachment_json(&v);
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert("expiresAt".into(), json!(v.expires_at.map(ts)));
+                }
+                if mime.starts_with("image/") {
+                    use base64::Engine;
+                    return Ok(json!({
+                        CONTENT_KEY: [
+                            { "type": "text", "text": meta.to_string() },
+                            {
+                                "type": "image",
+                                "data": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                                "mimeType": mime,
+                            },
+                        ]
+                    }));
+                }
+                if is_text && let Ok(text) = String::from_utf8(bytes) {
+                    return Ok(json!({
+                        CONTENT_KEY: [
+                            { "type": "text", "text": meta.to_string() },
+                            { "type": "text", "text": text },
+                        ]
+                    }));
+                }
+            }
             let mut out = attachment_json(&v);
             if let Some(obj) = out.as_object_mut() {
                 obj.insert("expiresAt".into(), json!(v.expires_at.map(ts)));

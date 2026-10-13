@@ -11518,12 +11518,12 @@ function createIssue(input, user):
 <tbody>
 <tr>
 <td><strong>Accept</strong></td>
-<td>Team-Mitglied; ggf. <code>priority != 0</code></td>
+<td>Zugriff auf das Team (Recht wie „Issue bearbeiten“, <a href="#ch-02-teams-rechte">02 §6.5</a>; Gäste nur als Mitglied; Mitgliedschaft ist nicht nötig); ggf. <code>priority != 0</code></td>
 <td>optionaler Kommentar wird angelegt; Wechsel auf <code>defaultIssueState</code> oder einen vom User gewählten Status (<code>backlog</code>, <code>unstarted</code>, <code>started</code>); <code>triagedAt</code> gesetzt</td>
 </tr>
 <tr>
 <td><strong>Decline</strong></td>
-<td>Team-Mitglied</td>
+<td>Zugriff auf das Team (wie Accept)</td>
 <td>optionaler Kommentar mit Begründung; Wechsel auf ersten <code>canceled</code>-Status (oder gewählten <code>canceled</code>-Status); <code>triagedAt</code> gesetzt</td>
 </tr>
 <tr>
@@ -18509,7 +18509,7 @@ function compileVirtual(alias, key, v, ctx):
 </tr>
 <tr>
 <td>Workspace-Template anlegen, ändern, löschen</td>
-<td>Workspace-Admins und -Owner</td>
+<td>Workspace-Admins und -Owner sowie Member, wenn die Workspace-Einstellung <code>templateManagementRole</code> (Default <code>user</code>) es zulässt; Gäste und Apps nie. Festlegung Lineal: Maßgeblich ist <a href="#ch-02-teams-rechte">02 §6.3/§6.5</a>; wer Workspace-Templates auf Admins beschränken will, setzt <code>templateManagementRole = admin</code>.</td>
 <td><code>forbidden</code></td>
 </tr>
 <tr>
@@ -18901,7 +18901,7 @@ function compileVirtual(alias, key, v, ctx):
 </tr>
 <tr>
 <td><code>POST /oauth/register</code></td>
-<td><strong>Dynamic Client Registration</strong> (RFC 7591): öffentliche Clients ohne Secret, <code>token_endpoint_auth_method: "none"</code>, Redirect-URIs nur <code>https</code> oder <code>http://localhost</code>/<code>127.0.0.1</code></td>
+<td><strong>Dynamic Client Registration</strong> (RFC 7591): öffentliche Clients ohne Secret, <code>token_endpoint_auth_method: "none"</code>, Redirect-URIs nur per Allowlist: <code>https</code>, <code>http://localhost</code>/<code>127.0.0.1</code>/<code>[::1]</code> und private Schemata nach RFC 8252 §7.1 (Reverse-DNS wie <code>com.example.app:</code> oder bekannte Client-Schemata <code>cursor</code>, <code>vscode</code>, <code>vscode-insiders</code>, <code>windsurf</code>, <code>zed</code>, <code>claude</code>, <code>claude-desktop</code>); <code>mailto:</code>, <code>intent:</code>, <code>view-source:</code> u. a. werden abgelehnt</td>
 </tr>
 <tr>
 <td><code>GET /oauth/authorize</code></td>
@@ -18920,8 +18920,10 @@ function compileVirtual(alias, key, v, ctx):
 <p>Regeln:</p>
 <ul>
 <li><strong>PKCE mit <code>S256</code> ist Pflicht</strong>, <code>plain</code> wird abgelehnt.</li>
-<li>Der Parameter <code>resource</code> (RFC 8707) muss auf <code>https://lineal.example/mcp</code> zeigen; ausgegebene Access-Tokens sind auf diese Audience beschränkt.</li>
-<li>Access-Token-Lebensdauer 1 h, Refresh-Token 30 Tage, rotierend.</li>
+<li>Der Parameter <code>resource</code> (RFC 8707) ist optional; wenn angegeben, muss er (bei <code>/oauth/authorize</code> und <code>/oauth/token</code>) genau auf <code>https://lineal.example/mcp</code> zeigen, sonst <code>invalid_target</code>. Der Server hat nur diese eine Ressource; ausgegebene Tokens gelten für sie.</li>
+<li>Access-Token-Lebensdauer 1 h, Refresh-Token 30 Tage ab Ausstellung bzw. letzter Rotation.</li>
+<li><strong>Refresh-Rotation (RFC 9700 §4.14):</strong> Jedes Refresh-Token ist einmalig. Wird ein bereits eingelöstes Token erneut vorgelegt (auch bei parallelen Anfragen: genau eine gewinnt), gilt das als Diebstahlverdacht: die gesamte Token-Familie (alle Access- und Refresh-Tokens des Grants) wird widerrufen, die Webhooks der Anwendung werden deaktiviert, ein Audit-Eintrag <code>oauth_app.refresh_reuse_revoked</code> und das Event <code>OAuthAuthorizationRevoked</code> entstehen. Es gibt bewusst keine Gnadenfrist (die Antwort kann nicht idempotent wiederholt werden, weil nur Hashes gespeichert sind); ein Client, der die Antwort verliert, muss neu autorisieren.</li>
+<li><code>/oauth/revoke</code> widerruft mit Access- oder Refresh-Token die ganze Familie (RFC 7009).</li>
 <li>Ohne oder mit ungültigem Token antwortet <code>/mcp</code> mit HTTP <code>401</code> und <code>WWW-Authenticate: Bearer resource_metadata="https://lineal.example/.well-known/oauth-protected-resource"</code>. Damit startet ein MCP-Client den Flow selbstständig.</li>
 <li><strong>Alternative: persönlicher API-Key</strong> als <code>Authorization: Bearer lin_api_…</code> (bzw. <code>lineal_api_…</code>). Er trägt die Scopes, mit denen er angelegt wurde, und wirkt als der User, der ihn erzeugt hat. Für stdio-Betrieb ist das der Normalfall.</li>
 </ul>
@@ -18941,6 +18943,10 @@ function compileVirtual(alias, key, v, ctx):
 <tr>
 <td><code>write</code></td>
 <td>zusätzlich alle <code>save_*</code>, <code>delete_*</code>, <code>retire_*</code>, <code>restore_*</code>, <code>mark_notification</code>, <code>share_issue</code>, <code>unshare_issue</code>, <code>prepare_attachment_upload</code>, <code>create_attachment_from_upload</code> (impliziert <code>read</code>)</td>
+</tr>
+<tr>
+<td><code>admin</code></td>
+<td>nur für Owner/Admin: Workspace-Einstellungen (Rollen, Teams, Webhooks, API-Keys anderer). Wird bei anderen Rollen beim Consent still entfernt; unbekannte Scopes werden mit <code>invalid_scope</code> abgelehnt. Die Consent-Seite warnt vor <code>admin</code>. Im Token steht immer <code>read</code> zusätzlich.</td>
 </tr>
 </tbody>
 </table>
@@ -28629,6 +28635,9 @@ enum PaginationOrderBy { createdAt updatedAt }
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Umsetzung (Entscheidung zu B8.13):</strong> Die implementierte GraphQL-Schicht ist vereinfacht und weicht von der obigen Relay-SDL ab; maßgeblich ist <code>web/schema.graphql</code>. Connections tragen <code>nodes</code>, <code>hasNextPage</code> und <code>endCursor</code> (kein <code>pageInfo</code>-Objekt, kein <code>totalCount</code>, keine <code>edges</code>); <code>last</code>/<code>before</code> werden nicht unterstützt (<code>invalid_request</code>). Kleine Listen (<code>teams</code>, <code>workflowStates</code> u. a.) liefern direkt ein Array mit <code>first</code>. <code>filter</code>/<code>orderBy</code> gibt es nur dort, wo das Schema sie nennt (z. B. Views mit <code>filterData</code>). <code>first</code> außerhalb 1..250 (Projekte 1..50) und ungültige Cursor sind <code>invalid_request</code>; <code>after: \"\"</code> gilt wie <code>null</code>. Cursor-Formate sind je Connection verschieden und für Clients opak. Eine Angleichung an die Relay-Form ist nicht geplant (docs/15 §2).</p>
+</blockquote>
 <p><strong>Abweichung von Linear:</strong> Linears Default-<code>orderBy</code> ist <code>createdAt</code>. Lineal nutzt <code>updatedAt</code> (00 ist verbindlich). Cursor sind opak (base64 von <code>{sortKey, id}</code>); ein Cursor ist nur mit derselben <code>orderBy</code>/<code>filter</code>-Kombination gültig, sonst <code>invalid_request</code>.</p>
 <h3 id="ch-09-api-events-1-4-kern-sdl-query-root">1.4 Kern-SDL: Query-Root</h3>
 <p>Auszug, Typen der Entitäten siehe <a href="#ch-01-domaenenmodell">01-domaenenmodell.md</a>. Alle <code>id</code>-Argumente akzeptieren die <strong>flexible Referenz</strong> aus <a href="#ch-00-konventionen">00 §2</a> (UUID, <code>ENG-123</code>, <code>P-ENG-7</code>, <code>I-4</code>, <code>slugId</code>).</p>
@@ -28739,7 +28748,7 @@ type UploadFileHeader { key: String!  value: String! }
   # Issues (Regeln: 03)
   issueCreate(input: IssueCreateInput!): IssuePayload!
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
-  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 50 IDs, atomar
+  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 250 IDs, je Issue eigene Transaktion (nicht atomar); Fehler je Eintrag in `failures`
   issueArchive(id: String!, trash: Boolean): IssueArchivePayload!
   issueUnarchive(id: String!): IssueArchivePayload!
   issueDelete(id: String!, permanentlyDelete: Boolean): IssueArchivePayload!       # Default: Papierkorb 30 Tage
@@ -29217,7 +29226,7 @@ Content-Type: application/json
 </tr>
 <tr>
 <td>Access Token</td>
-<td>24 h</td>
+<td>1 h</td>
 <td></td>
 </tr>
 <tr>
@@ -29243,7 +29252,7 @@ Content-Type: application/json
   L--&gt;&gt;B: Redirect redirect_uri?code&amp;state
   B-&gt;&gt;C: code
   C-&gt;&gt;L: POST /oauth/token (code, code_verifier)
-  L--&gt;&gt;C: access_token (24 h), refresh_token
+  L--&gt;&gt;C: access_token (1 h), refresh_token
   C-&gt;&gt;L: POST /graphql (Authorization: Bearer access_token)
   L--&gt;&gt;C: data
   C-&gt;&gt;L: POST /oauth/token (grant_type=refresh_token)
@@ -29290,6 +29299,14 @@ Content-Type: application/json
 </tbody>
 </table>
 <p>Lineal übernimmt diese Werte als <strong>Defaults</strong> und macht sie als Workspace-Limits konfigurierbar (konsistent mit der Entscheidung „Pläne/Limits“ in <a href="#ch-readme">README</a>). Zusätzlich gibt es <strong>Endpunkt-Limits</strong> für teure Operationen (Default: <code>searchIssues</code> 300/h, <code>fileUpload</code> 600/h, <code>issueBatchUpdate</code> 600/h pro User). Die Web-App über Session-Cookie und der Sync-Kanal unterliegen einem eigenen, großzügigeren Limit (Default 10× OAuth).</p>
+<p><strong>Umsetzung (Reihenfolge, Schlüssel, Fail-closed):</strong></p>
+<ol>
+<li><em>Vor dem Token-Lookup:</em> Anfragen <strong>ohne</strong> Zugangsdaten zählen gegen den IP-Bucket <code>ip:&lt;IP&gt;</code> (600/h, IPv6 je /64). Anfragen <strong>mit</strong> Zugangsdaten zählen (egal ob gültig) gegen ein grobes Sicherheitsnetz <code>ipa:&lt;IP&gt;</code> (<code>ip_authenticated</code>, Default 200 000/h), damit hinter NAT/Büro-Proxy kein gemeinsames enges Limit entsteht. Zusätzlich sperren <code>auth_failures</code> die IP bei 20 Fehlversuchen/min (vor dem Lookup).</li>
+<li><em>Nach dem Lookup:</em> gültige Zugangsdaten zählen je <strong>Konto und Klasse</strong> (<code>req:user:&lt;Klasse&gt;:&lt;UserId&gt;</code>, alle Keys/Sessions desselben Users teilen den Bucket; Klassen siehe Tabelle, Session 50 000/h). Ungültige Zugangsdaten (erfundene/abgelaufene Tokens, fremde Schemata) zählen gegen <code>ipc:&lt;IP&gt;</code> (<code>ip_credentialed</code>, Default 2 000/h).</li>
+<li>Die Bucket-Tabelle ist begrenzt (200 000); aktive Buckets werden nie verdrängt, neue Schlüssel teilen sich bei voller Tabelle einen strengen Überlauf-Bucket (1/10 des Limits). Ohne Peer-Adresse antwortet der Server im Produktivbetrieb mit 500 statt unbegrenzt durchzulassen.</li>
+<li>429 ist immer JSON (GraphQL- bzw. REST-Fehlermodell) mit <code>Retry-After</code>; das gilt auch für den nginx-Edge (<code>deploy/nginx.conf</code>, <code>@rate_limited</code>).</li>
+<li>Prüfen und Abziehen eines Buckets sind atomar (ein Mutex); parallele Anfragen überschreiten das Limit nicht.</li>
+</ol>
 <h3 id="ch-09-api-events-3-2-komplexit-tsberechnung">3.2 Komplexitätsberechnung</h3>
 <p>Statisch vor der Ausführung, aus dem Query-AST:</p>
 <table>

@@ -53,8 +53,19 @@ pub struct UpdateWorkspaceInput {
     pub limits: Option<Value>,
 }
 
-/// URL-Key: `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$` (docs/02 §1.1).
+/// Reservierte URL-Keys: Top-Level-Pfade der App und der API (docs/02 §1.1; B8.09).
+pub const RESERVED_URL_KEYS: &[&str] = &[
+    "admin", "api", "app", "assets", "auth", "docs", "files", "graphql", "healthz", "help",
+    "invite", "login", "logout", "mcp", "new", "oauth", "readyz", "register", "settings", "signup",
+    "static", "status", "support", "uploads", "www",
+];
+
+/// URL-Key: `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$` (docs/02 §1.1), nicht reserviert.
 pub fn validate_url_key(key: &str) -> AppResult<()> {
+    if RESERVED_URL_KEYS.contains(&key) {
+        return Err(AppError::invalid_request("This urlKey is reserved")
+            .with_details(json!({ "field": "urlKey", "reason": "reserved" })));
+    }
     let b = key.as_bytes();
     let alnum = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
     let ok = (3..=32).contains(&b.len())
@@ -134,18 +145,12 @@ impl App {
         &self,
         input: CreateWorkspaceInput,
     ) -> AppResult<WorkspaceCreated> {
-        let name = input.name.trim().to_string();
-        if name.is_empty() || name.chars().count() > 80 {
-            return Err(AppError::invalid_request("name must be 1-80 characters")
-                .with_details(json!({ "field": "name" })));
-        }
-        let owner_name = input.owner_name.trim().to_string();
-        if owner_name.is_empty() || owner_name.chars().count() > 255 {
-            return Err(
-                AppError::invalid_request("owner name must be 1-255 characters")
-                    .with_details(json!({ "field": "ownerName" })),
-            );
-        }
+        let name = lineal_domain::rules::text::validate_single_line_name("name", &input.name, 80)?;
+        let owner_name = lineal_domain::rules::text::validate_single_line_name(
+            "ownerName",
+            &input.owner_name,
+            255,
+        )?;
         let email = input.owner_email.trim().to_string();
         super::user::validate_email(&email)?;
         let password_hash = match &input.owner_password {
@@ -171,7 +176,9 @@ impl App {
                 let base = slugify(&name);
                 let mut candidate = base.clone();
                 let mut i = 2;
-                while tx.orgs().url_key_taken(&candidate).await? {
+                while RESERVED_URL_KEYS.contains(&candidate.as_str())
+                    || tx.orgs().url_key_taken(&candidate).await?
+                {
                     let suffix = format!("-{i}");
                     let keep: String = base.chars().take(32 - suffix.len()).collect();
                     candidate = format!("{}{}", keep.trim_end_matches('-'), suffix);
@@ -334,18 +341,16 @@ impl App {
             ..Default::default()
         };
         if let Some(n) = &input.name {
-            let n = n.trim();
-            if n.is_empty() || n.chars().count() > 80 {
-                return Err(AppError::invalid_request("name must be 1-80 characters")
-                    .with_details(json!({ "field": "name" })));
-            }
-            patch.name = Some(n.to_string());
+            patch.name = Some(lineal_domain::rules::text::validate_single_line_name(
+                "name", n, 80,
+            )?);
         }
         if let Some(k) = &input.url_key
             && *k != current.url_key
         {
             validate_url_key(k)?;
-            if tx.orgs().url_key_taken(k).await? {
+            // Eigene frühere Keys dürfen zurückgesetzt werden (kein Aussperren; B8.09).
+            if !current.previous_url_keys.contains(k) && tx.orgs().url_key_taken(k).await? {
                 return Err(AppError::conflict("This urlKey is already in use")
                     .with_details(json!({ "field": "urlKey" })));
             }
@@ -382,9 +387,38 @@ impl App {
             }
             patch.limits = Some(merge_object(&current.limits, l));
         }
+        let mut changed: Vec<&str> = Vec::new();
+        for (set, name) in [
+            (patch.name.is_some(), "name"),
+            (patch.url_key.is_some(), "urlKey"),
+            (patch.logo_url.is_some(), "logoUrl"),
+            (
+                patch.fiscal_year_start_month.is_some(),
+                "fiscalYearStartMonth",
+            ),
+            (patch.initiatives_enabled.is_some(), "initiativesEnabled"),
+            (patch.security_settings.is_some(), "securitySettings"),
+            (patch.limits.is_some(), "limits"),
+        ] {
+            if set {
+                changed.push(name);
+            }
+        }
         let org = tx.orgs().update(&patch).await?;
         // Sanity: die neuen Einstellungen müssen sich parsen lassen.
         let _ = OrgPolicy::from_json(&org.security_settings, &org.limits);
+        // Audit (docs/10 §6.4; B8.27): Name, urlKey, Fiskaljahr usw.
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "workspace.updated",
+                "workspace",
+                Some(org.id.0),
+                json!({ "fields": changed }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(org)
     }
@@ -616,7 +650,18 @@ mod tests {
         for ok in ["acme", "a-b", "acme-2", "a1b"] {
             assert!(validate_url_key(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "ab", "-acme", "acme-", "Acme", "ac me", &"a".repeat(33)] {
+        for bad in [
+            "",
+            "ab",
+            "-acme",
+            "acme-",
+            "Acme",
+            "ac me",
+            "login",
+            "invite",
+            "settings",
+            &"a".repeat(33),
+        ] {
             assert!(validate_url_key(bad).is_err(), "{bad}");
         }
     }

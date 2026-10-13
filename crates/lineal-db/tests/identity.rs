@@ -52,9 +52,10 @@ async fn seed_matches_the_example_table(pool: PgPool) {
         .unwrap();
     let keys: Vec<_> = teams.items.iter().map(|t| t.team.key.clone()).collect();
     assert!(keys.contains(&"ENG".to_string()) && keys.contains(&"WEB".to_string()));
+    // Admin/Owner sehen private Teams als Metadaten (docs/02 §5.1; B8.05).
     assert!(
-        !keys.contains(&"DES".to_string()),
-        "private team hidden from non-member"
+        keys.contains(&"DES".to_string()),
+        "private team visible as metadata for the owner"
     );
     let web = app.get_team(&alice, "WEB").await.unwrap();
     assert_eq!(web.display_name, "Engineering › Web");
@@ -116,8 +117,10 @@ async fn private_teams_are_not_found_for_non_members(pool: PgPool) {
     let carol = ctx_for(SeedUser::Carol);
     let bob = ctx_for(SeedUser::Bob);
     for r in ["DES", "Design", "design"] {
+        // Admin/Owner: Metadaten privater Teams sichtbar (B8.05); Guests nicht.
+        assert!(app.get_team(&alice, r).await.is_ok(), "{r}");
         assert_eq!(
-            kind(app.get_team(&alice, r).await),
+            kind(app.get_team(&carol, r).await),
             ErrorKind::NotFound,
             "{r}"
         );
@@ -445,10 +448,20 @@ async fn workflow_state_crud_and_deletion_rules(pool: PgPool) {
         .unwrap();
     assert_eq!(review.state.position, 2000.0);
     // Duplicate-State, doppelter Name, ungültige Farbe
-    for (name, t, color) in [
-        ("Dupe", StateType::Duplicate, "#000000"),
-        ("in review", StateType::Started, "#000000"),
-        ("X", StateType::Started, "red"),
+    for (name, t, color, expected) in [
+        (
+            "Dupe",
+            StateType::Duplicate,
+            "#000000",
+            ErrorKind::InvalidRequest,
+        ),
+        (
+            "in review",
+            StateType::Started,
+            "#000000",
+            ErrorKind::Conflict,
+        ),
+        ("X", StateType::Started, "red", ErrorKind::InvalidRequest),
     ] {
         let r = app
             .create_workflow_state(
@@ -463,7 +476,7 @@ async fn workflow_state_crud_and_deletion_rules(pool: PgPool) {
                 },
             )
             .await;
-        assert_eq!(kind(r), ErrorKind::InvalidRequest, "{name}");
+        assert_eq!(kind(r), expected, "{name}");
     }
     // WEB erbt: Status wurden mitkopiert, direktes Anlegen in WEB ist gesperrt
     let web_states = app.list_workflow_states(&bob, "WEB").await.unwrap();

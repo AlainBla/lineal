@@ -208,6 +208,7 @@ impl DocumentQuery {
     ) -> async_graphql::Result<DocumentConnection> {
         let cursor = after
             .as_deref()
+            .filter(|c| !c.is_empty())
             .map(parse_cursor)
             .transpose()
             .map_err(gql_err)?;
@@ -224,7 +225,10 @@ impl DocumentQuery {
                 include_archived: include_archived.unwrap_or(false),
                 trashed: trashed.unwrap_or(false),
                 order_by: OrderBy::UpdatedAt,
-                limit: i64::from(first.unwrap_or(50)),
+                limit: i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 50, 250),
+                    ctx,
+                )?),
                 cursor,
                 ..Default::default()
             },
@@ -242,6 +246,7 @@ impl DocumentQuery {
     ) -> async_graphql::Result<DocumentConnection> {
         let cursor = after
             .as_deref()
+            .filter(|c| !c.is_empty())
             .map(parse_cursor)
             .transpose()
             .map_err(gql_err)?;
@@ -250,7 +255,10 @@ impl DocumentQuery {
             ListDocumentsInput {
                 query: Some(term),
                 order_by: OrderBy::UpdatedAt,
-                limit: i64::from(first.unwrap_or(50)),
+                limit: i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 50, 250),
+                    ctx,
+                )?),
                 cursor,
                 ..Default::default()
             },
@@ -268,6 +276,7 @@ impl DocumentQuery {
     ) -> async_graphql::Result<HistoryConnection> {
         let before = after
             .as_deref()
+            .filter(|c| !c.is_empty())
             .map(|c| parse_cursor(c).map(|p| (p.key, p.id)))
             .transpose()
             .map_err(gql_err)?;
@@ -276,7 +285,10 @@ impl DocumentQuery {
                 request_ctx(ctx)?,
                 &document_id,
                 before,
-                i64::from(first.unwrap_or(50)),
+                i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 50, 250),
+                    ctx,
+                )?),
             )
             .await
             .map_err(gql_err)?;
