@@ -239,12 +239,9 @@ pub struct StateView {
 }
 
 fn validate_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > 80 {
-        return Err(AppError::invalid_request("name must be 1-80 characters")
-            .with_details(json!({ "field": "name" })));
-    }
-    Ok(n.to_string())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", name, 80,
+    )?)
 }
 
 fn reason(message: &str, reason: &str) -> AppError {

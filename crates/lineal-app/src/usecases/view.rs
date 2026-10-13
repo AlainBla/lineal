@@ -187,11 +187,11 @@ fn invalid(field: &str, msg: impl Into<String>) -> AppError {
 }
 
 fn clean_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > MAX_NAME_CHARS {
-        return Err(invalid("name", "name must be 1-80 characters"));
-    }
-    Ok(n.to_owned())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name",
+        name,
+        MAX_NAME_CHARS,
+    )?)
 }
 
 fn clean_description(d: &str) -> AppResult<Option<String>> {
@@ -1208,11 +1208,12 @@ impl App {
         };
         match kind {
             "folder" => {
-                let n = input.folder_name.as_deref().map(str::trim).unwrap_or("");
-                if n.is_empty() || n.chars().count() > MAX_NAME_CHARS {
-                    return Err(invalid("folderName", "folderName must be 1-80 characters"));
-                }
-                new.folder_name = Some(n.to_owned());
+                let n = lineal_domain::rules::text::validate_single_line_name(
+                    "folderName",
+                    input.folder_name.as_deref().unwrap_or(""),
+                    MAX_NAME_CHARS,
+                )?;
+                new.folder_name = Some(n);
             }
             "predefinedView" => {
                 let t = input

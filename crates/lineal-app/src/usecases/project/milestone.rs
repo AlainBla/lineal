@@ -52,12 +52,9 @@ pub struct SaveMilestoneInput {
 
 fn validate_name(name: &str) -> AppResult<String> {
     let n = super::clean_text(name);
-    let n = n.as_str();
-    if n.is_empty() || n.chars().count() > 255 {
-        return Err(AppError::invalid_request("name must be 1-255 characters")
-            .with_details(json!({ "field": "name" })));
-    }
-    Ok(n.to_owned())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", &n, 255,
+    )?)
 }
 
 impl App {

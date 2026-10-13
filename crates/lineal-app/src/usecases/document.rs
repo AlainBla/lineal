@@ -279,7 +279,14 @@ pub(crate) fn validate_title(title: &str) -> AppResult<String> {
             format!("title must not exceed {MAX_TITLE_CHARS} characters"),
         ));
     }
-    Ok(title.to_owned())
+    if title.trim().is_empty() {
+        return Ok(title.to_owned());
+    }
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "title",
+        title,
+        MAX_TITLE_CHARS,
+    )?)
 }
 
 /// Icon: `^[A-Za-z0-9_:-]{1,64}$`; leer = entfernen.

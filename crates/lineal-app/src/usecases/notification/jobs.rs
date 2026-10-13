@@ -106,7 +106,7 @@ fn mail_for(prefs: &UserNotificationPrefs, items: &[&NotificationView], base: &s
     };
     Mail {
         to: prefs.email.clone(),
-        subject,
+        subject: lineal_domain::rules::text::sanitize_header_value(&subject),
         body,
     }
 }

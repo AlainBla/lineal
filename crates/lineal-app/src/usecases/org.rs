@@ -134,18 +134,12 @@ impl App {
         &self,
         input: CreateWorkspaceInput,
     ) -> AppResult<WorkspaceCreated> {
-        let name = input.name.trim().to_string();
-        if name.is_empty() || name.chars().count() > 80 {
-            return Err(AppError::invalid_request("name must be 1-80 characters")
-                .with_details(json!({ "field": "name" })));
-        }
-        let owner_name = input.owner_name.trim().to_string();
-        if owner_name.is_empty() || owner_name.chars().count() > 255 {
-            return Err(
-                AppError::invalid_request("owner name must be 1-255 characters")
-                    .with_details(json!({ "field": "ownerName" })),
-            );
-        }
+        let name = lineal_domain::rules::text::validate_single_line_name("name", &input.name, 80)?;
+        let owner_name = lineal_domain::rules::text::validate_single_line_name(
+            "ownerName",
+            &input.owner_name,
+            255,
+        )?;
         let email = input.owner_email.trim().to_string();
         super::user::validate_email(&email)?;
         let password_hash = match &input.owner_password {
@@ -334,12 +328,9 @@ impl App {
             ..Default::default()
         };
         if let Some(n) = &input.name {
-            let n = n.trim();
-            if n.is_empty() || n.chars().count() > 80 {
-                return Err(AppError::invalid_request("name must be 1-80 characters")
-                    .with_details(json!({ "field": "name" })));
-            }
-            patch.name = Some(n.to_string());
+            patch.name = Some(lineal_domain::rules::text::validate_single_line_name(
+                "name", n, 80,
+            )?);
         }
         if let Some(k) = &input.url_key
             && *k != current.url_key

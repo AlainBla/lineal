@@ -258,11 +258,7 @@ impl App {
             return Err(AppError::invalid_request("a guest needs at least one team")
                 .with_details(json!({ "field": "teams" })));
         }
-        let name = input.name.trim().to_string();
-        if name.is_empty() || name.chars().count() > 255 {
-            return Err(AppError::invalid_request("name must be 1-255 characters")
-                .with_details(json!({ "field": "name" })));
-        }
+        let name = lineal_domain::rules::text::validate_single_line_name("name", &input.name, 255)?;
         let email = input.email.trim().to_string();
         validate_email(&email)?;
         check_invite_domain(&snap.org, &email, "email")?;

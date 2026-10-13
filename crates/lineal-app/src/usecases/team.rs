@@ -147,11 +147,9 @@ async fn generate_team_key(tx: &mut dyn Tx, name: &str) -> AppResult<String> {
 }
 
 fn validate_team_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > 80 {
-        return Err(invalid("name", "must be 1-80 characters"));
-    }
-    Ok(n.to_string())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", name, 80,
+    )?)
 }
 
 pub(crate) fn validate_timezone(tz: &str) -> AppResult<()> {

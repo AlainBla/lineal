@@ -179,11 +179,9 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
 }
 
 fn validate_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > 255 {
-        return Err(invalid("name", "name must be 1-255 characters"));
-    }
-    Ok(n.to_owned())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", name, 255,
+    )?)
 }
 
 fn clean_opt(v: &Option<String>) -> Option<String> {
