@@ -191,19 +191,16 @@ async fn projects_contract(pool: sqlx::PgPool) {
     .await
     .unwrap();
     assert_eq!(hull["teams"].as_array().unwrap().len(), 1);
-    // Alice darf ein Projekt mit einem für sie unsichtbaren Team nicht ändern.
-    assert_eq!(
-        err_kind(
-            call(
-                &app,
-                SeedUser::Alice,
-                "save_project",
-                json!({ "id": "P-ENG-2", "name": "X" })
-            )
-            .await
-        ),
-        ErrorKind::NotFound
-    );
+    // Zugriff auf ein Projekt-Team genügt (docs/04 §2.2): Alice darf ändern, DES bleibt unsichtbar.
+    let changed = call(
+        &app,
+        SeedUser::Alice,
+        "save_project",
+        json!({ "id": "P-ENG-2", "name": "X" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(changed["teams"].as_array().unwrap().len(), 1);
     let u = call(&app, SeedUser::Bob, "save_project", json!({ "id": "P-ENG-2", "lead": null, "patch": [{ "op": "replace", "old_string": "Zeile eins", "new_string": "Erste Zeile" }] })).await.unwrap();
     assert!(u["lead"].is_null());
     assert!(
