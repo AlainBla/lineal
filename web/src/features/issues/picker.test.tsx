@@ -8,6 +8,7 @@ import { shortcuts } from "@/lib/shortcuts";
 
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { PropertyPicker } from "./picker";
+import { priorityOptions } from "./property-options";
 import { keys } from "./queries";
 import { Toaster } from "./toaster";
 import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./test-fixtures";
@@ -80,6 +81,29 @@ describe("PropertyPicker per Tastatur", () => {
     await userEvent.type(input, "{Backspace}2");
     expect(onSelect.mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
     expect(screen.getByTestId("open")).toHaveTextContent("true");
+  });
+});
+
+describe("Priority-Ziffern (B4.08)", () => {
+  it("Ziffer = Prioritätswert, No priority mit 0", async () => {
+    const onSelect = vi.fn();
+    function PrioHarness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <PropertyPicker
+          open={open}
+          onOpenChange={setOpen}
+          title="Set priority…"
+          options={priorityOptions()}
+          onSelect={onSelect}
+        />
+      );
+    }
+    await renderWithApp(<PrioHarness />);
+    const input = await screen.findByPlaceholderText("Set priority…");
+    expect(screen.getByText("No priority").closest("[cmdk-item]")?.textContent).toMatch(/0$/);
+    await userEvent.type(input, "2");
+    expect(onSelect).toHaveBeenLastCalledWith("2");
   });
 });
 

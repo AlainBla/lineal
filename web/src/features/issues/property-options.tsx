@@ -24,6 +24,7 @@ export function priorityOptions(): PickerOption[] {
     id: String(p.value),
     label: p.label,
     icon: <PriorityIcon priority={p.value} />,
+    digit: String(p.value),
   }));
 }
 
