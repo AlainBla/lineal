@@ -190,6 +190,18 @@ describe("shell", () => {
     expect(router.state.location.search).toMatchObject({ redirect: "/acme/inbox" });
   });
 
+  it("document.title folgt der Seite und bleibt nicht veraltet (B4.32)", async () => {
+    mockFetch(true);
+    const router = await renderApp("/acme/inbox");
+    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() => expect(document.title).toBe("Inbox · Lineal"));
+    await router.navigate({ to: "/acme/drafts" });
+    await waitFor(() => expect(document.title).toBe("Drafts · Lineal"));
+    await router.navigate({ to: "/acme/views/issues" });
+    await waitFor(() => expect(document.title).not.toMatch(/^Inbox|^Drafts/));
+    expect(document.title).toMatch(/Views/);
+  });
+
   it("navigates with key sequences (g i, g m)", async () => {
     const user = userEvent.setup();
     mockFetch(true);

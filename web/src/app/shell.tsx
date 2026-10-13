@@ -1,10 +1,11 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { logout, type Session } from "@/app/auth";
 import { ConnectedCommandMenu } from "@/app/command-menu";
 import { useGlobalActions } from "@/app/global-actions";
+import { titleForPath } from "@/app/nav";
 import { ShortcutHelp } from "@/app/shortcut-help";
 import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
@@ -14,10 +15,38 @@ import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
 import { useSyncStream } from "@/lib/store";
 
+const pageTitle = (pathname: string) => `${titleForPath(pathname)} · Lineal`;
+
 /** Linear-artige Shell: Sidebar, Topbar, Hauptbereich, Overlays und globale Tastaturbedienung. */
 export function Shell({ session, children }: { session: Session; children: ReactNode }) {
   const navigate = useNavigate();
   const client = useQueryClient();
+  const router = useRouter();
+
+  // Standardtitel je Pfad (B4.32): beim ersten Render (vor den Effekten der Seite) und bei jeder
+  // Navigation zurückgesetzt, damit nie der Titel der vorherigen Seite stehen bleibt. Seiten mit
+  // eigenem Titel überschreiben ihn danach in ihrem Effekt.
+  useState(() => {
+    document.title = pageTitle(router.state.location.pathname);
+  });
+  useEffect(() => {
+    const offBefore = router.subscribe("onBeforeNavigate", ({ toLocation }) => {
+      document.title = pageTitle(toLocation.pathname);
+    });
+    // Seiten, die ihren Titel beim Verlassen auf den vorherigen Wert zurücksetzen, würden den neuen
+    // Standardtitel überschreiben: steht nach dem Rendern noch der Standardtitel der alten Seite,
+    // gilt wieder der der neuen.
+    const offRendered = router.subscribe("onRendered", ({ fromLocation, toLocation }) => {
+      if (fromLocation && fromLocation.pathname !== toLocation.pathname) {
+        if (document.title === pageTitle(fromLocation.pathname))
+          document.title = pageTitle(toLocation.pathname);
+      }
+    });
+    return () => {
+      offBefore();
+      offRendered();
+    };
+  }, [router]);
 
   const onLogout = () => {
     void logout().then(() => {
