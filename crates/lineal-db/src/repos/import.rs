@@ -121,8 +121,18 @@ fn prepare_row(org: Uuid, row: &Value, with_org: bool) -> AppResult<(Vec<String>
 
 /// Eine vom Schema abgelehnte Zeile (Eindeutigkeit, Referenz, Check) → `conflict`; Details im Log.
 fn row_rejected(e: &sqlx::Error) -> AppError {
-    tracing::warn!(error = %e, "import row rejected by the database");
-    AppError::conflict("the row was rejected by the database")
+    // Der Constraint-Name ist kein Nutzerinhalt und steht im Bericht; die Details nur im Debug-Log.
+    tracing::debug!(error = %e, "import row rejected by the database");
+    let constraint = e
+        .as_database_error()
+        .and_then(|d| d.constraint())
+        .map(str::to_owned);
+    match constraint {
+        Some(c) => AppError::conflict(format!(
+            "the row was rejected by the database (constraint {c})"
+        )),
+        None => AppError::conflict("the row was rejected by the database"),
+    }
 }
 
 /// Nur die Tabellen mit `organization_id`-Spalte (alle der Whitelist).

@@ -1105,6 +1105,7 @@ impl Session<'_, '_> {
             }
         }
         let mut users = HashMap::new();
+        self.source_warnings();
         for u in self.fetch_all_unfiltered(SourceEntity::Users).await? {
             let n = N(&u);
             if let (Some(name), Some(id)) = (n.text("displayName"), n.id()) {

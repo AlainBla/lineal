@@ -260,3 +260,58 @@ async fn zombie_cli_runs_are_failed_by_the_runner(pool: PgPool) {
     assert_eq!(status(ids[0]).await, "failed");
     assert_eq!(status(ids[1]).await, "running", "a live run is left alone");
 }
+
+/// B7.07: Der CSV-Import meldet jede stille Datenänderung (Duplikat, Kürzung, ungültige Werte).
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn csv_import_reports_every_data_change(pool: PgPool) {
+    let e = env(pool).await;
+    let long = "t".repeat(300);
+    let csv = format!(
+        "ID,Team,Title,Status,Priority,Created\n\
+ENG-1,Engineering,First,Todo,High,2025-01-06T09:00:00.000Z\n\
+ENG-1,Engineering,Duplicate,Todo,High,2025-01-06T09:00:00.000Z\n\
+ENG-2,Engineering,{long},Odd Status,Extreme,yesterday\n"
+    );
+    let source = lineal_import::CsvSource::from_csv(csv.as_bytes(), Some("ENG")).unwrap();
+    let ctx = e.alice_ctx();
+    let run = e
+        .app
+        .import_register_scanned(&ctx, "linearCsv", json!({ "teams": [{ "id": "csv-team-ENG", "key": "ENG", "name": "Engineering" }] }))
+        .await
+        .unwrap();
+    e.app
+        .import_start(
+            &ctx,
+            ImportStartInput {
+                run_id: run.id,
+                teams: vec!["ENG".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let out = e
+        .engine(&source, Default::default())
+        .run(e.org, run.id)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    assert_eq!(e.count("SELECT count(*) FROM issue").await, 2);
+    let messages: Vec<String> = sqlx::query_scalar(
+        "SELECT message FROM import_issue WHERE import_run_id = $1 AND severity = 'warning'",
+    )
+    .bind(run.id)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    let all = messages.join("\n");
+    for needle in [
+        "duplicate ID ENG-1",
+        "longer than 255",
+        "status `Odd Status`",
+        "unknown priority `Extreme`",
+        "created date `yesterday`",
+    ] {
+        assert!(all.contains(needle), "missing `{needle}` in:\n{all}");
+    }
+}
