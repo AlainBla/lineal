@@ -52,6 +52,11 @@ pub struct EngineConfig {
     pub team_lock: ChronoDuration,
     /// Lease-Dauer des Runners.
     pub lease: Duration,
+    /// Takt, in dem Lease und Team-Sperren auch außerhalb von Einheiten verlängert werden
+    /// (lange Rate-Limit-Wartezeiten der Quelle).
+    pub heartbeat: Duration,
+    /// Takt, in dem Pause/Abbruch während eines langen Quellzugriffs geprüft werden.
+    pub control_poll: Duration,
     /// Obergrenze der gespeicherten Berichtseinträge je Lauf.
     pub max_report_entries: usize,
     /// Gleichzeitige Downloads (docs/13 §4.1 Phase 6: 4).
@@ -65,6 +70,8 @@ impl Default for EngineConfig {
             stop_after_phase: None,
             team_lock: ChronoDuration::hours(1),
             lease: Duration::from_secs(120),
+            heartbeat: Duration::from_secs(30),
+            control_poll: Duration::from_secs(2),
             max_report_entries: 10_000,
             download_concurrency: 4,
         }
@@ -496,8 +503,75 @@ impl<'a> ImportEngine<'a> {
             plan: BTreeMap::new(),
             dl_seen: HashSet::new(),
         };
-        let result = s.drive().await;
+        let result = {
+            let beat = heartbeat(
+                self.app,
+                org,
+                s.run.id,
+                self.config.lease,
+                self.config.team_lock,
+                self.config.heartbeat,
+                s.source_kind,
+                dry,
+            );
+            tokio::select! {
+                r = s.drive() => r,
+                never = beat => match never {},
+            }
+        };
         s.finish(result).await
+    }
+}
+
+/// Hält Lease und Team-Sperren eines Laufs aktuell, solange er läuft (auch während langer
+/// Wartezeiten auf die Quelle). Jeder Schritt ist eine eigene kurze Transaktion mit genau einer
+/// Tabelle (Import-Lauf bzw. Teams), damit sie nie mit der Einheit des Laufs verklemmt.
+#[allow(clippy::too_many_arguments)]
+async fn heartbeat(
+    app: &App,
+    org: OrgId,
+    run_id: Uuid,
+    lease: Duration,
+    team_lock: ChronoDuration,
+    every: Duration,
+    source: &str,
+    dry: bool,
+) -> std::convert::Infallible {
+    let lease = ChronoDuration::from_std(lease).unwrap_or(ChronoDuration::minutes(2));
+    loop {
+        tokio::time::sleep(every).await;
+        if dry {
+            continue;
+        }
+        let now = app.clock.now();
+        let beat = async {
+            let mut tx = app.store.begin(org).await?;
+            tx.imports().set_import_lease(run_id, Some(now + lease)).await?;
+            tx.commit().await?;
+            let mut tx = app.store.begin(org).await?;
+            let mut ids = Vec::new();
+            let mut after: Option<String> = None;
+            loop {
+                let page = tx
+                    .imports()
+                    .list_mappings(source, "Team", after.as_deref(), 500)
+                    .await?;
+                if page.is_empty() {
+                    break;
+                }
+                after = page.last().map(|m| m.source_id.clone());
+                ids.extend(page.iter().map(|m| m.target_id));
+            }
+            if !ids.is_empty() {
+                tx.imports()
+                    .set_team_import_lock(&ids, Some(now + team_lock))
+                    .await?;
+            }
+            tx.commit().await
+        };
+        if let Err(e) = beat.await {
+            tracing::warn!(run = %run_id, error = %e.message, "import heartbeat failed");
+        }
     }
 }
 
@@ -548,6 +622,11 @@ impl Session<'_, '_> {
 
     /// Pause/Abbruch zwischen zwei Einheiten prüfen (frische Transaktion, sieht auch Fremdänderungen).
     async fn check_control(&mut self) -> HResult<()> {
+        self.poll_control().await
+    }
+
+    /// Wie `check_control`, aber ohne `&mut` (für Prüfungen während eines Quellzugriffs).
+    async fn poll_control(&self) -> HResult<()> {
         let mut tx = self.eng.app.store.begin(self.org).await?;
         let status = tx
             .imports()
@@ -824,23 +903,37 @@ impl Session<'_, '_> {
         }
     }
 
+    /// Führt einen Quellzugriff aus und prüft dabei regelmäßig Pause/Abbruch, damit sie auch
+    /// während langer Rate-Limit-Wartezeiten zeitnah wirken. Der Zugriff selbst wird dabei nie
+    /// mitten in einer Datenbankoperation abgebrochen (die Prüfung läuft zwischen den Polls).
+    pub(crate) async fn guarded<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T, SourceError>>,
+    ) -> HResult<T> {
+        tokio::pin!(fut);
+        loop {
+            tokio::select! {
+                r = &mut fut => return r.map_err(Halt::from),
+                () = tokio::time::sleep(self.eng.config.control_poll) => {}
+            }
+            self.poll_control().await?;
+        }
+    }
+
     /// Eine Seite lesen (außerhalb jeder Transaktion; Dry-Run hält seine eine Transaktion offen).
     pub(crate) async fn fetch(
         &self,
         entity: SourceEntity,
         cursor: Option<String>,
     ) -> HResult<SourcePage> {
-        Ok(self
-            .eng
-            .source
-            .page(&PageQuery {
-                entity,
-                cursor,
-                updated_after: self.opts.updated_after,
-                limit: self.eng.config.page_size.clamp(1, 100),
-                scope: self.scope(),
-            })
-            .await?)
+        self.guarded(self.eng.source.page(&PageQuery {
+            entity,
+            cursor,
+            updated_after: self.opts.updated_after,
+            limit: self.eng.config.page_size.clamp(1, 100),
+            scope: self.scope(),
+        }))
+        .await
     }
 
     /// Einschränkung der Abfragen auf die gewählten Teams/Projekte (leer = alles).
@@ -858,16 +951,18 @@ impl Session<'_, '_> {
 
     /// Alle Objekte einer (kleinen) Entität.
     pub(crate) async fn fetch_all(&self, entity: SourceEntity) -> HResult<Vec<Value>> {
-        Ok(self
-            .eng
-            .source
-            .collect(entity, self.opts.updated_after, 1000)
-            .await?)
+        self.guarded(
+            self.eng
+                .source
+                .collect(entity, self.opts.updated_after, 1000),
+        )
+        .await
     }
 
     /// Alle Objekte einer Entität ohne Delta-Filter (für Referenzen, z. B. Teams/Labels).
     pub(crate) async fn fetch_all_unfiltered(&self, entity: SourceEntity) -> HResult<Vec<Value>> {
-        Ok(self.eng.source.collect(entity, None, 1000).await?)
+        self.guarded(self.eng.source.collect(entity, None, 1000))
+            .await
     }
 
     /// Fehler eines einzelnen Objekts melden, ohne den Lauf abzubrechen. Datenbank-/Systemfehler

@@ -97,6 +97,135 @@ async fn interrupted_import_leaves_counters_usable(pool: PgPool) {
     );
 }
 
+/// Quelle, die beim n-ten Issue-Seitenabruf eine Aktion ausführt und danach lange wartet
+/// (wie eine Rate-Limit-Wartezeit des Linear-Adapters).
+struct SlowOnPage<'a> {
+    inner: &'a lineal_import::FakeSource,
+    env: &'a Env,
+    run: uuid::Uuid,
+    at_call: usize,
+    pause: bool,
+    wait: std::time::Duration,
+    calls: std::sync::atomic::AtomicUsize,
+    /// Lease am Ende der Wartezeit.
+    lease_after_wait: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
+}
+
+#[async_trait::async_trait]
+impl lineal_import::ImportSource for SlowOnPage<'_> {
+    fn kind(&self) -> &'static str {
+        "linear"
+    }
+    async fn workspace(
+        &self,
+    ) -> lineal_import::port::SourceResult<lineal_import::port::SourceWorkspace> {
+        self.inner.workspace().await
+    }
+    async fn page(
+        &self,
+        q: &lineal_import::port::PageQuery,
+    ) -> lineal_import::port::SourceResult<lineal_import::port::SourcePage> {
+        if q.entity == SourceEntity::Issues {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == self.at_call {
+                if self.pause {
+                    self.env
+                        .app
+                        .import_pause(&self.env.alice_ctx(), self.run)
+                        .await
+                        .unwrap();
+                } else {
+                    // Die Uhr läuft weiter; ohne Heartbeat wäre die Lease längst abgelaufen.
+                    self.env.clock.set(t0() + chrono::Duration::minutes(10));
+                }
+                tokio::time::sleep(self.wait).await;
+                let lease: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+                    "SELECT lease_until FROM import_run WHERE id = $1",
+                )
+                .bind(self.run)
+                .fetch_one(&self.env.pool)
+                .await
+                .unwrap();
+                *self.lease_after_wait.lock().unwrap() = lease;
+            }
+        }
+        self.inner.page(q).await
+    }
+    async fn download(
+        &self,
+        url: &str,
+    ) -> lineal_import::port::SourceResult<lineal_import::port::Downloaded> {
+        self.inner.download(url).await
+    }
+}
+
+fn fast_control() -> EngineConfig {
+    EngineConfig {
+        page_size: 40,
+        heartbeat: std::time::Duration::from_millis(50),
+        control_poll: std::time::Duration::from_millis(50),
+        ..Default::default()
+    }
+}
+
+/// B7.04: Während einer langen Wartezeit der Quelle wird die Lease verlängert.
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn lease_is_extended_while_the_source_waits(pool: PgPool) {
+    let e = env(pool).await;
+    let fake_src = fake();
+    let planned = e.scan(&fake_src).await;
+    e.start(planned.id, ImportStartInput::default()).await;
+    let src = SlowOnPage {
+        inner: &fake_src,
+        env: &e,
+        run: planned.id,
+        at_call: 2,
+        pause: false,
+        wait: std::time::Duration::from_millis(600),
+        calls: Default::default(),
+        lease_after_wait: Default::default(),
+    };
+    let out = e
+        .engine(&src, fast_control())
+        .run(e.org, planned.id)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    let lease = *src.lease_after_wait.lock().unwrap();
+    // Ohne Heartbeat stünde die Lease bei t0 + 2 min; mit ihm bei (Uhr = t0 + 10 min) + 2 min.
+    assert!(
+        lease.is_some_and(|l| l > t0() + chrono::Duration::minutes(10)),
+        "lease during the wait: {lease:?}"
+    );
+}
+
+/// B7.04: Pause wirkt zeitnah, auch wenn die Quelle gerade lange wartet.
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn pause_takes_effect_during_a_long_source_wait(pool: PgPool) {
+    let e = env(pool).await;
+    let fake_src = fake();
+    let planned = e.scan(&fake_src).await;
+    e.start(planned.id, ImportStartInput::default()).await;
+    let src = SlowOnPage {
+        inner: &fake_src,
+        env: &e,
+        run: planned.id,
+        at_call: 2,
+        pause: true,
+        wait: std::time::Duration::from_secs(120),
+        calls: Default::default(),
+        lease_after_wait: Default::default(),
+    };
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        e.engine(&src, fast_control()).run(e.org, planned.id),
+    )
+    .await
+    .expect("the pause must not wait for the source")
+    .unwrap();
+    assert_eq!(out, RunOutcome::Paused);
+}
+
 /// B7.03: Von der CLI gestartete Läufe, deren Prozess hart beendet wurde, werden vom Runner als
 /// `failed` (fortsetzbar) markiert statt ewig `running` zu bleiben.
 #[sqlx::test(migrator = "lineal_db::MIGRATOR")]
