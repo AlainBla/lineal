@@ -53,3 +53,10 @@ Schreibe Funde **sofort** in die Datei, nicht erst am Ende. Am Ende deines Zeitf
 ## Zeitfenster
 
 Arbeite bis zur im Auftrag genannten Uhrzeit (prüfe mit `date`). Teste breit und tief: Normalfälle, Grenzfälle, Fehlbedienung, Rechte (Gast, Nicht-Mitglied, Admin), Nebenläufigkeit (zwei Browser-Kontexte), Tastaturbedienung und Live-Aktualisierung. Hör nicht früher auf: Ist dein Bereich erschöpft, nimm angrenzende Bereiche dazu. Ein Testlauf ohne Funde ist verdächtig.
+
+## Nachtrag ab Welle 2
+
+- **Logins sparsam:** Alle Agenten teilen sich eine Client-IP; das nginx-Limit für `/auth/login` (10/min) gilt für alle zusammen. Melde dich einmal je User an und verwende das Cookie (bzw. den Playwright-`storageState`) weiter.
+- **Vorhandene Funde:** Lies vor dem Start alle Berichte unter `var/testrun/` und melde nichts doppelt. Ergänzungen zu einem vorhandenen Fund (neue Variante, schwerere Folge) als eigener Fund mit Verweis auf die bestehende Kennung.
+- **Fremde Testdaten:** Testdaten anderer Agenten (Präfixe W1A…W1F) nicht verändern.
+- **Zeitfenster:** Das Zeitfenster ist verbindlich. Wer vorher fertig ist, wechselt in einen angrenzenden Bereich, bis die Endzeit erreicht ist.
