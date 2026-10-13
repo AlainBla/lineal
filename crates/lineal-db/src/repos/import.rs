@@ -239,6 +239,26 @@ impl ImportRepo for PgTx {
         Ok(row.map(Into::into))
     }
 
+    async fn fail_stale_import_runs(
+        &mut self,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE import_run SET status = 'failed', lease_until = NULL, finished_at = $1, \
+               error = 'the run was interrupted (process ended); resume or cancel it', \
+               updated_at = $1, version = version + 1 \
+             WHERE status = 'running' AND archived_at IS NULL AND source <> 'linear' \
+               AND COALESCE(lease_until, updated_at) < $2",
+        )
+        .bind(now)
+        .bind(stale_before)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
     async fn set_import_lease(
         &mut self,
         id: Uuid,

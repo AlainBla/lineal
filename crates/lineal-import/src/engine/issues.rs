@@ -27,6 +27,7 @@ impl Session<'_, '_> {
                 self.item_result("Issue", n.id(), r)?;
             }
             let next = page.next_cursor;
+            self.sync_counters().await?;
             self.end_unit(Some(self.cp(Step::Issues, next.clone())))
                 .await?;
             match next {

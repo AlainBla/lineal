@@ -228,6 +228,18 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Zombie-Läufe aufräumen: von der CLI gestartete Läufe (`source <> 'linear'`) im Status
+    /// `running`, deren Lease bzw. letzte Änderung vor `stale_before` liegt (Prozess hart beendet),
+    /// werden `failed` (fortsetzbar). Liefert die Anzahl.
+    async fn fail_stale_import_runs(
+        &mut self,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let _ = (now, stale_before);
+        nyi()
+    }
+
     /// Verlängert (`Some`) oder löscht (`None`) die Lease eines Laufs.
     async fn set_import_lease(
         &mut self,

@@ -99,7 +99,7 @@ impl Session<'_, '_> {
         }
     }
 
-    async fn mapped_team_ids(&mut self) -> AppResult<Vec<Uuid>> {
+    pub(crate) async fn mapped_team_ids(&mut self) -> AppResult<Vec<Uuid>> {
         let source = self.source().to_owned();
         let mut ids = Vec::new();
         let mut after: Option<String> = None;
@@ -115,6 +115,19 @@ impl Session<'_, '_> {
             after = page.last().map(|m| m.source_id.clone());
             ids.extend(page.iter().map(|m| m.target_id));
         }
+    }
+
+    /// Team-Nummernzähler auf das Maximum der vorhandenen Nummern nachführen (laufend nach jeder
+    /// Issue-Seite, damit ein abgebrochener Lauf ein benutzbares Team hinterlässt).
+    pub(crate) async fn sync_counters(&mut self) -> AppResult<()> {
+        if self.dry {
+            return Ok(());
+        }
+        let team_ids = self.mapped_team_ids().await?;
+        self.tx()?
+            .imports()
+            .finalize_import_counters(&team_ids)
+            .await
     }
 
     /// Phase 8: Zähler setzen, Verifikation, Sperren aufheben (im Lauf-Abschluss).

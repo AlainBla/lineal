@@ -510,6 +510,9 @@ impl App {
                 .await?;
             let ids: Vec<Uuid> = teams.iter().map(|m| m.target_id).collect();
             tx.imports().set_team_import_lock(&ids, None).await?;
+            // Ein abgebrochener Lauf hinterlässt benutzbare Teams: Zähler auf die vorhandenen
+            // Nummern nachführen (sonst scheitert die Issue-Anlage mit "number already in use").
+            tx.imports().finalize_import_counters(&ids).await?;
         }
         let run = tx
             .imports()
