@@ -944,7 +944,7 @@ async fn b1_10_state_archive_vs_issue_create(pool: PgPool) {
             }
         });
         let (d, rs) = tokio::join!(del, futures_join_all(creates));
-        assert_no_internal("state archive", &[d.clone()]);
+        assert_no_internal("state archive", std::slice::from_ref(&d));
         assert_no_internal("issue create", &rs);
         let stuck: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM issue i JOIN workflow_state s ON s.id = i.state_id \
