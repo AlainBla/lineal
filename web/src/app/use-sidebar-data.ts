@@ -2,9 +2,12 @@
  * Sidebar-Daten (Teams, Sub-Teams, Badges) hinter einer stabilen Schnittstelle; der Sync-Store
  * (WP15) kann die Implementierung von `useSidebarData` ersetzen, die Form `SidebarData` bleibt.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { useSession } from "@/app/auth";
+import { draftScope, useSavedDrafts } from "@/features/issues/create-store";
+import { fetchTriageCount, triageKeys } from "@/features/triage/queries";
 import { gqlRequest } from "@/lib/graphql";
 
 export interface SidebarTeam {
@@ -121,5 +124,29 @@ export function useSidebarData(): SidebarQueryResult {
     },
     staleTime: 30_000,
   });
-  return { data: q.data, isLoading: q.isLoading, isError: q.isError };
+  // Triage-Zähler je Team mit Triage; Key unter `["issues"]`, damit jede Issue-Änderung ihn erneuert.
+  const triageTeams = (session?.teams ?? []).filter((t) => t.triageEnabled);
+  const counts = useQueries({
+    queries: triageTeams.map((t) => ({
+      queryKey: triageKeys.count(t.id),
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchTriageCount(t.id, signal),
+      staleTime: 30_000,
+    })),
+    combine: (results) => results.map((r) => r.data ?? 0),
+  });
+  const countKey = counts.join(",");
+  const drafts = useSavedDrafts(session ? draftScope(session.user.id, session.workspace.id) : null);
+  const draftsCount = drafts.length;
+  const data = useMemo(() => {
+    if (!q.data) return undefined;
+    const byId = new Map(triageTeams.map((t, i) => [t.id, counts[i] ?? 0]));
+    return {
+      ...q.data,
+      draftsCount,
+      teams: q.data.teams.map((t) => ({ ...t, triageCount: byId.get(t.id) ?? t.triageCount })),
+    };
+    // `counts` ist über `countKey` stabilisiert.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, countKey, draftsCount]);
+  return { data, isLoading: q.isLoading, isError: q.isError };
 }

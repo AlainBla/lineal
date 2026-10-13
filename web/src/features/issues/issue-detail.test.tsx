@@ -171,6 +171,7 @@ describe("Issue-Detail", () => {
       "Labels",
       "Project",
       "Milestone",
+      "Parent",
     ]);
     const row = (name: string) => sidebar.querySelector(`[data-property="${name}"]`)!;
     expect(within(row("Status") as HTMLElement).getByText("In Progress")).toBeInTheDocument();

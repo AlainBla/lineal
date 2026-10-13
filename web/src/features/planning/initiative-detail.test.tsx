@@ -70,7 +70,7 @@ describe("InitiativeDetail", () => {
       posted.push(`${String(v.health)}:${String(v.body)}`);
       return { initiativeUpdateCreate: { success: true } };
     },
-    PlanningInitiativeDocuments: () => ({
+    DocumentList: () => ({
       documents: {
         nodes: [
           {

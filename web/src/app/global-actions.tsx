@@ -29,6 +29,7 @@ import { useMemo } from "react";
 
 import { useActions, type Action } from "@/app/commands";
 import { teamKeyFromPath, teamPaths, workspacePaths } from "@/app/nav";
+import { buildOpenActions } from "@/app/open-actions";
 import {
   setUiState,
   toggleCommandMenu,
@@ -336,6 +337,7 @@ export function buildGlobalActions(args: {
       perform: () => go(teamPaths(ws, team.key).home),
     });
   });
+  actions.push(...buildOpenActions({ ws, go, guest: args.guest }));
   return args.guest ? actions.filter((a) => !GUEST_HIDDEN.has(a.id)) : actions;
 }
 

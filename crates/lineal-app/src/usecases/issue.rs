@@ -1707,6 +1707,19 @@ impl App {
                 },
             )
             .await?;
+            // Hinweis an den Empfaenger der Freigabe (F.17, docs/05 §6.2): erscheint in dessen
+            // Inbox (die Sichtbarkeit folgt der Freigabe).
+            crate::usecases::notification::fanout::insert_direct(
+                &mut *tx,
+                self.ids.as_ref(),
+                now,
+                user.id,
+                "issueShared",
+                actor_user_id(ctx),
+                Some((issue.id, issue.team_id)),
+                format!("share:{}:{}:{}", issue.id, user.id, now.timestamp_millis()),
+            )
+            .await?;
         }
         tx.commit().await?;
         Ok(ShareResult {

@@ -10,6 +10,7 @@ pub mod import_runner;
 pub mod notification_cap;
 pub mod purge;
 pub mod recurring_issues;
+pub mod reminders;
 pub mod sla;
 pub mod snooze;
 pub mod sort_renumber;

@@ -3,15 +3,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CommentsSection } from "@/features/comments/comments-section";
+import { DocumentsSection } from "@/features/docs/documents-section";
 import { errorText } from "@/features/issues/error-text";
 import { openCreateIssue, setCreateContext } from "@/features/issues/create-store";
-import { useTeamMetas } from "@/features/issues/hooks";
-import { IssueList } from "@/features/issues/issue-list";
-import { useIssueLookup } from "@/features/issues/issue-lookup";
-import { groupByState, relativeTime } from "@/features/issues/model";
+import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
-import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
-import type { Issue, Project } from "@/gql/graphql";
+import { ErrorState, ListSkeleton } from "@/features/issues/states";
+import type { Project } from "@/gql/graphql";
 
 import { DateField, TextField } from "./fields";
 import { ProjectActions, ProjectDetails } from "./project-details";
@@ -23,13 +22,20 @@ import {
   usePostProjectUpdate,
   useProject,
   useProjectUpdates,
-  useScopedIssues,
   type Health,
 } from "./queries";
+import { useRemindAction } from "@/features/inbox/remind";
+import { IssueView } from "@/features/views/issue-view";
 import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
-export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
-export const PROJECT_TABS: ProjectTab[] = ["overview", "issues", "updates", "milestones"];
+export type ProjectTab = "overview" | "issues" | "updates" | "milestones" | "resources";
+export const PROJECT_TABS: ProjectTab[] = [
+  "overview",
+  "issues",
+  "updates",
+  "milestones",
+  "resources",
+];
 export const isProjectTab = (v: string): v is ProjectTab => (PROJECT_TABS as string[]).includes(v);
 
 const TAB_LABEL: Record<ProjectTab, string> = {
@@ -37,6 +43,7 @@ const TAB_LABEL: Record<ProjectTab, string> = {
   issues: "Issues",
   updates: "Updates",
   milestones: "Milestones",
+  resources: "Resources",
 };
 
 function Prop({ label, children }: { label: string; children: React.ReactNode }) {
@@ -121,6 +128,12 @@ function UpdatesFeed({ projectId }: { projectId: string }) {
             <span>{relativeTime(u.createdAt)}</span>
           </div>
           <RichEditor key={u.id} value={u.body} editable={false} ariaLabel="Update" />
+          <div className="mt-3">
+            <CommentsSection
+              target={{ projectUpdateId: u.id }}
+              title={`Comments on update ${relativeTime(u.createdAt)}`}
+            />
+          </div>
         </li>
       ))}
     </ul>
@@ -224,100 +237,18 @@ function Milestones({ project }: { project: Project }) {
 }
 
 function ProjectIssues({ ws, project }: { ws: string; project: Project }) {
-  const issues = useScopedIssues({ projectId: project.id });
-  const metas = useTeamMetas(project.teams.flatMap((t) => (t.key ? [t.key] : [])));
-  const lookup = useIssueLookup(metas);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"milestone" | "status">("milestone");
-  const stateGroups = (list: Issue[]) =>
-    metas.flatMap((m) =>
-      m
-        ? groupByState(
-            m.states,
-            list.filter((i) => i.teamId === m.team.id),
-            "all",
-          )
-        : [],
-    );
-  const groups = useMemo(
-    () => stateGroups(issues.data?.issues ?? []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [metas, issues.data],
-  );
-  // Gruppierung nach Meilenstein (docs/08 §2.7: Default im Issues-Tab), danach „No milestone“.
-  const milestoneSections = useMemo(() => {
-    const all = issues.data?.issues ?? [];
-    const known = [...project.milestones].sort((a, b) => a.sortOrder - b.sortOrder);
-    const sections = known.map((m) => ({
-      id: m.id,
-      name: m.name,
-      date: m.targetDate,
-      issues: all.filter((i) => i.projectMilestoneId === m.id),
-    }));
-    const knownIds = new Set(known.map((m) => m.id));
-    sections.push({
-      id: "none",
-      name: "No milestone",
-      date: null,
-      issues: all.filter((i) => !i.projectMilestoneId || !knownIds.has(i.projectMilestoneId)),
-    });
-    return sections.filter((s) => s.issues.length > 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.milestones, issues.data]);
   const teamKey = project.leadTeam?.key ?? project.teams[0]?.key ?? undefined;
-  if (issues.isLoading) return <ListSkeleton />;
-  if (issues.isError) return <ErrorState error={issues.error} />;
+  const scope = useMemo(() => ({ project: { id: { in: [project.id] } } }), [project.id]);
   return (
-    <div>
-      <div className="flex items-center justify-end gap-2 border-b border-border px-3 py-1">
-        <div role="radiogroup" aria-label="Grouping" className="flex gap-1">
-          {(["milestone", "status"] as const).map((g) => (
-            <Button
-              key={g}
-              type="button"
-              variant="ghost"
-              size="sm"
-              role="radio"
-              aria-checked={mode === g}
-              className={mode === g ? "bg-surface-active" : undefined}
-              onClick={() => setMode(g)}
-            >
-              {g === "milestone" ? "By milestone" : "By status"}
-            </Button>
-          ))}
-        </div>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex justify-end border-b border-border px-3 py-1">
         <Button size="sm" onClick={() => openCreateIssue({ teamKey, projectId: project.id })}>
           <Plus /> New issue
         </Button>
       </div>
-      {groups.length === 0 ? (
-        <EmptyState title="No issues" description="Issues added to this project show up here." />
-      ) : mode === "milestone" ? (
-        milestoneSections.map((s) => (
-          <section key={s.id} aria-label={`Milestone ${s.name}`}>
-            <h2 className="flex items-center gap-2 border-b border-border bg-surface-hover px-4 py-1 text-xs font-medium">
-              {s.name}
-              {s.date && <span className="text-muted-foreground">{shortDate(s.date)}</span>}
-              <span className="text-muted-foreground">{s.issues.length}</span>
-            </h2>
-            <IssueList
-              groups={stateGroups(s.issues)}
-              ws={ws}
-              lookup={lookup}
-              focusedId={focusedId}
-              onFocus={setFocusedId}
-            />
-          </section>
-        ))
-      ) : (
-        <IssueList
-          groups={groups}
-          ws={ws}
-          lookup={lookup}
-          focusedId={focusedId}
-          onFocus={setFocusedId}
-        />
-      )}
+      <div className="min-h-0 flex-1">
+        <IssueView ws={ws} title="Issues" scope={scope} />
+      </div>
     </div>
   );
 }
@@ -343,6 +274,8 @@ export function ProjectPage({
     setCreateContext({ teamKey: ctxTeamKey, projectId: ctxProjectId });
     return () => setCreateContext(null);
   }, [ctxProjectId, ctxTeamKey]);
+
+  useRemindAction(p ? { targetType: "project", target: p.id, label: p.name } : null);
 
   if (q.isLoading) return <ListSkeleton />;
   if (q.isError || !p)
@@ -394,6 +327,7 @@ export function ProjectPage({
                 <p className="text-sm text-muted-foreground">No updates yet.</p>
               )}
             </section>
+            <CommentsSection target={{ projectId: p.id }} title="Project comments" />
             <section aria-label="Milestones">
               <h2 className="mb-2 text-xs font-medium text-muted-foreground">Milestones</h2>
               {p.milestones.length === 0 ? (
@@ -421,6 +355,13 @@ export function ProjectPage({
           </div>
         )}
         {tab === "milestones" && <Milestones project={p} />}
+        {tab === "resources" && (
+          <DocumentsSection
+            ws={ws}
+            scope={{ projectId: p.id }}
+            teamId={p.leadTeam?.id ?? p.teams[0]?.id}
+          />
+        )}
       </div>
     </div>
   );

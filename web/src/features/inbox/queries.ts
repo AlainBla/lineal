@@ -99,14 +99,24 @@ export function applyInboxAction(
   now: string,
 ): Notification[] {
   switch (a.kind) {
-    case "read":
-      return list.map((n) => (n.id === a.id ? { ...n, readAt: a.read ? now : null } : n));
+    case "read": {
+      // Der Server setzt gelesen/ungelesen für die ganze Gruppe (docs/05 §6.8).
+      const key = list.find((n) => n.id === a.id)?.groupKey;
+      return list.map((n) =>
+        n.id === a.id || (key && n.groupKey === key) ? { ...n, readAt: a.read ? now : null } : n,
+      );
+    }
     case "snooze":
-    case "archive":
-      return list.filter((n) => n.id !== a.id);
+    case "archive": {
+      // Snooze und Löschen gelten für die ganze Gruppe (docs/05 §6.4/§6.8).
+      const key = list.find((n) => n.id === a.id)?.groupKey;
+      return list.filter((n) => n.id !== a.id && (!key || n.groupKey !== key));
+    }
     case "markAllRead":
       return list.map((n) => (n.readAt ? n : { ...n, readAt: now }));
     case "archiveAll":
+      // "completed" kennt nur der Server (Issue geschlossen); die Liste lädt danach neu.
+      if (a.filter === "completed") return list;
       return a.filter === "all" ? [] : list.filter((n) => !n.readAt);
   }
 }

@@ -39,7 +39,12 @@ pub const KNOWN_KINDS: &[&str] = &[
     "issueSlaHighRisk",
     "issueSlaBreached",
     "issueReminder",
+    "projectReminder",
+    "initiativeReminder",
+    "documentReminder",
     "issueSubscribed",
+    "issueShared",
+    "invitationAccepted",
     "issueUnsubscribed",
     "issueCreated",
     "issueAddedToView",
@@ -102,6 +107,7 @@ pub fn category_of(kind: &str) -> &'static str {
         | "issueCreated"
         | "issueAddedToView"
         | "issueSubscribed"
+        | "issueShared"
         | "issueUnsubscribed"
         | "documentSubscribed"
         | "documentUnsubscribed" => "subscriptions",
@@ -217,6 +223,7 @@ pub fn default_subscription_types(
         (K::Team, _) => &["issueSlaHighRisk", "issueSlaBreached"],
         (K::Cycle, _) => &["issueAddedToView"],
         (K::Label, _) => &["issueCreated"],
+        (K::User, _) => &["issueAddedToView"],
     };
     v.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -247,6 +254,11 @@ pub fn render(v: &NotificationView, base: &str) -> Rendered {
         (t.clone(), format!("{base}/document/{id}{anchor}"))
     } else {
         ("Notification".to_owned(), format!("{base}/inbox"))
+    };
+    let title = if n.kind == "invitationAccepted" {
+        "Invitation accepted".to_owned()
+    } else {
+        title
     };
     let emoji = n.reaction_emoji.clone().unwrap_or_default();
     let subject = if v.issue_identifier.is_some() {
@@ -298,7 +310,12 @@ pub fn render(v: &NotificationView, base: &str) -> Rendered {
         "issueSlaHighRisk" => format!("{ident} is at risk of breaching its SLA"),
         "issueSlaBreached" => format!("{ident} breached its SLA"),
         "issueReminder" => format!("Reminder for {ident}"),
+        "projectReminder" => "Reminder for a project".to_owned(),
+        "initiativeReminder" => "Reminder for an initiative".to_owned(),
+        "documentReminder" => "Reminder for a document".to_owned(),
         "issueSubscribed" => format!("{who} subscribed you to {ident}"),
+        "issueShared" => format!("{who} shared {ident} with you"),
+        "invitationAccepted" => format!("{who} accepted your invitation"),
         "issueUnsubscribed" => format!("{who} unsubscribed you from {ident}"),
         "issueCreated" => format!("{who} created {ident}"),
         "issueAddedToView" => format!("{ident} was added to a view you follow"),

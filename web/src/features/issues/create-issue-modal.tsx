@@ -1,5 +1,5 @@
 import { useRouterState } from "@tanstack/react-router";
-import { X } from "lucide-react";
+import { CalendarDays, FileText, GitBranch, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 import { useShortcutContext } from "@/lib/shortcuts";
 
 import {
+  addSavedDraft,
   clearCreateDraft,
   clearCreatePreset,
   draftScope,
@@ -21,7 +22,7 @@ import {
   useCreatePreset,
   type CreatePreset,
 } from "./create-store";
-import { useCreateIssue, useTeamMeta, useTeams } from "./hooks";
+import { useCreateIssue, useIssue, useTeamMeta, useTeams } from "./hooks";
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import { estimateLabel, priorityLabel, toggleLabel } from "./model";
 import { PropertyPicker } from "./picker";
@@ -37,12 +38,26 @@ import {
   statusOptions,
   teamOptions,
 } from "./property-options";
+import { DueDateDialog } from "./due-date-dialog";
+import { ParentSearchDialog } from "./parent-dialog";
 import { RichEditor } from "./rich-editor";
+import { TemplateForm } from "./template-form";
+import {
+  formFields,
+  missingRequired,
+  templatePrefill,
+  toFormAnswers,
+  useIssueTemplates,
+  useTeamDefaultTemplates,
+  type FormAnswerValue,
+} from "./templates";
+import { uploadImageAsset } from "./assets";
 import { errorMessage, showToast } from "./toast-store";
 import { useAssignableUsers, useKnownUsers } from "./users";
 
 type ChipKind =
   | "team"
+  | "template"
   | "status"
   | "priority"
   | "assignee"
@@ -101,12 +116,22 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
   const [priority, setPriority] = useState<number | null>(null);
   const [assigneeId, setAssigneeId] = useState<string | null | undefined>(undefined);
   const [labelIds, setLabelIds] = useState<string[]>([]);
+  const [labelIdsTouched, setLabelIdsTouched] = useState(false);
   const [projectId, setProjectId] = useState<string | null | undefined>(undefined);
   const [milestoneId, setMilestoneId] = useState<string | null>(null);
   const [cycleId, setCycleId] = useState<string | null | undefined>(undefined);
   const [estimate, setEstimate] = useState<number | null>(null);
+  const [dueDate, setDueDate] = useState<string | null>(null);
+  const [parentId, setParentId] = useState<string | null | undefined>(undefined);
+  const [templateChoice, setTemplateChoice] = useState<string | null | undefined>(undefined);
+  const [answers, setAnswers] = useState<Record<string, FormAnswerValue>>({});
+  const [descriptionTouched, setDescriptionTouched] = useState(initialDraft !== null);
+  const [templateChosen, setTemplateChosen] = useState(false);
+  const [dueOpen, setDueOpen] = useState(false);
+  const [parentOpen, setParentOpen] = useState(false);
   const [createMore, setCreateMore] = useState(false);
-  const [picker, setPicker] = useState<ChipKind | null>(null);
+  // Alt+C öffnet direkt die Template-Auswahl.
+  const [picker, setPicker] = useState<ChipKind | null>(preset?.pickTemplate ? "template" : null);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -118,22 +143,59 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
     teamList.find((t) => t.key === defaultKey) ??
     teamList[0];
   const meta = useTeamMeta(team?.id);
+  const templates = useIssueTemplates(team?.id);
+  const defaults = useTeamDefaultTemplates(team?.id);
+  const templateList = useMemo(() => templates.data ?? [], [templates.data]);
+  // Default-Template des Teams (Mitglied / Nicht-Mitglied) ist vorausgewählt, abwählbar (docs/06 §2.8).
+  const isMember = !!team && !!session?.teams.some((t) => t.id === team.id);
+  const defaultTemplateId = isMember ? defaults.data?.forMembersId : defaults.data?.forNonMembersId;
+  const template =
+    templateList.find(
+      (t) => t.id === (templateChoice === undefined ? defaultTemplateId : templateChoice),
+    ) ?? null;
+  const fields = useMemo(() => (template?.isForm ? formFields(template) : []), [template]);
+  const prefill = useMemo(
+    () => (template && !template.isForm ? templatePrefill(template) : {}),
+    [template],
+  );
+  const hasTitleField = fields.some((f) => f.kind === "title");
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
   // Nur Personen mit Teamzugang als Assignee anbieten (B4.33).
   const assignable = useAssignableUsers(team?.id);
   const presetApplies = chosenTeamId === null; // Kontextwerte gelten nur fürs Vorgabeteam
   const m = meta.data;
   const states = m?.states ?? [];
   const defaultState = states.find((s) => s.isDefault);
+  const explicitStateId = stateId ?? (presetApplies ? preset?.stateId : undefined);
+  // Nicht-Mitglied in einem Team mit Triage: das Issue landet in „Triage“ (Anzeige, nicht gesendet).
+  const triageApplies = !!m?.team.triageEnabled && !isMember;
+  const triageState = states.find((s) => s.type === "triage");
   const effectiveStateId =
-    stateId ?? (presetApplies ? preset?.stateId : undefined) ?? defaultState?.id;
+    explicitStateId ??
+    prefill.stateId ??
+    (triageApplies ? triageState?.id : undefined) ??
+    defaultState?.id;
   const state = states.find((s) => s.id === effectiveStateId);
-  const effectivePriority = priority ?? (presetApplies ? preset?.priority : undefined) ?? 0;
+  const effectivePriority =
+    priority ?? (presetApplies ? preset?.priority : undefined) ?? prefill.priority ?? 0;
   const effectiveAssignee =
-    assigneeId !== undefined ? assigneeId : presetApplies ? (preset?.assigneeId ?? null) : null;
+    assigneeId !== undefined
+      ? assigneeId
+      : presetApplies
+        ? (preset?.assigneeId ?? prefill.assigneeId ?? null)
+        : (prefill.assigneeId ?? null);
   const effectiveProject =
-    projectId !== undefined ? projectId : presetApplies ? (preset?.projectId ?? null) : null;
+    projectId !== undefined
+      ? projectId
+      : presetApplies
+        ? (preset?.projectId ?? prefill.projectId ?? null)
+        : (prefill.projectId ?? null);
   const effectiveCycle =
     cycleId !== undefined ? cycleId : presetApplies ? (preset?.cycleId ?? null) : null;
+  const effectiveLabels = labelIdsTouched ? labelIds : (prefill.labelIds ?? labelIds);
+  const effectiveEstimate = estimate ?? prefill.estimate ?? null;
+  const effectiveParent = parentId !== undefined ? parentId : (preset?.parentId ?? null);
+  const parentIssue = useIssue(effectiveParent ?? "");
   const estimationType = m?.team.issueEstimationType ?? "notUsed";
   const me = session ? { id: session.user.id, name: session.user.name } : null;
   const nameOf = (id: string | null) =>
@@ -148,7 +210,8 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
     if (scope) saveCreateDraft(scope, { title, description });
   }, [scope, title, description]);
 
-  const titleMissing = title.trim() === "";
+  const titleMissing =
+    title.trim() === "" && !(template && !template.isForm && prefill.title) && !hasTitleField;
   const canSubmit = !!team && !titleMissing && !create.isPending;
 
   const changeTeam = (id: string) => {
@@ -157,6 +220,10 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
     setChosenTeamId(id);
     setStateId(null);
     setLabelIds([]);
+    setLabelIdsTouched(false);
+    setTemplateChoice(undefined);
+    setAnswers({});
+    setParentId(undefined);
     setProjectId(null);
     setMilestoneId(null);
     setCycleId(null);
@@ -172,21 +239,37 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
       return;
     }
     if (!team || create.isPending) return;
+    if (template?.isForm) {
+      const missing = missingRequired(fields, answers);
+      setInvalidFields(missing);
+      if (missing.length > 0) {
+        setError("Fill in the required fields.");
+        return;
+      }
+    }
     setError(null);
     create.mutate(
       {
         teamId: team.id,
-        title: title.trim(),
-        ...(description.trim() ? { description } : {}),
-        ...(effectiveStateId ? { stateId: effectiveStateId } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
+        // Ohne Bearbeitung gilt die Beschreibung des Templates (der Server entfernt Platzhalter).
+        ...(description.trim() && (!template || descriptionTouched) && !template?.isForm
+          ? { description }
+          : {}),
+        ...(template ? { templateId: template.id } : {}),
+        ...(template?.isForm ? { formAnswers: toFormAnswers(fields, answers) } : {}),
+        // Status nur senden, wenn er ausdrücklich gewählt ist: ein Default würde die Triage-Regel
+        // (Nicht-Mitglied → Triage, docs/03 §10.2) und den Template-Status überstimmen.
+        ...(explicitStateId ? { stateId: explicitStateId } : {}),
         ...(effectivePriority ? { priority: effectivePriority } : {}),
         ...(effectiveAssignee ? { assigneeId: effectiveAssignee } : {}),
-        ...(labelIds.length > 0 ? { labelIds } : {}),
+        ...(effectiveLabels.length > 0 ? { labelIds: effectiveLabels } : {}),
         ...(effectiveProject ? { projectId: effectiveProject } : {}),
         ...(effectiveProject && milestoneId ? { projectMilestoneId: milestoneId } : {}),
         ...(effectiveCycle ? { cycleId: effectiveCycle } : {}),
-        ...(estimate !== null ? { estimate } : {}),
-        ...(preset?.parentId ? { parentId: preset.parentId } : {}),
+        ...(effectiveEstimate !== null ? { estimate: effectiveEstimate } : {}),
+        ...(dueDate ? { dueDate } : {}),
+        ...(effectiveParent ? { parentId: effectiveParent } : {}),
       },
       {
         onSuccess: (issue) => {
@@ -236,6 +319,16 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         <Chip label={`Team: ${team?.key ?? "none"}`} onClick={() => setPicker("team")}>
           <span className="font-medium">{team?.key ?? "Set team"}</span>
         </Chip>
+        {(templateList.length > 0 || template) && (
+          <Chip
+            label={`Template: ${template?.name ?? "none"}`}
+            onClick={() => setPicker("template")}
+            muted={!template}
+          >
+            <FileText className="size-3.5" />
+            {template?.name ?? "Template"}
+          </Chip>
+        )}
         <span aria-hidden className="text-muted-foreground">
           ›
         </span>
@@ -256,39 +349,66 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         Create an issue. Press Control or Command plus Enter to submit.
       </DialogDescription>
       <div className="flex flex-col gap-2 px-4 pt-3">
-        <input
-          ref={titleRef}
-          autoFocus
-          aria-label="Issue title"
-          aria-invalid={submitted && titleMissing}
-          aria-describedby={error ? "create-issue-error" : undefined}
-          placeholder="Issue title"
-          value={title}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            if (error && e.target.value.trim() !== "") setError(null);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
-              e.preventDefault(); // Enter im Titel springt in die Beschreibung
-              document
-                .querySelector<HTMLElement>('[role="dialog"] [aria-label="Description"]')
-                ?.focus();
+        {!hasTitleField && (
+          <input
+            ref={titleRef}
+            autoFocus
+            aria-label="Issue title"
+            aria-invalid={submitted && titleMissing}
+            aria-describedby={error ? "create-issue-error" : undefined}
+            placeholder={prefill.title ?? "Issue title"}
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (error && e.target.value.trim() !== "") setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault(); // Enter im Titel springt in die Beschreibung
+                document
+                  .querySelector<HTMLElement>('[role="dialog"] [aria-label="Description"]')
+                  ?.focus();
+              }
+            }}
+            className="w-full bg-transparent text-lg font-medium outline-none placeholder:text-subtle-foreground"
+          />
+        )}
+        {!template?.isForm && (
+          <RichEditor
+            key={`${nonce}:${template?.id ?? ""}`}
+            value={
+              nonce === 0 && !templateChosen
+                ? (initialDraft?.description ?? prefill.description ?? "")
+                : (prefill.description ?? "")
             }
-          }}
-          className="w-full bg-transparent text-lg font-medium outline-none placeholder:text-subtle-foreground"
-        />
-        <RichEditor
-          key={nonce}
-          value={nonce === 0 ? (initialDraft?.description ?? "") : ""}
-          ariaLabel="Description"
-          placeholder="Add description…"
-          users={[...(me ? [me] : []), ...users.filter((u) => u.id !== me?.id)]}
-          onChange={setDescription}
-          onSubmit={() => submit()}
-          className="max-h-60 min-h-20 overflow-y-auto"
-        />
+            ariaLabel="Description"
+            placeholder="Add description…"
+            users={[...(me ? [me] : []), ...users.filter((u) => u.id !== me?.id)]}
+            onChange={(md) => {
+              setDescription(md);
+              setDescriptionTouched(true);
+            }}
+            onSubmit={() => submit()}
+            uploadImage={uploadImageAsset}
+            onUploadError={(e) =>
+              showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" })
+            }
+            className="max-h-60 min-h-20 overflow-y-auto"
+          />
+        )}
       </div>
+      {template?.isForm && (
+        <TemplateForm
+          fields={fields}
+          answers={answers}
+          labels={labels}
+          invalid={invalidFields}
+          onChange={(id, v) => {
+            setAnswers((a) => ({ ...a, [id]: v }));
+            setInvalidFields((f) => f.filter((x) => x !== id));
+          }}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-1.5 px-4 pt-3 pb-3" aria-label="Properties">
         <Chip label={`Status: ${state?.name ?? "default"}`} onClick={() => setPicker("status")}>
           <StatusIcon type={state?.type ?? "backlog"} color={state?.color} />
@@ -310,20 +430,28 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
           {nameOf(effectiveAssignee) ?? "Assignee"}
         </Chip>
         {estimationType !== "notUsed" && (
-          <Chip label="Estimate" onClick={() => setPicker("estimate")} muted={estimate === null}>
-            {estimateLabel(estimationType, estimate) ?? "Estimate"}
+          <Chip
+            label="Estimate"
+            onClick={() => setPicker("estimate")}
+            muted={effectiveEstimate === null}
+          >
+            {estimateLabel(estimationType, effectiveEstimate) ?? "Estimate"}
           </Chip>
         )}
-        <Chip label="Labels" onClick={() => setPicker("labels")} muted={labelIds.length === 0}>
-          {labelIds.length === 0 ? (
+        <Chip
+          label="Labels"
+          onClick={() => setPicker("labels")}
+          muted={effectiveLabels.length === 0}
+        >
+          {effectiveLabels.length === 0 ? (
             "Labels"
           ) : (
             <>
-              {labelIds.slice(0, 2).map((id) => {
+              {effectiveLabels.slice(0, 2).map((id) => {
                 const l = labels.find((x) => x.id === id);
                 return l ? <LabelDot key={id} color={l.color} /> : null;
               })}
-              {labelIds.length} label{labelIds.length === 1 ? "" : "s"}
+              {effectiveLabels.length} label{effectiveLabels.length === 1 ? "" : "s"}
             </>
           )}
         </Chip>
@@ -345,6 +473,22 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
             })()}
           </Chip>
         )}
+        <Chip
+          label={`Due date: ${dueDate ?? "none"}`}
+          onClick={() => setDueOpen(true)}
+          muted={!dueDate}
+        >
+          <CalendarDays className="size-3.5" />
+          {dueDate ?? "Due date"}
+        </Chip>
+        <Chip
+          label={`Parent: ${parentIssue.data?.identifier ?? "none"}`}
+          onClick={() => setParentOpen(true)}
+          muted={!effectiveParent}
+        >
+          <GitBranch className="size-3.5" />
+          {effectiveParent ? (parentIssue.data?.identifier ?? "Parent") : "Parent"}
+        </Chip>
       </div>
       {error && (
         <p id="create-issue-error" role="alert" className="px-4 pb-2 text-xs text-destructive">
@@ -376,6 +520,27 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         onSelect={changeTeam}
       />
       <PropertyPicker
+        {...pickerProps("template")}
+        title="Choose template…"
+        options={[
+          { id: NONE, label: "No template" },
+          ...templateList.map((t) => ({
+            id: t.id,
+            label: t.name,
+            hint: t.isForm ? "Form" : (t.teamKey ?? "Workspace"),
+            keywords: t.description ? [t.description] : [],
+          })),
+        ]}
+        selected={template?.id ?? NONE}
+        onSelect={(id) => {
+          setTemplateChoice(id === NONE ? null : id);
+          setTemplateChosen(true);
+          setAnswers({});
+          setInvalidFields([]);
+          if (id === NONE) setDescriptionTouched(false);
+        }}
+      />
+      <PropertyPicker
         {...pickerProps("status")}
         title="Change status…"
         options={statusOptions(states)}
@@ -400,7 +565,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         {...pickerProps("estimate")}
         title="Set estimate…"
         options={estimatePickerOptions(estimationType)}
-        selected={estimate === null ? NONE : String(estimate)}
+        selected={effectiveEstimate === null ? NONE : String(effectiveEstimate)}
         onSelect={(id) => setEstimate(id === NONE ? null : Number(id))}
       />
       <PropertyPicker
@@ -408,8 +573,11 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         multi
         title="Change labels…"
         options={labelOptions(labels)}
-        selected={labelIds}
-        onSelect={(id) => setLabelIds((prev) => toggleLabel(prev, id, labels))}
+        selected={effectiveLabels}
+        onSelect={(id) => {
+          setLabelIdsTouched(true);
+          setLabelIds(toggleLabel(effectiveLabels, id, labels));
+        }}
       />
       <PropertyPicker
         {...pickerProps("project")}
@@ -436,6 +604,22 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         selected={effectiveCycle ?? NONE}
         onSelect={(id) => setCycleId(id === NONE ? null : id)}
       />
+      {dueOpen && (
+        <DueDateDialog
+          open
+          current={dueDate}
+          onClose={() => setDueOpen(false)}
+          onSave={setDueDate}
+        />
+      )}
+      {parentOpen && (
+        <ParentSearchDialog
+          currentParentId={effectiveParent}
+          title="Set parent issue"
+          onChoose={setParentId}
+          onClose={() => setParentOpen(false)}
+        />
+      )}
     </form>
   );
 }
@@ -477,6 +661,25 @@ export function CreateIssueModal() {
             </span>
             <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(false)}>
               Keep editing
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const d = scope ? getCreateDraft(scope) : null;
+                if (scope && d) {
+                  addSavedDraft(scope, d);
+                  clearCreateDraft(scope);
+                  showToast({
+                    message: "Draft saved",
+                    href: `/${session?.workspace.urlKey ?? ""}/drafts`,
+                  });
+                }
+                close();
+              }}
+            >
+              Save draft
             </Button>
             <Button
               type="button"

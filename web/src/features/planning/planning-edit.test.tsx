@@ -3,13 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "@/app/test-polyfills";
-import {
-  makeIssue,
-  mockGraphql,
-  newClient,
-  renderWithApp,
-  TEAM_META,
-} from "@/features/issues/test-fixtures";
+import { makeIssue, mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fixtures";
+import { groupIssues } from "@/features/views/display-options";
 import type { Initiative, Project } from "@/gql/graphql";
 import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 
@@ -212,7 +207,11 @@ describe("Projekt bearbeiten (F.01)", () => {
     );
     const user = userEvent.setup();
     await user.selectOptions(await screen.findByLabelText("Status"), "paused");
-    expect(await screen.findByRole("alert")).toHaveTextContent(/permission/i);
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("alert").some((a) => /permission/i.test(a.textContent ?? "")),
+      ).toBe(true),
+    );
   });
 
   it("Meilensteine: umbenennen, Datum ändern, löschen nur nach Bestätigung", async () => {
@@ -273,39 +272,19 @@ describe("Projekt bearbeiten (F.01)", () => {
     expect(confirm).toHaveBeenCalledTimes(3);
   });
 
-  it("Issues-Tab gruppiert nach Meilenstein, danach „No milestone“", async () => {
+  it("Gruppierung nach Meilenstein (F.07): Meilenstein-Gruppen, danach „No milestone“", () => {
     const issues = [
-      makeIssue({
-        id: "a",
-        identifier: "ENG-1",
-        title: "Im Alpha",
-        projectId: "p-1",
-        projectMilestoneId: "m-alpha",
-      }),
-      makeIssue({ id: "b", identifier: "ENG-2", title: "Ohne", projectId: "p-1" }),
+      makeIssue({ id: "a", identifier: "ENG-1", projectId: "p-1", projectMilestoneId: "m-alpha" }),
+      makeIssue({ id: "b", identifier: "ENG-2", projectId: "p-1" }),
     ];
-    mockGraphql({
-      ...base(() => project()),
-      PlanningScopedIssues: () => ({
-        issues: { nodes: issues, hasNextPage: false, endCursor: null },
-      }),
-      TeamMeta: () => ({
-        team: TEAM_META.team,
-        workflowStates: TEAM_META.states,
-        issueLabels: TEAM_META.labels,
-        cycles: [],
-        projects: TEAM_META.projects,
-      }),
+    const g = groupIssues(issues, "milestone", {
+      assignee: () => null,
+      project: () => null,
+      team: () => null,
+      cycle: () => null,
+      milestone: (id) => (id === "m-alpha" ? "Alpha" : null),
     });
-    await renderWithApp(
-      <ProjectPage ws="acme" projectRef="P-ENG-1" tab="issues" />,
-      newClient(),
-      "/acme/project/P-ENG-1/issues",
-    );
-    const alpha = await screen.findByRole("region", { name: "Milestone Alpha" });
-    expect(within(alpha).getByText("Im Alpha")).toBeInTheDocument();
-    const none = screen.getByRole("region", { name: "Milestone No milestone" });
-    expect(within(none).getByText("Ohne")).toBeInTheDocument();
+    expect(g.map((x) => x.label)).toEqual(["Alpha", "No milestone"]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -107,5 +107,89 @@ describe("DocumentPage", () => {
     title = "Renamed by Bob";
     await client.invalidateQueries();
     await waitFor(() => expect(input).toHaveValue("Renamed by Bob"));
+  });
+
+  it("subscribes via the bell and moves the document to another parent", async () => {
+    let subscribed = false;
+    const gql = mockGraphql({
+      DocumentDetail: () => ({ document: doc }),
+      DocumentSubscribed: () => ({ documentSubscribed: subscribed }),
+      DocumentSubscribe: () => {
+        subscribed = true;
+        return { documentSubscribe: { success: true, subscribed: true } };
+      },
+      DocumentMove: () => ({
+        documentUpdate: { success: true, document: { ...doc, projectId: "p-2" } },
+      }),
+    });
+    await renderWithApp(<DocumentPage docRef="abc" />, newClient(), "/acme/document/abc");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Subscribe to this document" }));
+    expect(
+      await screen.findByRole("button", { name: "Unsubscribe from this document" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(gql.of("DocumentSubscribe")[0]!.variables).toEqual({ id: "d1" });
+
+    await user.click(screen.getByRole("button", { name: /Settings/ }));
+    await user.type(screen.getByLabelText("New parent"), "Checkout");
+    await user.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() =>
+      expect(gql.of("DocumentMove")[0]!.variables).toEqual({
+        id: "d1",
+        input: { projectId: "Checkout" },
+      }),
+    );
+  });
+
+  it("shows the trashed banner with a restore action", async () => {
+    const gql = mockGraphql({
+      DocumentDetail: () => ({ document: { ...doc, trashed: true } }),
+      DocumentSubscribed: () => ({ documentSubscribed: false }),
+      DocumentRestoreTrash: () => ({ documentUnarchive: { success: true } }),
+    });
+    await renderWithApp(<DocumentPage docRef="abc" />, newClient(), "/acme/document/abc");
+    const user = userEvent.setup();
+    expect(await screen.findByText(/in Recently deleted/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Restore$/ }));
+    await waitFor(() => expect(gql.of("DocumentRestoreTrash")).toHaveLength(1));
+  });
+
+  it("lists inline threads in the sidebar and resolves one", async () => {
+    const gql = mockGraphql({
+      DocumentDetail: () => ({ document: doc }),
+      DocumentSubscribed: () => ({ documentSubscribed: false }),
+      TargetComments: () => ({
+        comments: {
+          nodes: [
+            {
+              id: "c1",
+              body: "Please rephrase",
+              userId: "user-alice",
+              user: { id: "user-alice", name: "Alice", displayName: "Alice" },
+              documentId: "d1",
+              parentId: null,
+              quotedText: "Hello",
+              anchorStart: null,
+              anchorEnd: null,
+              anchorState: "attached",
+              editedAt: null,
+              resolvedAt: null,
+              createdAt: "2026-10-01T10:00:00Z",
+              updatedAt: "2026-10-01T10:00:00Z",
+            },
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      }),
+      TargetCommentResolve: () => ({ commentResolve: { success: true } }),
+    });
+    await renderWithApp(<DocumentPage docRef="abc" />, newClient(), "/acme/document/abc");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Comments \(1\)/ }));
+    const panel = await screen.findByRole("complementary", { name: "Comment threads" });
+    expect(within(panel).getByText("Please rephrase")).toBeInTheDocument();
+    expect(within(panel).getByText("Hello")).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Resolve" }));
+    await waitFor(() => expect(gql.of("TargetCommentResolve")[0]!.variables).toEqual({ id: "c1" }));
   });
 });

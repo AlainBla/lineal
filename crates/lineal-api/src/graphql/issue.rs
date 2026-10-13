@@ -1,6 +1,7 @@
 //! GraphQL-Teilobjekte des Bereichs `issue` (WP06): `issue`, `issues`, `issueCreate`,
 //! `issueUpdate`, `issueArchive`, `issueUnarchive`, `issueDelete`, `issueRelationCreate`.
 
+use super::comment::AttachmentGql;
 use super::org::gql_err;
 use crate::context::{app, charge_detail_field, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
@@ -46,6 +47,15 @@ pub struct IssueGql {
     pub trashed: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// Seit wann der Status gilt („Time in status“).
+    pub state_entered_at: String,
+    /// Triage: bis wann gesnoozt (`null` = nicht gesnoozt).
+    pub snoozed_until_at: Option<String>,
+    /// Triage: Eintritt in die Triage.
+    pub started_triage_at: Option<String>,
+    pub triaged_at: Option<String>,
+    /// Anzahl der Anhänge/Links („Link count“).
+    pub link_count: i32,
 }
 
 impl From<IssueView> for IssueGql {
@@ -80,6 +90,11 @@ impl From<IssueView> for IssueGql {
             trashed: i.trashed,
             created_at: i.created_at.to_rfc3339(),
             updated_at: i.updated_at.to_rfc3339(),
+            state_entered_at: i.state_entered_at.to_rfc3339(),
+            snoozed_until_at: ts(i.snoozed_until_at),
+            started_triage_at: ts(i.started_triage_at),
+            triaged_at: ts(i.triaged_at),
+            link_count: i32::try_from(v.extras.link_count).unwrap_or(i32::MAX),
         }
     }
 }
@@ -172,6 +187,16 @@ impl IssueGql {
             duplicate_of: r.duplicate_of.map(Into::into),
             duplicates: list(r.duplicates),
         })
+    }
+
+    /// Anhänge und Links des Issues (Uploads mit frisch signierter Download-URL).
+    async fn attachments(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<AttachmentGql>> {
+        charge_detail_field(ctx)?;
+        let views = app(ctx)?
+            .list_issue_attachments(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)?;
+        Ok(views.into_iter().map(Into::into).collect())
     }
 
     /// Ob der Aufrufer dieses Issue abonniert hat.

@@ -238,6 +238,12 @@ function TeamEntry({
                 </NavLink>
               </li>
               <li>
+                <NavLink to={p.documents}>
+                  <FileText />
+                  Documents
+                </NavLink>
+              </li>
+              <li>
                 <NavLink to={p.trash}>
                   <Trash2 />
                   Recently deleted

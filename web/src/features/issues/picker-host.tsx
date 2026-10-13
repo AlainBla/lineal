@@ -19,6 +19,7 @@ import {
   statusOptions,
 } from "./property-options";
 import { DueDateDialog } from "./due-date-dialog";
+import { ParentDialog } from "./parent-dialog";
 import { TeamSwitchDialog } from "./team-switch-dialog";
 import { errorMessage, showToast } from "./toast-store";
 import { useAssignableUsers } from "./users";
@@ -33,14 +34,15 @@ export type PickerKind =
   | "milestone"
   | "cycle"
   | "team"
-  | "due";
+  | "due"
+  | "parent";
 
 export interface PickerRequest {
   kind: PickerKind;
   issue: Issue;
 }
 
-const TITLES: Record<Exclude<PickerKind, "team" | "due">, string> = {
+const TITLES: Record<Exclude<PickerKind, "team" | "due" | "parent">, string> = {
   status: "Change status…",
   assignee: "Assign to…",
   priority: "Set priority…",
@@ -92,7 +94,8 @@ export function IssuePickerHost({
     kind !== "team" &&
     kind !== "priority" &&
     kind !== "assignee" &&
-    kind !== "due";
+    kind !== "due" &&
+    kind !== "parent";
   useEffect(() => {
     if (metaFailed) {
       showToast({ message: errorMessage(meta.error, "Could not load the team."), tone: "error" });
@@ -117,6 +120,9 @@ export function IssuePickerHost({
         onSave={(d) => actions.setDueDate(issue, d)}
       />
     );
+  }
+  if (kind === "parent") {
+    return <ParentDialog key={issue.id} issue={issue} actions={actions} onClose={onClose} />;
   }
   if (kind === "team") return <TeamSwitchDialog issue={issue} onClose={onClose} />;
 

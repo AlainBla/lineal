@@ -1,15 +1,17 @@
 /**
  * Tastaturkürzel für Property-Picker (docs/08 §3.2): S Status, A Assignee, I mir zuweisen, P Priority,
- * L Labels, ⇧E (und E) Estimate, ⇧C Cycle, ⇧P Projekt, Strg ⇧ M Teamwechsel. Wirken auf das Issue,
+ * L Labels, ⇧E (und E) Estimate, ⇧C Cycle, ⇧P Projekt, Strg ⇧ M Teamwechsel, Strg ⇧ P Parent. Wirken auf das Issue,
  * das `getIssue` liefert (fokussierte Zeile bzw. geöffnetes Detail).
  */
 import { useCallback } from "react";
 
 import { useActions, type Action } from "@/app/commands";
+import { useRemindAction } from "@/features/inbox/remind";
 import type { Issue } from "@/gql/graphql";
 import { useShortcuts, type ShortcutContext } from "@/lib/shortcuts";
 
 import type { IssueActions } from "./issue-actions";
+import { useIssueExtraShortcuts } from "./issue-extra-shortcuts";
 import type { PickerKind, PickerRequest } from "./picker-host";
 
 interface Args {
@@ -30,6 +32,7 @@ const PICKERS: Array<{ id: string; kind: PickerKind; keys: string; title: string
   { id: "issue.project", kind: "project", keys: "shift+p", title: "Add to project…" },
   { id: "issue.milestone", kind: "milestone", keys: "shift+m", title: "Set milestone…" },
   { id: "issue.team", kind: "team", keys: "mod+shift+m", title: "Move to a different team…" },
+  { id: "issue.parent", kind: "parent", keys: "mod+shift+p", title: "Set parent issue…" },
 ];
 
 export function useIssueShortcuts({ context, target, open, actions }: Args): void {
@@ -51,6 +54,14 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
       enabled,
       perform: () => run(p.kind),
     })),
+    {
+      id: "issue.parent-remove",
+      title: "Remove parent issue",
+      section: "Issues",
+      context,
+      enabled: enabled && target?.parentId != null,
+      perform: () => target && actions.setParent(target, null),
+    },
     {
       id: "issue.assign-me",
       title: "Assign to me",
@@ -74,6 +85,12 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
     });
   }
   useActions(list);
+  useIssueExtraShortcuts({ context, target });
+  // Remind me (docs/08 §3.2, Shift+H); in der Inbox bleibt H = Snooze, Shift+H = Erinnerung am Issue.
+  useRemindAction(
+    target ? { targetType: "issue", target: target.id, label: target.identifier } : null,
+    context,
+  );
 
   // Alias aus der Aufgabenstellung („E Estimate“); ohne eigenen Command-Eintrag.
   useShortcuts([

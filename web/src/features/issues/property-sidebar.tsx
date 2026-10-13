@@ -7,7 +7,7 @@ import { teamPaths } from "@/app/nav";
 
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { estimateLabel, priorityLabel } from "./model";
+import { estimateLabel, issuePath, priorityLabel } from "./model";
 import type { PickerKind } from "./picker-host";
 import type { TeamMeta } from "./queries";
 
@@ -54,6 +54,8 @@ interface SidebarProps {
   /** Teamdaten konnten nicht geladen werden (z. B. 429): Hinweis mit Retry statt „Team“ (B4.27). */
   metaError?: boolean;
   onRetryMeta?: () => void;
+  /** Aufgelöstes Parent-Issue (Kennung und Titel), falls vorhanden und sichtbar. */
+  parent?: Pick<Issue, "identifier" | "title"> | null;
 }
 
 /**
@@ -70,6 +72,7 @@ export function PropertySidebar({
   readOnly = false,
   metaError = false,
   onRetryMeta,
+  parent,
 }: SidebarProps) {
   const open = (f: () => void) => (readOnly || metaError ? undefined : f);
   const teamKeyFromIdentifier = issue.identifier.split("-")[0] ?? "";
@@ -190,6 +193,21 @@ export function PropertySidebar({
           )}
         </PropertyRow>
       )}
+      <PropertyRow label="Parent" keys="mod+shift+p" onOpen={open(() => onOpen("parent"))}>
+        {parent ? (
+          <Link
+            to={issuePath(ws, parent.identifier) as "/"}
+            className="truncate"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {parent.identifier} {parent.title}
+          </Link>
+        ) : issue.parentId ? (
+          <span className="text-muted-foreground">Parent issue</span>
+        ) : (
+          <span className="text-muted-foreground">Set parent</span>
+        )}
+      </PropertyRow>
     </dl>
   );
 }

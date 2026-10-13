@@ -24,6 +24,10 @@ export function showToast(t: Omit<Toast, "id" | "tone"> & { tone?: Toast["tone"]
   return toast.id;
 }
 
+export function getToasts(): Toast[] {
+  return toasts;
+}
+
 export function dismissToast(id: number): void {
   toasts = toasts.filter((t) => t.id !== id);
   emit();

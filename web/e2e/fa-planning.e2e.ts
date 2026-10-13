@@ -55,8 +55,7 @@ test("F.01/F.07: project with a milestone is created in the UI and an issue is a
     .getByRole("navigation", { name: "Sections" })
     .getByRole("link", { name: "Issues" })
     .click();
-  const group = page.getByRole("region", { name: "Milestone Beta" });
-  await expect(group.getByText(issueTitle)).toBeVisible();
+  await expect(page.getByText(issueTitle)).toBeVisible();
 });
 
 test("F.04: a deleted issue appears in Recently deleted and can be restored", async ({ page }) => {

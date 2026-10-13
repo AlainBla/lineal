@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,8 @@ import {
   markCreateReopen,
   openCreateIssue,
   setCreateContext,
+  listSavedDrafts,
+  openCreateFromTemplate,
 } from "./create-store";
 import { makeIssue, mockGraphql, renderWithApp, SESSION, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
@@ -167,9 +169,10 @@ describe("Create-Issue-Modal", () => {
       teamId: "team-eng",
       title: "Login schlägt fehl",
       description: "Steps",
-      stateId: "s-backlog",
       priority: 2,
     });
+    // Der Default-Status wird nicht gesendet: sonst würde er die Triage-Regel aushebeln.
+    expect(created[0]).not.toHaveProperty("stateId");
     expect(await screen.findByText("ENG-123 created")).toBeInTheDocument();
     await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
   });
@@ -332,5 +335,189 @@ describe("Create-Issue-Modal", () => {
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]).toMatchObject({ title: "Fokus bleibt", priority: 1 });
+  });
+
+  it("Template-Auswahl: Chip, Vorbelegung aus templateData, templateId im Request (F.16)", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql({
+      ...handlers((i) => created.push(i)),
+      IssueTemplates: () => ({
+        templates: [
+          {
+            id: "tpl-bug",
+            name: "Bug report",
+            description: null,
+            teamId: "team-eng",
+            teamKey: "ENG",
+            isForm: false,
+            templateData: {
+              priority: 2,
+              description: "{{placeholder: Schritte}}Details",
+              labelIds: ["l-bug"],
+            },
+          },
+        ],
+      }),
+      TeamDefaults: () => ({ teamDefaultTemplates: { forMembersId: null, forNonMembersId: null } }),
+    });
+    const title = await openModal();
+    await userEvent.click(await screen.findByRole("button", { name: "Template: none" }));
+    await userEvent.type(await screen.findByPlaceholderText("Choose template…"), "Bug{Enter}");
+    expect(await screen.findByRole("button", { name: "Template: Bug report" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Priority: High" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Labels" })).toHaveTextContent("1 label");
+    await userEvent.type(title, "Login kaputt");
+    await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({
+      title: "Login kaputt",
+      templateId: "tpl-bug",
+      priority: 2,
+      labelIds: ["l-bug"],
+    });
+    // Beschreibung unverändert: der Server wendet die Template-Beschreibung an.
+    expect(created[0]).not.toHaveProperty("description");
+  });
+
+  it("Default-Template des Teams ist vorausgewählt und abwählbar", async () => {
+    mockGraphql({
+      ...handlers(),
+      IssueTemplates: () => ({
+        templates: [
+          {
+            id: "tpl-d",
+            name: "Standard",
+            description: null,
+            teamId: "team-eng",
+            teamKey: "ENG",
+            isForm: false,
+            templateData: {},
+          },
+        ],
+      }),
+      TeamDefaults: () => ({
+        teamDefaultTemplates: { forMembersId: "tpl-d", forNonMembersId: null },
+      }),
+    });
+    await openModal();
+    expect(await screen.findByRole("button", { name: "Template: Standard" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Template: Standard" }));
+    await userEvent.click(await screen.findByRole("option", { name: /No template/ }));
+    expect(await screen.findByRole("button", { name: "Template: none" })).toBeInTheDocument();
+  });
+
+  it("Formular-Template rendert Felder, prüft Pflichtfelder und sendet formAnswers", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql({
+      ...handlers((i) => created.push(i)),
+      IssueTemplates: () => ({
+        templates: [
+          {
+            id: "tpl-form",
+            name: "Anfrage",
+            description: null,
+            teamId: "team-eng",
+            teamKey: "ENG",
+            isForm: true,
+            templateData: {
+              formFields: [
+                { id: "t", kind: "title", label: "Kurztitel", required: true },
+                {
+                  id: "info",
+                  kind: "instructions",
+                  label: "Hinweis",
+                  text: "Bitte genau beschreiben.",
+                },
+                { id: "d", kind: "longText", label: "Details", required: true },
+                { id: "k", kind: "dropdown", label: "Art", options: ["Bug", "Wunsch"] },
+                { id: "c", kind: "checkboxes", label: "Bereiche", options: ["Web", "API"] },
+                { id: "due", kind: "dueDate", label: "Bis wann" },
+              ],
+            },
+          },
+        ],
+      }),
+      TeamDefaults: () => ({ teamDefaultTemplates: { forMembersId: null, forNonMembersId: null } }),
+    });
+    await openModal();
+    await userEvent.click(await screen.findByRole("button", { name: "Template: none" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Anfrage/ }));
+    const form = await screen.findByRole("group", { name: "Form" });
+    expect(within(form).getByText("Bitte genau beschreiben.")).toBeInTheDocument();
+    // Titel kommt aus dem Formular: kein separates Titelfeld, keine Beschreibung.
+    expect(screen.queryByLabelText("Issue title")).toBeNull();
+    expect(screen.queryByLabelText("Description")).toBeNull();
+
+    await userEvent.type(within(form).getByLabelText("Kurztitel"), "VPN Zugang");
+    await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("required fields");
+    expect(created).toHaveLength(0);
+
+    await userEvent.type(within(form).getByLabelText("Details"), "Brauche Zugang");
+    await userEvent.selectOptions(within(form).getByLabelText("Art"), "Wunsch");
+    await userEvent.click(within(form).getByLabelText("API"));
+    await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ templateId: "tpl-form" });
+    expect(created[0]!.formAnswers).toEqual([
+      { fieldId: "t", value: "VPN Zugang" },
+      { fieldId: "d", value: "Brauche Zugang" },
+      { fieldId: "k", value: "Wunsch" },
+      { fieldId: "c", value: ["API"] },
+    ]);
+    expect(created[0]).not.toHaveProperty("description");
+  });
+
+  it("Fälligkeit und Parent landen im Request (F.16)", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql({
+      ...handlers((i) => created.push(i)),
+      ParentSearch: () => ({
+        searchIssues: {
+          nodes: [
+            { issue: { id: "p1", identifier: "ENG-2", title: "Epic", stateType: "started" } },
+          ],
+        },
+      }),
+      IssueDetail: () => ({ issue: makeIssue({ id: "p1", identifier: "ENG-2", title: "Epic" }) }),
+    });
+    const title = await openModal();
+    await userEvent.type(title, "Mit Parent");
+    await userEvent.click(screen.getByRole("button", { name: "Due date: none" }));
+    const dueDialog = await screen.findByRole("dialog", { name: /due/i });
+    fireEvent.change(within(dueDialog).getByLabelText(/due date/i), {
+      target: { value: "2026-12-24" },
+    });
+    await userEvent.click(within(dueDialog).getByRole("button", { name: /save/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Parent: none" }));
+    await userEvent.type(await screen.findByLabelText("Search issues"), "Epic");
+    await userEvent.click(await screen.findByRole("button", { name: /ENG-2/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ dueDate: "2026-12-24", parentId: "p1" });
+  });
+
+  it("Esc mit Inhalt: Save draft legt einen Draft ab, der Arbeitsentwurf ist leer", async () => {
+    mockGraphql(handlers());
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    await userEvent.type(title, "Später weiter");
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(await screen.findByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
+    expect(getCreateDraft(SCOPE)).toBeNull();
+    expect(listSavedDrafts(SCOPE).map((d) => d.title)).toEqual(["Später weiter"]);
+    expect(await screen.findByText("Draft saved")).toBeInTheDocument();
+  });
+
+  it("Alt+C öffnet das Modal direkt mit der Template-Auswahl", async () => {
+    mockGraphql({
+      ...handlers(),
+      IssueTemplates: () => ({ templates: [] }),
+      TeamDefaults: () => ({ teamDefaultTemplates: { forMembersId: null, forNonMembersId: null } }),
+    });
+    await renderWithApp(<CreateIssueModal />);
+    act(() => openCreateFromTemplate());
+    expect(await screen.findByPlaceholderText("Choose template…")).toBeInTheDocument();
   });
 });

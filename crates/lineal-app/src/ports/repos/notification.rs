@@ -346,6 +346,8 @@ pub enum ObjectKind {
     Initiative,
     Cycle,
     Label,
+    /// Assigned-Ansicht eines Users (`userContextViewType = assigned`).
+    User,
 }
 
 impl ObjectKind {
@@ -356,6 +358,15 @@ impl ObjectKind {
             Self::Initiative => "initiative",
             Self::Cycle => "cycle",
             Self::Label => "label",
+            Self::User => "user",
+        }
+    }
+
+    /// Spalte des Kontexts (`user` hat eine eigene Spalte).
+    pub const fn context_column(&self) -> &'static str {
+        match self {
+            Self::User => "user_context_view_type",
+            _ => "context_view_type",
         }
     }
 
@@ -367,6 +378,7 @@ impl ObjectKind {
             Self::Initiative => "initiative_id",
             Self::Cycle => "cycle_id",
             Self::Label => "label_id",
+            Self::User => "user_id",
         }
     }
 }
@@ -408,9 +420,69 @@ pub struct DueCandidate {
     pub timezone: Option<String>,
 }
 
+/// Persönliche „Remind me“-Erinnerung (docs/05 §6.10).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reminder {
+    pub id: Uuid,
+    pub user_id: UserId,
+    /// `issue`, `project`, `initiative` oder `document`.
+    pub target_type: String,
+    pub target_id: Uuid,
+    pub remind_at: DateTime<Utc>,
+    pub fired_at: Option<DateTime<Utc>>,
+}
+
 /// Persistenzzugriff des Bereichs `notification`.
 #[async_trait]
 pub trait NotificationRepo: Send {
+    // --- Remind me ---
+
+    /// Setzt oder ersetzt die Erinnerung (je User und Objekt höchstens eine).
+    async fn set_reminder(
+        &mut self,
+        _id: Uuid,
+        _user: UserId,
+        _target_type: &str,
+        _target_id: Uuid,
+        _remind_at: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Reminder> {
+        unimplemented_repo()
+    }
+    /// Entfernt die Erinnerung; `false`, wenn keine existierte.
+    async fn clear_reminder(
+        &mut self,
+        _user: UserId,
+        _target_type: &str,
+        _target_id: Uuid,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Offene (nicht ausgelöste) Erinnerung des Users am Objekt.
+    async fn get_reminder(
+        &mut self,
+        _user: UserId,
+        _target_type: &str,
+        _target_id: Uuid,
+    ) -> AppResult<Option<Reminder>> {
+        unimplemented_repo()
+    }
+    /// Fällige, noch nicht ausgelöste Erinnerungen der Organisation.
+    async fn list_due_reminders(
+        &mut self,
+        _now: DateTime<Utc>,
+        _limit: i64,
+    ) -> AppResult<Vec<Reminder>> {
+        unimplemented_repo()
+    }
+    async fn mark_reminder_fired(&mut self, _id: Uuid, _now: DateTime<Utc>) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Ob das Objekt existiert und nicht im Papierkorb liegt (`issue`, `project`, `initiative`).
+    async fn reminder_target_alive(&mut self, _target_type: &str, _id: Uuid) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
     // --- Notifications ---
 
     /// Schreibt die Benachrichtigung (idempotent über `dedup_key`) und beendet ein laufendes

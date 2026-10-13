@@ -3,6 +3,8 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { errorText } from "@/features/issues/error-text";
+import { CommentsSection } from "@/features/comments/comments-section";
+import { DocumentsSection } from "@/features/docs/documents-section";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
@@ -17,11 +19,11 @@ import {
   useInitiatives,
   useInitiativeLinks,
   useProjects,
-  useInitiativeDocuments,
   useInitiativeUpdates,
   usePostInitiativeUpdate,
   type Health,
 } from "./queries";
+import { useRemindAction } from "@/features/inbox/remind";
 import { RoadmapPage } from "./roadmap-page";
 import { HealthBadge, PageHeader } from "./ui";
 
@@ -184,6 +186,12 @@ function Updates({ initiativeId }: { initiativeId: string }) {
                 <span>{relativeTime(u.createdAt)}</span>
               </div>
               <RichEditor key={u.id} value={u.body} editable={false} ariaLabel="Update" />
+              <div className="mt-3">
+                <CommentsSection
+                  target={{ initiativeUpdateId: u.id }}
+                  title={`Comments on update ${relativeTime(u.createdAt)}`}
+                />
+              </div>
             </li>
           ))}
         </ul>
@@ -193,22 +201,7 @@ function Updates({ initiativeId }: { initiativeId: string }) {
 }
 
 function Documents({ ws, initiativeId }: { ws: string; initiativeId: string }) {
-  const q = useInitiativeDocuments(initiativeId);
-  if (q.isLoading) return <ListSkeleton rows={3} />;
-  if (q.isError) return <ErrorState error={q.error} title="Could not load documents" />;
-  if (!q.data?.length) return <EmptyState title="No documents" />;
-  return (
-    <ul className="m-4 max-w-3xl divide-y divide-border rounded-lg border border-border">
-      {q.data.map((d) => (
-        <li key={d.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-          <Link to={`/${ws}/document/${d.slugId}` as "/"} className="hover:underline">
-            {d.title}
-          </Link>
-          <span className="ml-auto text-xs text-muted-foreground">{relativeTime(d.updatedAt)}</span>
-        </li>
-      ))}
-    </ul>
-  );
+  return <DocumentsSection ws={ws} scope={{ initiativeId }} />;
 }
 
 function SubInitiatives({ ws, i }: { ws: string; i: Initiative }) {
@@ -262,6 +255,7 @@ export function InitiativeDetail({
 }) {
   const q = useInitiative(initiativeRef);
   const i = q.data;
+  useRemindAction(i ? { targetType: "initiative", target: i.id, label: i.name } : null);
   if (q.isLoading) return <ListSkeleton rows={4} />;
   if (q.isError || !i)
     return (
@@ -275,7 +269,14 @@ export function InitiativeDetail({
   let body;
   switch (tab) {
     case "overview":
-      body = <Overview i={i} />;
+      body = (
+        <>
+          <Overview i={i} />
+          <div className="max-w-3xl p-4">
+            <CommentsSection target={{ initiativeId: i.id }} title="Initiative comments" />
+          </div>
+        </>
+      );
       break;
     case "projects":
       body = <Projects ws={ws} i={i} />;

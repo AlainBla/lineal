@@ -226,6 +226,7 @@ struct ExtrasRow {
     label_names: Vec<String>,
     label_ids: Vec<Uuid>,
     children_count: i64,
+    link_count: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -683,7 +684,8 @@ impl IssueRepo for PgTx {
                  JOIN issue_label l ON l.id = il.label_id WHERE il.issue_id = i.id), '{}') AS label_names, \
                COALESCE((SELECT array_agg(l.id ORDER BY l.name, l.id) FROM issue_to_label il \
                  JOIN issue_label l ON l.id = il.label_id WHERE il.issue_id = i.id), '{}') AS label_ids, \
-               (SELECT count(*) FROM issue ch WHERE ch.parent_id = i.id AND NOT ch.trashed) AS children_count \
+               (SELECT count(*) FROM issue ch WHERE ch.parent_id = i.id AND NOT ch.trashed) AS children_count, \
+               (SELECT count(*) FROM attachment at WHERE at.issue_id = i.id AND at.archived_at IS NULL) AS link_count \
              FROM issue i \
              JOIN workflow_state s ON s.id = i.state_id \
              JOIN team t ON t.id = i.team_id \
@@ -720,6 +722,7 @@ impl IssueRepo for PgTx {
                         label_names: r.label_names,
                         label_ids: r.label_ids.into_iter().map(LabelId).collect(),
                         children_count: r.children_count,
+                        link_count: r.link_count,
                     },
                 )
             })

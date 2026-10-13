@@ -35,6 +35,8 @@ export interface Selection {
   /** Bereich vom zuletzt gewählten Issue bis `id` hinzufügen. */
   extendTo: (id: string) => void;
   clear: () => void;
+  /** Alle Issues der Ansicht wählen (`Ctrl A`). */
+  selectAll: () => void;
   /**
    * Klick auf Zeile/Karte: mit Shift/Cmd/Strg oder bei bestehender Auswahl wird gewählt und `true`
    * geliefert (Navigation unterdrücken), sonst `false`.
@@ -67,6 +69,10 @@ export function useSelection(orderedIds: string[]): Selection {
     anchor.current = null;
     setRaw(new Set());
   }, []);
+  const selectAll = useCallback(() => {
+    anchor.current = orderedIds[orderedIds.length - 1] ?? null;
+    setRaw(new Set(orderedIds));
+  }, [orderedIds]);
   const size = selected.size;
   const handleClick = useCallback(
     (id: string, mods: ClickMods) => {
@@ -83,7 +89,16 @@ export function useSelection(orderedIds: string[]): Selection {
     [extendTo, toggle, size],
   );
   return useMemo(
-    () => ({ selected, size, has: (id) => selected.has(id), toggle, extendTo, clear, handleClick }),
-    [selected, size, toggle, extendTo, clear, handleClick],
+    () => ({
+      selected,
+      size,
+      has: (id) => selected.has(id),
+      toggle,
+      extendTo,
+      clear,
+      selectAll,
+      handleClick,
+    }),
+    [selected, size, toggle, extendTo, clear, selectAll, handleClick],
   );
 }
