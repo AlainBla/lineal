@@ -481,13 +481,7 @@ impl App {
         let name_patch: Option<Option<String>> = match &input.name {
             Some(Some(n)) if n.trim().is_empty() => Some(None),
             Some(Some(n)) => {
-                let n = n.trim().to_owned();
-                if n.chars().count() > 255 {
-                    return Err(invalid(
-                        "name",
-                        "The name must have at most 255 characters.",
-                    ));
-                }
+                let n = lineal_domain::rules::text::validate_single_line_name("name", n, 255)?;
                 let run = n.chars().rev().take_while(char::is_ascii_digit).count();
                 if run > 0 && trailing_number(&n).is_none_or(|v| v > MAX_CYCLE_NUMBER) {
                     return Err(invalid("name", "Cycle number out of range."));

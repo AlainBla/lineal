@@ -464,6 +464,31 @@ pub async fn resolve_milestone(
     }
 }
 
+/// Cycle für ein Issue: wie [`resolve_cycle`], erlaubt aber den zuletzt abgeschlossenen Cycle für
+/// erledigte/abgebrochene Issues (nachträgliche Zurechnung, docs/04 §1.6).
+async fn resolve_cycle_for_issue(
+    tx: &mut dyn Tx,
+    team: TeamId,
+    reference: &str,
+    state_type: StateType,
+) -> AppResult<CycleLookup> {
+    match resolve_cycle(tx, team, reference).await {
+        Ok(c) => Ok(c),
+        Err(e)
+            if e.details["reason"] == "cycle_completed"
+                && matches!(state_type, StateType::Completed | StateType::Canceled) =>
+        {
+            let found = tx.issues().find_cycles(team, reference).await?;
+            let previous = crate::usecases::cycle::previous_cycle_id(tx, team).await?;
+            match found.into_iter().next() {
+                Some(c) if Some(c.id) == previous => Ok(c),
+                _ => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Wirksame Zuordnung nach einem Update: Projekt, Meilenstein, Cycle.
 pub struct PlanningChange {
     pub project: Option<Option<String>>,
@@ -523,26 +548,7 @@ pub async fn apply_planning(
     match &change.cycle {
         Some(None) => issue.cycle_id = None,
         Some(Some(r)) => {
-            let c = match resolve_cycle(tx, team.id, r).await {
-                Ok(c) => c,
-                // Zuletzt abgeschlossener Cycle: nur für erledigte/abgebrochene Issues
-                // (nachträgliche Zurechnung, docs/04 §1.6).
-                Err(e)
-                    if e.details["reason"] == "cycle_completed"
-                        && matches!(
-                            issue.state_type,
-                            StateType::Completed | StateType::Canceled
-                        ) =>
-                {
-                    let found = tx.issues().find_cycles(team.id, r).await?;
-                    let previous = crate::usecases::cycle::previous_cycle_id(tx, team.id).await?;
-                    match found.into_iter().next() {
-                        Some(c) if Some(c.id) == previous => c,
-                        _ => return Err(e),
-                    }
-                }
-                Err(e) => return Err(e),
-            };
+            let c = Box::pin(resolve_cycle_for_issue(tx, team.id, r, issue.state_type)).await?;
             issue.cycle_id = Some(c.id);
             // Backlog-Issue in einem aktiven oder künftigen Cycle: Wechsel nach Todo (docs/04 §1.6).
             let assignable = c.completed_at.is_none();

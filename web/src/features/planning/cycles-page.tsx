@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { teamPaths } from "@/app/nav";
+import { setCreateContext } from "@/features/issues/create-store";
 import { useTeamMeta } from "@/features/issues/hooks";
 import { IssueList } from "@/features/issues/issue-list";
 import { useIssueLookup } from "@/features/issues/issue-lookup";
@@ -100,6 +101,13 @@ export function CyclePage({
   const lookup = useIssueLookup([meta.data]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const p = teamPaths(ws, teamKey);
+  // „C“ legt im Cycle-Kontext an (B4.15).
+  const ctxCycleId = cycle?.id;
+  useEffect(() => {
+    if (!ctxCycleId) return;
+    setCreateContext({ teamKey, cycleId: ctxCycleId });
+    return () => setCreateContext(null);
+  }, [ctxCycleId, teamKey]);
 
   if (cq.isLoading) return <ListSkeleton />;
   if (cq.isError)
