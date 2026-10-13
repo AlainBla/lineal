@@ -235,7 +235,8 @@ export function describeHistory(entry: IssueHistoryEntry, r: HistoryResolver): D
     ...relationPhrases(entry.relationChanges),
   ];
   const sourceLabel = SOURCE_LABEL[entry.source] ?? null;
-  const actorName = entry.actorId ? r.user(entry.actorId) : null;
+  // Verzeichnis zuerst; sonst der vom Server gelieferte Name (auch für Gäste einer Freigabe, B4.16).
+  const actorName = (entry.actorId ? r.user(entry.actorId) : null) ?? entry.actorName ?? null;
   return {
     id: entry.id,
     createdAt: entry.createdAt,

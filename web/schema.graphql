@@ -1021,6 +1021,10 @@ Ein Eintrag der Aktivitätshistorie.
 type IssueHistoryEntry {
 	id: String!
 	actorId: String
+	"""
+	Name des Akteurs (auch für Gäste einer Freigabe sichtbar).
+	"""
+	actorName: String
 	source: String!
 	"""
 	`{ "<feld>": { "from": …, "to": … } }` (camelCase-Feldnamen).

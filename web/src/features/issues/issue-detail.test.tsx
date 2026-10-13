@@ -210,6 +210,7 @@ describe("Issue-Detail", () => {
           {
             id: "h-late",
             actorId: "user-bob",
+            actorName: null,
             source: "user",
             changes: { stateId: { from: "s-todo", to: "s-done" } },
             addedLabelIds: [],
@@ -221,6 +222,7 @@ describe("Issue-Detail", () => {
           {
             id: "h-early",
             actorId: null,
+            actorName: null,
             source: "import",
             changes: { projectId: { from: null, to: null } },
             addedLabelIds: ["l-bug"],

@@ -677,6 +677,12 @@ async fn single_select_label_groups(pool: PgPool) {
             .as_ref()
             .is_some_and(|r| r.contains(&ios))
     }));
+    // B4.16: der Verlauf nennt den Akteur beim Namen.
+    assert!(
+        history
+            .iter()
+            .any(|h| h.actor_id.is_some() && h.actor_name.as_deref() == Some("Alice Example"))
+    );
     // ersetzendes labels mit zwei Geschwistern: Fehler
     let err = fx
         .app

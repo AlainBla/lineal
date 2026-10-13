@@ -117,6 +117,8 @@ pub struct IssueRelations {
 pub struct IssueHistoryEntry {
     pub id: String,
     pub actor_id: Option<String>,
+    /// Name des Akteurs (auch für Gäste einer Freigabe sichtbar).
+    pub actor_name: Option<String>,
     pub source: String,
     /// `{ "<feld>": { "from": …, "to": … } }` (camelCase-Feldnamen).
     pub changes: async_graphql::types::Json<serde_json::Value>,
@@ -201,6 +203,7 @@ impl IssueGql {
             .map(|e| IssueHistoryEntry {
                 id: e.id.to_string(),
                 actor_id: e.actor_id.map(|u| u.to_string()),
+                actor_name: e.actor_name,
                 source: e.source.as_str().to_owned(),
                 changes: async_graphql::types::Json(e.changes),
                 added_label_ids: ids(e.added_label_ids),

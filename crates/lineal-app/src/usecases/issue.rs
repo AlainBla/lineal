@@ -1316,7 +1316,18 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
         let entries = tx.issues().list_history(issue.id, 1000).await?;
-        redact_history(&mut *tx, &snap, ctx, entries).await
+        let mut entries = redact_history(&mut *tx, &snap, ctx, entries).await?;
+        // Akteursnamen für alle Betrachter des Issues (auch Gäste einer Freigabe, B4.16).
+        let mut names: HashMap<UserId, Option<String>> = HashMap::new();
+        for e in &mut entries {
+            let Some(actor) = e.actor_id else { continue };
+            if !names.contains_key(&actor) {
+                let name = tx.users().get(actor).await?.map(|u| u.name);
+                names.insert(actor, name);
+            }
+            e.actor_name = names.get(&actor).cloned().flatten();
+        }
+        Ok(entries)
     }
 
     /// Issues filtern (docs/07 §3.2 `list_issues`).

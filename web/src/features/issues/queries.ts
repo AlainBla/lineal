@@ -141,7 +141,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
       blocks { ${RELATED} } blockedBy { ${RELATED} } relatedTo { ${RELATED} }
       duplicateOf { ${RELATED} } duplicates { ${RELATED} }
     }
-    history { id actorId source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
+    history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
   }
 }`;
 
