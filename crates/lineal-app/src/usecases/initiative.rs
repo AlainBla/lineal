@@ -577,6 +577,9 @@ impl App {
                     )
                     .with_details(json!({ "field": "patch" })));
                 }
+                if lead_team.flatten().is_none() {
+                    snap.require_initiative_without_lead_team(ctx)?;
+                }
                 let name = validate_name(input.name.as_deref().unwrap_or(""))?;
                 let status = status.unwrap_or(InitiativeStatus::Planned);
                 let number = tx.initiatives().next_number().await?;
