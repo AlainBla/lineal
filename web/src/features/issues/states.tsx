@@ -4,7 +4,15 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { GraphQLRequestError } from "@/lib/graphql";
+
 import { errorText } from "./error-text";
+
+/** Wiederholen hilft bei Berechtigungs- und Nicht-gefunden-Fehlern nicht. */
+export function isRetryable(error: unknown): boolean {
+  if (!(error instanceof GraphQLRequestError)) return true;
+  return !(error.code === "not_found" || error.code === "forbidden" || error.status === 403);
+}
 
 /** Ladeskelett einer Issue-Liste. */
 export function ListSkeleton({ rows = 8 }: { rows?: number }) {
@@ -50,7 +58,7 @@ export function ErrorState({
       <AlertTriangle className="size-5 text-destructive" aria-hidden />
       <h2 className="text-sm font-medium">{title}</h2>
       <p className="max-w-sm text-sm text-muted-foreground">{errorText(error)}</p>
-      {onRetry && (
+      {onRetry && isRetryable(error) && (
         <Button variant="outline" size="sm" onClick={onRetry}>
           Try again
         </Button>

@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 
 import { ensureSession, useSession } from "@/app/auth";
+import { useSessionExpiry } from "@/app/session-expiry";
 import { PlaceholderPage } from "@/app/placeholder";
 import { Shell } from "@/app/shell";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ const isPublicPath = (pathname: string) => pathname.startsWith("/invite/");
 
 function RootLayout() {
   const session = useSession();
+  useSessionExpiry();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (!session || isPublicPath(pathname)) return <Outlet />;
   return (

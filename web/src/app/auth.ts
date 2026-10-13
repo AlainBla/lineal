@@ -8,6 +8,7 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { queryClient as defaultClient } from "@/app/query-client";
+import { NETWORK_ERROR_MESSAGE, parseRetryAfter, retryDelayMs } from "@/lib/graphql";
 
 export interface SessionUser {
   id: string;
@@ -101,12 +102,29 @@ export class AuthError extends Error {
 }
 
 /** Lädt die aktuelle Session; `null` = nicht angemeldet, Fehler bei Server-/Netzproblemen. */
-export async function fetchSession(fetchImpl: typeof fetch = fetch): Promise<Session | null> {
-  const res = await fetchImpl("/auth/me", {
-    credentials: "same-origin",
-    headers: { accept: "application/json" },
-  });
+export async function fetchSession(
+  fetchImpl: typeof fetch = fetch,
+  sleepImpl: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<Session | null> {
+  const call = async () => {
+    try {
+      return await fetchImpl("/auth/me", {
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      });
+    } catch {
+      throw new AuthError(NETWORK_ERROR_MESSAGE, 0);
+    }
+  };
+  let res = await call();
+  if (res.status === 429) {
+    // Retry-After respektieren, einmal wiederholen (docs/08 F4).
+    await sleepImpl(retryDelayMs(parseRetryAfter(res.headers.get("retry-after"))));
+    res = await call();
+  }
   if (res.status === 401 || res.status === 403) return null;
+  if (res.status === 429)
+    throw new AuthError("Too many requests. Wait a moment and try again.", res.status);
   if (!res.ok) throw new AuthError(`Session check failed (${res.status})`, res.status);
   return normalizeSession(await res.json().catch(() => null));
 }

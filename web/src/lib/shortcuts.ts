@@ -251,7 +251,7 @@ export class ShortcutRegistry {
       return { exact, prefix };
     };
 
-    let { exact, prefix } = tryMatch(step);
+    const { exact, prefix } = tryMatch(step);
     if (step.length > 0 && exact.length === 0 && !prefix) {
       // Sequenz abgebrochen (docs/08 §3.3): die Folge wird verworfen, die zweite Taste löst keine
       // Aktion aus. Esc bleibt unberührt, damit es weiter Dialoge schließen kann.
