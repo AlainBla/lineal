@@ -644,13 +644,115 @@ async fn valid_credentials_are_limited_per_account_not_per_ip() {
         req
     };
     for i in 0..6 {
-        assert_eq!(send(&router, with(KEY_RW)).await.status, StatusCode::OK, "{i}");
+        assert_eq!(
+            send(&router, with(KEY_RW)).await.status,
+            StatusCode::OK,
+            "{i}"
+        );
     }
     let r = send(&router, with(KEY_RW)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.json()["error"], "rate_limited");
     assert!(r.headers.contains_key("retry-after"));
     assert_eq!(send(&router, with(KEY_RO)).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn coarse_ip_safety_net_applies_to_authenticated_requests_before_the_lookup() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.ip_authenticated = 3.0;
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let with = |peer: &str, key: &str| {
+        let mut req = from_peer(peer, "");
+        req.headers_mut()
+            .insert("authorization", key.parse().unwrap());
+        req
+    };
+    for _ in 0..3 {
+        assert_eq!(
+            send(&router, with("203.0.113.8", KEY_RW)).await.status,
+            StatusCode::OK
+        );
+    }
+    // Weder gültige noch erfundene Tokens umgehen das Netz; JSON mit Retry-After.
+    let r = send(&router, with("203.0.113.8", KEY_RO)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(r.headers.contains_key("retry-after"));
+    assert_eq!(
+        send(&router, with("203.0.113.8", "lin_api_fake"))
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        send(&router, with("203.0.113.9", KEY_RW)).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn credentialed_requests_without_peer_fail_closed_in_production() {
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.require_peer = true;
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    for auth in [KEY_RW, "lin_api_fake"] {
+        let req = Request::get("/ping")
+            .header("authorization", auth)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            send(&router, req).await.status,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+}
+
+#[tokio::test]
+async fn many_keys_of_one_account_share_one_bucket() {
+    // Gleicher Principal über zwei verschiedene Tokens: ein gemeinsamer Konto-Bucket.
+    let shared = principal(Scopes::read_write());
+    let store = FakeStore::new()
+        .with_principal(hash_token("lin_api_k1"), shared.clone())
+        .with_principal(hash_token("lin_api_k2"), shared);
+    let app = test_app(Arc::new(store));
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.api_key = ClassLimits {
+        requests: 4.0,
+        complexity: 100.0,
+    };
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    for i in 0..4 {
+        let key = if i % 2 == 0 {
+            "lin_api_k1"
+        } else {
+            "lin_api_k2"
+        };
+        let mut req = from_peer("203.0.113.20", "");
+        req.headers_mut()
+            .insert("authorization", key.parse().unwrap());
+        assert_eq!(send(&router, req).await.status, StatusCode::OK);
+    }
+    let mut req = from_peer("203.0.113.20", "");
+    req.headers_mut()
+        .insert("authorization", "lin_api_k1".parse().unwrap());
+    assert_eq!(
+        send(&router, req).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]
