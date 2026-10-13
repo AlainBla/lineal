@@ -805,10 +805,23 @@ impl App {
         summary: Option<Option<String>>,
         now: DateTime<Utc>,
     ) -> AppResult<(ProjectId, Option<i64>)> {
+        let mut resolved = resolve::project::resolve_in(tx, snap, reference).await?;
+        if input.set_teams.is_some()
+            || !input.add_teams.is_empty()
+            || !input.remove_teams.is_empty()
+            || input.lead_team.is_some()
+        {
+            // Team-/Lead-Änderungen je Projekt serialisieren und den frischen Stand lesen
+            // (sonst: Lead-Team ohne Projektbeteiligung bei parallelem removeTeams/leadTeam).
+            tx.advisory_lock("project_teams", Some(resolved.project.id.0))
+                .await?;
+            resolved =
+                resolve::project::resolve_in(tx, snap, &resolved.project.id.to_string()).await?;
+        }
         let ResolvedProject {
             project,
             teams: current_teams,
-        } = resolve::project::resolve_in(tx, snap, reference).await?;
+        } = resolved;
         require_manage(snap, ctx, Action::ManageProject, &current_teams)?;
         writable(&project)?;
         let mut patch = ProjectPatch::default();

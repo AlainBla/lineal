@@ -9,6 +9,7 @@ use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
 use lineal_app::usecases::label::SaveLabelInput;
+use lineal_app::usecases::project::SaveProjectInput;
 use lineal_app::usecases::state::CreateStateInput;
 use lineal_app::usecases::team::{CreateTeamInput, NestOptions};
 use lineal_app::usecases::template::SaveTemplateInput;
@@ -953,6 +954,68 @@ async fn b1_10_state_archive_vs_issue_create(pool: PgPool) {
         assert_eq!(
             stuck, 0,
             "round {round}: Issues in archiviertem Status ({d:?})"
+        );
+    }
+}
+
+/// B1.11: removeTeams und leadTeam parallel: das Lead-Team bleibt Projektteam.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_11_project_remove_team_vs_lead_team(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let created = fx
+            .app
+            .save_project(
+                &alice(),
+                SaveProjectInput {
+                    name: Some(format!("Proj{round}")),
+                    add_teams: vec!["ENG".into(), "WEB".into()],
+                    lead_team: Some("ENG".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let id = created.identifier.clone();
+        let (a1, a2) = (fx.app.clone(), fx.app.clone());
+        let (i1, i2) = (id.clone(), id.clone());
+        let (r1, r2) = tokio::join!(
+            async move {
+                a1.save_project(
+                    &alice(),
+                    SaveProjectInput {
+                        id: Some(i1),
+                        remove_teams: vec!["WEB".into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ())
+            },
+            async move {
+                a2.save_project(
+                    &alice(),
+                    SaveProjectInput {
+                        id: Some(i2),
+                        lead_team: Some("WEB".into()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ())
+            }
+        );
+        assert_no_internal("project teams", &[r1, r2]);
+        let orphan: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM project p WHERE NOT EXISTS ( \
+               SELECT 1 FROM project_team t WHERE t.project_id = p.id AND t.team_id = p.lead_team_id)",
+        )
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            orphan, 0,
+            "round {round}: Lead-Team ohne Projektbeteiligung"
         );
     }
 }
