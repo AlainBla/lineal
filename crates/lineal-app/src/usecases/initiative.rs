@@ -933,6 +933,8 @@ impl App {
             ctx,
             DomainEvent::InitiativeUpdated {
                 initiative_id: i.id,
+                changed: vec!["trashed".into()],
+                previous_owner_id: None,
             },
         )
         .await?;
