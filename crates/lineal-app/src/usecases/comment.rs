@@ -7,7 +7,7 @@
 
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorKind};
 use crate::policy::{Action, PolicySnapshot, TeamTree, compute_visible_team_ids};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
@@ -188,13 +188,31 @@ async fn authorize_parent(
     action: Action,
     write: bool,
 ) -> AppResult<()> {
-    if let (ParentRef::Issue(issue), ParentScope::Teams(teams)) = (parent, scope)
+    let result = if let (ParentRef::Issue(issue), ParentScope::Teams(teams)) = (parent, scope)
         && teams.len() == 1
     {
-        return crate::resolve::issue::authorize_issue(tx, snap, ctx, issue, teams[0], action)
-            .await;
-    }
-    authorize(snap, ctx, scope, action, write)
+        crate::resolve::issue::authorize_issue(tx, snap, ctx, issue, teams[0], action).await
+    } else {
+        authorize(snap, ctx, scope, action, write)
+    };
+    // Unsichtbare Eltern melden das Elternobjekt, nicht das Team (B8.20).
+    result.map_err(|e| {
+        if e.kind != ErrorKind::NotFound {
+            return e;
+        }
+        // Keine ID/Referenz zurückgeben: kein Existenz-Orakel.
+        let what = match parent {
+            ParentRef::Issue(_) => "Issue",
+            ParentRef::Project(_) => "Project",
+            ParentRef::Initiative(_) => "Initiative",
+            ParentRef::Document(_) => "Document",
+            ParentRef::Milestone(_) => "ProjectMilestone",
+            ParentRef::ProjectUpdate(_) => "ProjectUpdate",
+            ParentRef::InitiativeUpdate(_) => "InitiativeUpdate",
+        };
+        AppError::not_found(format!("Could not find referenced {what}."))
+            .with_details(json!({ "type": what }))
+    })
 }
 
 async fn scope_of(tx: &mut dyn Tx, parent: ParentRef) -> AppResult<ParentScope> {
@@ -228,6 +246,17 @@ async fn resolve_parent(tx: &mut dyn Tx, spec: &ParentSpec) -> AppResult<ParentR
             },
             id,
         ),
+    };
+    // Issue-Kennungen auch über frühere Team-Keys auflösen (B8.11); unbekannte Referenzen
+    // fallen auf die Repo-Suche zurück und enden dort in `not_found`.
+    let resolved_issue;
+    let reference = if let ParentSpec::Issue(_) = spec
+        && let Ok(id) = crate::resolve::issue::lookup(tx, reference.trim()).await
+    {
+        resolved_issue = id.to_string();
+        resolved_issue.as_str()
+    } else {
+        reference
     };
     for kind in kinds {
         if let Some(p) = tx.comments().find_parent(kind, reference).await? {
