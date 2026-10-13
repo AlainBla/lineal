@@ -1,3 +1,6 @@
 [env]
 # Default für #[sqlx::test] und lokale Läufe (überschreibbar per Umgebungsvariable).
 DATABASE_URL = { value = "postgres://lineal:lineal@localhost:5440/lineal", force = false }
+# Test-Threads mit 8 MiB Stack (wie die Tokio-Worker im Server): tief verschachtelte
+# Use-Case-Futures laufen im Debug-Build sonst knapp am 2-MiB-Standard.
+RUST_MIN_STACK = { value = "8388608", force = false }
