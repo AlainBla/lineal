@@ -227,4 +227,30 @@ describe("IssuePickerHost", () => {
       input: { teamId: "team-des" },
     });
   });
+
+  it("Assignee-Picker bietet nur Personen mit Teamzugang an (B4.33)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    const gql = mockGraphql({
+      TeamMeta: () => ({
+        team: TEAM_META.team,
+        workflowStates: TEAM_META.states,
+        issueLabels: [],
+        cycles: [],
+        projects: [],
+      }),
+      KnownUsers: (v) => ({
+        users: v.team
+          ? [{ id: "u-alice", name: "alice", displayName: "Alice" }]
+          : [
+              { id: "u-alice", name: "alice", displayName: "Alice" },
+              { id: "u-carol", name: "carol", displayName: "Carol (Gast)" },
+            ],
+      }),
+    });
+    await renderWithApp(<Host request={{ kind: "assignee", issue }} />);
+    await screen.findByPlaceholderText("Assign to…");
+    await screen.findByText("Alice");
+    expect(screen.queryByText("Carol (Gast)")).toBeNull();
+    expect(gql.of("KnownUsers").some((c) => c.variables.team === "team-eng")).toBe(true);
+  });
 });

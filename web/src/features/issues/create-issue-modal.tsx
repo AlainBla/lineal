@@ -38,7 +38,7 @@ import {
 } from "./property-options";
 import { RichEditor } from "./rich-editor";
 import { errorMessage, showToast } from "./toast-store";
-import { useKnownUsers } from "./users";
+import { useAssignableUsers, useKnownUsers } from "./users";
 
 type ChipKind =
   "team" | "status" | "priority" | "assignee" | "labels" | "estimate" | "project" | "cycle";
@@ -108,6 +108,8 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
     teamList.find((t) => t.key === defaultKey) ??
     teamList[0];
   const meta = useTeamMeta(team?.id);
+  // Nur Personen mit Teamzugang als Assignee anbieten (B4.33).
+  const assignable = useAssignableUsers(team?.id);
   const presetApplies = chosenTeamId === null; // Kontextwerte gelten nur fürs Vorgabeteam
   const m = meta.data;
   const states = m?.states ?? [];
@@ -371,7 +373,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
       <PropertyPicker
         {...pickerProps("assignee")}
         title="Assign to…"
-        options={assigneeOptions(users, me)}
+        options={assigneeOptions(assignable, me)}
         selected={effectiveAssignee ?? NONE}
         onSelect={(id) => setAssigneeId(id === NONE ? null : id)}
       />

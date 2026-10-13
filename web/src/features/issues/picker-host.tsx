@@ -20,7 +20,7 @@ import {
 import { DueDateDialog } from "./due-date-dialog";
 import { TeamSwitchDialog } from "./team-switch-dialog";
 import { errorMessage, showToast } from "./toast-store";
-import { useKnownUsers } from "./users";
+import { useAssignableUsers } from "./users";
 
 export type PickerKind =
   "status" | "assignee" | "priority" | "labels" | "estimate" | "project" | "cycle" | "team" | "due";
@@ -56,7 +56,7 @@ export function IssuePickerHost({
   const meta = useTeamMeta(issue?.teamId);
   const actions = useIssueActions();
   const session = useSession();
-  const users = useKnownUsers();
+  const users = useAssignableUsers(issue?.teamId);
   // Mehrfachauswahl: lokale Zwischenstände, bis der Cache die Änderung zeigt.
   const [labelOverride, setLabelOverride] = useState<{ id: string; ids: string[] } | null>(null);
   const labelIds =
