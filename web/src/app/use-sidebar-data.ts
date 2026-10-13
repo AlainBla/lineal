@@ -6,6 +6,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useSession } from "@/app/auth";
+import { draftScope, useSavedDrafts } from "@/features/issues/create-store";
 import { fetchTriageCount, triageKeys } from "@/features/triage/queries";
 import { gqlRequest } from "@/lib/graphql";
 
@@ -134,15 +135,18 @@ export function useSidebarData(): SidebarQueryResult {
     combine: (results) => results.map((r) => r.data ?? 0),
   });
   const countKey = counts.join(",");
+  const drafts = useSavedDrafts(session ? draftScope(session.user.id, session.workspace.id) : null);
+  const draftsCount = drafts.length;
   const data = useMemo(() => {
     if (!q.data) return undefined;
     const byId = new Map(triageTeams.map((t, i) => [t.id, counts[i] ?? 0]));
     return {
       ...q.data,
+      draftsCount,
       teams: q.data.teams.map((t) => ({ ...t, triageCount: byId.get(t.id) ?? t.triageCount })),
     };
     // `counts` ist über `countKey` stabilisiert.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, countKey]);
+  }, [q.data, countKey, draftsCount]);
   return { data, isLoading: q.isLoading, isError: q.isError };
 }

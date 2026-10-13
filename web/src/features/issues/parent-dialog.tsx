@@ -29,16 +29,22 @@ async function searchParents(term: string, signal?: AbortSignal): Promise<Candid
 }
 
 /**
- * „Set parent issue…“ (Strg ⇧ P, docs/08): Issue per Suche wählen, Parent wechseln oder entfernen.
- * Zyklen und Selbstbezug lehnt der Server ab; der Fehler erscheint als Toast der Aktion.
+ * Suchdialog für ein Parent-Issue: wählen oder (bei vorhandenem Parent) entfernen. `exclude`
+ * blendet das Issue selbst aus. Zyklen und Selbstbezug lehnt der Server beim Speichern ab.
  */
-export function ParentDialog({
-  issue,
-  actions,
+export function ParentSearchDialog({
+  currentParentId,
+  exclude,
+  title = "Set parent issue",
+  description,
+  onChoose,
   onClose,
 }: {
-  issue: Issue;
-  actions: IssueActions;
+  currentParentId: string | null;
+  exclude?: string;
+  title?: string;
+  description?: string;
+  onChoose: (parentId: string | null) => void;
   onClose: () => void;
 }) {
   useShortcutContext("modal");
@@ -48,16 +54,16 @@ export function ParentDialog({
     const t = setTimeout(() => setDebounced(term.trim()), 200);
     return () => clearTimeout(t);
   }, [term]);
-  const current = useIssue(issue.parentId ?? "");
+  const current = useIssue(currentParentId ?? "");
   const results = useQuery({
     queryKey: ["issues", "parent-search", debounced],
     enabled: debounced !== "",
     queryFn: ({ signal }) => searchParents(debounced, signal),
   });
-  const candidates = (results.data ?? []).filter((c) => c.id !== issue.id);
+  const candidates = (results.data ?? []).filter((c) => c.id !== exclude);
 
   const choose = (parentId: string | null) => {
-    actions.setParent(issue, parentId);
+    onChoose(parentId);
     onClose();
   };
 
@@ -65,11 +71,11 @@ export function ParentDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent position="top" className="max-w-md">
         <div className="flex flex-col gap-3 p-4">
-          <DialogTitle className="text-base font-semibold">Set parent issue</DialogTitle>
+          <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
           <DialogDescription className="sr-only">
-            Search for the issue that becomes the parent of {issue.identifier}.
+            {description ?? "Search for the issue that becomes the parent."}
           </DialogDescription>
-          {issue.parentId && (
+          {currentParentId && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-muted-foreground">Current parent:</span>
               <span>{current.data ? `${current.data.identifier} ${current.data.title}` : "…"}</span>
@@ -113,5 +119,26 @@ export function ParentDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** „Set parent issue…“ (Strg ⇧ P, docs/08): Parent des Issues setzen, wechseln oder entfernen. */
+export function ParentDialog({
+  issue,
+  actions,
+  onClose,
+}: {
+  issue: Issue;
+  actions: IssueActions;
+  onClose: () => void;
+}) {
+  return (
+    <ParentSearchDialog
+      currentParentId={issue.parentId}
+      exclude={issue.id}
+      description={`Search for the issue that becomes the parent of ${issue.identifier}.`}
+      onChoose={(id) => actions.setParent(issue, id)}
+      onClose={onClose}
+    />
   );
 }

@@ -257,7 +257,8 @@ export async function batchUpdateIssues(input: IssueBatchVars): Promise<IssueBat
 export interface IssueCreateVars {
   [key: string]: unknown;
   teamId: string;
-  title: string;
+  /** Pflicht, außer ein Template liefert den Titel. */
+  title?: string;
   description?: string;
   stateId?: string;
   assigneeId?: string;
@@ -268,6 +269,9 @@ export interface IssueCreateVars {
   projectId?: string;
   cycleId?: string;
   dueDate?: string;
+  /** Template (UUID); der Server wendet es an (Merge, Platzhalter, Formular). */
+  templateId?: string;
+  formAnswers?: Array<{ fieldId: string; value: string | string[] | number }>;
 }
 
 export async function createIssue(input: IssueCreateVars): Promise<Issue> {
