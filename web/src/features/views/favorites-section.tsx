@@ -20,6 +20,7 @@ import { useMemo, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
+import { useIssue } from "@/features/issues/hooks";
 import type { Favorite } from "@/gql/graphql";
 
 import { computeFavoriteMove } from "./favorites-order";
@@ -74,7 +75,11 @@ export function resolveFavorite(
   }
 }
 
-/** Sortierbare Zeile: Griff zum Ziehen (Maus; Tastatur: Leertaste, Pfeiltasten). */
+/**
+ * Sortierbare Zeile. Die ganze Zeile ist Maus-Ziehfläche (der Link ist `draggable=false`, sonst
+ * übernimmt das native Link-Drag und dnd-kit bekommt `pointercancel`, B4.02); Tastatur über den
+ * Griff (Leertaste, Pfeiltasten), damit Enter/Leertaste auf dem Link weiter navigieren.
+ */
 function SortableRow({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -85,6 +90,7 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
       data-favorite={id}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={isDragging ? "relative z-10 opacity-70" : undefined}
+      onPointerDown={listeners?.onPointerDown}
     >
       <div className="group/fav flex items-center">
         <button
@@ -92,13 +98,56 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
           aria-label={`Reorder favorite ${label}`}
           className="hidden size-4 shrink-0 cursor-grab items-center justify-center text-subtle-foreground group-hover/fav:flex focus-visible:flex"
           {...attributes}
-          {...listeners}
+          onKeyDown={listeners?.onKeyDown}
         >
           <GripVertical className="size-3" />
         </button>
         <div className="min-w-0 flex-1">{children}</div>
       </div>
     </li>
+  );
+}
+
+/** Eine Favoritenzeile; Issue-Favoriten zeigen Kennung und Titel statt der UUID (B4.39). */
+function FavoriteRow({
+  favorite: f,
+  target,
+  ws,
+  onRemove,
+}: {
+  favorite: Favorite;
+  target: FavoriteTarget;
+  ws: string;
+  onRemove: () => void;
+}) {
+  const issue = useIssue(f.type === "issue" ? (f.targetId ?? "") : "");
+  const t: FavoriteTarget = issue.data
+    ? {
+        label: `${issue.data.identifier} ${issue.data.title}`,
+        to: `/${ws}/issue/${issue.data.identifier}`,
+      }
+    : target;
+  return (
+    <SortableRow id={f.id} label={t.label}>
+      <div className="group flex items-center">
+        <Link
+          to={t.to as "/"}
+          draggable={false}
+          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-surface-hover"
+        >
+          <Star className="size-3.5 shrink-0 text-subtle-foreground" aria-hidden />
+          <span className="truncate">{t.label}</span>
+        </Link>
+        <button
+          type="button"
+          aria-label={`Remove favorite ${t.label}`}
+          className="mr-1 hidden size-5 items-center justify-center rounded text-subtle-foreground group-hover:flex hover:text-foreground"
+          onClick={onRemove}
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+    </SortableRow>
   );
 }
 
@@ -139,25 +188,13 @@ export function FavoritesSection({ ws }: { ws: string }) {
     const t = resolveFavorite(f, ws, ctx);
     if (!t) return null;
     return (
-      <SortableRow key={f.id} id={f.id} label={t.label}>
-        <div className="group flex items-center">
-          <Link
-            to={t.to as "/"}
-            className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-surface-hover"
-          >
-            <Star className="size-3.5 shrink-0 text-subtle-foreground" aria-hidden />
-            <span className="truncate">{t.label}</span>
-          </Link>
-          <button
-            type="button"
-            aria-label={`Remove favorite ${t.label}`}
-            className="mr-1 hidden size-5 items-center justify-center rounded text-subtle-foreground group-hover:flex hover:text-foreground"
-            onClick={() => remove.mutate(f.id)}
-          >
-            <X className="size-3" />
-          </button>
-        </div>
-      </SortableRow>
+      <FavoriteRow
+        key={f.id}
+        favorite={f}
+        target={t}
+        ws={ws}
+        onRemove={() => remove.mutate(f.id)}
+      />
     );
   };
 

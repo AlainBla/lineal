@@ -35,8 +35,7 @@ function SnoozeMenu({
   const [customOpen, setCustomOpen] = useState(false);
   const [custom, setCustom] = useState("");
   const customDate = custom ? new Date(custom) : null;
-  const customValid =
-    !!customDate && !Number.isNaN(customDate.getTime()) && customDate.getTime() > Date.now();
+  const customValid = !!customDate && !Number.isNaN(customDate.getTime());
   return (
     <>
       <DropdownMenu open={open} onOpenChange={onOpenChange}>
@@ -56,7 +55,7 @@ function SnoozeMenu({
             className="flex flex-col gap-3 p-4"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!customValid || !customDate) return;
+              if (!customValid || !customDate || customDate.getTime() <= Date.now()) return;
               onPick(customDate);
               setCustomOpen(false);
             }}

@@ -157,6 +157,10 @@ export function useFavorites() {
         )
       ).favorites,
     staleTime: 30_000,
+    // Favoriten haben kein Sync-Event: Änderungen aus anderen Tabs/Geräten kommen per Polling und
+    // beim Zurückkehren zum Tab an (B4.03).
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
   });
 }
 
