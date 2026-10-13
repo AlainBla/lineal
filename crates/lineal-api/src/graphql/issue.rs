@@ -5,7 +5,6 @@ use super::org::gql_err;
 use crate::context::{app, charge_detail_field, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use chrono::{DateTime, NaiveDate, Utc};
-use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
 use lineal_app::usecases::issue::{
     BatchPatch, BatchUpdateInput, CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput,
@@ -491,7 +490,7 @@ impl IssueMutation {
             milestone: input.project_milestone_id,
             parent: input.parent_id,
             sort_order: input.sort_order,
-            source: HistorySource::Api,
+            source: crate::context::history_source(request_ctx(ctx)?),
             ..Default::default()
         };
         let v = match template {
@@ -541,7 +540,7 @@ impl IssueMutation {
                     parent: tri(input.parent_id),
                     sort_order: input.sort_order,
                     move_sub_issues: input.move_sub_issues.unwrap_or(false),
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                     ..Default::default()
                 },
             )
@@ -689,7 +688,7 @@ impl IssueMutation {
                 UpdateIssueInput {
                     id: input.issue_id,
                     relations,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                     ..Default::default()
                 },
             )

@@ -530,6 +530,7 @@ mod tests {
                 key: "other".into(),
                 ct: None,
                 exp: 9_999_999,
+                max: None,
             })
             .unwrap(),
         );
@@ -571,6 +572,7 @@ mod tests {
             key: key.into(),
             ct: Some("text/plain".into()),
             exp: 1,
+            max: None,
         };
         let err = write_upload(&s, &claims("big"), Body::from(vec![0u8; 20]))
             .await
