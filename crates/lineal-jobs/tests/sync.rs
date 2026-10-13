@@ -845,3 +845,82 @@ async fn bootstrap_pages_cover_models_and_resume_after_the_cursor(pool: PgPool) 
         .collect();
     assert!(ids.contains(&live.0) && !ids.contains(&trashed.0));
 }
+
+/// Event aus der Outbox (wie vom Worker) an den Sync-Konsumenten geben.
+async fn drain_outbox_into_sync(e: &Env) {
+    let rows: Vec<(Uuid, String, Value, Option<Uuid>)> = sqlx::query_as(
+        "SELECT event_id, origin, payload, actor_id FROM outbox_event ORDER BY sync_id, event_id",
+    )
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    for (id, origin, payload, actor) in rows {
+        let event: DomainEvent = serde_json::from_value(payload).unwrap();
+        let origin = match origin.as_str() {
+            "system" => EventOrigin::System,
+            "import" => EventOrigin::Import,
+            _ => EventOrigin::User,
+        };
+        let stored = StoredEvent {
+            id: EventId(id),
+            org_id: e.d.org,
+            origin,
+            actor_id: actor.map(UserId),
+            sync_id: 1,
+            event,
+            created_at: Utc::now(),
+        };
+        e.handle(&stored).await;
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn removing_a_team_member_reaches_the_removed_user_via_sync(pool: PgPool) {
+    let e = env(pool).await;
+    // Alice (Owner) entfernt Carol (Gast) aus WEB: Carol bekommt `D TeamMembership` in `user:<id>`.
+    e.app
+        .remove_team_member(&ctx_for(SeedUser::Alice), "WEB", "carol")
+        .await
+        .unwrap();
+    drain_outbox_into_sync(&e).await;
+    let log = e.log().await;
+    let row = log
+        .iter()
+        .find(|r| r.model_name == "TeamMembership" && r.action == "D")
+        .expect("TeamMembership D");
+    assert!(row.groups.contains(&format!("user:{}", e.d.carol.0)));
+    assert_eq!(row.data["teamId"], e.d.web.0.to_string());
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn favorites_sync_only_to_their_owner(pool: PgPool) {
+    let e = env(pool).await;
+    let ctx = ctx_for(SeedUser::Bob);
+    let fav = e
+        .app
+        .create_favorite(
+            &ctx,
+            lineal_app::usecases::view::CreateFavoriteInput {
+                kind: "folder".into(),
+                folder_name: Some("Meine".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    e.app.delete_favorite(&ctx, fav.id).await.unwrap();
+    drain_outbox_into_sync(&e).await;
+    let log: Vec<_> = e
+        .log()
+        .await
+        .into_iter()
+        .filter(|r| r.model_name == "Favorite")
+        .collect();
+    assert_eq!(
+        log.iter().map(|r| r.action.as_str()).collect::<Vec<_>>(),
+        vec!["I", "D"]
+    );
+    for r in &log {
+        assert_eq!(r.groups, vec![format!("user:{}", e.d.bob.0)]);
+    }
+}

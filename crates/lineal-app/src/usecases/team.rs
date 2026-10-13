@@ -330,6 +330,16 @@ async fn ensure_member(
             now,
         })
         .await?;
+    // Der Betroffene erhält die Aktion über seine persönliche Sync-Gruppe (B4.41).
+    tx.outbox()
+        .push(crate::ports::repos::NewEvent::new(
+            DomainEvent::TeamMembershipCreated {
+                team_id: team,
+                user_id: user,
+            },
+            EventOrigin::User,
+        ))
+        .await?;
     Ok(true)
 }
 
@@ -1187,7 +1197,17 @@ impl App {
         }
         let guest = snap.actor.role == UserRole::Guest;
         for t in leave_closure(&snap.tree, team.id, also_leave_parent_teams, guest) {
-            tx.teams().delete_membership(t, me).await?;
+            if tx.teams().delete_membership(t, me).await? {
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::TeamMembershipRemoved {
+                        team_id: t,
+                        user_id: me,
+                    },
+                )
+                .await?;
+            }
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;
@@ -1222,7 +1242,17 @@ impl App {
         }
         let guest = target.role == UserRole::Guest;
         for t in leave_closure(&snap.tree, team.id, false, guest) {
-            tx.teams().delete_membership(t, target.id).await?;
+            if tx.teams().delete_membership(t, target.id).await? {
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::TeamMembershipRemoved {
+                        team_id: t,
+                        user_id: target.id,
+                    },
+                )
+                .await?;
+            }
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         tx.commit().await?;

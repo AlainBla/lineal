@@ -456,7 +456,7 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         "eine Gruppe"
     );
 
-    // gelesen / ungelesen (einzeln)
+    // gelesen / ungelesen (gilt für die ganze Gruppe, docs/05 §6.7)
     let id = list.items[0].view.n.id;
     let read = e
         .app
@@ -482,7 +482,8 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
             .unwrap()
             .items
             .len(),
-        1
+        0,
+        "die ganze Gruppe ist gelesen"
     );
     let back = e
         .app
@@ -497,6 +498,15 @@ async fn inbox_read_snooze_archive_flow(pool: PgPool) {
         .await
         .unwrap();
     assert!(back.view.n.read_at.is_none());
+    assert_eq!(
+        e.app
+            .list_notifications(&ctx, unread_only.clone())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
 
     // Öffnen liest die ganze Gruppe.
     e.app.open_notification(&ctx, id).await.unwrap();
@@ -1454,13 +1464,17 @@ async fn due_reminders_fire_once_per_stage_after_nine_local(pool: PgPool) {
         0
     );
     assert_eq!(e.count(bob).await, 2);
-    let item = &e
+    let items = e
         .app
         .list_notifications(&ctx_for(SeedUser::Bob), Default::default())
         .await
         .unwrap()
-        .items[0];
-    assert!(item.subtitle.contains("is due soon"));
+        .items;
+    let item = &items[0];
+    let mut texts: Vec<&str> = items.iter().map(|i| i.subtitle.as_str()).collect();
+    texts.sort();
+    assert!(texts[0].ends_with("is due tomorrow"), "{texts:?}");
+    assert!(texts[1].ends_with("is overdue"), "{texts:?}");
     assert_eq!(item.view.n.category, "reminders");
     assert!(item.view.n.actor_id.is_none());
 }
@@ -2097,4 +2111,802 @@ async fn read_only_token_cannot_change_inbox_or_subscriptions(pool: PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.kind, lineal_app::ErrorKind::Forbidden);
+}
+
+// --- Paket 6: Bündelung, Dringlichkeit, Freigaben, Gruppen ---
+
+fn assignee_changed(issue: IssueId, d: &SeedData) -> DomainEvent {
+    DomainEvent::IssueUpdated {
+        previous: None,
+        issue_id: issue,
+        team_id: d.eng,
+        changed: vec!["assigneeId".into()],
+        mentioned_user_ids: vec![],
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bundling_keeps_priority_and_does_not_duplicate_types(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    // Issue ist bereits erledigt: der Statuswechsel erzeugt für den Assignee `issueStatusChanged`
+    // (Kategorie statusChanges, kein Priority-Default).
+    let issue = e.issue(e.d.eng, 1, 950, alice, Some(bob), 3).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: None,
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["stateId".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    // Doppelte Zuweisung (Anlage + Zuweisung) erzeugt keinen zweiten gleichen Eintrag.
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    let rows: Vec<(String, bool, Vec<String>)> = sqlx::query_as(
+        "SELECT type, is_priority, bundled_types FROM notification WHERE user_id = $1",
+    )
+    .bind(bob.0)
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "issueAssignedToYou");
+    assert!(
+        rows[0].1,
+        "isPriority darf durch die Bündelung nicht fallen"
+    );
+    assert_eq!(
+        rows[0].2,
+        vec!["issueAssignedToYou", "issueStatusChanged"],
+        "keine doppelten Typen"
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn opposite_events_end_in_the_final_state(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 951, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    sqlx::query("UPDATE issue SET assignee_id = NULL WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: Some(lineal_domain::events::IssuePrevious {
+                assignee_id: Some(bob),
+                ..Default::default()
+            }),
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["assigneeId".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["issueUnassignedFromYou"]);
+}
+
+async fn make_urgent(e: &Env, issue: IssueId) {
+    sqlx::query("UPDATE issue SET priority = 1 WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn urgent_assignment_is_mailed_immediately_unless_disabled(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let urgent = e.issue(e.d.eng, 1, 952, alice, Some(bob), 1).await;
+    make_urgent(&e, urgent).await;
+    e.handle(&e.user_ev(alice, assignee_changed(urgent, &e.d)))
+        .await;
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        1,
+        "Urgent-Zuweisung geht sofort raus"
+    );
+
+    // Normale Zuweisung: 5 Minuten Verzögerung.
+    let normal = e.issue(e.d.eng, 1, 953, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(normal, &e.d)))
+        .await;
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Mit abgeschalteter Sofort-Regel gilt auch Urgent die 5 Minuten.
+    e.app
+        .update_notification_settings(
+            &ctx_for(SeedUser::Bob),
+            NotificationSettingsPatch {
+                email_immediate_urgent: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let urgent2 = e.issue(e.d.eng, 1, 954, alice, Some(bob), 1).await;
+    make_urgent(&e, urgent2).await;
+    e.handle(&e.user_ev(alice, assignee_changed(urgent2, &e.d)))
+        .await;
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(20))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::minutes(6))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn priority_change_bundled_into_assignment_still_mails_immediately(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 955, alice, Some(bob), 1).await;
+    e.handle(&e.user_ev(alice, assignee_changed(issue, &e.d)))
+        .await;
+    make_urgent(&e, issue).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: None,
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["priority".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 1, "gebündelt");
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::seconds(10))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn guest_with_share_is_mentioned_and_notified(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, carol) = (e.d.alice, e.d.carol);
+    let _issue = e.issue(e.d.eng, 1, 956, alice, None, 1).await;
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": true}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let actx = ctx_for(SeedUser::Alice);
+    let input = |body: &str| lineal_app::usecases::comment::CreateCommentInput {
+        parent: Some(lineal_app::usecases::comment::ParentSpec::Issue(
+            "ENG-956".into(),
+        )),
+        reply_to: None,
+        body: body.into(),
+        quoted_text: None,
+    };
+    // Ohne Freigabe: keine Erwähnung.
+    let m = e
+        .app
+        .create_comment(&actx, input("Bitte ansehen @carol"))
+        .await
+        .unwrap();
+    assert!(m.mentioned_user_ids.is_empty());
+    e.app.share_issue(&actx, "ENG-956", "carol").await.unwrap();
+    let m = e
+        .app
+        .create_comment(&actx, input("Jetzt geteilt @carol"))
+        .await
+        .unwrap();
+    assert_eq!(m.mentioned_user_ids, vec![carol]);
+    let comment: CommentId = m.view.comment.id;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![carol],
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(carol).await, vec!["issueCommentMention"]);
+    let cctx = ctx_for(SeedUser::Carol);
+    assert_eq!(
+        e.app
+            .list_notifications(&cctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1,
+        "Inbox zeigt die Notification des geteilten Issues"
+    );
+    let id = e.first_notification(carol).await;
+    e.app.get_notification(&cctx, id).await.unwrap();
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn read_state_applies_to_the_whole_group(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 957, alice, None, 1).await;
+    e.subscribe(issue, bob).await;
+    let c1 = e.comment(issue, alice, None).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: c1,
+            mentioned_user_ids: vec![bob],
+        },
+    ))
+    .await;
+    // Anderer Akteur: wird nicht mit der ersten Notification gebündelt, bleibt aber in derselben Gruppe.
+    let c2 = e.comment(issue, e.d.carol, None).await;
+    e.handle(&e.user_ev(
+        e.d.carol,
+        DomainEvent::CommentCreated {
+            comment_id: c2,
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 2);
+    let ctx = ctx_for(SeedUser::Bob);
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 1);
+    let id = e.first_notification(bob).await;
+    e.app
+        .mark_notification(
+            &ctx,
+            id,
+            MarkNotificationInput {
+                read: Some(true),
+                snoozed_until_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    let unread: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM notification WHERE user_id = $1 AND read_at IS NULL",
+    )
+    .bind(bob.0)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(unread, 0, "gelesen gilt für die ganze Gruppe");
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn notifications_of_deleted_comments_and_trashed_issues_are_hidden_and_not_mailed(
+    pool: PgPool,
+) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let issue = e.issue(e.d.eng, 1, 958, alice, None, 1).await;
+    e.subscribe(issue, bob).await;
+    let comment = e.comment(issue, alice, None).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![bob],
+        },
+    ))
+    .await;
+    let ctx = ctx_for(SeedUser::Bob);
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 1);
+    sqlx::query("UPDATE comment SET deleted_at = now() WHERE id = $1")
+        .bind(comment.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(e.app.unread_notification_count(&ctx).await.unwrap(), 0);
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::minutes(10))
+            .await
+            .unwrap(),
+        0,
+        "keine Mail zu gelöschtem Kommentar"
+    );
+    sqlx::query("UPDATE comment SET deleted_at = NULL WHERE id = $1")
+        .bind(comment.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE issue SET trashed = true WHERE id = $1")
+        .bind(issue.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert!(
+        e.app
+            .list_notifications(&ctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn group_actions_never_reach_other_users_rows(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob, carol) = (e.d.alice, e.d.bob, e.d.carol);
+    let issue = e.issue(e.d.eng, 1, 960, carol, None, 1).await;
+    e.subscribe(issue, alice).await;
+    e.subscribe(issue, bob).await;
+    let comment = e.comment(issue, e.d.carol, None).await;
+    // System-Event: Alice und Bob erhalten je eine Notification in derselben Gruppe (gleicher group_key).
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::System,
+        None,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(alice).await, 1);
+    assert_eq!(e.count(bob).await, 1);
+    let bob_ctx = ctx_for(SeedUser::Bob);
+    let alice_id = e.first_notification(alice).await;
+    // Fremde ID: not_found, nichts verändert.
+    let err = e
+        .app
+        .mark_notification(
+            &bob_ctx,
+            alice_id,
+            MarkNotificationInput {
+                read: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::NotFound);
+    // Eigene Gruppenaktion lässt Alices Zeile unberührt.
+    let bob_id = e.first_notification(bob).await;
+    e.app
+        .mark_notification(
+            &bob_ctx,
+            bob_id,
+            MarkNotificationInput {
+                read: Some(true),
+                snoozed_until_at: Some(Some(e.app.clock.now() + Duration::days(1))),
+            },
+        )
+        .await
+        .unwrap();
+    e.app
+        .archive_notification(&bob_ctx, bob_id, true)
+        .await
+        .unwrap();
+    let (read, snoozed, archived): (bool, bool, bool) = sqlx::query_as(
+        "SELECT read_at IS NOT NULL, snoozed_until_at IS NOT NULL, archived_at IS NOT NULL \
+         FROM notification WHERE user_id = $1",
+    )
+    .bind(alice.0)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(!read && !snoozed && !archived);
+}
+
+// --- Paket 6: Projekt-/Initiativ-Benachrichtigungen ---
+
+impl Env {
+    /// Projekt in ENG; `lead` und Inhalt frei wählbar.
+    async fn project_in_eng(&self, number: i32, lead: Option<UserId>, content: &str) -> Uuid {
+        let project = Uuid::now_v7();
+        let status: Uuid = sqlx::query_scalar("SELECT id FROM project_status LIMIT 1")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id, creator_id, lead_id, content) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        )
+        .bind(project)
+        .bind(self.d.org.0)
+        .bind(format!("Projekt {number}"))
+        .bind(self.d.eng.0)
+        .bind(number)
+        .bind(status)
+        .bind(self.d.alice.0)
+        .bind(lead.map(|l| l.0))
+        .bind(content)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+        )
+        .bind(self.d.org.0)
+        .bind(project)
+        .bind(self.d.eng.0)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        project
+    }
+
+    async fn initiative(&self, number: i32, owner: Option<UserId>, content: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO initiative (id, organization_id, number, name, owner_id, creator_id, content) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(id)
+        .bind(self.d.org.0)
+        .bind(number)
+        .bind(format!("Initiative {number}"))
+        .bind(owner.map(|o| o.0))
+        .bind(self.d.alice.0)
+        .bind(content)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        id
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_lead_and_mentions_are_notified_once_and_only_if_visible(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob, carol) = (e.d.alice, e.d.bob, e.d.carol);
+    // Carol (Gast, nur WEB) als Lead und per @carol erwähnt, ENG-Projekt: nichts für sie.
+    let project = e
+        .project_in_eng(110, Some(bob), "Plan mit @carol und `@alice` im Code")
+        .await;
+    sqlx::query("UPDATE project SET lead_id = $1 WHERE id = $2")
+        .bind(carol.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let created = e.user_ev(
+        alice,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    );
+    e.handle(&created).await;
+    assert_eq!(
+        e.count(carol).await,
+        0,
+        "kein Zugriff auf ENG: keine Notification"
+    );
+    // Lead wechselt auf Bob (Mitglied von ENG): projectAddedAsLead, Alice im Code nicht erwähnt.
+    sqlx::query("UPDATE project SET lead_id = $1, content = 'Plan mit @bob' WHERE id = $2")
+        .bind(bob.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let updated = e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    );
+    e.handle(&updated).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["projectMention"]);
+    assert_eq!(e.count(alice).await, 0);
+    assert_eq!(e.count(carol).await, 0);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_lead_gets_added_as_lead_and_default_update_subscription(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let project = e.project_in_eng(111, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["projectAddedAsLead"]);
+    // Lead-Abo mit Default-Typ erhält den Statusbericht.
+    {
+        let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+        tx.projects()
+            .subscribe(ProjectId(project), bob, e.app.clock.now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let update = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Läuft @bob')")
+        .bind(update)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // Bericht mit Erwähnung von Bob und von Carol (Gast, ENG unsichtbar).
+    sqlx::query("UPDATE project_update SET body = 'Läuft @bob @carol' WHERE id = $1")
+        .bind(update)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdateCreated {
+            update_id: ProjectUpdateId(update),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.kinds(bob).await,
+        vec!["projectAddedAsLead", "projectUpdateMention"]
+    );
+    assert_eq!(
+        e.count(e.d.carol).await,
+        0,
+        "Gast ohne Freigabe bleibt außen vor"
+    );
+    // Ohne Erwähnung: das Lead-Abo selbst liefert projectUpdateCreated.
+    let plain = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Weiter')")
+        .bind(plain)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdateCreated {
+            update_id: ProjectUpdateId(plain),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await.last().unwrap(), "projectUpdateCreated");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn initiative_owner_mentions_and_update_reactions(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let initiative = e.initiative(120, Some(bob), "Ziel: @bob prüft").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["initiativeMention"]);
+    // Gast sieht keine Initiative.
+    let carol_owned = e.initiative(121, Some(e.d.carol), "").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(carol_owned),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(e.d.carol).await, 0);
+
+    // Meilenstein-Beschreibung mit Erwähnung.
+    let project = e.project_in_eng(112, None, "").await;
+    let milestone = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_milestone (id, organization_id, project_id, name, description) VALUES ($1,$2,$3,'M1','Prüfen @bob')")
+        .bind(milestone)
+        .bind(e.d.org.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectMilestoneCreated {
+            milestone_id: MilestoneId(milestone),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.kinds(bob).await,
+        vec!["initiativeMention", "projectMilestoneMention"]
+    );
+
+    // Reaktion auf Statusbericht erreicht dessen Autor.
+    let update = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Stand')")
+        .bind(update)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let reaction = Uuid::now_v7();
+    sqlx::query("INSERT INTO reaction (id, organization_id, emoji, user_id, project_update_id) VALUES ($1,$2,'👍',$3,$4)")
+        .bind(reaction)
+        .bind(e.d.org.0)
+        .bind(alice.0)
+        .bind(update)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ReactionCreated {
+            reaction_id: ReactionId(reaction),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await.last().unwrap(), "projectUpdateReaction");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn subscription_types_and_priority_settings_are_validated(pool: PgPool) {
+    let e = env(pool).await;
+    use lineal_app::ports::repos::notification::ObjectKind;
+    let ctx = ctx_for(SeedUser::Bob);
+    let project = e.project_in_eng(113, None, "").await;
+    let err = e
+        .app
+        .set_notification_subscription(
+            &ctx,
+            SetObjectSubscriptionInput {
+                kind: ObjectKind::Project,
+                target: project,
+                context_view_type: None,
+                types: Some(vec!["bogusType".into()]),
+                include_sub_initiative_updates: None,
+                active: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    // Duplikate der Priority-Kategorien werden normalisiert.
+    let s = e
+        .app
+        .update_notification_settings(
+            &ctx,
+            NotificationSettingsPatch {
+                priority_categories: Some(vec!["mentions".into(), "mentions".into()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.priority_categories, vec!["mentions"]);
+    // Nur-Priority-Mail ohne Kategorien ist ungültig.
+    let err = e
+        .app
+        .update_notification_settings(
+            &ctx,
+            NotificationSettingsPatch {
+                priority_categories: Some(vec![]),
+                email_only_priority: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_update_prompt_is_priority_and_due_text_distinguishes_stages(pool: PgPool) {
+    let e = env(pool).await;
+    let bob = e.d.bob;
+    let project = e.project_in_eng(114, Some(bob), "").await;
+    sqlx::query(
+        "UPDATE \"user\" SET notification_priority_categories = ARRAY['reminders'] WHERE id = $1",
+    )
+    .bind(bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    {
+        let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+        tx.projects()
+            .record_reminder(
+                "project",
+                project,
+                bob,
+                e.app.clock.now(),
+                1,
+                e.app.clock.now(),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let p: bool = sqlx::query_scalar(
+        "SELECT is_priority FROM notification WHERE type = 'projectUpdatePrompt'",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(p);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn self_assigned_lead_is_not_reported_after_later_edits(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let project = e.project_in_eng(130, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        bob,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 0);
+    let initiative = e.initiative(131, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        bob,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeUpdated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 0);
 }

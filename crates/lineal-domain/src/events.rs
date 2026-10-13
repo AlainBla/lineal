@@ -164,6 +164,10 @@ domain_events! {
     CustomViewRemoved { view_id: ViewId },
     /// Triage-Aktion (accept/decline/duplicate/snooze/move) auf einem Issue (WP12).
     IssueTriaged { issue_id: IssueId, team_id: TeamId, action: String },
+    // --- Paket 6 (B4.03): Favoriten sind persönlich; nur an `user_id` zu synchronisieren ---
+    FavoriteCreated { favorite_id: uuid::Uuid, user_id: UserId },
+    FavoriteUpdated { favorite_id: uuid::Uuid, user_id: UserId },
+    FavoriteRemoved { favorite_id: uuid::Uuid, user_id: UserId },
     // --- vom Orchestrator vor Welle 4 ergänzt (Sync des Inbox-Zustands, WP15) ---
     /// Gelesen/ungelesen/gesnoozt geändert; nur an `user_id` zu synchronisieren.
     NotificationUpdated { notification_id: NotificationId, user_id: UserId },

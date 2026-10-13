@@ -22,7 +22,7 @@ use crate::ports::repos::notification::{
 use crate::ports::repos::user::{Page, PageRequest};
 use crate::resolve;
 use chrono::{DateTime, Utc};
-use kinds::{CATEGORIES, channel_default, default_subscription_types, render};
+use kinds::{CATEGORIES, KNOWN_KINDS, channel_default, default_subscription_types, render};
 use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{IssueId, NotificationId, TeamId, UserId};
 use serde_json::{Value, json};
@@ -165,7 +165,13 @@ async fn fetch_visible(
         .ok_or_else(not_found)?;
     let visible = snap.visible_team_ids();
     let ok = match (&view.issue_team_id, view.n.project_id) {
-        (Some(team), _) => visible.contains(team),
+        (Some(team), _) => {
+            visible.contains(team)
+                || match view.n.issue_id {
+                    Some(issue) => tx.documents().issue_shared_with(issue, user).await?,
+                    None => false,
+                }
+        }
         (None, Some(project)) if view.n.target_type == "project" => tx
             .notifications()
             .project_team_ids(project)
@@ -308,21 +314,31 @@ impl App {
                 .snooze_group(user, &view.n.group_key, until, now)
                 .await?;
         }
+        // Gelesen/ungelesen gilt für die ganze Gruppe (docs/05 §6.7/6.8).
+        let mut changed: Vec<NotificationId> = vec![id];
         if let Some(read) = input.read {
-            tx.notifications().set_read(user, id, read, now).await?;
+            changed.extend(
+                tx.notifications()
+                    .set_read(user, id, read, now)
+                    .await?
+                    .into_iter()
+                    .filter(|c| *c != id),
+            );
         }
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let view = fetch_visible(&mut *tx, &snap, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
-        push_notification_event(
-            &mut *tx,
-            ctx,
-            DomainEvent::NotificationUpdated {
-                notification_id: id,
-                user_id: user,
-            },
-        )
-        .await?;
+        for notification_id in changed {
+            push_notification_event(
+                &mut *tx,
+                ctx,
+                DomainEvent::NotificationUpdated {
+                    notification_id,
+                    user_id: user,
+                },
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(to_item(view, &base))
     }
@@ -716,13 +732,10 @@ impl App {
             }
         }
         if let Some(types) = &input.types {
-            let ok = !types.is_empty()
-                && types.iter().all(|t| {
-                    !t.is_empty() && t.len() <= 80 && t.chars().all(|c| c.is_ascii_alphanumeric())
-                });
+            let ok = !types.is_empty() && types.iter().all(|t| KNOWN_KINDS.contains(&t.as_str()));
             if !ok {
                 return Err(AppError::invalid_request(
-                    "`notificationSubscriptionTypes` must be a non-empty list of type names.",
+                    "`notificationSubscriptionTypes` must be a non-empty list of known notification types.",
                 )
                 .with_details(json!({ "field": "notificationSubscriptionTypes" })));
             }
@@ -828,11 +841,15 @@ impl App {
                     .with_details(json!({ "field": "emailFormat" })),
             );
         }
-        if let Some(cats) = &patch.priority_categories
-            && cats.iter().any(|c| !CATEGORIES.contains(&c.as_str()))
-        {
-            return Err(AppError::invalid_request("unknown notification category")
-                .with_details(json!({ "field": "priorityCategories" })));
+        let mut patch = patch;
+        if let Some(cats) = &mut patch.priority_categories {
+            if cats.iter().any(|c| !CATEGORIES.contains(&c.as_str())) {
+                return Err(AppError::invalid_request("unknown notification category")
+                    .with_details(json!({ "field": "priorityCategories" })));
+            }
+            // Duplikate entfallen, die Reihenfolge bleibt (docs/05 §6.9).
+            let mut seen = BTreeSet::new();
+            cats.retain(|c| seen.insert(c.clone()));
         }
         for c in &patch.channels {
             if !CATEGORIES.contains(&c.category.as_str()) || !CHANNELS.contains(&c.channel.as_str())
@@ -860,6 +877,21 @@ impl App {
         }
         let now = self.clock.now();
         let mut tx = self.store.begin(ctx.org_id).await?;
+        // `emailOnlyPriority` braucht mindestens eine Priority-Kategorie (Ergebnis nach dem Patch).
+        let current = settings_in(&mut *tx, user).await?;
+        let only_priority = patch
+            .email_only_priority
+            .unwrap_or(current.email_only_priority);
+        let categories = patch
+            .priority_categories
+            .as_ref()
+            .unwrap_or(&current.priority_categories);
+        if only_priority && categories.is_empty() {
+            return Err(AppError::invalid_request(
+                "`emailOnlyPriority` requires at least one priority category.",
+            )
+            .with_details(json!({ "field": "emailOnlyPriority" })));
+        }
         tx.notifications()
             .update_prefs(
                 user,

@@ -265,11 +265,17 @@ fn clean_body(body: &str) -> AppResult<String> {
 /// Die Erwähnungs-Kandidaten im Text: je `@`-Lauf die Namen von lang nach kurz
 /// (`@bob.` → `bob.`, `bob`).
 fn mention_runs(body: &str) -> Vec<Vec<String>> {
+    // Code ist keine Erwähnung (B6.15).
+    let body = super::issue::mentions::strip_code(body);
     let chars: Vec<char> = body.chars().collect();
     let mut runs = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '@' && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '@')) {
+        if chars[i] == '@'
+            && (i == 0
+                || !(chars[i - 1].is_alphanumeric()
+                    || matches!(chars[i - 1], '@' | '/' | '\\' | '_' | ':' | '.' | '-')))
+        {
             let mut j = i + 1;
             while j < chars.len()
                 && j - i - 1 < 40
@@ -303,6 +309,7 @@ pub(crate) async fn mentioned_users(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     scope: &ParentScope,
+    parent: ParentRef,
     body: &str,
 ) -> AppResult<Vec<UserId>> {
     let runs = mention_runs(body);
@@ -329,7 +336,7 @@ pub(crate) async fn mentioned_users(
         if result.contains(&c.id) {
             continue;
         }
-        if user_can_access(tx, &snap.tree, scope, c.id, c.role).await? {
+        if user_can_access(tx, &snap.tree, scope, parent, c.id, c.role).await? {
             result.push(c.id);
         }
     }
@@ -340,6 +347,7 @@ async fn user_can_access(
     tx: &mut dyn Tx,
     tree: &TeamTree,
     scope: &ParentScope,
+    parent: ParentRef,
     user: UserId,
     role: UserRole,
 ) -> AppResult<bool> {
@@ -349,7 +357,14 @@ async fn user_can_access(
             let memberships = tx.teams().list_memberships_of_user(user).await?;
             let view = crate::policy::ActorView::new(Actor::User { id: user, role }, &memberships);
             let visible = compute_visible_team_ids(&view, tree);
-            Ok(teams.iter().all(|t| visible.contains(t)))
+            if teams.iter().all(|t| visible.contains(t)) {
+                return Ok(true);
+            }
+            // Freigabe (`issue_share`): ein Gast, dem das Issue geteilt wurde, ist erwähnbar.
+            match parent {
+                ParentRef::Issue(issue) => tx.documents().issue_shared_with(issue, user).await,
+                _ => Ok(false),
+            }
         }
     }
 }
@@ -692,7 +707,7 @@ impl App {
             );
         }
 
-        let mentioned = mentioned_users(&mut *tx, &snap, &scope, &body).await?;
+        let mentioned = mentioned_users(&mut *tx, &snap, &scope, parent, &body).await?;
         let now = self.clock.now();
         let author = actor_user(ctx);
         let mut comment = tx
@@ -846,15 +861,17 @@ impl App {
             return Err(AppError::forbidden("Only the author can edit a comment.")
                 .with_details(json!({ "reason": "not_author" })));
         }
-        let previous: BTreeSet<UserId> = mentioned_users(&mut *tx, &snap, &scope, &comment.body)
-            .await?
-            .into_iter()
-            .collect();
-        let mentioned: Vec<UserId> = mentioned_users(&mut *tx, &snap, &scope, &body)
-            .await?
-            .into_iter()
-            .filter(|u| !previous.contains(u))
-            .collect();
+        let previous: BTreeSet<UserId> =
+            mentioned_users(&mut *tx, &snap, &scope, comment.parent, &comment.body)
+                .await?
+                .into_iter()
+                .collect();
+        let mentioned: Vec<UserId> =
+            mentioned_users(&mut *tx, &snap, &scope, comment.parent, &body)
+                .await?
+                .into_iter()
+                .filter(|u| !previous.contains(u))
+                .collect();
         let updated = tx
             .comments()
             .update_body(comment.id, &body, self.clock.now())

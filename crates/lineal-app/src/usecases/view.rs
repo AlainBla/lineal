@@ -1281,6 +1281,15 @@ impl App {
             .await?;
         new.sort_order = lineal_domain::rules::sort_order::between(max, None);
         let fav = tx.views().insert_favorite(&new).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteCreated {
+                favorite_id: fav.id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(fav)
     }
@@ -1326,6 +1335,15 @@ impl App {
             .update_favorite(access.user_id, id, parent, sort_order, self.clock.now())
             .await?
             .ok_or_else(|| not_found(id, "Favorite"))?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteUpdated {
+                favorite_id: id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(saved)
     }
@@ -1340,6 +1358,15 @@ impl App {
             return Err(AppError::not_found("Could not find referenced Favorite.")
                 .with_details(json!({ "reference": id.to_string(), "type": "Favorite" })));
         }
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteRemoved {
+                favorite_id: id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
