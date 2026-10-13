@@ -936,10 +936,20 @@ impl App {
                 "`template` is only valid when creating a document",
             ));
         }
-        let (mut doc, parent, scope) = load_visible(tx, snap, ctx, reference, false).await?;
-        let loaded_updated_at = doc.updated_at;
+        let (doc, parent, scope) = load_visible(tx, snap, ctx, reference, false).await?;
         require_write(snap, ctx, parent, &scope)?;
         require_writable_parent(&scope)?;
+        // Inhaltszeile sperren (gleiche Reihenfolge wie der Raum: erst Inhalt, dann Dokument) und
+        // das Dokument auf frischem Stand neu lesen: sonst gewinnen bei parallelen Schreibern
+        // mehrere dieselbe `expectedVersion`, und Patches werden auf veraltetem Text angewandt.
+        tx.documents().content_state(doc.content_id, true).await?;
+        let mut doc = tx
+            .documents()
+            .get(doc.id)
+            .await?
+            .filter(|d| !d.trashed)
+            .ok_or_else(|| not_found(reference))?;
+        let loaded_updated_at = doc.updated_at;
         if let Some(v) = input.expected_version
             && v != doc.content_version
         {

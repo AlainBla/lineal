@@ -974,3 +974,87 @@ async fn permissions_scopes_and_archived_parents(pool: PgPool) {
     assert_eq!(list(false).await, 0);
     assert_eq!(list(true).await, 1);
 }
+
+/// B2.04: parallele Patches auf verschiedene Absätze gehen nicht verloren, und bei gleicher
+/// `expectedVersion` gewinnt genau ein Aufruf.
+#[sqlx::test(migrations = "./migrations")]
+async fn parallel_patches_and_expected_version_are_atomic(pool: PgPool) {
+    let store = PgStore::new(pool.clone());
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = test_app(Arc::new(store));
+    let alice = ctx_for(SeedUser::Alice);
+    for round in 0..4 {
+        let content = (0..6)
+            .map(|i| format!("Absatz p{i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let d = app
+            .save_document(&alice, in_team("ENG", &format!("Parallel {round}"), &content))
+            .await
+            .unwrap();
+        let id = d.doc.id.to_string();
+        let mut tasks = Vec::new();
+        for i in 0..6 {
+            let app = app.clone();
+            let ctx = alice.clone();
+            let id = id.clone();
+            tasks.push(tokio::spawn(async move {
+                app.save_document(
+                    &ctx,
+                    SaveDocumentInput {
+                        id: Some(id),
+                        patch: Some(vec![PatchOp::Replace {
+                            old_string: format!("p{i}"),
+                            new_string: format!("neu{i}"),
+                            replace_all: None,
+                        }]),
+                        ..Default::default()
+                    },
+                )
+                .await
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap().unwrap();
+        }
+        let got = app.get_document(&alice, &id).await.unwrap();
+        for i in 0..6 {
+            assert!(
+                got.doc.content.contains(&format!("neu{i}")),
+                "Patch {i} verloren in Runde {round}: {}",
+                got.doc.content
+            );
+        }
+
+        // expectedVersion: genau ein Gewinner.
+        let version = got.doc.content_version;
+        let mut tasks = Vec::new();
+        for i in 0..4 {
+            let app = app.clone();
+            let ctx = alice.clone();
+            let id = id.clone();
+            tasks.push(tokio::spawn(async move {
+                app.save_document(
+                    &ctx,
+                    SaveDocumentInput {
+                        id: Some(id),
+                        content: Some(format!("Gewinner {i}")),
+                        expected_version: Some(version),
+                        ..Default::default()
+                    },
+                )
+                .await
+            }));
+        }
+        let mut wins = 0;
+        for t in tasks {
+            match t.await.unwrap() {
+                Ok(_) => wins += 1,
+                Err(e) => assert_eq!(e.kind, ErrorKind::Conflict),
+            }
+        }
+        assert_eq!(wins, 1, "Runde {round}: genau ein Gewinner erwartet");
+    }
+}
