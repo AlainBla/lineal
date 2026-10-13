@@ -1100,3 +1100,91 @@ async fn identical_content_does_not_bump_the_version(pool: PgPool) {
     let history1 = env.app.document_history(&alice, &id, None, 50).await.unwrap();
     assert_eq!(history1.items.len(), history0.items.len());
 }
+
+/// B2.12: ein leerer Titel zusammen mit einem Template übernimmt den Template-Titel.
+#[sqlx::test(migrations = "./migrations")]
+async fn empty_title_with_template_uses_the_template_title(pool: PgPool) {
+    let env = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let tpl = env
+        .app
+        .save_template(
+            &alice,
+            lineal_app::usecases::template::SaveTemplateInput {
+                template_type: Some(lineal_domain::enums::TemplateType::Document),
+                name: Some("Testplan".into()),
+                template_data: Some(serde_json::json!({ "title": "Testplan", "content": "## Scope" })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for title in [Some(String::new()), Some("   ".into()), None] {
+        let d = env
+            .app
+            .save_document(
+                &alice,
+                SaveDocumentInput {
+                    title,
+                    template: Some(tpl.template.id.to_string()),
+                    parent: ParentRefs {
+                        team: Some("ENG".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(d.doc.title, "Testplan");
+    }
+}
+
+/// B2.08: `replace_range` mit vertauschten Ankern nennt die mögliche Ursache.
+#[sqlx::test(migrations = "./migrations")]
+async fn replace_range_with_swapped_anchors_gets_a_hint(pool: PgPool) {
+    let env = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let d = create(
+        &env,
+        SeedUser::Alice,
+        in_team("ENG", "Range", "Alpha\n\nBeta\n\nDelta"),
+    )
+    .await;
+    let err = env
+        .app
+        .save_document(
+            &alice,
+            SaveDocumentInput {
+                id: Some(d.doc.id.to_string()),
+                patch: Some(vec![PatchOp::ReplaceRange {
+                    from: "Delta".into(),
+                    to: "Alpha".into(),
+                    new_string: "x".into(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Conflict);
+    assert!(err.message.contains("swap"), "{}", err.message);
+    // Richtige Reihenfolge funktioniert.
+    let ok = env
+        .app
+        .save_document(
+            &alice,
+            SaveDocumentInput {
+                id: Some(d.doc.id.to_string()),
+                patch: Some(vec![PatchOp::ReplaceRange {
+                    from: "Alpha".into(),
+                    to: "Delta".into(),
+                    new_string: "x\n\n".into(),
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.doc.content, "x\n\nDelta");
+}

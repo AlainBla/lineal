@@ -118,7 +118,8 @@ pub struct HistoryConnection {
 #[derive(InputObject)]
 #[graphql(name = "DocumentCreateInput")]
 pub struct DocumentCreateInput {
-    pub title: String,
+    /// Pflicht, außer bei `templateId` (dann gilt der Template-Titel).
+    pub title: Option<String>,
     pub content: Option<String>,
     pub icon: Option<String>,
     pub color: Option<String>,
@@ -337,7 +338,7 @@ impl DocumentMutation {
             .save_document(
                 request_ctx(ctx)?,
                 SaveDocumentInput {
-                    title: Some(input.title),
+                    title: input.title,
                     content: input.content,
                     icon: input.icon,
                     color: input.color,

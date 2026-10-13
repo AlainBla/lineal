@@ -486,7 +486,10 @@ type DocumentContentHistoryConnection {
 }
 
 input DocumentCreateInput {
-	title: String!
+	"""
+	Pflicht, außer bei `templateId` (dann gilt der Template-Titel).
+	"""
+	title: String
 	content: String
 	icon: String
 	color: String
