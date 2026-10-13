@@ -2455,3 +2455,68 @@ async fn notifications_of_deleted_comments_and_trashed_issues_are_hidden_and_not
             .is_empty()
     );
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn group_actions_never_reach_other_users_rows(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob, carol) = (e.d.alice, e.d.bob, e.d.carol);
+    let issue = e.issue(e.d.eng, 1, 960, carol, None, 1).await;
+    e.subscribe(issue, alice).await;
+    e.subscribe(issue, bob).await;
+    let comment = e.comment(issue, e.d.carol, None).await;
+    // System-Event: Alice und Bob erhalten je eine Notification in derselben Gruppe (gleicher group_key).
+    e.handle(&ev(
+        e.d.org,
+        EventOrigin::System,
+        None,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.count(alice).await, 1);
+    assert_eq!(e.count(bob).await, 1);
+    let bob_ctx = ctx_for(SeedUser::Bob);
+    let alice_id = e.first_notification(alice).await;
+    // Fremde ID: not_found, nichts verändert.
+    let err = e
+        .app
+        .mark_notification(
+            &bob_ctx,
+            alice_id,
+            MarkNotificationInput {
+                read: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::NotFound);
+    // Eigene Gruppenaktion lässt Alices Zeile unberührt.
+    let bob_id = e.first_notification(bob).await;
+    e.app
+        .mark_notification(
+            &bob_ctx,
+            bob_id,
+            MarkNotificationInput {
+                read: Some(true),
+                snoozed_until_at: Some(Some(e.app.clock.now() + Duration::days(1))),
+            },
+        )
+        .await
+        .unwrap();
+    e.app
+        .archive_notification(&bob_ctx, bob_id, true)
+        .await
+        .unwrap();
+    let (read, snoozed, archived): (bool, bool, bool) = sqlx::query_as(
+        "SELECT read_at IS NOT NULL, snoozed_until_at IS NOT NULL, archived_at IS NOT NULL \
+         FROM notification WHERE user_id = $1",
+    )
+    .bind(alice.0)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(!read && !snoozed && !archived);
+}
