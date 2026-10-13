@@ -19,7 +19,22 @@ import {
   TriageSection,
 } from "./team-sections";
 import { RecurringSection, SlaSection, WebhooksSection } from "./team-extra-sections";
-import { Field, Section, SettingsShell } from "./ui";
+import { Field, Section, SettingsShell, selectClass } from "./ui";
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 export const TEAM_SECTIONS = [
   ["general", "General"],
@@ -118,15 +133,20 @@ function WorkspaceForm({ ws }: { ws: Organization }) {
         <Field label="URL">
           <Input aria-label="Workspace URL" value={ws.urlKey} readOnly disabled />
         </Field>
-        <Field label="Fiscal year start (month 1–12)">
-          <Input
+        <Field label="Fiscal year starts in">
+          <select
             aria-label="Fiscal year start"
-            type="number"
-            min={1}
-            max={12}
+            className={selectClass}
             value={month}
-            onChange={(e) => setMonth(Math.min(12, Math.max(1, Number(e.target.value) || 1)))}
-          />
+            onChange={(e) => setMonth(Number(e.target.value))}
+          >
+            {MONTH_NAMES.map((n, i) => (
+              // Die API zählt 0-11 (0 = Januar); die Anzeige nennt den Monat.
+              <option key={n} value={i}>
+                {n}
+              </option>
+            ))}
+          </select>
         </Field>
         <label className="flex items-center gap-2 text-sm">
           <input

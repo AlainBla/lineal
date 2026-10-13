@@ -10,7 +10,7 @@ import {
   TEAM_META,
 } from "@/features/issues/test-fixtures";
 
-import { TeamSettingsPage } from "./settings-pages";
+import { TeamSettingsPage, WorkspaceSettingsPage } from "./settings-pages";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -128,6 +128,36 @@ describe("TeamSettingsPage", () => {
     expect(gql.of("SettingsCyclesUpdate")[0]!.variables).toEqual({
       teamId: "team-eng",
       input: { cycleCooldownTime: 8 },
+    });
+  });
+
+  it("B5.06: fiscal year start is shown by month and saved 0-11", async () => {
+    const gql = mockGraphql({
+      SettingsWorkspace: () => ({
+        workspace: {
+          id: "o1",
+          name: "Acme",
+          urlKey: "acme",
+          fiscalYearStartMonth: 0,
+          initiativesEnabled: true,
+          logoUrl: null,
+        },
+      }),
+      SettingsWorkspaceUpdate: () => ({ workspaceUpdate: { success: true } }),
+    });
+    await renderWithApp(
+      <WorkspaceSettingsPage ws="acme" />,
+      newClient(),
+      "/acme/settings/workspace",
+    );
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText("Fiscal year start");
+    expect(select).toHaveValue("0");
+    await user.selectOptions(select, "December");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("SettingsWorkspaceUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsWorkspaceUpdate")[0]!.variables).toEqual({
+      input: { fiscalYearStartMonth: 11 },
     });
   });
 });

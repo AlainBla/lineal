@@ -35,6 +35,7 @@ import {
   useWorkflowStates,
   useWorkspaceMembers,
 } from "./queries";
+import { estimateLabel } from "./team-config-sections";
 import { TeamAccessSection, TeamDangerZone } from "./team-admin-sections";
 import { normalizeKey, validateKey } from "./team-key";
 import { LabelManager } from "./label-manager";
@@ -185,7 +186,9 @@ export function GeneralSection({ team }: { team: Team }) {
               onChange={(e) => setTimezone(e.target.value)}
             />
           </Field>
-          <p className="text-xs text-muted-foreground">Estimates: {team.issueEstimationType}</p>
+          <p className="text-xs text-muted-foreground">
+            Estimates: {estimateLabel(team.issueEstimationType)}
+          </p>
           <SaveRow
             pending={update.isPending}
             error={confirmKey ? null : update.error}

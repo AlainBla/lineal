@@ -51,6 +51,19 @@ describe("EstimatesSection", () => {
     });
   });
 
+  it("B5.15: switching to Not in use keeps the default estimate", async () => {
+    const gql = mockGraphql(baseHandlers({ defaultIssueEstimate: 1 }));
+    await open("estimates");
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("Estimation scale"), "notUsed");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("SettingsTeamUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsTeamUpdate")[0]!.variables).toEqual({
+      id: "team-eng",
+      input: { issueEstimationType: "notUsed" },
+    });
+  });
+
   it("disables the options for an unused scale", async () => {
     mockGraphql(baseHandlers({ issueEstimationType: "notUsed" }));
     await open("estimates");

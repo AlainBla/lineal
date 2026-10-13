@@ -21,6 +21,10 @@ export const ESTIMATE_SCALES = [
   { value: "tShirt", label: "T-shirt sizes", example: "XS, S, M, L, XL" },
 ] as const;
 
+/** Anzeigename der Schätzskala (statt des rohen Enum-Werts). */
+export const estimateLabel = (type: string) =>
+  ESTIMATE_SCALES.find((s) => s.value === type)?.label ?? type;
+
 const SCALE_VALUES: Record<string, { base: number[]; ext: number[] }> = {
   exponential: { base: [1, 2, 4, 8, 16], ext: [32, 64] },
   fibonacci: { base: [1, 2, 3, 5, 8], ext: [13, 21] },
@@ -67,8 +71,13 @@ export function EstimatesSection({ team }: { team: Team }) {
   const [dflt, setDflt] = useState(team.defaultIssueEstimate);
   const unused = type === "notUsed";
   const options = scaleOptions(type, extended);
-  // Ein Default außerhalb der (neuen) Skala wird beim Speichern auf „No estimate“ zurückgesetzt.
-  const effectiveDefault = options.some((o) => o.value === dflt) ? dflt : 0;
+  // Der Wert gilt für ungeschätzte Issues in Statistiken (docs/02 §2.5, Standard 1). Ohne Skala
+  // bleibt er unverändert; liegt er außerhalb einer neuen Skala, gilt wieder 1 (B5.15).
+  const effectiveDefault = unused
+    ? team.defaultIssueEstimate
+    : options.some((o) => o.value === dflt)
+      ? dflt
+      : 1;
   const dirty =
     type !== team.issueEstimationType ||
     extended !== team.issueEstimationExtended ||
@@ -131,7 +140,7 @@ export function EstimatesSection({ team }: { team: Team }) {
           />
           Allow zero as an estimate
         </label>
-        <Field label="Default estimate for new issues">
+        <Field label="Weight of unestimated issues in statistics">
           <select
             aria-label="Default estimate"
             className={selectClass}
@@ -139,7 +148,7 @@ export function EstimatesSection({ team }: { team: Team }) {
             disabled={inherited || unused}
             onChange={(e) => setDflt(Number(e.target.value))}
           >
-            <option value={0}>No estimate</option>
+            <option value={0}>0 (not counted)</option>
             {options.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
