@@ -42,7 +42,7 @@ impl JobRepo for PgTx {
             "DELETE FROM job WHERE id IN ( \
                SELECT id FROM job \
                WHERE (status = 'done' AND completed_at < $1) \
-                  OR (status = 'failed' AND COALESCE(locked_at, run_at) < $2) \
+                  OR (status = 'failed' AND run_at < $2) \
                LIMIT $3 FOR UPDATE SKIP LOCKED)",
         )
         .bind(done_before)

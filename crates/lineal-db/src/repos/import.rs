@@ -761,6 +761,25 @@ impl ImportRepo for PgTx {
         Ok(())
     }
 
+    async fn extend_team_import_lock(
+        &mut self,
+        team_ids: &[Uuid],
+        until: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE team SET import_locked_until = $3 WHERE id IN ( \
+               SELECT id FROM team WHERE organization_id = $1 AND id = ANY($2) \
+                 AND import_locked_until IS NOT NULL FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(self.org.0)
+        .bind(team_ids)
+        .bind(until)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn set_team_states(
         &mut self,
         team_id: Uuid,

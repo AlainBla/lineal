@@ -566,7 +566,7 @@ async fn heartbeat(
             }
             if !ids.is_empty() {
                 tx.imports()
-                    .set_team_import_lock(&ids, Some(now + team_lock))
+                    .extend_team_import_lock(&ids, now + team_lock)
                     .await?;
             }
             tx.commit().await

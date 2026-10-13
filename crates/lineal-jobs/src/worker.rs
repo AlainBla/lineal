@@ -253,15 +253,31 @@ impl Worker {
             kind.to_owned(),
         );
         tokio::spawn(async move {
+            // Gibt den Namen auch bei einer Panic in `run` frei, sonst liefe der Job in diesem
+            // Prozess nie wieder.
+            let _busy = BusyGuard { busy, name };
             let outcome = job.run(&app, now).await.map_err(|e| (e.to_string(), true));
-            busy.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(name);
+            drop(_busy);
             if let Err(e) = finish_job(&app, id, attempts, &kind, outcome).await {
                 tracing::error!(job = %id, error = %e, "could not record the job result");
             }
         });
         Ok(())
+    }
+}
+
+/// Gibt beim Drop den Namen eines abgekoppelten Jobs wieder frei.
+struct BusyGuard {
+    busy: Arc<Mutex<HashSet<&'static str>>>,
+    name: &'static str,
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(self.name);
     }
 }
 

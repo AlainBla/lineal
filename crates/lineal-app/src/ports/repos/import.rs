@@ -444,6 +444,18 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Wie `set_team_import_lock`, aber ohne zu warten: Teams, deren Zeile gerade von einer anderen
+    /// Transaktion (der laufenden Einheit des Imports) gesperrt ist, werden übersprungen. Für den
+    /// Heartbeat, der nie mit der Einheit verklemmen darf.
+    async fn extend_team_import_lock(
+        &mut self,
+        team_ids: &[Uuid],
+        until: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let _ = (team_ids, until);
+        nyi()
+    }
+
     /// Standardstatus/Triage-/Auto-Close-Status eines Teams setzen (Zirkelreferenz Team/Status).
     async fn set_team_states(
         &mut self,

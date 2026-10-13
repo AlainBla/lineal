@@ -41,7 +41,8 @@ impl PeriodicJob for SlowDetached {
         "slow_detached"
     }
     fn schedule(&self) -> Schedule {
-        Schedule::Every(Duration::from_secs(1))
+        // Ein einziger Slot, unabhängig davon, wann der Test über eine Sekundengrenze läuft.
+        Schedule::Every(Duration::from_secs(3600))
     }
     fn detached(&self) -> bool {
         true
