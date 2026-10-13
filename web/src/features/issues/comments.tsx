@@ -1,14 +1,27 @@
-import { Bell, BellOff, SmilePlus } from "lucide-react";
+import { Bell, BellOff, Check, Pencil, RotateCcw, SmilePlus, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Comment, Issue, IssueHistoryEntry } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
-import { useComments, useCreateComment, useIssueExtras, useReactions } from "./hooks";
+import {
+  useCommentActions,
+  useComments,
+  useCreateComment,
+  useIssueExtras,
+  useReactions,
+} from "./hooks";
 import { Avatar } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { describeHistory, type HistoryResolver } from "./history";
@@ -174,6 +187,94 @@ function CommentComposer({
   );
 }
 
+function EditComment({
+  comment,
+  issueId,
+  users,
+  onDone,
+}: {
+  comment: Comment;
+  issueId: string;
+  users: ReturnType<typeof useKnownUsers>;
+  onDone: () => void;
+}) {
+  const { update } = useCommentActions(issueId);
+  const [body, setBody] = useState(comment.body);
+  const singleFlight = useSingleFlight();
+  const empty = body.trim() === "";
+  const save = () => {
+    if (empty) return;
+    void singleFlight(async () => {
+      try {
+        if (body !== comment.body) await update.mutateAsync({ id: comment.id, body });
+        onDone();
+      } catch (e) {
+        showToast({ message: errorMessage(e, "Could not save comment."), tone: "error" });
+      }
+    });
+  };
+  return (
+    <div className="rounded-lg border border-border-strong p-2.5">
+      <RichEditor
+        value={comment.body}
+        ariaLabel="Edit comment"
+        users={users}
+        autoFocus
+        onChange={setBody}
+        onSubmit={save}
+      />
+      <div className="mt-2 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={save} disabled={empty || update.isPending}>
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function DeleteCommentDialog({
+  comment,
+  issueId,
+  open,
+  onOpenChange,
+}: {
+  comment: Comment;
+  issueId: string;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const { remove } = useCommentActions(issueId);
+  const confirm = () =>
+    remove.mutate(comment.id, {
+      onSuccess: () => onOpenChange(false),
+      onError: (e) =>
+        showToast({ message: errorMessage(e, "Could not delete comment."), tone: "error" }),
+    });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete comment?</DialogTitle>
+          <DialogDescription>
+            This removes the comment. Replies in the thread stay visible.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2 p-4">
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" size="sm" onClick={confirm} disabled={remove.isPending}>
+            Delete
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CommentCard({
   comment,
   replies,
@@ -188,6 +289,13 @@ function CommentCard({
   myReactions: React.MutableRefObject<Map<string, string>>;
 }) {
   const [replying, setReplying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const session = useSession();
+  const { resolve } = useCommentActions(issueId);
+  const isAuthor = !!session && comment.userId === session.user.id;
+  const isAdmin = session?.user.role === "owner" || session?.user.role === "admin";
+  const resolved = !!comment.resolvedAt;
   const author = comment.user?.displayName || comment.user?.name || "Unknown user";
   return (
     <article
@@ -206,8 +314,84 @@ function CommentCard({
           {relativeTime(comment.createdAt)}
         </a>
         {comment.editedAt && <span className="text-xs text-subtle-foreground">(edited)</span>}
+        {resolved && (
+          <span className="rounded-full bg-surface-active px-2 text-xs text-muted-foreground">
+            Resolved
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-0.5">
+          {!comment.parentId && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label={resolved ? "Reopen thread" : "Resolve thread"}
+              title={resolved ? "Reopen thread" : "Resolve thread"}
+              disabled={resolve.isPending}
+              onClick={() =>
+                resolve.mutate(
+                  { id: comment.id, resolve: !resolved },
+                  {
+                    onError: (e) =>
+                      showToast({
+                        message: errorMessage(e, "Could not change the thread."),
+                        tone: "error",
+                      }),
+                  },
+                )
+              }
+            >
+              {resolved ? <RotateCcw className="size-3.5" /> : <Check className="size-3.5" />}
+            </Button>
+          )}
+          {isAuthor && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label="Edit comment"
+              title="Edit comment"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          )}
+          {(isAuthor || isAdmin) && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              aria-label="Delete comment"
+              title="Delete comment"
+              onClick={() => setDeleting(true)}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </span>
       </header>
-      <RichEditor value={comment.body} editable={false} ariaLabel="Comment text" users={users} />
+      {editing ? (
+        <EditComment
+          comment={comment}
+          issueId={issueId}
+          users={users}
+          onDone={() => setEditing(false)}
+        />
+      ) : (
+        <RichEditor
+          key={comment.body}
+          value={comment.body}
+          editable={false}
+          ariaLabel="Comment text"
+          users={users}
+        />
+      )}
+      <DeleteCommentDialog
+        comment={comment}
+        issueId={issueId}
+        open={deleting}
+        onOpenChange={setDeleting}
+      />
       <div className="mt-1">
         <Reactions comment={comment} issueId={issueId} myReactions={myReactions} />
       </div>

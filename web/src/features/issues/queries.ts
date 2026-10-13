@@ -297,6 +297,44 @@ export async function createComment(input: {
   return res.commentCreate.comment;
 }
 
+export async function updateComment(id: string, body: string): Promise<Comment> {
+  const res = await gqlRequest<
+    { commentUpdate: { success: boolean; comment: Comment | null } },
+    { id: string; input: { body: string } }
+  >(
+    `mutation CommentUpdate($id: String!, $input: CommentUpdateInput!) {
+      commentUpdate(id: $id, input: $input) { success comment { ${COMMENT_FIELDS} } }
+    }`,
+    { id, input: { body } },
+  );
+  if (!res.commentUpdate.success || !res.commentUpdate.comment) throw new Error("Update failed");
+  return res.commentUpdate.comment;
+}
+
+export async function deleteComment(id: string): Promise<void> {
+  await gqlRequest<{ commentDelete: { success: boolean } }, { id: string }>(
+    `mutation CommentDelete($id: String!) { commentDelete(id: $id) { success } }`,
+    { id },
+  );
+}
+
+/** Thread auflösen (`resolve = true`) oder wiedereröffnen. */
+export async function setCommentResolved(id: string, resolve: boolean): Promise<Comment> {
+  const op = resolve ? "commentResolve" : "commentUnresolve";
+  const res = await gqlRequest<
+    Record<string, { success: boolean; comment: Comment | null }>,
+    { id: string }
+  >(
+    `mutation CommentResolution($id: String!) {
+      ${op}(id: $id) { success comment { ${COMMENT_FIELDS} } }
+    }`,
+    { id },
+  );
+  const comment = res[op]?.comment;
+  if (!comment) throw new Error("Update failed");
+  return comment;
+}
+
 export async function createReaction(
   commentId: string,
   emoji: string,
