@@ -16,7 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Link } from "@tanstack/react-router";
 import { Folder, GripVertical, Star, X } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
@@ -177,10 +177,27 @@ export function FavoritesSection({ ws }: { ws: string }) {
     }),
     [views.data, session?.teams],
   );
+  const dragEndedAt = useRef(0);
+  const dragActive = useRef(false);
+  // Nach dem Drag löst der Browser ein Click auf dem Link aus; dnd-kit stoppt nur dessen Weitergabe,
+  // die native Link-Navigation liefe weiter. Darum das Click schon in der Capture-Phase entschärfen
+  // (`onDragEnd` kommt zudem erst nach dem Click, also zählt auch ein noch aktiver Drag).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const dragged = dragActive.current || Date.now() - dragEndedAt.current < 400;
+      if (dragged && e.target instanceof Element && e.target.closest("[data-favorite]"))
+        e.preventDefault();
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
   const items = favs.data ?? [];
   if (items.length === 0) return null;
 
+  // Nach einem Drag feuert der Browser ein Click auf dem Link: kurz unterdrücken (B4.02).
   const onDragEnd = (e: DragEndEvent) => {
+    dragActive.current = false;
+    dragEndedAt.current = Date.now();
     if (!e.over) return;
     const m = computeFavoriteMove(items, String(e.active.id), String(e.over.id));
     if (m) move.mutate(m);
@@ -208,7 +225,16 @@ export function FavoritesSection({ ws }: { ws: string }) {
       <h2 className="px-2 pt-4 pb-1 text-xs font-medium text-subtle-foreground select-none">
         Favorites
       </h2>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+        onDragStart={() => (dragActive.current = true)}
+        onDragCancel={() => {
+          dragActive.current = false;
+          dragEndedAt.current = Date.now();
+        }}
+      >
         <SortableContext items={items.map((f) => f.id)} strategy={verticalListSortingStrategy}>
           <ul className="flex flex-col gap-px">
             {top.map((f) =>

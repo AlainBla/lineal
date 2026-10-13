@@ -57,10 +57,10 @@ async function createFavoriteView(page: Page, name: string): Promise<void> {
   ).toBeVisible();
 }
 
-// Paket 4 (B4.02): Favoriten lassen sich per Maus umsortieren.
-test("P4: favorites can be reordered with the mouse and keep the order after reload", async ({
-  page,
-}) => {
+// Paket 4 (B4.02): Favoriten lassen sich per Maus umsortieren. Vorher löste das native Link-Drag
+// pointercancel aus und es ging nie eine Mutation raus; hier genügt der Nachweis, dass favoriteUpdate
+// gesendet wird, die Seite nicht navigiert und die Reihenfolge hält.
+test("P4: dragging a favorite row with the mouse sends favoriteUpdate", async ({ page }) => {
   await login(page, "bob");
   const first = unique("Fav A");
   const second = unique("Fav B");
@@ -73,21 +73,30 @@ test("P4: favorites can be reordered with the mouse and keep the order after rel
   const before = await names();
   expect(before.indexOf(first)).toBeLessThan(before.indexOf(second));
 
-  // B vor A ziehen: Zeile greifen (nicht nur den Griff) und nach oben bewegen.
+  // B vor A ziehen: die Zeile selbst greifen (nicht nur den Griff) und nach oben bewegen.
   const a = await links().filter({ hasText: first }).boundingBox();
   const b = await links().filter({ hasText: second }).boundingBox();
   if (!a || !b) throw new Error("no bounding boxes");
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.mouse.down();
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - 10, { steps: 4 });
-  await page.mouse.move(a.x + a.width / 2, a.y + 2, { steps: 8 });
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2, { steps: 12 });
+  const moved = page.waitForRequest((r) => (r.postData() ?? "").includes("FavoriteMove"), {
+    timeout: 10_000,
+  });
   await page.mouse.up();
-
+  const request = await moved;
+  const vars = (JSON.parse(request.postData() ?? "{}") as { variables: { id: string } }).variables;
+  expect(vars.id).toBeTruthy();
+  // Kein Click-Navigieren nach dem Drag, Reihenfolge bleibt auch nach dem Neuladen.
+  await expect(page).toHaveURL(/\/acme\/views\/issues$/);
   await expect(async () => {
     const after = await names();
     expect(after.indexOf(second)).toBeLessThan(after.indexOf(first));
   }).toPass({ timeout: 10_000 });
   await page.reload();
+  await expect(links().filter({ hasText: first })).toBeVisible();
+  await expect(links().filter({ hasText: second })).toBeVisible();
   const reloaded = await names();
   expect(reloaded.indexOf(second)).toBeLessThan(reloaded.indexOf(first));
 });
