@@ -8,6 +8,7 @@ import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 import { MyIssuesPage } from "./my-issues-page";
 import { TeamIssuesPage } from "./team-issues-page";
 import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./test-fixtures";
+import { Toaster } from "./toaster";
 import { resetKnownUsers } from "./users";
 
 const ISSUES = [
@@ -85,6 +86,40 @@ describe("Team-Issues", () => {
     await userEvent.type(input, "2"); // Todo
     await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
     expect(gql.of("IssueUpdate")[0]!.variables).toEqual({ id: "d", input: { stateId: "s-todo" } });
+  });
+
+  it("Shift+D öffnet in der Liste den Datumsdialog, Shift+E ohne Estimates zeigt einen Hinweis (B4.18)", async () => {
+    const gql = mockGraphql({
+      TeamMeta: () => ({
+        ...meta(),
+        team: { ...TEAM_META.team, issueEstimationType: "notUsed" },
+      }),
+      TeamIssues: () => ({ issues: { nodes: ISSUES, hasNextPage: false, endCursor: null } }),
+      IssueUpdate: (v) => ({
+        issueUpdate: { success: true, issue: { ...ISSUES[2], ...(v.input as object) } },
+      }),
+    });
+    await renderWithApp(
+      <>
+        <TeamIssuesPage ws="acme" teamKey="ENG" view="backlog" />
+        <Toaster />
+      </>,
+    );
+    await screen.findByText("Im Backlog");
+    await userEvent.keyboard("j");
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-issue-id", "d"));
+    await userEvent.keyboard("{Shift>}E{/Shift}");
+    expect(await screen.findByText("Estimates are not enabled for this team.")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Shift>}D{/Shift}");
+    const input = await screen.findByLabelText("Due date");
+    await userEvent.type(input, "2026-12-24");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toEqual({
+      id: "d",
+      input: { dueDate: "2026-12-24" },
+    });
   });
 
   it("zeigt Leerzustand, Fehlerzustand und Ladeskelett", async () => {

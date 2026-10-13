@@ -32,7 +32,7 @@ import type { IssueBatchVars } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
 
-export type BulkKind = PickerKind | "labels-remove" | "delete";
+export type BulkKind = Exclude<PickerKind, "due"> | "labels-remove" | "delete";
 
 const TITLES: Record<Exclude<BulkKind, "delete" | "team">, string> = {
   status: "Change status…",

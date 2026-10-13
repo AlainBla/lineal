@@ -6,8 +6,6 @@ import { useActions } from "@/app/commands";
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
 import { GraphQLRequestError } from "@/lib/graphql";
@@ -16,6 +14,7 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
 
+import { DueDateDialog } from "./due-date-dialog";
 import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
@@ -243,58 +242,6 @@ function TitleField({
         </p>
       )}
     </div>
-  );
-}
-
-function DueDateDialog({
-  open,
-  current,
-  onClose,
-  onSave,
-}: {
-  open: boolean;
-  current: string | null;
-  onClose: () => void;
-  onSave: (d: string | null) => void;
-}) {
-  const [value, setValue] = useState(current ?? "");
-  useShortcutContext("modal", open);
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xs">
-        <form
-          className="flex flex-col gap-3 p-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSave(value || null);
-            onClose();
-          }}
-        >
-          <DialogTitle className="text-base font-semibold">Set due date</DialogTitle>
-          <DialogDescription className="sr-only">Pick a date or clear it.</DialogDescription>
-          <Input
-            type="date"
-            autoFocus
-            aria-label="Due date"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-          />
-          <div className="flex justify-between">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                onSave(null);
-                onClose();
-              }}
-            >
-              Clear
-            </Button>
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
 

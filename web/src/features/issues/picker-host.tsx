@@ -17,19 +17,20 @@ import {
   projectOptions,
   statusOptions,
 } from "./property-options";
+import { DueDateDialog } from "./due-date-dialog";
 import { TeamSwitchDialog } from "./team-switch-dialog";
 import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
 
 export type PickerKind =
-  "status" | "assignee" | "priority" | "labels" | "estimate" | "project" | "cycle" | "team";
+  "status" | "assignee" | "priority" | "labels" | "estimate" | "project" | "cycle" | "team" | "due";
 
 export interface PickerRequest {
   kind: PickerKind;
   issue: Issue;
 }
 
-const TITLES: Record<Exclude<PickerKind, "team">, string> = {
+const TITLES: Record<Exclude<PickerKind, "team" | "due">, string> = {
   status: "Change status…",
   assignee: "Assign to…",
   priority: "Set priority…",
@@ -73,7 +74,12 @@ export function IssuePickerHost({
         : null;
   // Teamdaten nicht ladbar: Fehler statt „No results.“ (B4.27).
   const metaFailed =
-    meta.isError && !!kind && kind !== "team" && kind !== "priority" && kind !== "assignee";
+    meta.isError &&
+    !!kind &&
+    kind !== "team" &&
+    kind !== "priority" &&
+    kind !== "assignee" &&
+    kind !== "due";
   useEffect(() => {
     if (metaFailed) {
       showToast({ message: errorMessage(meta.error, "Could not load the team."), tone: "error" });
@@ -88,6 +94,17 @@ export function IssuePickerHost({
   }, [unavailable, onClose]);
 
   if (!request || !issue || !kind) return null;
+  if (kind === "due") {
+    return (
+      <DueDateDialog
+        key={issue.id}
+        open
+        current={issue.dueDate}
+        onClose={onClose}
+        onSave={(d) => actions.setDueDate(issue, d)}
+      />
+    );
+  }
   if (kind === "team") return <TeamSwitchDialog issue={issue} onClose={onClose} />;
 
   const me = session ? { id: session.user.id, name: session.user.name } : null;

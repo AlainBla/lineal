@@ -102,7 +102,8 @@ export function TeamIssuesPage({
   // Mit Auswahl wirken die Picker-Kürzel (S, A, P, L, …) auf alle markierten Issues.
   const openPicker = useCallback(
     (req: PickerRequest) => {
-      if (selection.size > 0) setBulkRequest(req.kind);
+      // Fälligkeit hat keine Bulk-Aktion: immer für das fokussierte Issue.
+      if (selection.size > 0 && req.kind !== "due") setBulkRequest(req.kind);
       else setRequest(req);
     },
     [selection.size],

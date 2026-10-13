@@ -60,6 +60,18 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
       perform: () => target && actions.assignToMe(target),
     },
   ];
+  // Detailseite hat ⇧D selbst (Dialog im Seitenkopf); in Listen und Board öffnet es den Dialog hier.
+  if (context === "list") {
+    list.push({
+      id: "issue.due-list",
+      title: "Set due date…",
+      section: "Issues",
+      keys: "shift+d",
+      context,
+      enabled,
+      perform: () => run("due"),
+    });
+  }
   useActions(list);
 
   // Alias aus der Aufgabenstellung („E Estimate“); ohne eigenen Command-Eintrag.
