@@ -31,6 +31,7 @@ import {
   type IssueList,
   type IssueUpdateVars,
 } from "./queries";
+import { errorMessage, showToast } from "./toast-store";
 import { commentAuthors, useRememberUsers } from "./users";
 
 export function useTeamIssues(teamRef: string) {
@@ -159,8 +160,11 @@ export function useUpdateIssue() {
       if (patch) patchIssueCaches(qc, id, patch);
       return { snapshot };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       ctx?.snapshot.forEach(([key, data]) => qc.setQueryData(key, data));
+      // Im Hook statt im Aufruf: `mutate`-Callbacks feuern nur für den letzten Aufruf und nur,
+      // solange die Komponente gemountet ist (B4.06).
+      showToast({ message: errorMessage(err, "Could not update issue."), tone: "error" });
     },
     onSuccess: (issue) => {
       patchIssueCaches(qc, issue.id, issue);

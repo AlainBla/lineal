@@ -113,6 +113,15 @@ export function useKnownUsers(): KnownUser[] {
   }, [dir.data, extra.data]);
 }
 
+/** Personen mit Zugriff auf das Team (`users(team:)`): Auswahl für Assignee, nie Nutzer ohne Teamzugang. */
+export function useAssignableUsers(teamId: string | undefined): KnownUser[] {
+  const dir = useDirectoryUsers("", teamId, !!teamId);
+  return useMemo(
+    () => toKnown(dir.data ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+    [dir.data],
+  );
+}
+
 /** @deprecated Kein Modulzustand mehr; bleibt als No-op, damit bestehende Tests kompilieren. */
 export function resetKnownUsers(): void {}
 

@@ -7,8 +7,19 @@ import { getUiState, setUiState } from "@/app/ui-state";
 import { shortcuts } from "@/lib/shortcuts";
 
 import { CreateIssueModal } from "./create-issue-modal";
-import { clearCreatePreset, openCreateIssue } from "./create-store";
-import { makeIssue, mockGraphql, renderWithApp, TEAM_META } from "./test-fixtures";
+import {
+  clearAllCreateDrafts,
+  draftScope,
+  purgeForeignDrafts,
+  saveCreateDraft,
+  clearCreatePreset,
+  consumeCreateReopen,
+  getCreateDraft,
+  markCreateReopen,
+  openCreateIssue,
+  setCreateContext,
+} from "./create-store";
+import { makeIssue, mockGraphql, renderWithApp, SESSION, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
 
@@ -87,6 +98,8 @@ function handlers(onCreate?: (input: Record<string, unknown>) => void) {
   };
 }
 
+const SCOPE = draftScope(SESSION.user.id, SESSION.workspace.id);
+
 beforeEach(() => {
   setUiState({ createIssueOpen: false });
 });
@@ -94,6 +107,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   shortcuts.reset();
   clearCreatePreset();
+  clearAllCreateDrafts();
   clearToasts();
 });
 
@@ -145,7 +159,7 @@ describe("Create-Issue-Modal", () => {
     await userEvent.type(screen.getByLabelText("Description"), "Steps");
 
     await userEvent.click(screen.getByRole("button", { name: /^Priority/ }));
-    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "3"); // High
+    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "2"); // High
     await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
 
     await waitFor(() => expect(created).toHaveLength(1));
@@ -167,7 +181,7 @@ describe("Create-Issue-Modal", () => {
     await screen.findByRole("button", { name: "Status: Backlog" });
     await userEvent.click(screen.getByRole("switch", { name: "Create more" }));
     await userEvent.click(screen.getByRole("button", { name: /^Priority/ }));
-    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "2"); // Urgent
+    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "1"); // Urgent
 
     await userEvent.type(title, "Erster Bug");
     await userEvent.keyboard("{Control>}{Enter}{/Control}");
@@ -214,5 +228,93 @@ describe("Create-Issue-Modal", () => {
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]).toMatchObject({ teamId: "team-des", title: "Icon-Set" });
     expect(created[0]).not.toHaveProperty("stateId");
+  });
+
+  it("Esc mit ungespeichertem Inhalt fragt nach; Discard verwirft, Keep editing behält (B4.26)", async () => {
+    mockGraphql(handlers());
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    await userEvent.type(title, "Halbfertig");
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(getUiState().createIssueOpen).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByLabelText("Issue title")).toHaveValue("Halbfertig");
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
+    expect(getCreateDraft(SCOPE)).toBeNull();
+  });
+
+  it("Esc ohne Inhalt schließt sofort", async () => {
+    mockGraphql(handlers());
+    await openModal();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
+  });
+
+  it("Entwurf übersteht Session-Ablauf: nach dem Login wieder da (B4.11)", async () => {
+    mockGraphql(handlers());
+    const title = await openModal();
+    await userEvent.type(title, "Wichtiger Text");
+    await waitFor(() => expect(getCreateDraft(SCOPE)?.title).toBe("Wichtiger Text"));
+    markCreateReopen(SCOPE);
+    act(() => setUiState({ createIssueOpen: false })); // Shell unmountet beim Redirect
+    expect(consumeCreateReopen(SCOPE)).toBe(true);
+    expect(consumeCreateReopen(SCOPE)).toBe(false);
+    act(() => setUiState({ createIssueOpen: true }));
+    expect(await screen.findByLabelText("Issue title")).toHaveValue("Wichtiger Text");
+  });
+
+  it("Entwürfe sind an Nutzer und Workspace gebunden, Logout löscht alle (Security)", () => {
+    const alice = draftScope("user-alice", "org-1");
+    const bob = draftScope("user-bob", "org-1");
+    const otherWs = draftScope("user-alice", "org-2");
+    saveCreateDraft(alice, { title: "Geheim", description: "privat" });
+    // anderer Nutzer, anderer Workspace: kein fremder Entwurf
+    expect(getCreateDraft(bob)).toBeNull();
+    expect(getCreateDraft(otherWs)).toBeNull();
+    markCreateReopen(alice);
+    expect(consumeCreateReopen(bob)).toBe(false);
+    // Login von Bob: Entwürfe anderer Scopes werden verworfen
+    purgeForeignDrafts(bob);
+    expect(getCreateDraft(alice)).toBeNull();
+    // derselbe Nutzer nach Session-Ablauf: Entwurf bleibt, Wiederöffnen genau einmal
+    saveCreateDraft(alice, { title: "Weiter", description: "" });
+    markCreateReopen(alice);
+    purgeForeignDrafts(alice);
+    expect(consumeCreateReopen(alice)).toBe(true);
+    expect(getCreateDraft(alice)?.title).toBe("Weiter");
+    // Logout: alles weg, auch für denselben Nutzer
+    clearAllCreateDrafts();
+    expect(getCreateDraft(alice)).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+    expect(localStorage.getItem("lineal-create-draft:" + alice)).toBeNull();
+  });
+
+  it("Taste C übernimmt den Seitenkontext (Team/Projekt) (B4.15)", async () => {
+    mockGraphql(handlers());
+    setCreateContext({ teamKey: "DES", projectId: "p-1" });
+    try {
+      await openModal();
+      expect(await screen.findByRole("button", { name: "Team: DES" })).toBeInTheDocument();
+    } finally {
+      setCreateContext(null);
+    }
+  });
+
+  it("Strg+Enter wirkt auch direkt nach der Auswahl im Picker (B4.25)", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql(handlers((i) => created.push(i)));
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    await userEvent.type(title, "Fokus bleibt");
+    await userEvent.click(screen.getByRole("button", { name: /^Priority/ }));
+    await userEvent.type(await screen.findByPlaceholderText("Set priority…"), "1");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ title: "Fokus bleibt", priority: 1 });
   });
 });

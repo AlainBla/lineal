@@ -126,4 +126,11 @@ describe("Issue-Routen in der Shell", () => {
     const router = await renderApp("/acme/my-issues/activity");
     await waitFor(() => expect(router.state.location.pathname).toBe("/acme/my-issues/assigned"));
   });
+
+  it("/acme/issue/ ohne Kennung zeigt eine 404-Seite statt „Something went wrong“ (B4.21)", async () => {
+    install();
+    await renderApp("/acme/issue/");
+    expect(await screen.findByRole("heading", { name: "Issue not found" })).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).toBeNull();
+  });
 });

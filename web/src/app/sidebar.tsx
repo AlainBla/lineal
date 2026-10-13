@@ -281,11 +281,21 @@ function TeamsSection({ ws, data, loading }: { ws: string; data?: SidebarData; l
   );
 }
 
-export function Sidebar({ session, onLogout }: { session: Session; onLogout: () => void }) {
+export function Sidebar({
+  session,
+  onLogout,
+  overlay = false,
+}: {
+  session: Session;
+  onLogout: () => void;
+  /** Schmaler Viewport: Sidebar liegt über dem Inhalt statt daneben. */
+  overlay?: boolean;
+}) {
   const { sidebarOpen } = useUiState();
   const { data, isLoading } = useSidebarData();
   const ws = session.workspace.urlKey;
   const p = workspacePaths(ws);
+  const guest = session.user.role === "guest";
 
   return (
     <motion.aside
@@ -293,7 +303,10 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
       initial={false}
       animate={{ width: sidebarOpen ? SIDEBAR_WIDTH : 0 }}
       transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-      className="shrink-0 overflow-hidden border-r border-border bg-sidebar"
+      className={cn(
+        "shrink-0 overflow-hidden border-r border-border bg-sidebar",
+        overlay && "fixed inset-y-0 left-0 z-40 shadow-popover",
+      )}
       // Eingeklappt: weder fokussierbar noch für Screenreader sichtbar.
       inert={!sidebarOpen}
       aria-hidden={!sidebarOpen}
@@ -356,12 +369,14 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
 
           <SectionLabel>Workspace</SectionLabel>
           <ul className="flex flex-col gap-px">
-            <li>
-              <NavLink to={p.overview}>
-                <LayoutDashboard />
-                Overview
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.overview}>
+                  <LayoutDashboard />
+                  Overview
+                </NavLink>
+              </li>
+            )}
             <li>
               <NavLink to={p.issues}>
                 <Layers />
@@ -374,30 +389,36 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
                 Projects
               </NavLink>
             </li>
-            <li>
-              <NavLink to={p.initiatives}>
-                <Target />
-                Initiatives
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.initiatives}>
+                  <Target />
+                  Initiatives
+                </NavLink>
+              </li>
+            )}
             <li>
               <NavLink to={p.views}>
                 <Layers />
                 Views
               </NavLink>
             </li>
-            <li>
-              <NavLink to={p.workload}>
-                <Gauge />
-                Workload
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to={p.cycles}>
-                <RefreshCw />
-                Cycles
-              </NavLink>
-            </li>
+            {!guest && (
+              <li>
+                <NavLink to={p.workload}>
+                  <Gauge />
+                  Workload
+                </NavLink>
+              </li>
+            )}
+            {!guest && (
+              <li>
+                <NavLink to={p.cycles}>
+                  <RefreshCw />
+                  Cycles
+                </NavLink>
+              </li>
+            )}
           </ul>
 
           <FavoritesSection ws={ws} />

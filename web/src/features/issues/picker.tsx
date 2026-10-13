@@ -19,6 +19,11 @@ export interface PickerOption {
   keywords?: string[];
   /** Rechtsbündiger Hinweis (z. B. „Current“). */
   hint?: string;
+  /**
+   * Ziffer, die diese Option direkt wählt. Hat mindestens eine Option eine Ziffer, gilt nur diese
+   * Zuordnung (Priority: Ziffer = Prioritätswert); sonst zählt die Position (1–9).
+   */
+  digit?: string;
 }
 
 interface PropertyPickerProps {
@@ -74,10 +79,14 @@ function PickerBody({
     if (!multi) onOpenChange(false);
   };
 
+  const explicitDigits = options.some((o) => o.digit !== undefined);
+  const digitOf = (o: PickerOption, i: number): string | undefined =>
+    explicitDigits ? o.digit : i < 9 ? String(i + 1) : undefined;
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (query !== "" || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (/^[1-9]$/.test(e.key)) {
-      const opt = options[Number(e.key) - 1];
+    if (/^[0-9]$/.test(e.key)) {
+      const opt = options.find((o, i) => digitOf(o, i) === e.key);
       if (opt) {
         e.preventDefault();
         pick(opt.id);
@@ -108,7 +117,9 @@ function PickerBody({
             <span className="ml-auto flex items-center gap-2 text-xs text-subtle-foreground">
               {o.hint}
               {chosen.has(o.id) && <Check aria-label="Selected" className="size-3.5" />}
-              {i < 9 && query === "" && <span aria-hidden>{i + 1}</span>}
+              {query === "" && digitOf(o, i) !== undefined && (
+                <span aria-hidden>{digitOf(o, i)}</span>
+              )}
             </span>
           </CommandItem>
         ))}

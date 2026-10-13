@@ -101,6 +101,22 @@ describe("ShortcutRegistry", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("verworfene Sequenz: die zweite Taste feuert kein Einzelkürzel (B4.10)", () => {
+    const open = vi.fn();
+    const priority = vi.fn();
+    reg.register({ id: "o-c", keys: "o c", description: "Open", run: open });
+    reg.register({ id: "p", keys: "p", description: "Priority", run: priority });
+    reg.handleKeyDown(key("o"));
+    expect(reg.handleKeyDown(key("p"))).toBe(true);
+    expect(priority).not.toHaveBeenCalled();
+    // Tasten ohne Kürzel (Tab, Enter) behalten nach abgebrochener Folge ihr Browserverhalten
+    reg.handleKeyDown(key("o"));
+    expect(reg.handleKeyDown(key("Tab"))).toBe(false);
+    // danach funktioniert p wieder normal
+    reg.handleKeyDown(key("p"));
+    expect(priority).toHaveBeenCalledTimes(1);
+  });
+
   it("supports shifted second steps (`g shift+w`)", () => {
     const run = vi.fn();
     reg.register({ id: "ws", keys: "g shift+w", description: "x", run });
