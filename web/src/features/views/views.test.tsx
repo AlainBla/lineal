@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -256,6 +257,36 @@ describe("IssueView mit gespeicherter View (WP31)", () => {
       id: "v-1",
       input: { filterData: { assignee: { isMe: { eq: true } } }, expectedVersion: 3 },
     });
+  });
+
+  it("Save sendet die Basisversion des Entwurfs, nicht die live aktualisierte (B4.04)", async () => {
+    const saved: Array<Record<string, unknown>> = [];
+    mockGraphql(
+      handlers({
+        ViewUpdate: (v) => {
+          saved.push(v);
+          return { customViewUpdate: { success: true } };
+        },
+      }),
+    );
+    const base = view({ and: [{ assignee: { isMe: { eq: true } } }, { priority: { in: [1] } }] });
+    function Live() {
+      const [version, setVersion] = useState(3);
+      return (
+        <>
+          <button onClick={() => setVersion(4)}>live update</button>
+          <IssueView ws="acme" title="My bugs" view={{ ...base, version }} />
+        </>
+      );
+    }
+    await renderWithApp(<Live />, newClient(), "/acme/view/abc");
+    const user = userEvent.setup();
+    await screen.findByText("Issue ENG-1");
+    await user.click(screen.getByRole("button", { name: "Remove filter Priority" }));
+    await user.click(screen.getByRole("button", { name: "live update" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect((saved[0]!.input as Record<string, unknown>).expectedVersion).toBe(3);
   });
 
   it("Chip bearbeiten: Dialog mit vorbelegtem Wert", async () => {
