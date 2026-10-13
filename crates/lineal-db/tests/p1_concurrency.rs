@@ -3,11 +3,15 @@
 //! Erwartung: nie `internal`, Invarianten per SQL geprüft.
 
 use lineal_app::ports::Store;
+use lineal_app::ports::repos::view::ViewModel;
 use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
+use lineal_app::usecases::template::SaveTemplateInput;
+use lineal_app::usecases::view::{CreateViewInput, UpdateViewInput};
 use lineal_app::{App, AppError, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
+use lineal_domain::enums::TemplateType;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -449,5 +453,178 @@ async fn b1_05_initiative_hierarchy_does_not_block_inserts(pool: PgPool) {
             results.push(r.unwrap());
         }
         assert_no_internal("initiative", &results);
+    }
+}
+
+/// B1.06: parallele View-Updates mit disjunkten Feldern verlieren keine Änderung;
+/// `expectedVersion` ist atomar (genau ein Gewinner).
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_06_view_updates_are_not_lost(pool: PgPool) {
+    let fx = setup(pool).await;
+    let upd = |app: Arc<App>,
+               reference: String,
+               f: Box<dyn FnOnce(&mut UpdateViewInput) + Send>| async move {
+        let mut input = UpdateViewInput {
+            reference,
+            ..Default::default()
+        };
+        f(&mut input);
+        app.update_view(&alice(), input).await
+    };
+    for round in 0..ROUNDS {
+        let created = fx
+            .app
+            .create_view(
+                &alice(),
+                CreateViewInput {
+                    name: format!("V{round}"),
+                    description: None,
+                    icon: None,
+                    color: None,
+                    model: ViewModel::Issue,
+                    filter: serde_json::json!({}),
+                    shared: false,
+                    team: None,
+                    project: None,
+                    initiative: None,
+                    preferences: None,
+                },
+            )
+            .await
+            .unwrap();
+        let id = created.view.id.to_string();
+        let mut set = tokio::task::JoinSet::new();
+        set.spawn(upd(
+            fx.app.clone(),
+            id.clone(),
+            Box::new(|i| i.name = Some("Renamed".into())),
+        ));
+        set.spawn(upd(
+            fx.app.clone(),
+            id.clone(),
+            Box::new(|i| i.description = Some(Some("Desc".into()))),
+        ));
+        set.spawn(upd(
+            fx.app.clone(),
+            id.clone(),
+            Box::new(|i| i.color = Some(Some("#112233".into()))),
+        ));
+        set.spawn(upd(
+            fx.app.clone(),
+            id.clone(),
+            Box::new(|i| i.sort_order = Some(42.0)),
+        ));
+        let mut results = Vec::new();
+        while let Some(r) = set.join_next().await {
+            results.push(r.unwrap());
+        }
+        assert_no_internal("view update", &results);
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        let row: (String, Option<String>, Option<String>, f64, i32) = sqlx::query_as(
+            "SELECT name, description, color, sort_order::float8, version FROM custom_view WHERE id = $1::uuid",
+        )
+        .bind(&id)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            (
+                "Renamed".into(),
+                Some("Desc".into()),
+                Some("#112233".into()),
+                42.0,
+                created.view.version + 4
+            ),
+            "round {round}: Update verloren"
+        );
+
+        // Gleiche expectedVersion: genau ein Gewinner.
+        let v = row.4;
+        let mut set = tokio::task::JoinSet::new();
+        for n in 0..3 {
+            set.spawn(upd(
+                fx.app.clone(),
+                id.clone(),
+                Box::new(move |i| {
+                    i.expected_version = Some(v);
+                    i.name = Some(format!("W{n}"));
+                }),
+            ));
+        }
+        let mut results = Vec::new();
+        while let Some(r) = set.join_next().await {
+            results.push(r.unwrap());
+        }
+        assert_no_internal("view expectedVersion", &results);
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        for r in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert_eq!(r.kind, ErrorKind::Conflict);
+        }
+    }
+}
+
+/// B1.06: parallele Template-Updates mit disjunkten Feldern.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_06_template_updates_are_not_lost(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let t = fx
+            .app
+            .save_template(
+                &alice(),
+                SaveTemplateInput {
+                    template_type: Some(TemplateType::Document),
+                    name: Some(format!("T{round}")),
+                    template_data: Some(
+                        serde_json::json!({ "title": "PRD", "content": "## Problem" }),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let id = t.template.id.to_string();
+        let mk = |f: Box<dyn FnOnce(&mut SaveTemplateInput) + Send>| {
+            let app = fx.app.clone();
+            let mut input = SaveTemplateInput {
+                id: Some(id.clone()),
+                ..Default::default()
+            };
+            f(&mut input);
+            async move { app.save_template(&alice(), input).await }
+        };
+        let mut set = tokio::task::JoinSet::new();
+        set.spawn(mk(Box::new(|i| i.name = Some(format!("Renamed{round}")))));
+        set.spawn(mk(Box::new(|i| i.description = Some("Desc".into()))));
+        set.spawn(mk(Box::new(|i| i.color = Some("#112233".into()))));
+        set.spawn(mk(Box::new(|i| i.icon = Some("star".into()))));
+        let mut results = Vec::new();
+        while let Some(r) = set.join_next().await {
+            results.push(r.unwrap());
+        }
+        assert_no_internal("template update", &results);
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        let row: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT name, description, color, icon FROM template WHERE id = $1::uuid",
+        )
+        .bind(&id)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row,
+            (
+                format!("Renamed{round}"),
+                Some("Desc".into()),
+                Some("#112233".into()),
+                Some("star".into())
+            ),
+            "round {round}: Update verloren"
+        );
     }
 }

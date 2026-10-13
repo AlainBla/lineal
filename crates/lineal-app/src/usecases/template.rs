@@ -284,6 +284,14 @@ impl App {
         ctx: &RequestCtx,
         input: SaveTemplateInput,
     ) -> AppResult<TemplateView> {
+        crate::error::with_retry(|| self.save_template_once(ctx, input.clone())).await
+    }
+
+    async fn save_template_once(
+        &self,
+        ctx: &RequestCtx,
+        input: SaveTemplateInput,
+    ) -> AppResult<TemplateView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
@@ -354,7 +362,10 @@ impl App {
                         "type and team cannot be changed after creation",
                     ));
                 }
-                let mut t = load_template(&mut *tx, &snap, reference, None).await?;
+                let found = load_template(&mut *tx, &snap, reference, None).await?;
+                // Serialisieren und frischen Stand lesen (Lost Update bei parallelen Änderungen).
+                tx.advisory_lock("template", Some(found.id.0)).await?;
+                let mut t = load_template(&mut *tx, &snap, &found.id.to_string(), None).await?;
                 // Anpassung eines geerbten Templates durch ein Sub-Team: Kopie mit `inheritedFrom`.
                 if let Some(as_team) = &input.as_team {
                     let sub =
