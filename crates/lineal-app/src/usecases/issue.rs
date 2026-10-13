@@ -439,10 +439,13 @@ impl App {
         ctx: &RequestCtx,
         input: CreateIssueInput,
     ) -> AppResult<IssueView> {
-        let mut tx = self.store.begin(ctx.org_id).await?;
-        let view = self.create_issue_in(&mut *tx, ctx, input).await?;
-        tx.commit().await?;
-        Ok(view)
+        crate::error::with_retry(|| async {
+            let mut tx = self.store.begin(ctx.org_id).await?;
+            let view = self.create_issue_in(&mut *tx, ctx, input.clone()).await?;
+            tx.commit().await?;
+            Ok(view)
+        })
+        .await
     }
 
     /// Wie [`App::create_issue`] in einer vorhandenen Transaktion (z. B. für Templates, Import).
@@ -1447,6 +1450,15 @@ impl App {
 
     /// Legt ein Issue in den Papierkorb (`permanently` = endgültig löschen, nur Admins).
     pub async fn delete_issue(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+        permanently: bool,
+    ) -> AppResult<Issue> {
+        crate::error::with_retry(|| self.delete_issue_once(ctx, reference, permanently)).await
+    }
+
+    async fn delete_issue_once(
         &self,
         ctx: &RequestCtx,
         reference: &str,

@@ -5,6 +5,7 @@
 use lineal_app::ports::Store;
 use lineal_app::ports::repos::label::LabelKind;
 use lineal_app::ports::repos::view::ViewModel;
+use lineal_app::usecases::attachment::LinkAttachmentInput;
 use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
@@ -1047,5 +1048,80 @@ async fn b1_14_parallel_subscribe_is_idempotent(pool: PgPool) {
         .await
         .unwrap();
         assert_eq!(n, 1);
+    }
+}
+
+/// B1.13: Issue endgültig löschen parallel zu Kommentar/Anhang/Sub-Issue: kein internal
+/// (FK-Verletzung wird not_found, Deadlocks werden wiederholt).
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_13_purge_parallel_to_dependent_inserts(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let issue = fx.issue(&format!("Gone{round}")).await;
+        let del = {
+            let app = fx.app.clone();
+            async move {
+                app.delete_issue(&alice(), &issue.to_string(), true)
+                    .await
+                    .map(|_| ())
+            }
+        };
+        let mut others = Vec::new();
+        for n in 0..3 {
+            let app = fx.app.clone();
+            others.push(tokio::spawn(async move {
+                app.create_comment(
+                    &alice(),
+                    CreateCommentInput {
+                        parent: Some(ParentSpec::Issue(issue.to_string())),
+                        body: format!("c{n}"),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ())
+            }));
+            let app = fx.app.clone();
+            others.push(tokio::spawn(async move {
+                app.create_issue(
+                    &alice(),
+                    CreateIssueInput {
+                        team: "ENG".into(),
+                        title: Some(format!("child{n}")),
+                        parent: Some(issue.to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ())
+            }));
+            let app = fx.app.clone();
+            others.push(tokio::spawn(async move {
+                app.link_attachment(
+                    &alice(),
+                    LinkAttachmentInput {
+                        issue: issue.to_string(),
+                        url: format!("https://example.com/{n}"),
+                        title: None,
+                        subtitle: None,
+                        metadata: None,
+                    },
+                )
+                .await
+                .map(|_| ())
+            }));
+        }
+        let d = del.await;
+        let mut results = vec![d];
+        for h in others {
+            results.push(h.await.unwrap());
+        }
+        assert_no_internal("purge", &results);
+        for r in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(
+                matches!(r.kind, ErrorKind::NotFound | ErrorKind::Conflict),
+                "{r:?}"
+            );
+        }
     }
 }

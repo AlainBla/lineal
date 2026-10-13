@@ -71,6 +71,13 @@ pub(crate) async fn wake_snoozed_issue(
     actor: Option<UserId>,
     now: DateTime<Utc>,
 ) -> AppResult<bool> {
+    // Zuerst ohne Sperre lesen: Nur ein tatsächlich gesnoozetes Issue wird gesperrt und
+    // geändert. Eine Zeilensperre bei jedem Kommentar verklemmt sich mit parallelen
+    // Fremdschlüssel-Inserts und mit dem endgültigen Löschen des Issues (B1.01/B1.13).
+    match tx.issues().get(issue_id, false).await? {
+        Some(i) if i.snoozed_until_at.is_some() => {}
+        _ => return Ok(false),
+    }
     let Some(mut issue) = tx.issues().get(issue_id, true).await? else {
         return Ok(false);
     };
