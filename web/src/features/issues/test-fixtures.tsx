@@ -94,6 +94,12 @@ export function makeIssue(over: Partial<Issue> & Pick<Issue, "id" | "identifier"
     trashed: false,
     createdAt: "2026-10-01T10:00:00Z",
     updatedAt: "2026-10-02T10:00:00Z",
+    stateEnteredAt: "2026-10-01T10:00:00Z",
+    snoozedUntilAt: null,
+    startedTriageAt: null,
+    triagedAt: null,
+    linkCount: 0,
+    attachments: [],
     ...over,
   };
 }

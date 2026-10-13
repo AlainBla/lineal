@@ -19,6 +19,7 @@ export const ISSUE_FIELDS = `
   id identifier previousIdentifiers title description priority estimate teamId
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
   labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed createdAt updatedAt
+  stateEnteredAt snoozedUntilAt startedTriageAt linkCount
 `;
 
 const COMMENT_FIELDS = `
@@ -128,8 +129,11 @@ export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Iss
   return res.issue;
 }
 
-/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 4). */
-export type IssueExtras = Pick<Issue, "children" | "relations" | "history" | "subscribed">;
+/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 5). */
+export type IssueExtras = Pick<
+  Issue,
+  "children" | "relations" | "history" | "subscribed" | "attachments"
+>;
 
 const RELATED = "id identifier title";
 const EXTRAS_QUERY = `query IssueExtras($id: String!) {
@@ -142,6 +146,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
       duplicateOf { ${RELATED} } duplicates { ${RELATED} }
     }
     history { id actorId source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
+    attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
   }
 }`;
 
@@ -333,6 +338,27 @@ export async function setCommentResolved(id: string, resolve: boolean): Promise<
   const comment = res[op]?.comment;
   if (!comment) throw new Error("Update failed");
   return comment;
+}
+
+/** Hängt eine hochgeladene Datei (`assetUrl` aus `fileUpload`) als Anhang an das Issue. */
+export async function createAttachment(input: {
+  issueId: string;
+  url: string;
+  title?: string;
+}): Promise<void> {
+  await gqlRequest<{ attachmentCreate: { success: boolean } }, { input: typeof input }>(
+    `mutation AttachmentCreate($input: AttachmentCreateInput!) {
+      attachmentCreate(input: $input) { success }
+    }`,
+    { input },
+  );
+}
+
+export async function deleteAttachment(id: string): Promise<void> {
+  await gqlRequest<{ attachmentDelete: { success: boolean } }, { id: string }>(
+    `mutation AttachmentDelete($id: String!) { attachmentDelete(id: $id) { success } }`,
+    { id },
+  );
 }
 
 export async function createReaction(
