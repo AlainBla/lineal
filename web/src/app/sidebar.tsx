@@ -281,7 +281,16 @@ function TeamsSection({ ws, data, loading }: { ws: string; data?: SidebarData; l
   );
 }
 
-export function Sidebar({ session, onLogout }: { session: Session; onLogout: () => void }) {
+export function Sidebar({
+  session,
+  onLogout,
+  overlay = false,
+}: {
+  session: Session;
+  onLogout: () => void;
+  /** Schmaler Viewport: Sidebar liegt über dem Inhalt statt daneben. */
+  overlay?: boolean;
+}) {
   const { sidebarOpen } = useUiState();
   const { data, isLoading } = useSidebarData();
   const ws = session.workspace.urlKey;
@@ -294,7 +303,10 @@ export function Sidebar({ session, onLogout }: { session: Session; onLogout: () 
       initial={false}
       animate={{ width: sidebarOpen ? SIDEBAR_WIDTH : 0 }}
       transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-      className="shrink-0 overflow-hidden border-r border-border bg-sidebar"
+      className={cn(
+        "shrink-0 overflow-hidden border-r border-border bg-sidebar",
+        overlay && "fixed inset-y-0 left-0 z-40 shadow-popover",
+      )}
       // Eingeklappt: weder fokussierbar noch für Screenreader sichtbar.
       inert={!sidebarOpen}
       aria-hidden={!sidebarOpen}

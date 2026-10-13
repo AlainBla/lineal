@@ -1,4 +1,4 @@
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -9,10 +9,12 @@ import { titleForPath } from "@/app/nav";
 import { ShortcutHelp } from "@/app/shortcut-help";
 import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
+import { setUiState, useUiState } from "@/app/ui-state";
 import { clearAllCreateDrafts } from "@/features/issues/create-store";
 import { IssuesHost } from "@/features/issues/host";
 import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
+import { NARROW_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useSyncStream } from "@/lib/store";
 
 const pageTitle = (pathname: string) => `${titleForPath(pathname)} · Lineal`;
@@ -56,6 +58,15 @@ export function Shell({ session, children }: { session: Session; children: React
     });
   };
 
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const { sidebarOpen } = useUiState();
+  const pathname = useRouterState({ select: (st) => st.location.pathname });
+  // Schmal: Sidebar ist ein Overlay; sie klappt beim Start und nach jeder Navigation ein (B4.28),
+  // ohne die gespeicherte Desktop-Einstellung zu ändern.
+  useEffect(() => {
+    if (narrow) setUiState({ sidebarOpen: false }, { persist: false });
+  }, [narrow, pathname]);
+
   useGlobalActions({
     ws: session.workspace.urlKey,
     onLogout,
@@ -77,7 +88,15 @@ export function Shell({ session, children }: { session: Session; children: React
       >
         Skip to content
       </a>
-      <Sidebar session={session} onLogout={onLogout} />
+      {narrow && sidebarOpen && (
+        <div
+          aria-hidden
+          data-testid="sidebar-scrim"
+          className="fixed inset-0 z-30 bg-scrim"
+          onClick={() => setUiState({ sidebarOpen: false }, { persist: false })}
+        />
+      )}
+      <Sidebar session={session} onLogout={onLogout} overlay={narrow} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">

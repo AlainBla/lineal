@@ -242,6 +242,32 @@ describe("shell", () => {
     expect(router.history.canGoBack()).toBe(false);
   });
 
+  it("Schmaler Viewport: Sidebar startet eingeklappt und öffnet als Overlay mit Scrim (B4.28)", async () => {
+    const user = userEvent.setup();
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: q.includes("max-width"),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      mockFetch(true);
+      await renderApp("/acme/inbox");
+      const aside = await screen.findByLabelText("Sidebar", { selector: "aside" });
+      await waitFor(() => expect(aside).toHaveAttribute("data-open", "false"));
+      expect(localStorage.getItem("lineal-sidebar-open")).not.toBe("false");
+      expect(screen.queryByTestId("sidebar-scrim")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+      expect(await screen.findByTestId("sidebar-scrim")).toBeInTheDocument();
+      expect(aside.className).toContain("fixed");
+      await user.click(screen.getByTestId("sidebar-scrim"));
+      await waitFor(() => expect(screen.queryByTestId("sidebar-scrim")).toBeNull());
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("navigates with key sequences (g i, g m)", async () => {
     const user = userEvent.setup();
     mockFetch(true);

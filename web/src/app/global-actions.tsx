@@ -115,7 +115,7 @@ export function buildGlobalActions(args: {
       section: "Interface",
       keys: "[",
       icon: PanelLeft,
-      perform: toggleSidebar,
+      perform: () => toggleSidebar(),
     },
     {
       id: "ui.details",
