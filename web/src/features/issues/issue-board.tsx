@@ -19,6 +19,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
+import { useShortcuts } from "@/lib/shortcuts";
 
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
@@ -170,6 +171,39 @@ export function IssueBoard({
   selection,
 }: BoardProps) {
   const [dragging, setDragging] = useState<Issue | null>(null);
+  // Canceled/Duplicate stehen unter „Hidden columns“ (docs/08 F5), standardmäßig eingeklappt.
+  const [showHidden, setShowHidden] = useState(false);
+  const isHiddenType = (c: BoardColumn) =>
+    c.state.type === "canceled" || c.state.type === "duplicate";
+  const hiddenColumns = columns.filter(isHiddenType);
+  const shownColumns = showHidden ? columns : columns.filter((c) => !isHiddenType(c));
+
+  // Strg+←/→: fokussierte Karte eine Spalte weiter verschieben (B4.19).
+  const moveFocused = (delta: 1 | -1) => {
+    if (!focusedId) return false as const;
+    const at = shownColumns.findIndex((c) => c.issues.some((i) => i.id === focusedId));
+    const target = shownColumns[at + delta];
+    if (at < 0 || !target) return false as const;
+    const result = applyDrop(columns, focusedId, COLUMN_PREFIX + target.state.id);
+    const issue = columns.flatMap((c) => c.issues).find((i) => i.id === focusedId);
+    if (result.patch && issue) onDrop({ ...result, issue });
+  };
+  useShortcuts([
+    {
+      id: "board.move-right",
+      keys: "mod+arrowright",
+      context: "list",
+      description: "Move card to next column",
+      run: () => moveFocused(1),
+    },
+    {
+      id: "board.move-left",
+      keys: "mod+arrowleft",
+      context: "list",
+      description: "Move card to previous column",
+      run: () => moveFocused(-1),
+    },
+  ]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, {
@@ -197,7 +231,7 @@ export function IssueBoard({
       onDragCancel={() => setDragging(null)}
     >
       <div className="flex h-full items-start gap-3 overflow-x-auto p-4">
-        {columns.map((c) => (
+        {shownColumns.map((c) => (
           <Column
             key={c.state.id}
             column={c}
@@ -209,6 +243,18 @@ export function IssueBoard({
             selection={selection}
           />
         ))}
+        {hiddenColumns.length > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            aria-expanded={showHidden}
+            onClick={() => setShowHidden((v) => !v)}
+          >
+            {showHidden ? "Hide" : "Hidden columns"} (
+            {hiddenColumns.reduce((n, c) => n + c.issues.length, 0)})
+          </Button>
+        )}
       </div>
       <DragOverlay>
         {dragging && (

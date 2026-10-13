@@ -65,6 +65,9 @@ describe("Team-Issues", () => {
     }
     expect(within(list).getByRole("region", { name: "Done" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Board layout" }));
+    await screen.findByRole("region", { name: "Todo" });
+    expect(screen.queryByRole("region", { name: "Canceled" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Hidden columns/ }));
     expect(await screen.findByRole("region", { name: "Canceled" })).toBeInTheDocument();
     expect(localStorage.getItem("lineal-issues-layout:ENG:all")).toBe("board");
   });
@@ -119,6 +122,26 @@ describe("Team-Issues", () => {
     expect(gql.of("IssueUpdate")[0]!.variables).toEqual({
       id: "d",
       input: { dueDate: "2026-12-24" },
+    });
+  });
+
+  it("Board: Strg+Pfeil rechts verschiebt die fokussierte Karte in die nächste Spalte (B4.19)", async () => {
+    const gql = mockGraphql({
+      TeamMeta: meta,
+      TeamIssues: () => ({ issues: { nodes: ISSUES, hasNextPage: false, endCursor: null } }),
+      IssueUpdate: (v) => ({
+        issueUpdate: { success: true, issue: { ...ISSUES[0], ...(v.input as object) } },
+      }),
+    });
+    await renderWithApp(<TeamIssuesPage ws="acme" teamKey="ENG" view="active" />);
+    await screen.findByText("Erstes");
+    await userEvent.keyboard("j");
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-issue-id", "a"));
+    await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({
+      id: "a",
+      input: { stateId: "s-progress" },
     });
   });
 
