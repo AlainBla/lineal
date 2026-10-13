@@ -27,8 +27,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     MIGRATOR.run(pool).await
 }
 
-/// Bildet einen sqlx-Fehler auf `AppError::internal` ab (Details nur im Log).
+/// Bildet einen sqlx-Fehler zentral auf einen `AppError` ab (siehe [`store::map_db_error`]).
 pub(crate) fn db_err(e: sqlx::Error) -> AppError {
-    tracing::error!(error = %e, "database error");
-    AppError::internal("database error")
+    store::map_db_error(&e)
 }

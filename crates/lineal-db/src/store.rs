@@ -2,12 +2,44 @@
 
 use crate::db_err;
 use async_trait::async_trait;
-use lineal_app::AppResult;
 use lineal_app::ports::repos::*;
 use lineal_app::ports::{Store, Tx};
+use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::OrgId;
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
+
+/// Wiederholt eine komplette Transaktion bei Deadlock (40P01) bzw. Serialisierungsfehler (40001);
+/// siehe [`lineal_app::error::with_retry`].
+pub use lineal_app::error::with_retry;
+
+/// Zentrale Fehlerabbildung für Datenbankfehler:
+/// - 40P01 (Deadlock) und 40001 (Serialisierung): `conflict` mit `details.retryable = true`
+///   (wird von [`with_retry`] wiederholt; nach erschöpften Versuchen so gemeldet, nie `internal`);
+/// - 23503 (Fremdschlüssel): `not_found`, wenn das referenzierte Objekt fehlt bzw. inzwischen
+///   gelöscht wurde, `conflict`, wenn der Datensatz noch referenziert wird;
+/// - 23505 (Unique) und 23P01 (Exclusion): `conflict`;
+/// - alles andere: `internal` (Details nur im Log).
+pub fn map_db_error(e: &sqlx::Error) -> AppError {
+    let db = e.as_database_error();
+    match db.and_then(|d| d.code()).as_deref() {
+        Some(code @ ("40P01" | "40001")) => AppError::retryable_conflict(code),
+        Some("23503") => {
+            let msg = db.map(|d| d.message()).unwrap_or_default();
+            if msg.contains("update or delete on table") {
+                AppError::conflict("The object is still referenced by other objects.")
+            } else {
+                AppError::not_found("A referenced object does not exist (anymore).")
+            }
+        }
+        Some("23505") => AppError::conflict("An object with these values already exists."),
+        Some("23P01") => AppError::conflict("The change conflicts with an existing object."),
+        _ => {
+            tracing::error!(error = %e, "database error");
+            AppError::internal("database error")
+        }
+    }
+}
 
 /// Postgres-Implementierung von [`Store`].
 #[derive(Clone)]
