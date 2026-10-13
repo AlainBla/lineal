@@ -10,10 +10,12 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use lineal_app::ports::repos::user::{PageCursor, PageRequest};
 use lineal_app::ports::{Clock, IdGen, Store};
-use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput, ExistingActiveIssues};
+use lineal_app::usecases::cycle::{
+    CycleKind, CycleSettingsInput, ExistingActiveIssues, UpdateCycleInput,
+};
 use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
 use lineal_app::usecases::initiative::{ListInitiativesInput, SaveInitiativeInput};
-use lineal_app::usecases::issue::CreateIssueInput;
+use lineal_app::usecases::issue::{CreateIssueInput, UpdateIssueInput};
 use lineal_app::usecases::project::milestone::SaveMilestoneInput;
 use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpts};
 use lineal_app::usecases::team::{CreateTeamInput, UpdateTeamInput};
@@ -586,4 +588,145 @@ async fn b5_11_projects_are_paginated_by_cursor(pool: PgPool) {
     }
     assert_eq!(seen.len(), 6, "5 neue plus Seed-Projekt");
     assert_eq!(pages, 3);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_16_22_23_cycle_update_validation(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let c3 = seed_cycle_id(3).to_string();
+    let upd = |name: Option<Option<String>>| UpdateCycleInput {
+        id: c3.clone(),
+        name,
+        description: None,
+        starts_at: None,
+        ends_at: None,
+    };
+    // Leerer Name = zurücksetzen.
+    let v = app
+        .update_cycle(&alice, upd(Some(Some("Sprint".into()))))
+        .await
+        .unwrap();
+    assert_eq!(v.cycle.name.as_deref(), Some("Sprint"));
+    let v = app
+        .update_cycle(&alice, upd(Some(Some("  ".into()))))
+        .await
+        .unwrap();
+    assert_eq!(v.cycle.name, None);
+    for bad in ["x".repeat(256), "Sprint 2147483647".to_string()] {
+        let e = app
+            .update_cycle(&alice, upd(Some(Some(bad))))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::InvalidRequest);
+        assert_eq!(e.details["field"], "name");
+    }
+    // Mindestdauer ein Tag.
+    let e = app
+        .update_cycle(
+            &alice,
+            UpdateCycleInput {
+                ends_at: Some(utc(2026, 10, 18, 22, 0) + chrono::Duration::hours(11)),
+                starts_at: Some(utc(2026, 10, 19, 0, 0)),
+                ..upd(None)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_27_28_backlog_to_future_cycle_and_done_into_previous(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let issue = app
+        .create_issue(
+            &alice,
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Spaeter".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(issue.issue.state_type.as_str(), "backlog");
+    let v = app
+        .update_issue(
+            &alice,
+            UpdateIssueInput {
+                id: issue.issue.identifier.clone(),
+                cycle: Some(Some("3".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(v.issue.state_type.as_str(), "unstarted");
+    // Erledigtes Issue darf in den zuletzt abgeschlossenen Cycle (Nr. 1).
+    let done = app
+        .create_issue(
+            &alice,
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Vergessen".into()),
+                state: Some("Done".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let v = app
+        .update_issue(
+            &alice,
+            UpdateIssueInput {
+                id: done.issue.identifier.clone(),
+                cycle: Some(Some("1".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(v.issue.cycle_id, Some(seed_cycle_id(1)));
+    // Ein offenes Issue nicht.
+    let e = app
+        .update_issue(
+            &alice,
+            UpdateIssueInput {
+                id: issue.issue.identifier.clone(),
+                cycle: Some(Some("1".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_29_activation_with_old_start_date_ends_with_an_active_cycle(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    app.configure_team_cycles(
+        &alice,
+        "WEB",
+        CycleSettingsInput {
+            cycles_enabled: Some(true),
+            duration: Some(1),
+            cooldown: Some(0),
+            start_day: Some(1),
+            upcoming_count: Some(2),
+            first_start_date: Some(date(2015, 1, 5)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (_, current) = app
+        .list_cycles(&alice, "WEB", Some(CycleKind::Current))
+        .await
+        .unwrap();
+    assert_eq!(current.len(), 1, "ein aktiver Cycle sofort nach Aktivierung");
+    let _ = (data, pool);
 }

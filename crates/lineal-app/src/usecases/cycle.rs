@@ -26,6 +26,8 @@ use std::collections::{BTreeMap, HashSet};
 
 /// Obergrenze für `cycleShiftAll` (Tage, je Richtung).
 const MAX_SHIFT_DAYS: i64 = 3660;
+/// Größte Cycle-Nummer, die ein Name festlegen darf.
+const MAX_CYCLE_NUMBER: i32 = 1_000_000;
 
 /// `type`-Filter von `list_cycles`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +155,25 @@ async fn build_views(
     let mut members: Option<usize> = None;
     for c in selection {
         let rows = tx.cycles().issue_rows(c.id).await?;
-        let scope = ProjectScope::from_rows(&rows);
+        let mut scope = ProjectScope::from_rows(&rows);
+        if c.is_past() {
+            // Abgeschlossen: alle Kennzahlen aus dem eingefrorenen Stand (docs/04 §1.9).
+            if let Some(v) = c.scope_history.last() {
+                scope.scope = *v;
+            }
+            if let Some(v) = c.completed_scope_history.last() {
+                scope.completed_scope = *v;
+            }
+            if let Some(v) = c.in_progress_scope_history.last() {
+                scope.in_progress_scope = *v;
+            }
+            if let Some(v) = c.issue_count_history.last() {
+                scope.issue_count = *v as i64;
+            }
+            if let Some(v) = c.completed_issue_count_history.last() {
+                scope.completed_issue_count = *v as i64;
+            }
+        }
         let (is_active, is_past, is_future, is_next, is_previous) = flags(cycles, c, now);
         let capacity = if c.is_past() {
             None
@@ -219,6 +239,19 @@ pub async fn auto_cycle_for_state(
         StateType::Completed if team.cycle_issue_auto_assign_completed => active.or(prev),
         _ => None,
     })
+}
+
+/// Der zuletzt abgeschlossene Cycle des Teams (`isPrevious`).
+pub async fn previous_cycle_id(
+    tx: &mut dyn Tx,
+    team: TeamId,
+) -> AppResult<Option<lineal_domain::ids::CycleId>> {
+    let cycles = tx.cycles().list_for_team(team, false).await?;
+    Ok(cycles
+        .iter()
+        .filter(|c| c.is_past())
+        .max_by_key(|c| c.ends_at)
+        .map(|c| c.id))
 }
 
 impl App {
@@ -444,12 +477,31 @@ impl App {
         {
             return Err(invalid("endsAt", "Completed cycles cannot be rescheduled."));
         }
-        if input.name.is_some() || input.description.is_some() {
+        // Name: leer = zurücksetzen (null), sonst 1-255 Zeichen; Zahlen am Ende begrenzt (B5.16, B5.23).
+        let name_patch: Option<Option<String>> = match &input.name {
+            Some(Some(n)) if n.trim().is_empty() => Some(None),
+            Some(Some(n)) => {
+                let n = n.trim().to_owned();
+                if n.chars().count() > 255 {
+                    return Err(invalid(
+                        "name",
+                        "The name must have at most 255 characters.",
+                    ));
+                }
+                let run = n.chars().rev().take_while(char::is_ascii_digit).count();
+                if run > 0 && trailing_number(&n).is_none_or(|v| v > MAX_CYCLE_NUMBER) {
+                    return Err(invalid("name", "Cycle number out of range."));
+                }
+                Some(Some(n))
+            }
+            other => other.clone(),
+        };
+        if name_patch.is_some() || input.description.is_some() {
             tx.cycles()
-                .update_meta(c.id, input.name.clone(), input.description.clone(), now)
+                .update_meta(c.id, name_patch.clone(), input.description.clone(), now)
                 .await?;
         }
-        if let Some(Some(name)) = &input.name {
+        if let Some(Some(name)) = &name_patch {
             renumber_after_rename(&mut *tx, &c, name, now).await?;
         }
         if input.starts_at.is_some() || input.ends_at.is_some() {
@@ -470,6 +522,9 @@ impl App {
             }
             if new_start < now && input.starts_at.is_some() {
                 return Err(invalid("startsAt", "The start must not be in the past."));
+            }
+            if new_end - new_start < Duration::hours(23) {
+                return Err(invalid("endsAt", "A cycle must last at least one day."));
             }
             if new_end <= now || new_end <= new_start {
                 return Err(invalid(

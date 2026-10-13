@@ -533,10 +533,30 @@ pub async fn apply_planning(
     match &change.cycle {
         Some(None) => issue.cycle_id = None,
         Some(Some(r)) => {
-            let c = resolve_cycle(tx, team.id, r).await?;
+            let c = match resolve_cycle(tx, team.id, r).await {
+                Ok(c) => c,
+                // Zuletzt abgeschlossener Cycle: nur für erledigte/abgebrochene Issues
+                // (nachträgliche Zurechnung, docs/04 §1.6).
+                Err(e)
+                    if e.details["reason"] == "cycle_completed"
+                        && matches!(
+                            issue.state_type,
+                            StateType::Completed | StateType::Canceled
+                        ) =>
+                {
+                    let found = tx.issues().find_cycles(team.id, r).await?;
+                    let previous = crate::usecases::cycle::previous_cycle_id(tx, team.id).await?;
+                    match found.into_iter().next() {
+                        Some(c) if Some(c.id) == previous => c,
+                        _ => return Err(e),
+                    }
+                }
+                Err(e) => return Err(e),
+            };
             issue.cycle_id = Some(c.id);
-            let active = c.starts_at <= now && now < c.ends_at;
-            if active
+            // Backlog-Issue in einem aktiven oder künftigen Cycle: Wechsel nach Todo (docs/04 §1.6).
+            let assignable = c.completed_at.is_none();
+            if assignable
                 && !state_set_explicitly
                 && issue.state_type == StateType::Backlog
                 && let Some(s) = first_state_of(tx, team.id, StateType::Unstarted).await?

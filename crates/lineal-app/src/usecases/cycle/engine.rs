@@ -22,6 +22,9 @@ use lineal_domain::rules::cycle_calendar::{
 use lineal_domain::rules::progress::stats;
 use std::collections::HashSet;
 
+/// Obergrenze der Cycles, die ein einzelner Generatorlauf anlegt.
+const MAX_GENERATED_CYCLES: usize = 3000;
+
 /// Issue eines gelöschten eigenen Cycles samt dessen Zeitfenster.
 type StrayIssue = (lineal_domain::ids::IssueId, (DateTime<Utc>, DateTime<Utc>));
 
@@ -337,8 +340,16 @@ pub async fn ensure_upcoming(
         .count();
     let mut last = all.iter().max_by_key(|c| c.starts_at).cloned();
     let mut guard = 0;
-    while future_count < up && guard < 400 {
+    while future_count < up {
         guard += 1;
+        // Startdatum weit in der Vergangenheit: lieber ehrlich ablehnen als einen halben Zustand
+        // ohne aktiven Cycle zu hinterlassen (B5.29).
+        if guard > MAX_GENERATED_CYCLES {
+            return Err(AppError::invalid_request(
+                "The first cycle start date is too far in the past for this schedule.",
+            )
+            .with_details(serde_json::json!({ "field": "firstCycleStartDate" })));
+        }
         let window = match &last {
             Some(l) => generate_following(&settings, tz, utc_to_local_date(l.ends_at, tz), 1)?,
             None => {
