@@ -89,6 +89,17 @@ fn model(model: &'static str, id: Uuid, op: Op) -> Vec<Plan> {
     }]
 }
 
+/// Favoriten sind persönlich: die Aktion geht nur an die Gruppe des Besitzers.
+fn favorite_plan(id: Uuid, user: UserId, action: &'static str) -> Vec<Plan> {
+    vec![Plan::Direct {
+        model: "Favorite",
+        id,
+        action,
+        data: json!({ "id": id }),
+        groups: vec![user_group(user.0)],
+    }]
+}
+
 /// Abbildung Event → Sync-Plan. Unbekannte/irrelevante Events (API-Keys, OAuth) → leer.
 fn plan(ev: &StoredEvent) -> Vec<Plan> {
     use DomainEvent as E;
@@ -282,6 +293,18 @@ fn plan(ev: &StoredEvent) -> Vec<Plan> {
                 changed: vec![],
             },
         ],
+        E::FavoriteCreated {
+            favorite_id,
+            user_id,
+        } => favorite_plan(*favorite_id, *user_id, "I"),
+        E::FavoriteUpdated {
+            favorite_id,
+            user_id,
+        } => favorite_plan(*favorite_id, *user_id, "U"),
+        E::FavoriteRemoved {
+            favorite_id,
+            user_id,
+        } => favorite_plan(*favorite_id, *user_id, "D"),
         E::IssueSubscriptionCreated { issue_id, user_id } => vec![Plan::Direct {
             model: "IssueSubscription",
             id: issue_id.0,
