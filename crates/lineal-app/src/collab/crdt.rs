@@ -94,7 +94,14 @@ pub fn sanitized_markdown_of(doc: &Doc) -> String {
 /// Eingaben (B2.01).
 pub fn state_matches_markdown(doc: &Doc, markdown: &str) -> bool {
     let current = sanitized_markdown_of(doc);
-    current == markdown || current == sanitized_markdown_of(&doc_from_markdown(markdown))
+    current == markdown || current == canonical_markdown(markdown)
+}
+
+/// Kanonische Form eines Markdowns: so, wie es der Raum nach dem Laden wieder ausgäbe.
+/// Ein Raum, dessen Ausgabe der kanonischen Form des gespeicherten Textes entspricht, hat nichts
+/// geändert (bloßes Öffnen darf nichts umschreiben, B2.02).
+pub fn canonical_markdown(markdown: &str) -> String {
+    sanitized_markdown_of(&doc_from_markdown(markdown))
 }
 
 // --- Minimale Änderungen ------------------------------------------------------------------

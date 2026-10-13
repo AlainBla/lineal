@@ -920,6 +920,42 @@ async fn reconnect_of_same_user_takes_over_awareness_id_of_stale_connection(pool
     assert!(watcher.awareness.iter().any(|(id, _)| *id == 77));
 }
 
+/// B2.02: bloßes Öffnen (auch mit einer Editor-Normalisierung) schreibt nichts um; Bearbeiten
+/// lässt Tabellen, Aufgabenlisten, Bilder und maskierte `<tag>`-Texte unverändert.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn opening_a_document_does_not_rewrite_it_and_edits_keep_tables_tasks_images(pool: PgPool) {
+    let e = env(pool).await;
+    let md = "Text \\<tag> mehr\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- [x] erledigt\n- [ ] offen\n\n![Logo](https://acme.example/l.png)";
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", md).await;
+    let (_, _, v0, _) = e.db_doc(doc).await;
+    let mut alice = e.join("alice", doc).await;
+    assert_eq!(alice.md(), md);
+    // Wie der Editor beim Laden: ein leerer Absatz am Ende.
+    alice
+        .edit(|d| {
+            let frag = d.get_or_insert_xml_fragment(pm::FRAGMENT);
+            let mut txn = d.transact_mut();
+            let n = frag.len(&txn);
+            frag.insert(&mut txn, n, yrs::XmlElementPrelim::empty("paragraph"));
+        })
+        .await;
+    alice.pump(Duration::from_millis(1500)).await;
+    let (stored, _, v1, _) = e.db_doc(doc).await;
+    assert_eq!(stored, md, "Öffnen hat den Inhalt umgeschrieben");
+    assert_eq!(v1, v0, "Öffnen hat eine Version erzeugt");
+    // Bearbeiten: nur die Änderung kommt hinzu.
+    alice
+        .edit(|d| {
+            let typed = crdt::markdown_of(d).replacen("mehr", "mehr TIPP", 1);
+            crdt::apply_markdown(d, &typed);
+        })
+        .await;
+    alice.pump(Duration::from_millis(300)).await;
+    wait_for_db(&e, doc, |m| m.contains("TIPP")).await;
+    let (stored, ..) = e.db_doc(doc).await;
+    assert_eq!(stored, md.replacen("mehr", "mehr TIPP", 1));
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn message_rate_is_limited(pool: PgPool) {
     let e = env_with(
@@ -1482,4 +1518,67 @@ async fn suspended_user_trashed_and_archived_owner_objects_end_or_downgrade_acce
             .await,
         404
     );
+}
+
+/// B2.02: API/MCP speichern die Issue-Beschreibung bereinigt; Öffnen im Raum ändert nichts.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: PgPool) {
+    use lineal_app::usecases::issue::{CreateIssueInput, DescriptionEdit, UpdateIssueInput};
+    let e = env(pool).await;
+    let created = e
+        .app
+        .create_issue(
+            &user(SeedUser::Alice),
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Roh".into()),
+                description: Some("Text <b>fett</b> [x](javascript:alert(1))\n\n<script>alert(1)</script>".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = created.issue.id.0;
+    let stored = created.issue.description.clone().unwrap_or_default();
+    assert!(!stored.contains('<') && !stored.contains("javascript"), "{stored}");
+    let updated = e
+        .app
+        .update_issue(
+            &user(SeedUser::Alice),
+            UpdateIssueInput {
+                id: id.to_string(),
+                description: Some(DescriptionEdit::Set("<script>alert(1)</script>".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.issue.description, None);
+    let _ = e
+        .app
+        .update_issue(
+            &user(SeedUser::Alice),
+            UpdateIssueInput {
+                id: id.to_string(),
+                description: Some(DescriptionEdit::Set(stored.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut c = desc_client(&e, "alice", "issue", id).await;
+    c.edit(|d| {
+        let frag = d.get_or_insert_xml_fragment(pm::FRAGMENT);
+        let mut txn = d.transact_mut();
+        let n = frag.len(&txn);
+        frag.insert(&mut txn, n, yrs::XmlElementPrelim::empty("paragraph"));
+    })
+    .await;
+    c.pump(Duration::from_millis(1500)).await;
+    let now: Option<String> = sqlx::query_scalar("SELECT description FROM issue WHERE id = $1")
+        .bind(id)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(now.unwrap_or_default(), stored);
 }

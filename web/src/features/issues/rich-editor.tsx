@@ -5,9 +5,12 @@
  */
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCaret from "@tiptap/extension-collaboration-caret";
+import Image from "@tiptap/extension-image";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Markdown } from "@tiptap/markdown";
 import Mention from "@tiptap/extension-mention";
 import Placeholder from "@tiptap/extension-placeholder";
+import { TableKit } from "@tiptap/extension-table";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
@@ -80,11 +83,19 @@ export function RichEditor({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        link: { openOnClick: false, protocols: ["http", "https", "mailto"] },
+        // Kein `protocols`: http/https/mailto sind linkify-Standard; eigene Protokolle würden bei jeder
+        // Editor-Instanz neu registriert (Konsolenwarnung "linkifyjs: already initialized", B2.13).
+        link: { openOnClick: false },
         // Mit Collaboration übernimmt Yjs Undo/Redo (sonst Konflikt mit dem History-Plugin).
         ...(collab ? { undoRedo: false as const } : {}),
       }),
       Markdown,
+      // Tabellen, Aufgabenlisten und Bilder gehören zum Schema des Servers (collab/pm.rs): ohne sie
+      // würde y-prosemirror sie beim Öffnen verwerfen und den Inhalt zurückschreiben (B2.02).
+      TableKit.configure({ table: { resizable: false } }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Image.configure({ inline: true, allowBase64: false }),
       ...(collab
         ? [
             Collaboration.configure({ document: collab.provider.doc }),

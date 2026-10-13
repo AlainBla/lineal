@@ -438,7 +438,7 @@ impl App {
             return Ok(PersistOutcome::Stale(cs.into()));
         }
         let clean = clean_markdown(markdown)?;
-        if clean == cs.markdown {
+        if clean == cs.markdown || clean == crdt::canonical_markdown(&cs.markdown) {
             tx.documents()
                 .set_content_state(
                     access.content_id,
@@ -502,7 +502,9 @@ impl App {
             return Ok(PersistOutcome::Stale(load));
         }
         let clean = clean_markdown(markdown)?;
-        let version = if clean == owner.markdown {
+        let version = if clean == owner.markdown
+            || clean == crdt::canonical_markdown(&owner.markdown)
+        {
             owner.version
         } else {
             match target {
