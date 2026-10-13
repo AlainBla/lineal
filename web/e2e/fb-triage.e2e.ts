@@ -34,12 +34,10 @@ test("F6: an outsider's issue lands in WEB triage and Bob accepts it", async ({ 
     const title = unique("Button verrutscht");
     const identifier = await createIssue(alice, "WEB", title);
 
-    await bob.goto("/acme/team/WEB/all");
-    await expect(bob.getByRole("link", { name: /Triage/ })).toBeVisible();
-    await expect(bob.getByLabel(/in triage/)).toContainText("1");
-
-    await bob.getByRole("link", { name: /Triage/ }).click();
+    // WEB hängt eingeklappt unter ENG: direkt zur Triage-Route.
+    await bob.goto("/acme/team/WEB/triage");
     await expect(bob).toHaveURL(/\/team\/WEB\/triage/);
+    await expect(bob.getByLabel("Issues in triage")).toContainText("1");
     const list = bob.getByRole("list", { name: "Triage issues" });
     await expect(list.getByText(title)).toBeVisible();
     await expect(bob.getByRole("region", { name: "Triage detail" })).toContainText(identifier);

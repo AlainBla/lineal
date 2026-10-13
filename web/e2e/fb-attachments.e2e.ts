@@ -30,7 +30,7 @@ test("F.08: pasted image appears in the description via a signed URL, upload sho
     );
   }, PNG.toString("base64"));
 
-  const img = editor.locator("img");
+  const img = editor.locator("img[alt='pixel.png']");
   await expect(img).toBeVisible();
   await expect(img).toHaveAttribute("src", /^\/files\//);
   await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
@@ -52,7 +52,9 @@ test("F.08: pasted image appears in the description via a signed URL, upload sho
 
   // Nach dem Neuladen wird das Bild wieder aufgelöst.
   await page.reload();
-  const reloaded = page.getByRole("textbox", { name: "Description" }).locator("img");
+  const reloaded = page
+    .getByRole("textbox", { name: "Description" })
+    .locator("img[alt='pixel.png']");
   await expect(reloaded).toHaveAttribute("src", /^\/files\//);
 
   // Upload über den Button-Weg (Datei-Input) erscheint in der Anhangsliste.
