@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,10 @@ export function TeamSwitchDialog({ issue, onClose }: { issue: Issue; onClose: ()
   const qc = useQueryClient();
   const [pending, setPending] = useState<{ target: TeamRef; losses: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Nach der Auswahl schließt der Picker sich selbst; das darf den Dialog nicht beenden, sonst
+  // erscheint die Bestätigung nie und die Auswahl bleibt ohne Wirkung (B4.09).
+  const [choosing, setChoosing] = useState(false);
+  const choosingRef = useRef(false);
   useShortcutContext("modal", pending !== null);
 
   const list = (teams.data ?? []).map((t) => ({ id: t.id, key: t.key, name: t.name }));
@@ -42,7 +46,10 @@ export function TeamSwitchDialog({ issue, onClose }: { issue: Issue; onClose: ()
     const oldIdentifier = issue.identifier;
     const moved = await actions.moveToTeam(issue, target.id);
     setBusy(false);
-    if (!moved) return;
+    if (!moved) {
+      onClose();
+      return;
+    }
     setPending(null);
     onClose();
     const ws = session?.workspace.urlKey ?? "";
@@ -60,6 +67,8 @@ export function TeamSwitchDialog({ issue, onClose }: { issue: Issue; onClose: ()
   };
 
   const choose = async (teamId: string) => {
+    choosingRef.current = true;
+    setChoosing(true);
     const target = (teams.data ?? []).find((t) => t.id === teamId);
     if (!target || target.id === issue.teamId) {
       onClose();
@@ -88,8 +97,8 @@ export function TeamSwitchDialog({ issue, onClose }: { issue: Issue; onClose: ()
   return (
     <>
       <PropertyPicker
-        open={pending === null}
-        onOpenChange={(o) => !o && onClose()}
+        open={pending === null && !choosing}
+        onOpenChange={(o) => !o && !choosingRef.current && onClose()}
         title="Move to team…"
         options={options}
         selected={issue.teamId}

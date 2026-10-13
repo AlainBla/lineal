@@ -180,4 +180,51 @@ describe("IssuePickerHost", () => {
       expect(client.getQueryData<typeof issue>(keys.issue("ENG-1"))?.priority).toBe(3),
     );
   });
+
+  it("Move to team: Auswahl mit Verlusten öffnet die Bestätigung und verschiebt (B4.09)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1", labelIds: ["l-bug"] });
+    const gql = mockGraphql({
+      IssueTeams: () => ({
+        teams: [
+          {
+            id: "team-eng",
+            key: "ENG",
+            name: "Engineering",
+            parentId: null,
+            issueEstimationType: "notUsed",
+          },
+          {
+            id: "team-des",
+            key: "DES",
+            name: "Design",
+            parentId: null,
+            issueEstimationType: "notUsed",
+          },
+        ],
+      }),
+      TeamMeta: (v) => ({
+        team: { ...TEAM_META.team, id: String(v.team) },
+        workflowStates: TEAM_META.states,
+        issueLabels: v.team === "team-des" ? [] : TEAM_META.labels,
+        cycles: [],
+        projects: [],
+      }),
+      IssueUpdate: (v) => ({
+        issueUpdate: {
+          success: true,
+          issue: { ...issue, identifier: "DES-9", ...(v.input as object) },
+        },
+      }),
+    });
+    await renderWithApp(<Host request={{ kind: "team", issue }} />);
+    const input = await screen.findByPlaceholderText("Move to team…");
+    await userEvent.type(input, "Design{Enter}");
+    expect(await screen.findByText(/label will be removed/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Move issue" }));
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toEqual({
+      id: "i1",
+      input: { teamId: "team-des" },
+    });
+  });
 });
