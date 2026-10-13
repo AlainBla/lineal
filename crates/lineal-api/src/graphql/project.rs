@@ -5,10 +5,11 @@
 
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
+use crate::pagination::{Cursor, PageInfo, PaginationOrderBy, page_request};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use lineal_app::AppError;
-use lineal_app::ports::repos::user::PageRequest;
+use lineal_app::ports::repos::user::{OrderBy, PageCursor, PageRequest};
 use lineal_app::usecases::project::milestone::{ProjectRef, SaveMilestoneInput};
 use lineal_app::usecases::project::pure::parse_date;
 use lineal_app::usecases::project::update::{ListProjectUpdatesInput, ProjectUpdateView};
@@ -418,9 +419,76 @@ pub struct ProjectSuccessPayload {
 #[derive(Default)]
 pub struct ProjectQuery;
 
+#[derive(SimpleObject)]
+#[graphql(name = "ProjectConnection")]
+pub struct ProjectConnection {
+    pub nodes: Vec<ProjectGql>,
+    pub page_info: PageInfo,
+}
+
+fn to_page_cursor(c: &Cursor) -> async_graphql::Result<PageCursor> {
+    let key = DateTime::parse_from_rfc3339(&c.sort_key)
+        .map_err(|_| gql_err(AppError::invalid_request("Invalid cursor.")))?
+        .with_timezone(&Utc);
+    Ok(PageCursor { key, id: c.id })
+}
+
+/// Eine Seite Projekte samt Cursor der nächsten Seite (`None` = letzte Seite).
+#[allow(clippy::too_many_arguments)]
+async fn list_page(
+    ctx: &Context<'_>,
+    team: Option<String>,
+    include_sub_teams: Option<bool>,
+    initiative: Option<String>,
+    member: Option<String>,
+    state: Option<String>,
+    label: Option<String>,
+    query: Option<String>,
+    include_archived: Option<bool>,
+    first: Option<i32>,
+    after: Option<String>,
+) -> async_graphql::Result<(Vec<ProjectGql>, Option<String>)> {
+    let order = PaginationOrderBy::UpdatedAt;
+    let req = page_request(first, after.as_deref(), None, None, order, 250).map_err(gql_err)?;
+    let cursor = req.after.as_ref().map(to_page_cursor).transpose()?;
+    let (page, views) = app(ctx)?
+        .list_projects(
+            request_ctx(ctx)?,
+            ListProjectsInput {
+                team,
+                include_sub_teams: include_sub_teams.unwrap_or(false),
+                initiative,
+                member,
+                state,
+                label,
+                query,
+                include_archived: include_archived.unwrap_or(false),
+                include_members: true,
+                include_milestones: true,
+                page: PageRequest {
+                    limit: i64::from(req.limit),
+                    cursor,
+                    order_by: OrderBy::UpdatedAt,
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(gql_err)?;
+    let end = page.next.as_ref().map(|c| {
+        Cursor {
+            sort_key: c.key.to_rfc3339_opts(SecondsFormat::Micros, true),
+            id: c.id,
+        }
+        .encode(order)
+    });
+    Ok((views.into_iter().map(Into::into).collect(), end))
+}
+
 #[Object]
 impl ProjectQuery {
-    /// Sichtbare Projekte (mindestens ein zugängliches Team).
+    /// Sichtbare Projekte (mindestens ein zugängliches Team); `first` bis 250, `after` ab Cursor
+    /// (siehe `projectsPage` für `hasNextPage`).
     #[allow(clippy::too_many_arguments)]
     async fn projects(
         &self,
@@ -434,31 +502,64 @@ impl ProjectQuery {
         query: Option<String>,
         include_archived: Option<bool>,
         first: Option<i32>,
+        after: Option<String>,
     ) -> async_graphql::Result<Vec<ProjectGql>> {
-        let (_, views) = app(ctx)?
-            .list_projects(
-                request_ctx(ctx)?,
-                ListProjectsInput {
-                    team,
-                    include_sub_teams: include_sub_teams.unwrap_or(false),
-                    initiative,
-                    member,
-                    state,
-                    label,
-                    query,
-                    include_archived: include_archived.unwrap_or(false),
-                    include_members: true,
-                    include_milestones: true,
-                    page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 50)),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(gql_err)?;
-        Ok(views.into_iter().map(Into::into).collect())
+        let (nodes, _) = list_page(
+            ctx,
+            team,
+            include_sub_teams,
+            initiative,
+            member,
+            state,
+            label,
+            query,
+            include_archived,
+            first,
+            after,
+        )
+        .await?;
+        Ok(nodes)
+    }
+
+    /// Wie `projects`, mit Cursor-Paginierung (`pageInfo.hasNextPage`/`endCursor`).
+    #[allow(clippy::too_many_arguments)]
+    async fn projects_page(
+        &self,
+        ctx: &Context<'_>,
+        team: Option<String>,
+        include_sub_teams: Option<bool>,
+        initiative: Option<String>,
+        member: Option<String>,
+        state: Option<String>,
+        label: Option<String>,
+        query: Option<String>,
+        include_archived: Option<bool>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> async_graphql::Result<ProjectConnection> {
+        let (nodes, end) = list_page(
+            ctx,
+            team,
+            include_sub_teams,
+            initiative,
+            member,
+            state,
+            label,
+            query,
+            include_archived,
+            first,
+            after,
+        )
+        .await?;
+        Ok(ProjectConnection {
+            page_info: PageInfo {
+                has_next_page: end.is_some(),
+                has_previous_page: false,
+                start_cursor: None,
+                end_cursor: end,
+            },
+            nodes,
+        })
     }
 
     /// Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.

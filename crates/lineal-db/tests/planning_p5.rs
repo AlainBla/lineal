@@ -8,7 +8,7 @@
 //! Paket 5 (Testlauf-Bugs): Planung und Settings gegen echte Datenbank.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use lineal_app::ports::repos::user::PageRequest;
+use lineal_app::ports::repos::user::{PageCursor, PageRequest};
 use lineal_app::ports::{Clock, IdGen, Store};
 use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput, ExistingActiveIssues};
 use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
@@ -546,4 +546,44 @@ async fn b5_08_b5_10_initiative_projects_are_recursive_and_rollup_respects_stale
         .unwrap();
     assert_eq!(v.health_rollup.on_track, 0);
     assert_eq!(v.health_rollup.none, 1);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_11_projects_are_paginated_by_cursor(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    for _ in 0..5 {
+        app.save_project(&alice, teams_input(&["ENG"]))
+            .await
+            .unwrap();
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let (page, views) = app
+            .list_projects(
+                &alice,
+                ListProjectsInput {
+                    page: PageRequest {
+                        limit: 2,
+                        cursor,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        pages += 1;
+        for v in &views {
+            assert!(seen.insert(v.project.id.0), "doppelter Eintrag");
+        }
+        match page.next {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), 6, "5 neue plus Seed-Projekt");
+    assert_eq!(pages, 3);
 }
