@@ -261,6 +261,57 @@ async fn zombie_cli_runs_are_failed_by_the_runner(pool: PgPool) {
     assert_eq!(status(ids[1]).await, "running", "a live run is left alone");
 }
 
+/// B7.08: Ein zweiter echter Lauf ins selbe Team wird abgelehnt, solange der erste läuft; ein Lauf
+/// mit Objektfehlern endet nicht kommentarlos als `completed`.
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn second_run_for_the_same_teams_is_rejected_and_errors_are_flagged(pool: PgPool) {
+    let e = env(pool).await;
+    let source = fake();
+    source.patch(SourceEntity::Issues, "i-ENG-30", &json!({ "team": null }));
+    let first = e.scan(&source).await;
+    let second = e.scan(&source).await;
+    e.start(first.id, ImportStartInput::default()).await;
+    let err = e
+        .app
+        .import_start(
+            &e.alice_ctx(),
+            ImportStartInput {
+                run_id: second.id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::error::ErrorKind::Conflict, "{err:?}");
+    // Der erste Lauf läuft zu Ende; ein Issue ohne Team ist ein Objektfehler.
+    let out = e
+        .engine(&source, Default::default())
+        .run(e.org, first.id)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    let flagged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM import_issue WHERE import_run_id = $1 \
+         AND message LIKE 'the run completed, but % could not be imported%'",
+    )
+    .bind(first.id)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 1);
+    // Danach ist das Team frei.
+    e.app
+        .import_start(
+            &e.alice_ctx(),
+            ImportStartInput {
+                run_id: second.id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+}
+
 /// B7.07: Der CSV-Import meldet jede stille Datenänderung (Duplikat, Kürzung, ungültige Werte).
 #[sqlx::test(migrator = "lineal_db::MIGRATOR")]
 async fn csv_import_reports_every_data_change(pool: PgPool) {

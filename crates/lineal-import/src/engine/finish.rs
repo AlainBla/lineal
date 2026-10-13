@@ -200,7 +200,21 @@ impl Session<'_, '_> {
         let now = self.eng.app.clock.now();
         let run_id = self.run.id;
         let stats = self.stats_json();
-        let report = std::mem::take(&mut self.report);
+        let mut report = std::mem::take(&mut self.report);
+        if matches!(result, Ok(RunOutcome::Completed)) && !dry {
+            let errors: u64 = self.stats.values().map(|c| c.errors).sum();
+            if errors > 0 {
+                report.push(lineal_app::ports::repos::import::ReportEntry {
+                    severity: "warning".into(),
+                    source_type: None,
+                    source_id: None,
+                    message: format!(
+                        "the run completed, but {errors} object(s) could not be imported; see the error entries of this report"
+                    ),
+                    created_at: None,
+                });
+            }
+        }
         let mut tx = self.eng.app.store.begin(self.org).await?;
         let outcome = match result {
             Ok(done) => {
