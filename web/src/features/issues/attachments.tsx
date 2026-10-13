@@ -7,6 +7,16 @@ import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
 import { sameOrigin, uploadFile } from "./assets";
+
+/** Nur http(s)-Links verlinken (z. B. importierte Anhänge könnten `javascript:` tragen). */
+export function safeHref(url: string): string | undefined {
+  try {
+    const u = new URL(url, window.location.origin);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
 import { useIssueExtras } from "./hooks";
 import { createAttachment, deleteAttachment, keys } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
@@ -134,7 +144,7 @@ export function AttachmentsSection({
                 <Paperclip className="size-3.5 text-muted-foreground" aria-hidden />
               )}
               <a
-                href={a.sourceType === "upload" ? sameOrigin(a.url) : a.url}
+                href={a.sourceType === "upload" ? sameOrigin(a.url) : safeHref(a.url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="min-w-0 truncate hover:underline"
