@@ -1,6 +1,13 @@
 name: lineal
 # Standard (`docker compose up -d`): nur PostgreSQL für Entwicklung und Tests (Port 5440).
 # Komplette Anwendung: `docker compose --profile app up -d --build` (siehe docs/15 §3.4).
+# Log-Rotation für alle App-Dienste (sonst wächst das json-file-Log unbegrenzt: ~9 MB/h im Test).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16
@@ -23,6 +30,7 @@ services:
   # URL-sichere Zeichen verwenden (z. B. `openssl rand -hex 24`).
   app-db:
     profiles: [app]
+    logging: *logging
     image: postgres:16
     # Ohne Passwort klar scheitern (Compose-Interpolation `:?` würde auch `docker compose up`
     # ohne Profil blockieren).
@@ -46,6 +54,7 @@ services:
   # Einmalig vor Server/Worker: Migrationen anwenden.
   migrate:
     profiles: [app]
+    logging: *logging
     build: &server-build { context: ., target: server }
     image: lineal-server:latest
     command: ["migrate"]
@@ -67,6 +76,7 @@ services:
 
   server:
     profiles: [app]
+    logging: *logging
     build: *server-build
     image: lineal-server:latest
     command: ["serve"]
@@ -77,9 +87,23 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
     restart: unless-stopped
+    # Bereit = Datenbank erreichbar (/readyz), nicht nur "Prozess lebt" (/healthz).
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    # SIGTERM -> geordnetes Beenden (LINEAL_SHUTDOWN_GRACE_SECS, Default 10 s) vor dem SIGKILL.
+    stop_grace_period: 20s
 
   worker:
     profiles: [app]
+    logging: *logging
     build: *server-build
     image: lineal-server:latest
     command: ["worker"]
@@ -89,10 +113,19 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
     restart: unless-stopped
-    healthcheck: { disable: true }
+    # Der Worker hat keinen HTTP-Port: er schreibt alle 10 s einen Heartbeat (cli/worker.rs).
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /tmp/lineal-worker.heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    # Ein laufender Tick (Jobs, Zustellungen) darf zu Ende laufen.
+    stop_grace_period: 30s
 
   web:
     profiles: [app]
+    logging: *logging
     build: { context: ., target: web }
     image: lineal-web:latest
     ports:

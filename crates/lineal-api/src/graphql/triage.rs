@@ -13,7 +13,6 @@ use crate::context::{app, request_ctx};
 use async_graphql::{Context, InputObject, Object, SimpleObject};
 use chrono::{DateTime, Utc};
 use lineal_app::AppError;
-use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::triage::TriageAction;
 use lineal_app::usecases::issue::IssueView;
 use lineal_app::usecases::triage::{
@@ -222,7 +221,7 @@ impl TriageMutation {
                     state: input.state_id,
                     priority: prio(input.priority),
                     comment: input.comment,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                 },
             )
             .await
@@ -250,7 +249,7 @@ impl TriageMutation {
                     state: input.state_id,
                     priority: prio(input.priority),
                     comment: input.comment,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                 },
             )
             .await
@@ -273,7 +272,7 @@ impl TriageMutation {
                     issue: id,
                     duplicate_of: duplicate_of_id,
                     comment,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                 },
             )
             .await
@@ -294,7 +293,7 @@ impl TriageMutation {
                 TriageSnoozeInput {
                     issue: id,
                     until: snoozed_until_at,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                 },
             )
             .await
@@ -309,7 +308,11 @@ impl TriageMutation {
         id: String,
     ) -> async_graphql::Result<IssuePayload> {
         let v = app(ctx)?
-            .triage_unsnooze(request_ctx(ctx)?, &id, HistorySource::Api)
+            .triage_unsnooze(
+                request_ctx(ctx)?,
+                &id,
+                crate::context::history_source(request_ctx(ctx)?),
+            )
             .await
             .map_err(gql_err)?;
         Ok(payload(v))
@@ -328,7 +331,7 @@ impl TriageMutation {
                 TriageMoveInput {
                     issue: id,
                     team: team_id,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                 },
             )
             .await

@@ -473,7 +473,7 @@ Regeln:
 | Token | Laufzeit | Regel |
 |---|---|---|
 | Authorization Code | 10 min | einmal verwendbar; zweite Verwendung widerruft alle daraus entstandenen Tokens |
-| Access Token | 24 h | |
+| Access Token | 1 h | |
 | Refresh Token | unbegrenzt bis Widerruf | **Rotation**: jeder Refresh liefert ein neues Paar; das alte Refresh-Token bleibt **30 min** (Grace Period) gültig, damit verlorene Antworten wiederholt werden können. Danach Wiederverwendung → gesamte Token-Familie widerrufen. |
 | Client-Credentials-Token | 30 Tage | `actor=app`, kein Refresh-Token |
 
@@ -491,7 +491,7 @@ sequenceDiagram
   L-->>B: Redirect redirect_uri?code&state
   B->>C: code
   C->>L: POST /oauth/token (code, code_verifier)
-  L-->>C: access_token (24 h), refresh_token
+  L-->>C: access_token (1 h), refresh_token
   C->>L: POST /graphql (Authorization: Bearer access_token)
   L-->>C: data
   C->>L: POST /oauth/token (grant_type=refresh_token)
@@ -514,6 +514,14 @@ Geprüfte Referenzwerte von Linear (Stand 2026-10-10, `linear.app/developers/rat
 | **Einzelquery** | – | max. **10 000** Punkte | – (immer abgelehnt) |
 
 Lineal übernimmt diese Werte als **Defaults** und macht sie als Workspace-Limits konfigurierbar (konsistent mit der Entscheidung „Pläne/Limits“ in [README](README.md)). Zusätzlich gibt es **Endpunkt-Limits** für teure Operationen (Default: `searchIssues` 300/h, `fileUpload` 600/h, `issueBatchUpdate` 600/h pro User). Die Web-App über Session-Cookie und der Sync-Kanal unterliegen einem eigenen, großzügigeren Limit (Default 10× OAuth).
+
+**Umsetzung (Reihenfolge, Schlüssel, Fail-closed):**
+
+1. *Vor dem Token-Lookup:* Anfragen **ohne** Zugangsdaten zählen gegen den IP-Bucket `ip:<IP>` (600/h, IPv6 je /64). Anfragen **mit** Zugangsdaten zählen (egal ob gültig) gegen ein grobes Sicherheitsnetz `ipa:<IP>` (`ip_authenticated`, Default 200 000/h), damit hinter NAT/Büro-Proxy kein gemeinsames enges Limit entsteht. Zusätzlich sperren `auth_failures` die IP bei 20 Fehlversuchen/min (vor dem Lookup).
+2. *Nach dem Lookup:* gültige Zugangsdaten zählen je **Konto und Klasse** (`req:user:<Klasse>:<UserId>`, alle Keys/Sessions desselben Users teilen den Bucket; Klassen siehe Tabelle, Session 50 000/h). Ungültige Zugangsdaten (erfundene/abgelaufene Tokens, fremde Schemata) zählen gegen `ipc:<IP>` (`ip_credentialed`, Default 2 000/h).
+3. Die Bucket-Tabelle ist begrenzt (200 000); aktive Buckets werden nie verdrängt, neue Schlüssel teilen sich bei voller Tabelle einen strengen Überlauf-Bucket (1/10 des Limits). Ohne Peer-Adresse antwortet der Server im Produktivbetrieb mit 500 statt unbegrenzt durchzulassen.
+4. 429 ist immer JSON (GraphQL- bzw. REST-Fehlermodell) mit `Retry-After`; das gilt auch für den nginx-Edge (`deploy/nginx.conf`, `@rate_limited`).
+5. Prüfen und Abziehen eines Buckets sind atomar (ein Mutex); parallele Anfragen überschreiten das Limit nicht.
 
 ### 3.2 Komplexitätsberechnung
 

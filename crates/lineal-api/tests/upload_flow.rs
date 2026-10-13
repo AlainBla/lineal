@@ -24,6 +24,8 @@ impl Clock for TestClock {
     }
 }
 
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     let store = PgStore::new(pool.clone());
@@ -78,7 +80,7 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     };
 
     // prepare → (ohne PUT fehlt das Objekt) → PUT → finalize → signierter Download
-    let p = app.prepare_attachment_upload(&bob, prep(4)).await.unwrap();
+    let p = app.prepare_attachment_upload(&bob, prep(12)).await.unwrap();
     let err = app
         .create_attachment_from_upload(&bob, &eng.to_string(), &p.asset_url, None, None)
         .await
@@ -86,7 +88,7 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     assert_eq!(err.details["reason"], "upload_missing");
     let res = router
         .clone()
-        .oneshot(put(&p.url, "image/png", vec![1, 2, 3, 4]))
+        .oneshot(put(&p.url, "image/png", PNG.to_vec()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -94,7 +96,7 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
         .create_attachment_from_upload(&bob, &eng.to_string(), &p.asset_url, None, None)
         .await
         .unwrap();
-    assert_eq!(done.view.attachment.size, Some(4));
+    assert_eq!(done.view.attachment.size, Some(12));
     let get = router
         .clone()
         .oneshot(
@@ -107,15 +109,15 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(
         &get.into_body().collect().await.unwrap().to_bytes()[..],
-        &[1, 2, 3, 4]
+        PNG
     );
 
     // abgelaufene PUT-URL (60 s) → 403; finalize findet kein Objekt
-    let p2 = app.prepare_attachment_upload(&bob, prep(4)).await.unwrap();
+    let p2 = app.prepare_attachment_upload(&bob, prep(12)).await.unwrap();
     *clock.0.lock().unwrap() += Duration::seconds(61);
     let res = router
         .clone()
-        .oneshot(put(&p2.url, "image/png", vec![1, 2, 3, 4]))
+        .oneshot(put(&p2.url, "image/png", PNG.to_vec()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
@@ -126,17 +128,17 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     assert_eq!(err.details["reason"], "upload_missing");
 
     // manipuliertes Token → 403; abweichende Größe → upload_size_mismatch
-    let p3 = app.prepare_attachment_upload(&bob, prep(10)).await.unwrap();
+    let p3 = app.prepare_attachment_upload(&bob, prep(20)).await.unwrap();
     let forged = format!("{}x", p3.url);
     let res = router
         .clone()
-        .oneshot(put(&forged, "image/png", vec![0; 10]))
+        .oneshot(put(&forged, "image/png", PNG.to_vec()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     let res = router
         .clone()
-        .oneshot(put(&p3.url, "image/png", vec![0; 3]))
+        .oneshot(put(&p3.url, "image/png", PNG.to_vec()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);

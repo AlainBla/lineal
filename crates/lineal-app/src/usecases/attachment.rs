@@ -298,7 +298,12 @@ impl App {
         );
         let put_url = self
             .blobs
-            .signed_put_url(&key, &content_type, PUT_TTL)
+            .signed_put_url_sized(
+                &key,
+                &content_type,
+                u64::try_from(input.size).unwrap_or(0),
+                PUT_TTL,
+            )
             .await?;
         let title = input
             .title

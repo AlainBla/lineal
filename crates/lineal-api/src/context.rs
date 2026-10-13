@@ -52,3 +52,29 @@ pub fn charge_detail_field(ctx: &Context<'_>) -> async_graphql::Result<()> {
         ))
     }
 }
+
+/// Herkunft einer Änderung im Verlauf: Cookie-Session = Web-App (`user`), API-Key und
+/// OAuth-Token = `api` (docs/01, B3.18).
+pub fn history_source(ctx: &RequestCtx) -> lineal_app::ports::repos::issue::HistorySource {
+    use lineal_app::ports::repos::issue::HistorySource;
+    if ctx.via_session {
+        HistorySource::User
+    } else {
+        HistorySource::Api
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lineal_app::ports::repos::issue::HistorySource;
+
+    #[test]
+    fn web_sessions_are_user_everything_else_is_api() {
+        let mut ctx = RequestCtx::system(lineal_domain::ids::OrgId::new_v7(), "r");
+        ctx.via_session = true;
+        assert_eq!(history_source(&ctx), HistorySource::User);
+        ctx.via_session = false;
+        assert_eq!(history_source(&ctx), HistorySource::Api);
+    }
+}

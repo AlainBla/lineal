@@ -1,7 +1,9 @@
 //! Token-Bucket-Rate-Limit (docs/09 §3): pro Identität zwei Buckets (Requests, Komplexität),
 //! kontinuierliche Nachfüllung, `X-RateLimit-*`-Header und 429 mit `Retry-After`.
-//! Design: Stufe 1 (`ip_middleware`, vor dem Token-Lookup) begrenzt je Client-IP, Stufe 2
-//! (`middleware`, nach dem Lookup) je User/Token. Die Bucket-Map ist begrenzt; bei voller Map
+//! Design: Stufe 1 (`ip_middleware`, vor dem Token-Lookup) begrenzt je Client-IP, aber nur
+//! Anfragen OHNE Zugangsdaten. Stufe 2 (`middleware`, nach dem Lookup) begrenzt gültig
+//! authentifizierte Anfragen je User/Token (nie je IP: Büro-NAT) und belastet die IP nur mit
+//! Anfragen, deren Zugangsdaten ungültig sind. Die Bucket-Map ist begrenzt; bei voller Map
 //! teilen sich neue Schlüssel einen Überlauf-Bucket, aktive Buckets werden nie verdrängt.
 //! Zustand liegt im Prozessspeicher (eine Instanz); die Zeit kommt aus der `Clock` der `App`.
 
@@ -34,9 +36,15 @@ pub struct RateLimits {
     /// Web-App über Session-Cookie: 10x OAuth.
     pub session: ClassLimits,
     pub anonymous: ClassLimits,
-    /// Requests je Client-IP (/64 bei IPv6) und Periode für Anfragen MIT Zugangsdaten, gezählt
-    /// vor dem Token-Lookup (jeder Request mit erfundenem Token kostet IP-Kontingent).
+    /// Anfragen je Client-IP (/64 bei IPv6) und Periode, deren Zugangsdaten sich als ungültig
+    /// erweisen (erfundenes/abgelaufenes Token). Gültige Anfragen zählen NICHT gegen die IP,
+    /// sondern gegen ihren User/Token (B3.01: Cookie-Sessions hinter NAT teilen sich sonst ein
+    /// Limit). Zusätzlich sperrt `auth_failures` die IP bei vielen Fehlversuchen je Minute.
     pub ip_credentialed: f64,
+    /// Grobes Sicherheitsnetz je Client-IP und Periode für ALLE Anfragen mit Zugangsdaten,
+    /// gezählt vor dem Token-Lookup (egal ob gültig). Bewusst sehr hoch (Büro-NAT bleibt
+    /// nutzbar), fängt aber Floods mit gültigen/ungültigen Credentials einer IP ab.
+    pub ip_authenticated: f64,
     /// Einzelquery über diesem Wert wird abgelehnt.
     pub max_query_complexity: u64,
 }
@@ -61,7 +69,8 @@ impl Default for RateLimits {
                 requests: 600.0,
                 complexity: 100_000.0,
             },
-            ip_credentialed: 10_000.0,
+            ip_credentialed: 2_000.0,
+            ip_authenticated: 200_000.0,
             max_query_complexity: 10_000,
         }
     }
@@ -306,10 +315,8 @@ fn exempt(path: &str) -> bool {
     matches!(path, "/healthz" | "/readyz")
 }
 
-/// Stufe 1 (vor der Authentifizierung): jeder Request kostet IP-Kontingent, bevor die
-/// Datenbank nach dem Token gefragt wird. Anfragen ohne Zugangsdaten nutzen das (kleine)
-/// Anonym-Limit, Anfragen mit Zugangsdaten ein eigenes, höheres IP-Limit (`ip_credentialed`).
-/// Ein Tokenwechsel umgeht das nicht: der Schlüssel hängt nur an der IP.
+/// Stufe 1 (vor der Authentifizierung): Anfragen ohne Zugangsdaten nutzen das (kleine)
+/// Anonym-Limit je IP. Anfragen mit Zugangsdaten werden in Stufe 2 nach dem Lookup gezählt.
 pub async fn ip_middleware(
     axum::extract::State(p): axum::extract::State<Platform>,
     req: Request,
@@ -327,11 +334,24 @@ pub async fn ip_middleware(
         // Nur Router-Tests (`oneshot`) haben keinen Peer: dort wird nicht nach IP begrenzt.
         return next.run(req).await;
     };
-    let (key, capacity) = if crate::middleware::auth::extract_token(req.headers()).is_some() {
-        (format!("ipc:{ip}"), p.cfg.rate.ip_credentialed)
-    } else {
-        (format!("ip:{ip}"), p.cfg.rate.anonymous.requests)
-    };
+    // Anfragen mit Zugangsdaten: vor dem Lookup nur das hohe Sicherheitsnetz je IP; danach in
+    // Stufe 2 gültig -> User-Bucket, ungültig -> strenger IP-Bucket. Brute-Force bremst
+    // `auth_failures` schon vor dem Lookup.
+    if crate::middleware::auth::extract_token(req.headers()).is_some() {
+        let now_ms = p.app.clock.now().timestamp_millis();
+        let d = p.limiter.take(
+            &format!("ipa:{ip}"),
+            p.cfg.rate.ip_authenticated,
+            p.cfg.rate.period_secs,
+            1.0,
+            now_ms,
+        );
+        if !d.allowed {
+            return rejection(&req, &d, "requests per IP");
+        }
+        return next.run(req).await;
+    }
+    let (key, capacity) = (format!("ip:{ip}"), p.cfg.rate.anonymous.requests);
     let now_ms = p.app.clock.now().timestamp_millis();
     let decision = p
         .limiter
@@ -357,6 +377,24 @@ pub async fn middleware(
     if exempt(req.uri().path()) {
         return next.run(req).await;
     }
+    if matches!(
+        req.extensions().get::<AuthState>(),
+        Some(AuthState::Invalid)
+    ) && let Some(ip) = client_ip(&req)
+    {
+        // Ungültige Zugangsdaten kosten IP-Kontingent (Token-Raten, abgelaufene Cookies).
+        let now_ms = p.app.clock.now().timestamp_millis();
+        let d = p.limiter.take(
+            &format!("ipc:{ip}"),
+            p.cfg.rate.ip_credentialed,
+            p.cfg.rate.period_secs,
+            1.0,
+            now_ms,
+        );
+        if !d.allowed {
+            return rejection(&req, &d, "requests per IP");
+        }
+    }
     let (class, key) = match req.extensions().get::<AuthState>() {
         Some(AuthState::Authenticated { ctx, class }) => {
             let id = match ctx.actor {
@@ -365,7 +403,9 @@ pub async fn middleware(
                 }
                 lineal_app::Actor::System => ctx.org_id.to_string(),
             };
-            (*class, format!("user:{id}"))
+            // Je Klasse ein Bucket (die Kapazität hängt an der Klasse); alle Credentials eines
+            // Users derselben Klasse (viele Keys/Sessions) teilen ihn.
+            (*class, format!("user:{class:?}:{id}"))
         }
         // Anonym/ungültig: bereits von Stufe 1 (IP) begrenzt.
         _ => return next.run(req).await,
@@ -491,6 +531,28 @@ mod tests {
             .map(|h| h.join().unwrap())
             .sum();
         assert_eq!(allowed, 10, "Prüfen und Abziehen sind atomar");
+    }
+
+    #[test]
+    fn full_table_sends_new_account_keys_to_a_strict_shared_bucket() {
+        let l = RateLimiter::with_max_buckets(10);
+        for i in 0..10 {
+            assert!(
+                l.take(&format!("req:user:u{i}"), 100.0, 3600.0, 1.0, 0)
+                    .allowed
+            );
+        }
+        // Neue Konten (z. B. massenhaft erzeugte Sessions/Keys) teilen sich 1/10 des Limits.
+        let ok = (0..50)
+            .filter(|i| {
+                l.take(&format!("req:user:new{i}"), 100.0, 3600.0, 1.0, 1)
+                    .allowed
+            })
+            .count();
+        assert_eq!(ok, 10);
+        assert!(l.len() <= 11);
+        // Bestehende Konten behalten ihren Stand.
+        assert!(l.take("req:user:u0", 100.0, 3600.0, 1.0, 2).allowed);
     }
 
     #[test]
