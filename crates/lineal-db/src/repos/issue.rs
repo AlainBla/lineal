@@ -452,23 +452,29 @@ impl IssueRepo for PgTx {
     }
 
     async fn save(&mut self, i: &Issue, now: DateTime<Utc>) -> AppResult<Issue> {
-        // Teamwechsel/neue Nummer separat und nur bei echter Änderung: Steht eine Schlüsselspalte
-        // (team_id, number) in der SET-Liste, sperrt Postgres die Zeile wegen der BEFORE-UPDATE-
-        // Trigger (Kennung, Volltext, Statustyp) vorab mit FOR UPDATE statt FOR NO KEY UPDATE und
-        // verklemmt sich mit den KEY-SHARE-Sperren paralleler Fremdschlüssel-Inserts (Kommentare ...).
-        sqlx::query(
-            "UPDATE issue SET team_id = $3, number = $4 WHERE organization_id = $1 AND id = $2 \
-             AND (team_id, number) IS DISTINCT FROM ($3, $4)",
+        // Steht eine Schlüsselspalte (team_id, number) in der SET-Liste, sperrt Postgres die Zeile
+        // wegen der BEFORE-UPDATE-Trigger (Kennung, Volltext, Statustyp) vorab mit FOR UPDATE statt
+        // FOR NO KEY UPDATE und verklemmt sich mit den KEY-SHARE-Sperren paralleler Fremdschlüssel-
+        // Inserts (Kommentare, Anhänge, Sub-Issues ...). Darum nur bei echtem Teamwechsel setzen.
+        let key_changed: bool = sqlx::query_scalar(
+            "SELECT (team_id, number) IS DISTINCT FROM ($3, $4) FROM issue \
+             WHERE organization_id = $1 AND id = $2",
         )
         .bind(self.org.0)
         .bind(i.id.0)
         .bind(i.team_id.0)
         .bind(i.number)
-        .execute(&mut *self.tx)
+        .fetch_optional(&mut *self.tx)
         .await
-        .map_err(|e| super::org::conflict_or_internal(e, "issue number already in use"))?;
-        let row = sqlx::query_as::<_, IssueRow>(&format!(
-            "UPDATE issue SET title = $3, description = $4, state_id = $5, \
+        .map_err(db_err)?
+        .unwrap_or(false);
+        let key_set = if key_changed {
+            "team_id = $39, number = $40, "
+        } else {
+            ""
+        };
+        let sql = format!(
+            "UPDATE issue SET {key_set}title = $3, description = $4, state_id = $5, \
              state_entered_at = $6, priority = $7, estimate = $8, assignee_id = $9, delegate_id = $10, \
              parent_id = $11, project_id = $12, project_milestone_id = $13, cycle_id = $14, due_date = $15, \
              sort_order = $16, priority_sort_order = $17, sub_issue_sort_order = $18, \
@@ -478,48 +484,55 @@ impl IssueRepo for PgTx {
              sla_started_at = $31, sla_medium_risk_at = $32, sla_high_risk_at = $33, sla_breaches_at = $34, \
              trashed = $35, trashed_at = $36, archived_at = $37, version = version + 1, updated_at = $38 \
              WHERE organization_id = $1 AND id = $2 RETURNING {COLS}"
-        ))
-        .bind(self.org.0)
-        .bind(i.id.0)
-        .bind(&i.title)
-        .bind(&i.description)
-        .bind(i.state_id.0)
-        .bind(i.state_entered_at)
-        .bind(i.priority.value() as i32)
-        .bind(i.estimate)
-        .bind(i.assignee_id.map(|u| u.0))
-        .bind(i.delegate_id.map(|u| u.0))
-        .bind(i.parent_id.map(|u| u.0))
-        .bind(i.project_id.map(|u| u.0))
-        .bind(i.project_milestone_id.map(|u| u.0))
-        .bind(i.cycle_id.map(|u| u.0))
-        .bind(i.due_date)
-        .bind(i.sort_order)
-        .bind(i.priority_sort_order)
-        .bind(i.sub_issue_sort_order)
-        .bind(i.started_triage_at)
-        .bind(i.triaged_at)
-        .bind(i.started_at)
-        .bind(i.completed_at)
-        .bind(i.canceled_at)
-        .bind(i.auto_closed_at)
-        .bind(i.snoozed_until_at)
-        .bind(i.snoozed_by_id.map(|u| u.0))
-        .bind(i.added_to_team_at)
-        .bind(i.added_to_cycle_at)
-        .bind(i.added_to_project_at)
-        .bind(i.sla_type.map(|t| t.as_str()))
-        .bind(i.sla_started_at)
-        .bind(i.sla_medium_risk_at)
-        .bind(i.sla_high_risk_at)
-        .bind(i.sla_breaches_at)
-        .bind(i.trashed)
-        .bind(i.trashed_at)
-        .bind(i.archived_at)
-        .bind(now)
-        .fetch_optional(&mut *self.tx)
-        .await
-        .map_err(|e| super::org::conflict_or_internal(e, "issue number already in use"))?;
+        );
+        let q = sqlx::query_as::<_, IssueRow>(&sql)
+            .bind(self.org.0)
+            .bind(i.id.0)
+            .bind(&i.title)
+            .bind(&i.description)
+            .bind(i.state_id.0)
+            .bind(i.state_entered_at)
+            .bind(i.priority.value() as i32)
+            .bind(i.estimate)
+            .bind(i.assignee_id.map(|u| u.0))
+            .bind(i.delegate_id.map(|u| u.0))
+            .bind(i.parent_id.map(|u| u.0))
+            .bind(i.project_id.map(|u| u.0))
+            .bind(i.project_milestone_id.map(|u| u.0))
+            .bind(i.cycle_id.map(|u| u.0))
+            .bind(i.due_date)
+            .bind(i.sort_order)
+            .bind(i.priority_sort_order)
+            .bind(i.sub_issue_sort_order)
+            .bind(i.started_triage_at)
+            .bind(i.triaged_at)
+            .bind(i.started_at)
+            .bind(i.completed_at)
+            .bind(i.canceled_at)
+            .bind(i.auto_closed_at)
+            .bind(i.snoozed_until_at)
+            .bind(i.snoozed_by_id.map(|u| u.0))
+            .bind(i.added_to_team_at)
+            .bind(i.added_to_cycle_at)
+            .bind(i.added_to_project_at)
+            .bind(i.sla_type.map(|t| t.as_str()))
+            .bind(i.sla_started_at)
+            .bind(i.sla_medium_risk_at)
+            .bind(i.sla_high_risk_at)
+            .bind(i.sla_breaches_at)
+            .bind(i.trashed)
+            .bind(i.trashed_at)
+            .bind(i.archived_at)
+            .bind(now);
+        let q = if key_changed {
+            q.bind(i.team_id.0).bind(i.number)
+        } else {
+            q
+        };
+        let row = q
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(|e| super::org::conflict_or_internal(e, "issue number already in use"))?;
         row.ok_or_else(|| AppError::not_found("Could not find referenced Issue."))?
             .into_issue()
     }
@@ -741,6 +754,10 @@ impl IssueRepo for PgTx {
         team: TeamId,
         state: StateId,
     ) -> AppResult<(Option<f64>, Option<f64>)> {
+        // Neue Issues erhalten min/max ± 1: unter Sperre lesen (gilt bis Commit), sonst vergeben
+        // parallele Anlagen im selben Status dieselbe Position.
+        self.advisory_lock_inner("issue_sort", Some(state.0))
+            .await?;
         sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
             "SELECT min(sort_order), max(sort_order) FROM issue WHERE organization_id = $1 AND team_id = $2 \
              AND state_id = $3 AND NOT trashed AND archived_at IS NULL",

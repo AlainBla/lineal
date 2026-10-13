@@ -378,6 +378,8 @@ impl App {
             ));
         }
         ensure_editable(&team, None, input.state_type)?;
+        // Nächste Position und Namenseindeutigkeit gegen parallele Anlage im Team serialisieren.
+        tx.advisory_lock("team_states", Some(team.id.0)).await?;
         let existing = tx.states().list_for_team(team.id, false).await?;
         if existing
             .iter()

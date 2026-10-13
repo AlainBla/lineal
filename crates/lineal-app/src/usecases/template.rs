@@ -328,7 +328,21 @@ impl App {
                     .await?;
                 let sort_order = match input.sort_order {
                     Some(s) => s,
-                    None => now.timestamp_millis() as f64,
+                    None => {
+                        // Eindeutig auch bei paralleler Anlage im selben Scope (Millisekunde).
+                        let scope = team.as_ref().map(|t| t.id);
+                        tx.advisory_lock("template_sort", scope.map(|t| t.0))
+                            .await?;
+                        let max = tx
+                            .templates()
+                            .list_active()
+                            .await?
+                            .into_iter()
+                            .filter(|t| t.team_id == scope)
+                            .map(|t| t.sort_order)
+                            .fold(f64::MIN, f64::max);
+                        (now.timestamp_millis() as f64).max(max + 1.0)
+                    }
                 };
                 let t = tx
                     .templates()

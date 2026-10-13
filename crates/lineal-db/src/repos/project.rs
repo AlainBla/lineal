@@ -1240,6 +1240,10 @@ impl ProjectRepo for PgTx {
     }
 
     async fn max_milestone_sort_order(&mut self, project: ProjectId) -> AppResult<f64> {
+        // Parallele Anlage: Das Maximum erst unter Sperre lesen (gilt bis Commit), sonst vergeben
+        // zwei Aufrufe dieselbe Position (max + 1).
+        self.advisory_lock_inner("milestone_sort", Some(project.0))
+            .await?;
         let v: Option<f64> = sqlx::query_scalar(
             "SELECT max(sort_order) FROM project_milestone WHERE organization_id = $1 AND project_id = $2",
         )

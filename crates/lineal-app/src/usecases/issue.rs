@@ -1221,6 +1221,26 @@ impl App {
         issue.assignee_id = keep_person_after_move(tx, z, issue.assignee_id).await?;
         issue.delegate_id = keep_person_after_move(tx, z, issue.delegate_id).await?;
         let _ = estimation_of(&snap.tree, z);
+        // docs/02 §7 Schritt 12: Abonnenten ohne Zugriff auf ein nicht öffentliches Zielteam
+        // werden entfernt.
+        if z.visibility != lineal_domain::enums::TeamVisibility::Public {
+            let subscribers = tx.notifications().issue_subscribers(issue.id).await?;
+            let mut without_access = Vec::new();
+            {
+                let mut fan =
+                    crate::usecases::notification::fanout::Fan::new(&mut *tx, now, None).await?;
+                for u in subscribers {
+                    if !fan.can_see_any(u, &[z.id]).await? {
+                        without_access.push(u);
+                    }
+                }
+            }
+            for u in without_access {
+                tx.notifications()
+                    .unsubscribe_issue(issue.id, u, now)
+                    .await?;
+            }
+        }
         labels_available_in(tx, &snap.tree, z.id, old_labels).await
     }
 

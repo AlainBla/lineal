@@ -684,7 +684,7 @@ fn leave_closure(tree: &TeamTree, team: TeamId, also_parents: bool, guest: bool)
 
 /// Räumt nach dem Austritt von `user` aus `left` auf (docs/02 §4.2, Tabelle „Effekte des
 /// Austritts“): In nicht öffentlichen Teams (`restricted`, `private`) verlieren offene Issues
-/// den Assignee (mit History), seine Abos auf Issues des Teams entfernt und ein
+/// den Assignee (mit History), seine Abos auf Issues des Teams werden entfernt und ein
 /// Projekt-Lead ohne verbleibenden Zugriff geleert. Öffentliche Teams bleiben unberührt.
 async fn release_after_leave(
     tx: &mut dyn Tx,

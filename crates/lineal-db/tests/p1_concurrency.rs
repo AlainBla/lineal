@@ -11,6 +11,7 @@ use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
 use lineal_app::usecases::label::SaveLabelInput;
 use lineal_app::usecases::project::SaveProjectInput;
+use lineal_app::usecases::project::milestone::SaveMilestoneInput;
 use lineal_app::usecases::state::CreateStateInput;
 use lineal_app::usecases::team::{CreateTeamInput, NestOptions};
 use lineal_app::usecases::template::SaveTemplateInput;
@@ -1273,4 +1274,191 @@ async fn b1_15_bestandsmigration_cleans_existing_rows(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(subs, 0);
+}
+
+/// B1.16: Teamwechsel in ein privates Team entfernt Abonnenten ohne Zugriff.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_16_move_to_private_team_drops_subscribers_without_access(pool: PgPool) {
+    let fx = setup(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    let issue = fx
+        .app
+        .create_issue(
+            &bob,
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Move me".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue;
+    let id = issue.id.to_string();
+    fx.app.subscribe_issue(&alice(), &id, None).await.unwrap();
+    fx.app.subscribe_issue(&bob, &id, None).await.unwrap();
+    fx.app
+        .update_issue(
+            &bob,
+            UpdateIssueInput {
+                id: id.clone(),
+                team: Some("DES".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let active = |user: Uuid| {
+        let pool = fx.pool.clone();
+        let issue = issue.id.0;
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM issue_subscription WHERE issue_id = $1 AND user_id = $2 AND active",
+            )
+            .bind(issue)
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(active(fx.data.alice.0).await, 0, "Abo ohne Zugriff bleibt");
+    assert_eq!(
+        active(fx.data.bob.0).await,
+        1,
+        "Abo mit Zugriff muss bleiben"
+    );
+}
+
+/// B1.18: parallele Anlage vergibt eindeutige Sortierpositionen (Meilensteine, Status, Issues,
+/// Templates).
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_18_parallel_creates_get_unique_sort_orders(pool: PgPool) {
+    let fx = setup(pool).await;
+    let project = fx
+        .app
+        .save_project(
+            &alice(),
+            SaveProjectInput {
+                name: Some("Sorted".into()),
+                add_teams: vec!["ENG".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .identifier;
+    let n = 10;
+    let calls = (0..n).map(|i| {
+        let (app, project) = (fx.app.clone(), project.clone());
+        async move {
+            app.save_milestone(
+                &alice(),
+                SaveMilestoneInput {
+                    project,
+                    id: None,
+                    name: Some(format!("M{i}")),
+                    description: None,
+                    target_date: None,
+                },
+            )
+            .await
+            .map(|_| ())
+        }
+    });
+    let rs = futures_join_all(calls).await;
+    assert_no_internal("milestones", &rs);
+    assert!(rs.iter().all(Result::is_ok), "{rs:?}");
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT sort_order FROM project_milestone WHERE name ~ '^M[0-9]+$' GROUP BY sort_order HAVING count(*) > 1) d",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(dup, 0, "doppelte Meilenstein-Positionen");
+
+    // Status gleicher Kategorie.
+    let calls = (0..6).map(|i| {
+        let app = fx.app.clone();
+        async move {
+            app.create_workflow_state(
+                &alice(),
+                CreateStateInput {
+                    team: "ENG".into(),
+                    name: format!("Dev{i}"),
+                    state_type: StateType::Started,
+                    color: "#112233".into(),
+                    description: None,
+                    position: None,
+                },
+            )
+            .await
+            .map(|_| ())
+        }
+    });
+    let rs = futures_join_all(calls).await;
+    assert_no_internal("states", &rs);
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT position FROM workflow_state WHERE type = 'started' \
+         GROUP BY team_id, position HAVING count(*) > 1) d",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(dup, 0, "doppelte Status-Positionen");
+
+    // Issues im selben Status.
+    let calls = (0..6).map(|i| {
+        let app = fx.app.clone();
+        async move {
+            app.create_issue(
+                &alice(),
+                CreateIssueInput {
+                    team: "ENG".into(),
+                    title: Some(format!("I{i}")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+        }
+    });
+    let rs = futures_join_all(calls).await;
+    assert_no_internal("issues", &rs);
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT sort_order FROM issue GROUP BY team_id, state_id, sort_order \
+         HAVING count(*) > 1) d",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(dup, 0, "doppelte Issue-Positionen");
+
+    // Templates im selben Scope.
+    let calls = (0..6).map(|i| {
+        let app = fx.app.clone();
+        async move {
+            app.save_template(
+                &alice(),
+                SaveTemplateInput {
+                    template_type: Some(TemplateType::Document),
+                    name: Some(format!("Tpl{i}")),
+                    template_data: Some(serde_json::json!({ "title": "T", "content": "x" })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+        }
+    });
+    let rs = futures_join_all(calls).await;
+    assert_no_internal("templates", &rs);
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT sort_order FROM template WHERE name LIKE 'Tpl%' \
+         GROUP BY sort_order HAVING count(*) > 1) d",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(dup, 0, "doppelte Template-Positionen");
 }
