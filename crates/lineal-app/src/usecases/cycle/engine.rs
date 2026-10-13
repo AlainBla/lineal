@@ -340,6 +340,7 @@ pub async fn ensure_upcoming(
         .count();
     let mut last = all.iter().max_by_key(|c| c.starts_at).cloned();
     let mut guard = 0;
+    let mut first_iteration = true;
     while future_count < up {
         guard += 1;
         // Startdatum weit in der Vergangenheit: lieber ehrlich ablehnen als einen halben Zustand
@@ -350,12 +351,16 @@ pub async fn ensure_upcoming(
             )
             .with_details(serde_json::json!({ "field": "firstCycleStartDate" })));
         }
-        let window = match &last {
-            Some(l) => generate_following(&settings, tz, utc_to_local_date(l.ends_at, tz), 1)?,
-            None => {
-                let from = first_start.unwrap_or_else(|| utc_to_local_date(env.now, tz));
-                generate(&settings, tz, from, 1)?
+        // Beim Reaktivieren (es gibt Vorgänger, aber keinen künftigen Cycle) gilt das angegebene
+        // Startdatum für den ersten neuen Cycle; er beginnt nie vor dem Ende des Vorgängers (B5.21).
+        let explicit_first = first_start.filter(|_| first_iteration);
+        first_iteration = false;
+        let window = match (&last, explicit_first) {
+            (_, Some(from)) => generate(&settings, tz, from, 1)?,
+            (Some(l), None) => {
+                generate_following(&settings, tz, utc_to_local_date(l.ends_at, tz), 1)?
             }
+            (None, None) => generate(&settings, tz, utc_to_local_date(env.now, tz), 1)?,
         }
         .remove(0);
         let (ws, we) = match &last {

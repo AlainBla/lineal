@@ -1780,6 +1780,51 @@ async fn deactivating_cycles_closes_the_active_one_and_removes_upcoming(pool: Pg
     assert!(max >= 4);
 }
 
+/// B5.21: Cycles aus/ein am selben Tag, dann „Start cycle today“ – der Vorgänger wurde heute
+/// geschlossen; der Cycle beginnt direkt nach dessen Ende statt zu überlappen.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn start_cycle_today_after_cycles_toggled_same_day(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    app.configure_team_cycles(&bob, "DES", settings_on(date(2026, 10, 5)))
+        .await
+        .unwrap();
+    app.configure_team_cycles(
+        &bob,
+        "DES",
+        CycleSettingsInput {
+            cycles_enabled: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    app.configure_team_cycles(
+        &bob,
+        "DES",
+        CycleSettingsInput {
+            cycles_enabled: Some(true),
+            first_start_date: Some(date(2026, 10, 12)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let next: Uuid = sqlx::query_scalar(
+        "SELECT id FROM cycle WHERE team_id = $1 AND completed_at IS NULL AND starts_at > $2 ORDER BY starts_at LIMIT 1",
+    )
+    .bind(data.des.0)
+    .bind(utc(2026, 10, 10, 7, 15))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let v = app
+        .start_cycle_today(&bob, &next.to_string())
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(v.is_active);
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn cycle_shift_start_today_and_archive(pool: PgPool) {
     let (app, data, pool) = setup(pool).await;
