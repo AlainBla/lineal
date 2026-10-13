@@ -1,5 +1,19 @@
+import {
+  closestCorners,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Plus } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -7,7 +21,8 @@ import { cn } from "@/lib/cn";
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { IssueRow } from "./issue-row";
-import type { BoardColumn } from "./model";
+import { applyDrop, COLUMN_PREFIX, type BoardColumn, type DropResult } from "./model";
+import type { Issue } from "@/gql/graphql";
 import type { Selection } from "./selection";
 
 interface ListProps {
@@ -19,6 +34,39 @@ interface ListProps {
   /** „+“ im Gruppenkopf: Issue mit Gruppenstatus anlegen. */
   onCreateInGroup?: (stateId: string) => void;
   selection?: Selection;
+  /**
+   * Drag & Drop zum Umsortieren (nur bei manueller Sortierung, docs/05 §2.5): innerhalb der Gruppe
+   * ändert es `sortOrder`, in eine andere Gruppe zusätzlich den Status.
+   */
+  onDrop?: (result: DropResult & { issue: Issue }) => void;
+}
+
+function SortableRow({ id, children }: { id: string; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      data-sortable-id={id}
+      {...attributes}
+      role="listitem"
+      {...listeners}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(isDragging && "opacity-40")}
+    >
+      {children}
+    </div>
+  );
+}
+
+function GroupDrop({ id, children }: { id: string; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} className={cn("min-h-2", isOver && "bg-surface-hover")}>
+      {children}
+    </div>
+  );
 }
 
 /** Liste nach Status gruppiert (einklappbar, `+` je Gruppe). */
@@ -30,7 +78,22 @@ export function IssueList({
   onFocus,
   onCreateInGroup,
   selection,
+  onDrop,
 }: ListProps) {
+  const [dragging, setDragging] = useState<Issue | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
+    }),
+  );
+  const all = groups.flatMap((g) => g.issues);
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragging(null);
+    const result = applyDrop(groups, String(e.active.id), e.over ? String(e.over.id) : null);
+    const issue = all.find((i) => i.id === result.issueId);
+    if (result.patch && issue) onDrop?.({ ...result, issue });
+  };
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setCollapsed((prev) => {
@@ -39,7 +102,7 @@ export function IssueList({
       return next;
     });
 
-  return (
+  const list = (
     <div role="list" aria-label="Issues">
       {groups.map(({ state, issues }) => {
         const closed = collapsed.has(state.id);
@@ -77,21 +140,65 @@ export function IssueList({
               )}
             </header>
             {!closed &&
-              issues.map((issue) => (
-                <div role="listitem" key={issue.id}>
-                  <IssueRow
-                    issue={issue}
-                    ws={ws}
-                    lookup={lookup}
-                    focused={focusedId === issue.id}
-                    onFocus={onFocus}
-                    selection={selection}
-                  />
-                </div>
+              (onDrop ? (
+                <GroupDrop id={COLUMN_PREFIX + state.id}>
+                  <SortableContext
+                    items={issues.map((i) => i.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {issues.map((issue) => (
+                      <SortableRow key={issue.id} id={issue.id}>
+                        <IssueRow
+                          issue={issue}
+                          ws={ws}
+                          lookup={lookup}
+                          focused={focusedId === issue.id}
+                          onFocus={onFocus}
+                          selection={selection}
+                        />
+                      </SortableRow>
+                    ))}
+                  </SortableContext>
+                </GroupDrop>
+              ) : (
+                issues.map((issue) => (
+                  <div role="listitem" key={issue.id}>
+                    <IssueRow
+                      issue={issue}
+                      ws={ws}
+                      lookup={lookup}
+                      focused={focusedId === issue.id}
+                      onFocus={onFocus}
+                      selection={selection}
+                    />
+                  </div>
+                ))
               ))}
           </section>
         );
       })}
     </div>
+  );
+  if (!onDrop) return list;
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={(e: DragStartEvent) =>
+        setDragging(all.find((i) => i.id === String(e.active.id)) ?? null)
+      }
+      onDragEnd={onDragEnd}
+      onDragCancel={() => setDragging(null)}
+    >
+      {list}
+      <DragOverlay>
+        {dragging && (
+          <div className="rounded-md border border-border-strong bg-card px-4 py-2 text-sm shadow-popover">
+            <span className="mr-2 text-xs text-muted-foreground">{dragging.identifier}</span>
+            {dragging.title}
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }

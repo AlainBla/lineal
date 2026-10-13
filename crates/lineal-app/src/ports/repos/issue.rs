@@ -93,6 +93,8 @@ pub struct IssueExtras {
     pub label_names: Vec<String>,
     pub label_ids: Vec<LabelId>,
     pub children_count: i64,
+    /// Anzahl der (nicht archivierten) Anhänge/Links.
+    pub link_count: i64,
 }
 
 /// Quelle eines History-Eintrags (`issue_history.source`).

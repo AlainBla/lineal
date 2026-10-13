@@ -140,10 +140,7 @@ export function titleForPath(pathname: string): string {
 }
 
 /** In der Navigation verlinkte, aber noch nicht gebaute Seiten: Platzhalter statt 404. */
-const PLANNED_PATHS = [
-  /^\/[^/]+\/drafts\/?$/,
-  /^\/[^/]+\/team\/[^/]+\/(overview|triage|archive)\/?$/,
-];
+const PLANNED_PATHS = [/^\/[^/]+\/team\/[^/]+\/(overview|archive)\/?$/];
 
 export const isPlannedPath = (pathname: string): boolean =>
   PLANNED_PATHS.some((re) => re.test(pathname));
