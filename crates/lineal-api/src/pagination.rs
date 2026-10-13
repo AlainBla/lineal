@@ -101,9 +101,21 @@ impl PageRequest {
     }
 }
 
+/// Prüft das `first`-Argument eines Resolvers: fehlend = `default`, kleiner 1 = `invalid_request`
+/// und größer `max` ebenfalls (B8.16, docs/00 §5).
+pub fn first_arg(first: Option<i32>, default: i32, max: i32) -> AppResult<i32> {
+    match first {
+        None => Ok(default),
+        Some(n) if !(1..=max).contains(&n) => Err(AppError::invalid_request(format!(
+            "first/limit must be between 1 and {max}."
+        ))),
+        Some(n) => Ok(n),
+    }
+}
+
 /// Baut den `PageRequest` aus `first/after/last/before` (GraphQL) bzw. `limit/cursor`
 /// (REST/MCP; dort `first = limit`, `after = cursor`). `max` ist 250 bzw. 50 für Projekte;
-/// größere Werte werden auf `max` begrenzt. Rückwärts-Paginierung (`last`/`before`) wird
+/// Werte außerhalb 1..=`max` sind `invalid_request`. Rückwärts-Paginierung (`last`/`before`) wird
 /// nicht unterstützt (`invalid_request`).
 pub fn page_request(
     first: Option<i32>,
@@ -120,12 +132,18 @@ pub fn page_request(
     }
     let limit = match first {
         None => DEFAULT_PAGE_SIZE.min(max),
-        Some(n) if n < 1 => {
-            return Err(AppError::invalid_request("first/limit must be at least 1."));
-        }
-        Some(n) => u32::try_from(n).unwrap_or(max).min(max),
+        Some(n) => u32::try_from(first_arg(
+            Some(n),
+            1,
+            i32::try_from(max).unwrap_or(i32::MAX),
+        )?)
+        .unwrap_or(max),
     };
-    let after = after.map(|c| Cursor::decode(c, order_by)).transpose()?;
+    // Ein leerer Cursor gilt wie `null` (B8.16).
+    let after = after
+        .filter(|c| !c.is_empty())
+        .map(|c| Cursor::decode(c, order_by))
+        .transpose()?;
     Ok(PageRequest {
         limit,
         after,
@@ -212,9 +230,13 @@ mod tests {
         let o = PaginationOrderBy::default();
         let lim = |first, max| page_request(first, None, None, None, o, max).map(|r| r.limit);
         assert_eq!(lim(None, 250).unwrap(), 50);
-        assert_eq!(lim(Some(999), 250).unwrap(), 250);
-        assert_eq!(lim(Some(999), 50).unwrap(), 50);
+        assert_eq!(lim(Some(250), 250).unwrap(), 250);
+        assert!(lim(Some(251), 250).is_err());
+        assert!(lim(Some(51), 50).is_err());
         assert!(lim(Some(0), 250).is_err());
+        assert!(lim(Some(-1), 250).is_err());
+        let empty = page_request(Some(5), Some(""), None, None, o, 250).unwrap();
+        assert!(empty.after.is_none());
         assert!(page_request(None, None, Some(5), None, o, 250).is_err());
     }
 

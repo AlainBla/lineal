@@ -146,7 +146,10 @@ impl LabelQuery {
                     name,
                     include_groups: include_groups.unwrap_or(true),
                     include_archived: include_archived.unwrap_or(false),
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )

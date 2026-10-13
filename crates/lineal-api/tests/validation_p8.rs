@@ -112,3 +112,67 @@ async fn nul_characters_are_invalid_request_not_internal(pool: sqlx::PgPool) {
     .await;
     assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
 }
+
+fn ext(res: &async_graphql::Response) -> Value {
+    let e = res.errors.first().expect("expected error");
+    serde_json::to_value(e).unwrap()["extensions"].clone()
+}
+
+/// B8.15: ungültige Eingaben (Argument-Coercion, Enum-Werte, Zeitpunkte) sind `invalid_request`.
+/// B8.18: `extensions.details` ist ein Objekt.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn invalid_inputs_are_invalid_request_with_object_details(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let alice = || ctx_for(SeedUser::Alice);
+    let r = run(
+        &schema,
+        alice(),
+        "mutation { teamUpdate(id: \"ENG\", input: { issueEstimationType: \"bogus\" }) { success } }",
+        json!({}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+    // Details bleiben ein Objekt (kein JSON-String).
+    let r = run(
+        &schema,
+        alice(),
+        "mutation($u: String!, $r: String!) { userRoleUpdate(userId: $u, role: $r) { success } }",
+        json!({"u": SeedData::acme().bob.to_string(), "r": "superhero"}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+    assert!(ext(&r)["details"].is_object(), "{}", ext(&r));
+    assert!(ext(&r)["requestId"].is_string());
+    let r = run(
+        &schema,
+        alice(),
+        "mutation($i: NotificationUpdateInput!) { notificationUpdate(id: \"00000000-0000-0000-0000-000000000000\", input: $i) { success } }",
+        json!({"i": {"snoozedUntilAt": "morgen"}}),
+    )
+    .await;
+    assert_eq!(code(&r), "invalid_request", "{:?}", r.errors);
+}
+
+/// B8.16: `first` außerhalb 1..=250 ist überall `invalid_request`.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn first_out_of_range_is_invalid_request(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    for q in [
+        "{ issues(first: 0) { nodes { id } } }",
+        "{ issues(first: -1) { nodes { id } } }",
+        "{ issues(first: 251) { nodes { id } } }",
+        "{ teams(first: 0) { id } }",
+        "{ notifications(first: -1) { nodes { id } } }",
+    ] {
+        let r = run(&schema, ctx_for(SeedUser::Alice), q, json!({})).await;
+        assert_eq!(code(&r), "invalid_request", "{q}: {:?}", r.errors);
+    }
+    let r = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        "{ issues(first: 5, after: \"\") { nodes { id } } }",
+        json!({}),
+    )
+    .await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+}

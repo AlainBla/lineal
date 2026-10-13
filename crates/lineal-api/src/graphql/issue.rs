@@ -144,7 +144,10 @@ impl IssueGql {
                     parent: Some(self.id.clone()),
                     include_archived: false,
                     order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(first.unwrap_or(50).clamp(1, 100)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 100),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )
@@ -386,6 +389,7 @@ impl IssueQuery {
     ) -> async_graphql::Result<IssueConnection> {
         let cursor = after
             .as_deref()
+            .filter(|c| !c.is_empty())
             .map(|c| -> AppResult<PageCursor> {
                 let (k, i) = c
                     .split_once('|')
@@ -414,7 +418,10 @@ impl IssueQuery {
                     priority: priority.map(i64::from),
                     include_archived: include_archived.unwrap_or(false),
                     order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     cursor,
                     ..Default::default()
                 },

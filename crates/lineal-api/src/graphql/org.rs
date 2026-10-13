@@ -3,7 +3,7 @@
 //! `createWorkspace` braucht eine Konto-Session ohne Workspace-Kontext und folgt mit WP03/WP16.
 
 use crate::context::{app, request_ctx};
-use async_graphql::{Context, ErrorExtensions, InputObject, Object, SimpleObject};
+use async_graphql::{Context, InputObject, Object, SimpleObject};
 use lineal_app::AppError;
 use lineal_app::policy::OrgPolicy;
 use lineal_app::ports::repos::org::Org;
@@ -14,11 +14,8 @@ use lineal_domain::enums::UserRole;
 
 /// Fehler nach docs/09 §1.2: `extensions.code` = `error` aus docs/00 §7.
 pub(crate) fn gql_err(e: AppError) -> async_graphql::Error {
-    async_graphql::Error::new(e.message.clone()).extend_with(|_, ext| {
-        ext.set("code", e.kind.code());
-        ext.set("status", e.kind.http_status());
-        ext.set("details", e.details.to_string());
-    })
+    // Einheitliche Fehlerform (code, status, requestId, details als Objekt; B8.18).
+    crate::error::gql_error(&e, &crate::middleware::request_id::current())
 }
 
 /// `Organization`.

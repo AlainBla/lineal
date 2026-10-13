@@ -144,10 +144,24 @@ fn operation<'a>(
     }
 }
 
-/// Antwort auf einen unlesbaren Request-Body (Fehlermodell, Status der Rejection).
+/// Antwort auf einen unlesbaren Request-Body (Fehlermodell). Daten-/Syntaxfehler (z. B. ein
+/// JSON-Array als Batch) sind `400 invalid_request` ohne interne Serde-Meldung (B8.17).
 pub fn bad_body(rejection: &JsonRejection) -> Response {
-    let mut res = graphql_error_response(&AppError::invalid_request(rejection.body_text()));
-    *res.status_mut() = rejection.status();
+    let status = rejection.status();
+    let message = match rejection {
+        JsonRejection::JsonDataError(_) | JsonRejection::JsonSyntaxError(_) => {
+            "The request body must be a single GraphQL request object with a `query` string \
+             (batching is not supported)."
+                .to_owned()
+        }
+        other => other.body_text(),
+    };
+    let mut res = graphql_error_response(&AppError::invalid_request(message));
+    *res.status_mut() = if status == StatusCode::UNPROCESSABLE_ENTITY {
+        StatusCode::BAD_REQUEST
+    } else {
+        status
+    };
     res
 }
 
@@ -161,7 +175,7 @@ fn finish_errors(response: &mut GqlResponse, request_id: &str) -> bool {
     for e in &mut response.errors {
         let ext = e.extensions.get_or_insert_with(Default::default);
         if ext.get("code").is_none() {
-            if e.path.is_empty() {
+            if e.path.is_empty() || crate::error::is_engine_input_error(&e.message) {
                 ext.set("code", "invalid_request");
                 ext.set("status", 400);
             } else {

@@ -302,7 +302,10 @@ impl InitiativeQuery {
                     query,
                     include_archived: include_archived.unwrap_or(false),
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 250)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -341,7 +344,10 @@ impl InitiativeQuery {
                     initiative: initiative_id,
                     include_archived: include_archived.unwrap_or(false),
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 250)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
                         ..Default::default()
                     },
                     ..Default::default()

@@ -368,8 +368,15 @@ impl CommentQuery {
             ));
         }
         let order = order_by.unwrap_or_default();
-        let req = page_request(first, after.as_deref(), None, None, order, MAX_PAGE_SIZE)
-            .map_err(gql_err)?;
+        let req = page_request(
+            first,
+            after.as_deref().filter(|c| !c.is_empty()),
+            None,
+            None,
+            order,
+            MAX_PAGE_SIZE,
+        )
+        .map_err(gql_err)?;
         let cursor = req.after.as_ref().map(cursor_to_page).transpose()?;
         let page = app(ctx)?
             .list_comments(

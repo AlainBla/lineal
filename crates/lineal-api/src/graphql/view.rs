@@ -293,7 +293,7 @@ impl ViewQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<CustomViewConnection> {
-        let cursor = decode_cursor(after.as_deref()).gql(ctx)?;
+        let cursor = decode_cursor(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let model = model_name.as_deref().map(model).transpose().gql(ctx)?;
         let page = app(ctx)?
             .list_views(
@@ -304,7 +304,10 @@ impl ViewQuery {
                     shared,
                     query,
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
                         cursor,
                         order_by: OrderBy::UpdatedAt,
                     },
@@ -386,7 +389,7 @@ impl ViewQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<IssueConnection> {
-        let cursor = decode_cursor(after.as_deref()).gql(ctx)?;
+        let cursor = decode_cursor(after.as_deref().filter(|c| !c.is_empty())).gql(ctx)?;
         let page = app(ctx)?
             .list_issues(
                 request_ctx(ctx)?,
@@ -398,7 +401,10 @@ impl ViewQuery {
                     include_sub_teams: include_sub_teams.unwrap_or(false),
                     include_archived: include_archived.unwrap_or(false),
                     order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     cursor,
                     ..Default::default()
                 },

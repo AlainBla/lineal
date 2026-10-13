@@ -233,7 +233,10 @@ impl TeamExtraQuery {
                 LabelKind::Project,
                 ListLabelsInput {
                     include_groups: include_groups.unwrap_or(true),
-                    limit: i64::from(first.unwrap_or(100).clamp(1, 250)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 100, 250),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )

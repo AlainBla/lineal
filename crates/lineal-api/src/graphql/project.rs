@@ -450,7 +450,10 @@ impl ProjectQuery {
                     include_members: true,
                     include_milestones: true,
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 50)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 50),
+                            ctx,
+                        )?),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -505,7 +508,10 @@ impl ProjectQuery {
                     project: project_id,
                     include_archived: include_archived.unwrap_or(false),
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 250)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
                         ..Default::default()
                     },
                     ..Default::default()
