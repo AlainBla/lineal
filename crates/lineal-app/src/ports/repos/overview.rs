@@ -60,6 +60,13 @@ pub struct ProjectHealthRow {
     pub team_id: TeamId,
     pub project_id: ProjectId,
     pub health: Option<String>,
+    /// Zeitpunkt des Health-Werts (letztes Update); Basis der Staleness (docs/04 §5.5).
+    pub health_updated_at: Option<DateTime<Utc>>,
+    /// `followWorkspace` | `custom` | `never`.
+    pub reminder_mode: String,
+    pub reminder_weeks: Option<i32>,
+    /// Status mit `indefinite`: keine Update-Erwartung.
+    pub indefinite: bool,
 }
 
 /// Initiative für die Übersicht.

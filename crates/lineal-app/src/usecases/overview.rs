@@ -20,7 +20,10 @@ use crate::resolve::user::actor_user_id;
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use lineal_domain::ids::{ProjectId, TeamId, UserId};
+use lineal_domain::enums::Health;
 use lineal_domain::rules::progress::stats;
+use super::project::pure::{Staleness, staleness};
+use super::project::update::reminder_cycle_days;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -420,9 +423,27 @@ impl App {
             .filter_map(|s| s.team_id.map(|t| (t, s)))
             .collect();
 
+        // Veraltete Health-Werte zählen als „no update“ (docs/04 §5.5 „Update missing“/grau).
+        let org_weeks = if health_rows.is_empty() {
+            None
+        } else {
+            tx.projects()
+                .reminder_settings()
+                .await?
+                .and_then(|s| s.project_frequency_in_weeks)
+        };
         let mut project_health_of: HashMap<ProjectId, Option<String>> = HashMap::new();
         for r in &health_rows {
-            project_health_of.insert(r.project_id, r.health.clone());
+            let health = r.health.as_deref().and_then(|h| h.parse::<Health>().ok());
+            let days = reminder_cycle_days(&r.reminder_mode, r.reminder_weeks, org_weeks);
+            let st = staleness(
+                !r.indefinite,
+                days,
+                health.zip(r.health_updated_at).map(|(h, at)| (at, h)),
+                now,
+            );
+            let stale = matches!(st, Staleness::Missing | Staleness::Grey);
+            project_health_of.insert(r.project_id, if stale { None } else { r.health.clone() });
         }
         let health_of = |teams: &BTreeSet<TeamId>| -> ProjectHealth {
             let ids: BTreeSet<ProjectId> = health_rows
