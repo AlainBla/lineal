@@ -799,6 +799,38 @@ impl TriageRepo for PgTx {
         Ok(())
     }
 
+    async fn count_recurring_for_template(&mut self, template: Uuid) -> AppResult<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM recurring_issue WHERE organization_id = $1 AND template_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(template)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn pause_recurring_run(
+        &mut self,
+        id: Uuid,
+        error: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE recurring_issue SET paused = true, last_error = left($3, 500), \
+             last_error_at = $4, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(error)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn orgs_with_recurring_due(&mut self, now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT organization_id FROM recurring_issue \

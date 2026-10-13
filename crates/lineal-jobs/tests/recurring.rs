@@ -398,16 +398,24 @@ async fn recurring_issue_validation_rights_and_missing_template(pool: PgPool) {
         .unwrap();
     assert_eq!((monthly.weekday, monthly.day_of_month), (None, Some(31)));
 
-    // Template archiviert: Lauf wird übersprungen, Fehler steht an der Regel, Job bricht nicht ab.
-    fx.app.delete_template(&alice(), &tpl).await.unwrap();
-    RecurringIssuesJob
-        .run(&fx.app, monthly.next_run_at)
+    // Ein Template mit aktiven Regeln lässt sich nicht löschen (B7.09) ...
+    assert_eq!(
+        kind(fx.app.delete_template(&alice(), &tpl).await),
+        ErrorKind::Conflict
+    );
+    // ... ist es trotzdem weg (hier direkt in der Datenbank archiviert), pausiert der Job die
+    // Regel mit Fehlermeldung, statt bei jedem Lauf still zu scheitern.
+    sqlx::query("UPDATE template SET archived_at = now() WHERE id = $1::uuid")
+        .bind(&tpl)
+        .execute(&fx.pool)
         .await
         .unwrap();
+    let created = fx.app.run_recurring_issues(monthly.next_run_at).await.unwrap();
+    assert_eq!(created, 0, "a skipped rule does not count as created");
     assert_eq!(count_issues(&fx, "Standup notes").await, 0);
     let after = by_id(&fx, weekly.id).await;
     assert!(after.last_error.is_some());
-    assert!(after.next_run_at > monthly.next_run_at);
+    assert!(after.paused, "a rule without template is paused");
 
     // Löschen; fremde ID → not_found.
     fx.app

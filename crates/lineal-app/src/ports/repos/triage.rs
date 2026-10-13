@@ -414,6 +414,20 @@ pub trait TriageRepo: Send {
     ) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Anzahl der wiederkehrenden Regeln, die dieses Template verwenden.
+    async fn count_recurring_for_template(&mut self, _template: Uuid) -> AppResult<i64> {
+        unimplemented_repo()
+    }
+    /// Pausiert eine Regel, die dauerhaft nicht ausgeführt werden kann (Template oder Team
+    /// fehlt), und vermerkt den Fehler.
+    async fn pause_recurring_run(
+        &mut self,
+        _id: Uuid,
+        _error: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
     /// Workspaces mit fälligen wiederkehrenden Issues (mandantenübergreifend).
     async fn orgs_with_recurring_due(&mut self, _now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         unimplemented_repo()
