@@ -6,8 +6,8 @@ use lineal_app::App;
 use lineal_app::AppResult;
 use lineal_app::ports::repos::NewJob;
 use lineal_domain::ids::JobId;
-use std::future::Future;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

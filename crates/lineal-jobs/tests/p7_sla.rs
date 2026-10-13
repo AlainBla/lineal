@@ -44,12 +44,11 @@ async fn sort_order_is_renumbered_when_gaps_collapse(pool: PgPool) {
             .await
             .unwrap();
     }
-    let updated_before: Vec<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let updated_before: Vec<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     let stats = app.run_sort_renumber(chrono::Utc::now()).await.unwrap();
     assert!(stats.errors.is_empty(), "{:?}", stats.errors);
     let rows: Vec<(String, f64)> = sqlx::query_as(
@@ -64,12 +63,11 @@ async fn sort_order_is_renumbered_when_gaps_collapse(pool: PgPool) {
         rows.windows(2).all(|w| w[1].1 - w[0].1 >= 1.0 - 1e-9),
         "gaps of at least 1: {rows:?}"
     );
-    let updated_after: Vec<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let updated_after: Vec<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(updated_before, updated_after, "no activity signal");
     let events: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM outbox_event WHERE payload->>'type' = 'IssueUpdated' \

@@ -410,7 +410,11 @@ async fn recurring_issue_validation_rights_and_missing_template(pool: PgPool) {
         .execute(&fx.pool)
         .await
         .unwrap();
-    let created = fx.app.run_recurring_issues(monthly.next_run_at).await.unwrap();
+    let created = fx
+        .app
+        .run_recurring_issues(monthly.next_run_at)
+        .await
+        .unwrap();
     assert_eq!(created, 0, "a skipped rule does not count as created");
     assert_eq!(count_issues(&fx, "Standup notes").await, 0);
     let after = by_id(&fx, weekly.id).await;

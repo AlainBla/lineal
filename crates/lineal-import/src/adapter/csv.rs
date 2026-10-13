@@ -32,9 +32,17 @@ const MAX_ROW_WARNINGS: usize = 500;
 fn state_type_is_guess(name: &str) -> bool {
     let n = name.to_lowercase();
     state_type(name) == "unstarted"
-        && !["todo", "to do", "unstarted", "open", "ready", "planned", "new"]
-            .iter()
-            .any(|k| n.contains(k))
+        && ![
+            "todo",
+            "to do",
+            "unstarted",
+            "open",
+            "ready",
+            "planned",
+            "new",
+        ]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 /// Ist die Priorität ein erkannter Wert (`urgent`, `high`, `medium`, `low`, `no priority`, 0-4)?
@@ -205,7 +213,9 @@ impl CsvSource {
             node.insert("identifier".into(), json!(ident));
             let title = rec.get(title_col).unwrap_or("");
             if title.trim().is_empty() {
-                warn(format!("row {row_no} ({ident}): empty title; `(untitled)` was used"));
+                warn(format!(
+                    "row {row_no} ({ident}): empty title; `(untitled)` was used"
+                ));
             } else if title.chars().count() > 255 {
                 warn(format!(
                     "row {row_no} ({ident}): the title is longer than 255 characters and was truncated"

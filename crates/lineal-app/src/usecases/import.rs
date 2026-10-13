@@ -697,6 +697,38 @@ impl App {
     }
 }
 
+/// Zwei gleichzeitige Läufe ins selbe Team würden sich gegenseitig mit Konflikten überschütten
+/// (doppelte Nummern, Mapping-Überschneidungen): ein zweiter echter Lauf wird abgelehnt, solange
+/// ein anderer Lauf für ein überlappendes Team `running` ist. Eine leere Teamliste heißt "alle".
+async fn ensure_no_overlapping_run(
+    tx: &mut dyn Tx,
+    run: &ImportRun,
+    teams: &[String],
+) -> AppResult<()> {
+    let mine: std::collections::BTreeSet<String> = teams.iter().map(|t| t.to_uppercase()).collect();
+    for other in tx.imports().list_import_runs(200).await? {
+        if other.id == run.id
+            || other.status != "running"
+            || other.options["dryRun"].as_bool() == Some(true)
+        {
+            continue;
+        }
+        let theirs: std::collections::BTreeSet<String> = other.options["teams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.as_str().map(str::to_uppercase))
+            .collect();
+        if mine.is_empty() || theirs.is_empty() || !mine.is_disjoint(&theirs) {
+            return Err(AppError::conflict(
+                "another import run is already running for the same team(s); wait for it to finish or cancel it first",
+            )
+            .with_details(json!({ "runId": other.id })));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,37 +778,4 @@ mod tests {
         assert!(Secret::new(&"x".repeat(600)).is_err());
         assert!(Secret::new("  lin_api_abcdefgh  ").is_ok());
     }
-}
-
-/// Zwei gleichzeitige Läufe ins selbe Team würden sich gegenseitig mit Konflikten überschütten
-/// (doppelte Nummern, Mapping-Überschneidungen): ein zweiter echter Lauf wird abgelehnt, solange
-/// ein anderer Lauf für ein überlappendes Team `running` ist. Eine leere Teamliste heißt "alle".
-async fn ensure_no_overlapping_run(
-    tx: &mut dyn Tx,
-    run: &ImportRun,
-    teams: &[String],
-) -> AppResult<()> {
-    let mine: std::collections::BTreeSet<String> =
-        teams.iter().map(|t| t.to_uppercase()).collect();
-    for other in tx.imports().list_import_runs(200).await? {
-        if other.id == run.id
-            || other.status != "running"
-            || other.options["dryRun"].as_bool() == Some(true)
-        {
-            continue;
-        }
-        let theirs: std::collections::BTreeSet<String> = other.options["teams"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|t| t.as_str().map(str::to_uppercase))
-            .collect();
-        if mine.is_empty() || theirs.is_empty() || !mine.is_disjoint(&theirs) {
-            return Err(AppError::conflict(
-                "another import run is already running for the same team(s); wait for it to finish or cancel it first",
-            )
-            .with_details(json!({ "runId": other.id })));
-        }
-    }
-    Ok(())
 }

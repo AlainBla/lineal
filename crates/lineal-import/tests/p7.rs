@@ -77,7 +77,10 @@ async fn interrupted_import_leaves_counters_usable(pool: PgPool) {
         .await
         .unwrap();
     assert!(matches!(out, RunOutcome::Failed(_)), "{out:?}");
-    assert!(e.count("SELECT count(*) FROM issue").await > 0, "some issues were imported");
+    assert!(
+        e.count("SELECT count(*) FROM issue").await > 0,
+        "some issues were imported"
+    );
     assert_eq!(e.count(BEHIND_SQL).await, 0, "counters follow the issues");
     assert!(e.count("SELECT max(last_issue_number) FROM team").await > 0);
     // Zähler zurücksetzen (harter Abbruch) und abbrechen: der Abbruch stellt sie wieder her.
@@ -139,13 +142,12 @@ impl lineal_import::ImportSource for SlowOnPage<'_> {
                     self.env.clock.set(t0() + chrono::Duration::minutes(10));
                 }
                 tokio::time::sleep(self.wait).await;
-                let lease: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-                    "SELECT lease_until FROM import_run WHERE id = $1",
-                )
-                .bind(self.run)
-                .fetch_one(&self.env.pool)
-                .await
-                .unwrap();
+                let lease: Option<chrono::DateTime<chrono::Utc>> =
+                    sqlx::query_scalar("SELECT lease_until FROM import_run WHERE id = $1")
+                        .bind(self.run)
+                        .fetch_one(&self.env.pool)
+                        .await
+                        .unwrap();
                 *self.lease_after_wait.lock().unwrap() = lease;
             }
         }
@@ -327,7 +329,11 @@ ENG-2,Engineering,{long},Odd Status,Extreme,yesterday\n"
     let ctx = e.alice_ctx();
     let run = e
         .app
-        .import_register_scanned(&ctx, "linearCsv", json!({ "teams": [{ "id": "csv-team-ENG", "key": "ENG", "name": "Engineering" }] }))
+        .import_register_scanned(
+            &ctx,
+            "linearCsv",
+            json!({ "teams": [{ "id": "csv-team-ENG", "key": "ENG", "name": "Engineering" }] }),
+        )
         .await
         .unwrap();
     e.app

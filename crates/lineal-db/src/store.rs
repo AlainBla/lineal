@@ -2,9 +2,9 @@
 
 use crate::db_err;
 use async_trait::async_trait;
-use lineal_app::{AppError, AppResult};
 use lineal_app::ports::repos::*;
 use lineal_app::ports::{Store, Tx};
+use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::OrgId;
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};

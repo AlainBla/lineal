@@ -42,9 +42,7 @@ async fn full_import_against_the_mock_server_matches_the_fake_source(pool: PgPoo
     assert_eq!(out, RunOutcome::Completed);
 
     let direct = env_n(pool, 2).await;
-    let (_, out) = direct
-        .import_all(&*data, ImportStartInput::default())
-        .await;
+    let (_, out) = direct.import_all(&*data, ImportStartInput::default()).await;
     assert_eq!(out, RunOutcome::Completed);
 
     let strip = |s: Vec<(String, i64)>| -> Vec<(String, i64)> {
@@ -93,7 +91,10 @@ async fn import_survives_rate_limits_and_server_errors(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(out, RunOutcome::Completed);
-    assert!(mock.faults.lock().unwrap().is_empty(), "all faults were hit");
+    assert!(
+        mock.faults.lock().unwrap().is_empty(),
+        "all faults were hit"
+    );
     assert_eq!(e.count("SELECT count(*) FROM issue").await, 200);
 }
 

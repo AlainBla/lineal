@@ -191,5 +191,9 @@ async fn retention_purges_old_finished_jobs_and_processed_events(pool: PgPool) {
     };
     assert_eq!(count("job").await, 3);
     assert_eq!(count("outbox_event").await, 3);
-    assert_eq!(count("outbox_delivery").await, 1, "deliveries of purged events are gone");
+    assert_eq!(
+        count("outbox_delivery").await,
+        1,
+        "deliveries of purged events are gone"
+    );
 }

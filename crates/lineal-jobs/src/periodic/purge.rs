@@ -84,7 +84,11 @@ pub async fn purge_queues(app: &App, now: DateTime<Utc>) -> AppResult<(u64, u64)
         }
     }
     if jobs > 0 || events > 0 {
-        tracing::info!(jobs, events, "purged finished jobs and processed outbox events");
+        tracing::info!(
+            jobs,
+            events,
+            "purged finished jobs and processed outbox events"
+        );
     }
     Ok((jobs, events))
 }

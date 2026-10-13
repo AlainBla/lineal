@@ -546,7 +546,9 @@ async fn heartbeat(
         let now = app.clock.now();
         let beat = async {
             let mut tx = app.store.begin(org).await?;
-            tx.imports().set_import_lease(run_id, Some(now + lease)).await?;
+            tx.imports()
+                .set_import_lease(run_id, Some(now + lease))
+                .await?;
             tx.commit().await?;
             let mut tx = app.store.begin(org).await?;
             let mut ids = Vec::new();

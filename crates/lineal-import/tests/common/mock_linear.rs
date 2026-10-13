@@ -106,7 +106,11 @@ fn root_field(query: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-async fn handle(State(m): State<Arc<MockLinear>>, headers: axum::http::HeaderMap, body: axum::Json<Value>) -> Response {
+async fn handle(
+    State(m): State<Arc<MockLinear>>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<Value>,
+) -> Response {
     let query = body["query"].as_str().unwrap_or_default().to_owned();
     let field = root_field(&query).unwrap_or_default();
     let auth = headers
@@ -146,7 +150,8 @@ async fn handle(State(m): State<Arc<MockLinear>>, headers: axum::http::HeaderMap
         let mut partial = m.partial_errors.lock().unwrap();
         if *partial > 0 && field != "viewer" {
             *partial -= 1;
-            payload["errors"] = json!([{ "message": "boom", "extensions": { "code": "INTERNAL_SERVER_ERROR" } }]);
+            payload["errors"] =
+                json!([{ "message": "boom", "extensions": { "code": "INTERNAL_SERVER_ERROR" } }]);
         }
     }
     let mut r = axum::Json(payload).into_response();

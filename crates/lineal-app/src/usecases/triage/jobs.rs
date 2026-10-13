@@ -113,7 +113,10 @@ impl App {
     /// (ohne History; die neue Reihenfolge wird per `IssueUpdated(sortOrder)` verteilt).
     pub async fn run_sort_renumber(&self, now: DateTime<Utc>) -> AppResult<JobStats> {
         let mut sys = self.store.begin_system().await?;
-        let teams = sys.triage().teams_with_tight_sort_order(MIN_SORT_GAP, now).await?;
+        let teams = sys
+            .triage()
+            .teams_with_tight_sort_order(MIN_SORT_GAP, now)
+            .await?;
         drop(sys);
         let mut stats = JobStats::default();
         for t in teams {
