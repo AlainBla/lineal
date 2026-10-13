@@ -2,10 +2,12 @@
 //! `Y.XmlFragment` ablegt. Der Server muss den Baum selbst lesen (abgeleitetes Markdown) und
 //! schreiben (Erstbefüllung aus Markdown, API-/MCP-Änderungen), ohne dass ein Client „seeden“ muss.
 //!
-//! Das Schema entspricht dem TipTap-`StarterKit` des Web-Editors: Knoten `paragraph`,
-//! `heading{level}`, `bulletList`, `orderedList{start}`, `listItem`, `blockquote`,
-//! `codeBlock{language}`, `horizontalRule`, `hardBreak`, `mention{id,label}`; Marken `bold`,
-//! `italic`, `strike`, `code`, `link{href}`. Unbekannte Knoten (z. B. von einem manipulierten
+//! Das Schema entspricht dem TipTap-`StarterKit` des Web-Editors plus Tabellen, Aufgabenlisten und
+//! Bildern: Knoten `paragraph`, `heading{level}`, `bulletList`, `orderedList{start}`, `listItem`,
+//! `taskList`, `taskItem{checked}`, `table`, `tableRow`, `tableHeader`, `tableCell` (Zellen
+//! enthalten Absätze), `blockquote`, `codeBlock{language}`, `horizontalRule`, `hardBreak`,
+//! `image{src,alt,title}` (inline), `mention{id,label}`; Marken `bold`, `italic`, `strike`, `code`,
+//! `link{href}`. Spaltenausrichtung von Tabellen kennt das Schema nicht (geht verloren). Unbekannte Knoten (z. B. von einem manipulierten
 //! Client) werden beim Lesen auf ihren Text reduziert, unsichere Link-Ziele fallen weg.
 //!
 //! Das Lesen ist gegen feindliche Bäume gesichert (Tiefen- und Knotenlimit).
@@ -119,6 +121,10 @@ struct Builder {
     /// Zahl der wegen Tiefen-/Knotenlimit nicht geöffneten Rahmen (deren `End` wird verschluckt).
     overflow: usize,
     opened: usize,
+    /// Offenes Bild: (Adresse, Titel, bisher gesammelter Alternativtext).
+    image: Option<(String, String, String)>,
+    /// Innerhalb der Tabellenkopfzeile (Zellen sind `tableHeader`).
+    in_table_head: bool,
 }
 
 impl Builder {
@@ -133,6 +139,8 @@ impl Builder {
             marks: vec![],
             overflow: 0,
             opened: 0,
+            image: None,
+            in_table_head: false,
         }
     }
 
@@ -166,7 +174,24 @@ impl Builder {
         if self.stack.len() <= 1 {
             return;
         }
-        let f = self.stack.pop().expect("frame");
+        let mut f = self.stack.pop().expect("frame");
+        // Aufgabenlisten: sobald ein Eintrag einen Aufgabenmarker trägt, wird die ganze Liste zur
+        // `taskList` (das Schema erlaubt dort nur `taskItem`); übrige Einträge sind unerledigt.
+        if matches!(f.tag, "bulletList" | "taskList")
+            && f.content
+                .iter()
+                .any(|c| matches!(c, Pm::Elem { tag, .. } if tag == "taskItem"))
+        {
+            f.tag = "taskList";
+            for c in &mut f.content {
+                if let Pm::Elem { tag, attrs, .. } = c
+                    && tag == "listItem"
+                {
+                    "taskItem".clone_into(tag);
+                    attrs.push(("checked".into(), Any::Bool(false)));
+                }
+            }
+        }
         let node = Pm::Elem {
             tag: f.tag.to_owned(),
             attrs: f.attrs,
@@ -239,8 +264,26 @@ fn heading_level(l: HeadingLevel) -> f64 {
 /// Parst Markdown in die Blöcke der Dokumentwurzel.
 pub fn parse_markdown(md: &str) -> Vec<Pm> {
     let mut b = Builder::new();
-    let parser = Parser::new_ext(md, Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(
+        md,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+    );
     for ev in parser {
+        // Innerhalb eines Bildes sammelt sich der Alternativtext.
+        if let Some((_, _, alt)) = b.image.as_mut() {
+            match &ev {
+                Event::Text(t) | Event::Code(t) => {
+                    alt.push_str(t);
+                    continue;
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    alt.push(' ');
+                    continue;
+                }
+                Event::End(TagEnd::Image) => {}
+                _ => continue,
+            }
+        }
         match ev {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {
@@ -288,12 +331,38 @@ pub fn parse_markdown(md: &str) -> Vec<Pm> {
                     b.close_implicit();
                     b.open("listItem", vec![], false);
                 }
+                Tag::Table(_) => {
+                    b.close_implicit();
+                    b.open("table", vec![], false);
+                }
+                Tag::TableHead => {
+                    b.in_table_head = true;
+                    b.open("tableRow", vec![], false);
+                }
+                Tag::TableRow => b.open("tableRow", vec![], false),
+                Tag::TableCell => {
+                    let tag = if b.in_table_head {
+                        "tableHeader"
+                    } else {
+                        "tableCell"
+                    };
+                    b.open(tag, vec![], false);
+                }
+                Tag::Image {
+                    dest_url, title, ..
+                } => {
+                    let src = if is_safe_url(&dest_url) && !dest_url.is_empty() {
+                        dest_url.to_string()
+                    } else {
+                        String::new()
+                    };
+                    b.image = Some((src, title.to_string(), String::new()));
+                }
                 Tag::Emphasis => b.marks.push(Mark::Italic),
                 Tag::Strong => b.marks.push(Mark::Bold),
                 Tag::Strikethrough => b.marks.push(Mark::Strike),
-                // Bilder: kein Bildknoten im Schema, die Adresse bleibt als Link erhalten.
                 // Unsichere/leere Ziele: leerer Link = Platzhalter (wird zu reinem Text).
-                Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
+                Tag::Link { dest_url, .. } => {
                     let ok = is_safe_url(&dest_url) && !dest_url.is_empty();
                     b.marks.push(Mark::Link(if ok {
                         dest_url.to_string()
@@ -309,15 +378,40 @@ pub fn parse_markdown(md: &str) -> Vec<Pm> {
                 | TagEnd::BlockQuote(_)
                 | TagEnd::CodeBlock
                 | TagEnd::List(_)
-                | TagEnd::Item => {
+                | TagEnd::Item
+                | TagEnd::Table
+                | TagEnd::TableRow
+                | TagEnd::TableCell => {
                     b.close_implicit();
                     b.close();
                 }
-                TagEnd::Emphasis
-                | TagEnd::Strong
-                | TagEnd::Strikethrough
-                | TagEnd::Link
-                | TagEnd::Image => {
+                TagEnd::TableHead => {
+                    b.close_implicit();
+                    b.close();
+                    b.in_table_head = false;
+                }
+                TagEnd::Image => {
+                    if let Some((src, title, alt)) = b.image.take() {
+                        if src.is_empty() {
+                            // Unsicheres/leeres Ziel: nur der Alternativtext bleibt.
+                            b.push_text(&alt);
+                        } else {
+                            let mut attrs = vec![
+                                ("src".to_owned(), Any::String(src.into())),
+                                ("alt".to_owned(), Any::String(alt.into())),
+                            ];
+                            if !title.is_empty() {
+                                attrs.push(("title".to_owned(), Any::String(title.into())));
+                            }
+                            b.push_inline(Pm::Elem {
+                                tag: "image".into(),
+                                attrs,
+                                content: vec![],
+                            });
+                        }
+                    }
+                }
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                     b.marks.pop();
                 }
                 _ => {}
@@ -334,7 +428,17 @@ pub fn parse_markdown(md: &str) -> Vec<Pm> {
                 b.close_implicit();
                 b.top().content.push(Pm::elem("horizontalRule", vec![]));
             }
-            // Rohes HTML, Fußnoten, Aufgabenmarker u. a.: nicht im Schema.
+            Event::TaskListMarker(checked) => {
+                let n = b.stack.len();
+                if n >= 2 && b.stack[n - 1].tag == "listItem" && b.stack[n - 2].tag == "bulletList"
+                {
+                    b.stack[n - 1].tag = "taskItem";
+                    b.stack[n - 1]
+                        .attrs
+                        .push(("checked".into(), Any::Bool(checked)));
+                }
+            }
+            // Rohes HTML (die Bereinigung beim Speichern entfernt es), Fußnoten u. a.: nicht im Schema.
             _ => {}
         }
     }
@@ -480,7 +584,7 @@ impl Reader {
     }
 }
 
-const KNOWN_NODES: [&str; 10] = [
+const KNOWN_NODES: [&str; 17] = [
     "paragraph",
     "heading",
     "bulletList",
@@ -491,6 +595,13 @@ const KNOWN_NODES: [&str; 10] = [
     "horizontalRule",
     "hardBreak",
     "mention",
+    "taskList",
+    "taskItem",
+    "table",
+    "tableRow",
+    "tableHeader",
+    "tableCell",
+    "image",
 ];
 
 /// Unbekannte Elemente werden zu einem Absatz mit ihrem Text.
@@ -576,7 +687,6 @@ pub fn read_fragment<T: ReadTxn, F: XmlFragment>(frag: &F, txn: &T) -> Vec<Pm> {
 /// Marker würden sonst Blöcke erzeugen).
 fn escape_text(s: &str, line_start: bool) -> String {
     let chars: Vec<char> = s.chars().collect();
-    let task_prefix = s.starts_with("[ ] ") || s.starts_with("[x] ") || s.starts_with("[X] ");
     // Index des Punkts/der Klammer einer Zeilenanfangs-Nummerierung („1. “).
     let digits = chars.iter().take_while(|c| c.is_ascii_digit()).count();
     let ordered_marker = (line_start
@@ -592,7 +702,7 @@ fn escape_text(s: &str, line_start: bool) -> String {
         let escape = match c {
             '\\' | '*' | '`' | '<' => true,
             '_' => !(alnum(prev) && alnum(next)),
-            '[' | ']' => !(task_prefix && i < 3),
+            '[' | ']' => true,
             '~' => next == Some('~') || prev == Some('~'),
             '#' | '>' => line_start && i == 0,
             '-' | '+' => line_start && i == 0 && next.is_none_or(|n| n == ' '),
@@ -687,6 +797,10 @@ fn inline_md(content: &[Pm]) -> String {
                 out.push_str("\\\n");
                 at_start = true;
             }
+            Pm::Elem { tag, .. } if tag == "image" => {
+                out.push_str(&image_md(n));
+                at_start = false;
+            }
             Pm::Elem { tag, .. } if tag == "mention" => {
                 let label = n
                     .attr_str("label")
@@ -703,6 +817,35 @@ fn inline_md(content: &[Pm]) -> String {
         }
     }
     out
+}
+
+/// `![alt](src "title")`; ohne sichere Adresse nur der Alternativtext.
+fn image_md(n: &Pm) -> String {
+    let alt = n.attr_str("alt").unwrap_or("");
+    let src = n
+        .attr_str("src")
+        .filter(|s| is_safe_url(s) && !s.is_empty());
+    let alt = alt
+        .replace(['\n', '\r'], " ")
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    let Some(src) = src else {
+        return alt;
+    };
+    let title = n
+        .attr_str("title")
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            format!(
+                " \"{}\"",
+                t.replace(['\n', '\r'], " ")
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+            )
+        })
+        .unwrap_or_default();
+    format!("![{alt}]({}{title})", link_dest(src))
 }
 
 fn plain_text(content: &[Pm]) -> String {
@@ -735,7 +878,7 @@ fn indent(s: &str, first: &str, rest: &str) -> String {
 }
 
 fn is_list(n: &Pm) -> bool {
-    matches!(n, Pm::Elem { tag, .. } if tag == "bulletList" || tag == "orderedList")
+    matches!(n, Pm::Elem { tag, .. } if tag == "bulletList" || tag == "orderedList" || tag == "taskList")
 }
 
 fn block_md(n: &Pm, depth: usize) -> Option<String> {
@@ -777,6 +920,24 @@ fn block_md(n: &Pm, depth: usize) -> Option<String> {
             Some(format!("{f}{lang}\n{text}\n{f}"))
         }
         "horizontalRule" => Some("---".to_owned()),
+        "image" => Some(image_md(n)).filter(|s| !s.is_empty()),
+        "table" => table_md(content),
+        "taskList" => {
+            let mut items = Vec::new();
+            for item in content {
+                let Pm::Elem { content: ic, .. } = item else {
+                    continue;
+                };
+                let checked = matches!(item.attr("checked"), Some(Any::Bool(true)));
+                let marker = if checked { "- [x] " } else { "- [ ] " };
+                items.push(indent(&list_item_md(ic, depth + 1), marker, "  "));
+            }
+            if items.is_empty() {
+                None
+            } else {
+                Some(items.join("\n"))
+            }
+        }
         "bulletList" | "orderedList" => {
             let ordered = tag == "orderedList";
             let start = n.attr_int("start").unwrap_or(1).clamp(0, 1_000_000_000);
@@ -802,6 +963,46 @@ fn block_md(n: &Pm, depth: usize) -> Option<String> {
         "hardBreak" | "mention" => None,
         _ => Some(inline_md(content)).filter(|s| !s.trim().is_empty()),
     }
+}
+
+/// GFM-Tabelle: die erste Zeile ist die Kopfzeile (Markdown kennt keine Tabelle ohne Kopf).
+fn table_md(rows: &[Pm]) -> Option<String> {
+    let cell = |c: &Pm| -> String {
+        let Pm::Elem { content, .. } = c else {
+            return String::new();
+        };
+        let text = content
+            .iter()
+            .filter_map(|b| match b {
+                Pm::Elem { tag, content, .. } if tag == "paragraph" => Some(inline_md(content)),
+                other => block_md(other, 1),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.replace(['\n', '\r'], " ").replace('|', "\\|")
+    };
+    let grid: Vec<Vec<String>> = rows
+        .iter()
+        .filter_map(|r| match r {
+            Pm::Elem { tag, content, .. } if tag == "tableRow" => {
+                Some(content.iter().map(cell).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    let cols = grid.iter().map(Vec::len).max().unwrap_or(0);
+    if cols == 0 {
+        return None;
+    }
+    let line = |cells: &[String]| {
+        let mut parts: Vec<&str> = cells.iter().map(|c| c.trim()).collect();
+        parts.resize(cols, "");
+        format!("| {} |", parts.join(" | "))
+    };
+    let mut out = vec![line(&grid[0])];
+    out.push(format!("| {} |", vec!["---"; cols].join(" | ")));
+    out.extend(grid[1..].iter().map(|r| line(r)));
+    Some(out.join("\n"))
 }
 
 fn list_item_md(content: &[Pm], depth: usize) -> String {
@@ -837,4 +1038,71 @@ pub fn block_to_markdown(block: &Pm) -> String {
 /// Markdown der gesamten Blockfolge.
 pub fn to_markdown(blocks: &[Pm]) -> String {
     blocks_md(blocks, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip(md: &str) -> String {
+        to_markdown(&parse_markdown(md))
+    }
+
+    #[test]
+    fn tables_task_lists_and_images_survive_the_roundtrip() {
+        for md in [
+            "| a | b |\n| --- | --- |\n| 1 | 2 |",
+            "| Name | Wert |\n| --- | --- |\n| `x \\| y` | **fett** |\n|  | leer |",
+            "- [x] erledigt\n- [ ] offen",
+            "- [ ] eins\n  - [x] verschachtelt",
+            "Text ![Logo](https://acme.example/l.png) mehr",
+            "![Logo](https://acme.example/l.png \"Titel\")",
+            "Absatz\n\n| a |\n| --- |\n| 1 |\n\n- [x] t\n\n![i](/files/a.png)",
+        ] {
+            assert_eq!(roundtrip(md), md, "{md:?}");
+        }
+    }
+
+    #[test]
+    fn literal_angle_brackets_and_task_like_text_stay_text() {
+        // `<tag>` als Text (maskiert) bleibt erhalten; "[ ] x" am Zeilenanfang wird nicht zur Aufgabe.
+        for md in ["Text \\<tag> mehr", "- \\[ \\] kein Task"] {
+            assert_eq!(roundtrip(md), md, "{md:?}");
+        }
+    }
+
+    #[test]
+    fn table_and_task_nodes_have_the_schema_shape() {
+        let blocks = parse_markdown("| a | b |\n|:-:|--|\n| 1 | 2 |\n\n- [x] ok\n- plain");
+        let Pm::Elem { tag, content, .. } = &blocks[0] else {
+            panic!("table expected")
+        };
+        assert_eq!(tag, "table");
+        let first_cells: Vec<&str> = content
+            .iter()
+            .map(|r| match r {
+                Pm::Elem { content, .. } => match &content[0] {
+                    Pm::Elem { tag, .. } => tag.as_str(),
+                    Pm::Text { .. } => "",
+                },
+                Pm::Text { .. } => "",
+            })
+            .collect();
+        assert_eq!(first_cells, ["tableHeader", "tableCell"]);
+        let Pm::Elem { tag, content, .. } = &blocks[1] else {
+            panic!("task list expected")
+        };
+        assert_eq!(tag, "taskList");
+        // Gemischte Liste: der Eintrag ohne Marker wird zur unerledigten Aufgabe (Schema).
+        assert!(
+            content
+                .iter()
+                .all(|c| matches!(c, Pm::Elem { tag, .. } if tag == "taskItem"))
+        );
+    }
+
+    #[test]
+    fn unsafe_image_targets_keep_only_the_alt_text() {
+        assert_eq!(roundtrip("![nur Alt](javascript:alert(1))"), "nur Alt");
+    }
 }

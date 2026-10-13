@@ -21,6 +21,37 @@ pub const MAX_ROWS: usize = 200_000;
 pub struct CsvSource {
     inner: FakeSource,
     notices: Vec<String>,
+    /// Zeilenwarnungen (stille Datenänderungen); werden einmal über `take_warnings` gemeldet.
+    row_warnings: std::sync::Mutex<Vec<String>>,
+}
+
+/// Obergrenze der einzeln gemeldeten Zeilenwarnungen (danach eine Sammelmeldung).
+const MAX_ROW_WARNINGS: usize = 500;
+
+/// Typ-Heuristik kannte den Statusnamen nicht (Standardtyp `unstarted` geraten).
+fn state_type_is_guess(name: &str) -> bool {
+    let n = name.to_lowercase();
+    state_type(name) == "unstarted"
+        && ![
+            "todo",
+            "to do",
+            "unstarted",
+            "open",
+            "ready",
+            "planned",
+            "new",
+        ]
+        .iter()
+        .any(|k| n.contains(k))
+}
+
+/// Ist die Priorität ein erkannter Wert (`urgent`, `high`, `medium`, `low`, `no priority`, 0-4)?
+fn priority_is_known(s: &str) -> bool {
+    let p = s.trim().to_lowercase();
+    matches!(
+        p.as_str(),
+        "urgent" | "high" | "medium" | "low" | "no priority" | "none" | ""
+    ) || p.parse::<i64>().is_ok_and(|n| (0..=4).contains(&n))
 }
 
 fn slug(s: &str) -> String {
@@ -127,22 +158,44 @@ impl CsvSource {
         let mut issues: Vec<Value> = Vec::new();
         let mut state_pos: BTreeMap<String, f64> = BTreeMap::new();
         let mut had_projects = false;
+        let mut row_warnings: Vec<String> = Vec::new();
+        let mut warned_states: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut dropped_warnings = 0usize;
+        let mut warn = |msg: String| {
+            if row_warnings.len() < MAX_ROW_WARNINGS {
+                row_warnings.push(msg);
+            } else {
+                dropped_warnings += 1;
+            }
+        };
         for (n_row, rec) in rdr.records().enumerate() {
             if n_row >= MAX_ROWS {
                 return Err(format!("the CSV has more than {MAX_ROWS} rows"));
             }
             let rec = rec.map_err(|_| format!("row {} cannot be read", n_row + 2))?;
             let ident = rec.get(id_col).unwrap_or("").trim().to_uppercase();
-            let Some((key, num)) = ident.rsplit_once('-') else {
+            let row_no = n_row + 2;
+            let parsed = ident
+                .rsplit_once('-')
+                .and_then(|(key, num)| Some((key, num.parse::<i64>().ok()?)))
+                .filter(|(key, number)| !key.is_empty() && *number > 0);
+            let Some((key, number)) = parsed else {
+                if !ident.is_empty() {
+                    warn(format!(
+                        "row {row_no}: `{}` is not a valid issue ID (expected KEY-123); the row was skipped",
+                        ident.chars().take(40).collect::<String>()
+                    ));
+                }
                 continue;
             };
-            let Ok(number) = num.parse::<i64>() else {
-                continue;
-            };
-            if key.is_empty() || number <= 0 {
+            if team_filter.is_some_and(|t| !t.eq_ignore_ascii_case(key)) {
                 continue;
             }
-            if team_filter.is_some_and(|t| !t.eq_ignore_ascii_case(key)) {
+            if !seen.insert(ident.clone()) {
+                warn(format!(
+                    "row {row_no}: duplicate ID {ident}; the first row was kept and this row was ignored"
+                ));
                 continue;
             }
             let team_name = get(&rec, "team");
@@ -158,12 +211,30 @@ impl CsvSource {
             node.insert("id".into(), json!(format!("csv-issue-{ident}")));
             node.insert("number".into(), json!(number));
             node.insert("identifier".into(), json!(ident));
-            node.insert("title".into(), json!(rec.get(title_col).unwrap_or("")));
+            let title = rec.get(title_col).unwrap_or("");
+            if title.trim().is_empty() {
+                warn(format!(
+                    "row {row_no} ({ident}): empty title; `(untitled)` was used"
+                ));
+            } else if title.chars().count() > 255 {
+                warn(format!(
+                    "row {row_no} ({ident}): the title is longer than 255 characters and was truncated"
+                ));
+            }
+            node.insert("title".into(), json!(title));
             node.insert("description".into(), json!(get(&rec, "description")));
             node.insert("team".into(), json!({ "id": team_id }));
             let status = get(&rec, "status");
             if !status.is_empty() {
                 let ty = state_type(&status);
+                if state_type_is_guess(&status)
+                    && warned_states.insert((key.to_owned(), status.clone()))
+                {
+                    warn(format!(
+                        "status `{}` of team {key} is not a known name; it was imported as type `unstarted`",
+                        status.chars().take(60).collect::<String>()
+                    ));
+                }
                 states.entry((key.to_owned(), status.clone())).or_insert(ty);
                 let pos = state_pos.len() as f64;
                 state_pos.entry(format!("{key}/{status}")).or_insert(pos);
@@ -172,9 +243,24 @@ impl CsvSource {
                     json!({ "id": format!("csv-state-{key}-{}", slug(&status)) }),
                 );
             }
-            node.insert("priority".into(), json!(priority(&get(&rec, "priority"))));
-            if let Ok(e) = get(&rec, "estimate").parse::<f64>() {
-                node.insert("estimate".into(), json!(e));
+            let prio = get(&rec, "priority");
+            if !priority_is_known(&prio) {
+                warn(format!(
+                    "row {row_no} ({ident}): unknown priority `{}`; `No priority` was used",
+                    prio.chars().take(30).collect::<String>()
+                ));
+            }
+            node.insert("priority".into(), json!(priority(&prio)));
+            let estimate = get(&rec, "estimate");
+            match estimate.parse::<f64>() {
+                Ok(e) => {
+                    node.insert("estimate".into(), json!(e));
+                }
+                Err(_) if !estimate.is_empty() => warn(format!(
+                    "row {row_no} ({ident}): the estimate `{}` is not a number and was ignored",
+                    estimate.chars().take(30).collect::<String>()
+                )),
+                Err(_) => {}
             }
             for (csv_name, field) in [("assignee", "assignee"), ("creator", "creator")] {
                 let name = get(&rec, csv_name);
@@ -205,15 +291,29 @@ impl CsvSource {
                 ("canceled", "canceledAt"),
                 ("archived", "archivedAt"),
             ] {
-                if let Some(t) = parse_ts(&get(&rec, csv_name)) {
+                let raw = get(&rec, csv_name);
+                if let Some(t) = parse_ts(&raw) {
                     node.insert(field.into(), json!(t.to_rfc3339()));
+                } else if !raw.is_empty() {
+                    warn(format!(
+                        "row {row_no} ({ident}): the {csv_name} date `{}` is invalid and was ignored",
+                        raw.chars().take(40).collect::<String>()
+                    ));
                 }
             }
             let due = get(&rec, "due date");
             if let Some(t) = parse_ts(&due) {
                 node.insert("dueDate".into(), json!(t.date_naive().to_string()));
-            } else if due.len() >= 10 {
-                node.insert("dueDate".into(), json!(&due[..10]));
+            } else if let Some(d) = due
+                .get(..10)
+                .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+            {
+                node.insert("dueDate".into(), json!(d));
+            } else if !due.is_empty() {
+                warn(format!(
+                    "row {row_no} ({ident}): the due date `{}` is invalid and was ignored",
+                    due.chars().take(40).collect::<String>()
+                ));
             }
             let parent = get(&rec, "parent issue").to_uppercase();
             if !parent.is_empty() {
@@ -268,7 +368,16 @@ impl CsvSource {
         if had_projects {
             notices.push("CSV import: the project assignment of issues is not imported".to_owned());
         }
-        Ok(Self { inner, notices })
+        if dropped_warnings > 0 {
+            row_warnings.push(format!(
+                "{dropped_warnings} further row warnings were omitted"
+            ));
+        }
+        Ok(Self {
+            inner,
+            notices,
+            row_warnings: std::sync::Mutex::new(row_warnings),
+        })
     }
 
     /// Warnungen über fehlende Daten (für CLI und Bericht).
@@ -285,6 +394,15 @@ impl ImportSource for CsvSource {
 
     fn notices(&self) -> Vec<String> {
         self.notices.clone()
+    }
+
+    fn take_warnings(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .row_warnings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     async fn workspace(&self) -> SourceResult<SourceWorkspace> {
@@ -341,6 +459,35 @@ WEB-7,Web,Other team,,In Progress,,,,,,,2025-01-09T09:00:00.000Z,2025-01-09T09:0
                 .iter()
                 .all(|u| u["email"].as_str().unwrap().ends_with("@import.invalid"))
         );
+    }
+
+    #[tokio::test]
+    async fn silent_data_changes_are_reported_as_row_warnings() {
+        let long = "x".repeat(300);
+        let csv = format!(
+            "ID,Team,Title,Status,Priority,Estimate,Created,Due Date\n\
+ENG-1,Eng,First,Todo,High,3,2025-01-06T09:00:00.000Z,2025-02-01\n\
+ENG-1,Eng,Duplicate,Todo,High,3,2025-01-06T09:00:00.000Z,2025-02-01\n\
+ENG-2,Eng,{long},Weird,Extreme,many,not-a-date,someday\n\
+bogus,Eng,Bad id,Todo,,,,\n"
+        );
+        let src = CsvSource::from_csv(csv.as_bytes(), None).unwrap();
+        let w = src.take_warnings().join("\n");
+        for needle in [
+            "duplicate ID ENG-1",
+            "longer than 255",
+            "status `Weird`",
+            "unknown priority `Extreme`",
+            "estimate `many`",
+            "created date `not-a-date`",
+            "due date `someday`",
+            "`BOGUS` is not a valid issue ID",
+        ] {
+            assert!(w.contains(needle), "missing `{needle}` in:\n{w}");
+        }
+        assert!(src.take_warnings().is_empty(), "warnings are reported once");
+        let issues = src.collect(SourceEntity::Issues, None, 5).await.unwrap();
+        assert_eq!(issues.len(), 2, "the duplicate row was dropped");
     }
 
     #[tokio::test]

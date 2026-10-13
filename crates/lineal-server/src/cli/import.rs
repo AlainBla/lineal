@@ -171,7 +171,7 @@ async fn linear(pool: &sqlx::PgPool, app: &App, a: LinearArgs) -> Result<()> {
     let raw = std::env::var(&a.token_env)
         .with_context(|| format!("environment variable `{}` is not set", a.token_env))?;
     let token = Secret::new(&raw).map_err(app_err)?;
-    let source = LinearSource::new(&token).map_err(|e| anyhow!("{e}"))?;
+    let source = LinearSource::from_env(&token).map_err(|e| anyhow!("{e}"))?;
     let sink = AppBlobSink { app };
     let engine = ImportEngine::new(app, &source, &sink);
 

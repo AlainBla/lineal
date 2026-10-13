@@ -27,6 +27,8 @@ export function useDocument(ref: string) {
           { signal },
         )
       ).document,
+    // Titeländerungen anderer Nutzer erscheinen ohne Neuladen (B2.09).
+    refetchInterval: 5000,
   });
 }
 

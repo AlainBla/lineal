@@ -40,9 +40,10 @@ export function getUiState(): UiState {
   return state;
 }
 
-export function setUiState(patch: Partial<UiState>) {
+/** `persist: false`: Änderung gilt nur für diese Sitzung (z. B. automatisches Einklappen auf schmalen Viewports). */
+export function setUiState(patch: Partial<UiState>, opts: { persist?: boolean } = {}) {
   state = { ...state, ...patch };
-  if ("sidebarOpen" in patch) {
+  if ("sidebarOpen" in patch && opts.persist !== false) {
     try {
       localStorage.setItem(SIDEBAR_STORAGE_KEY, String(state.sidebarOpen));
     } catch {
@@ -52,8 +53,8 @@ export function setUiState(patch: Partial<UiState>) {
   listeners.forEach((l) => l());
 }
 
-export function toggleSidebar() {
-  setUiState({ sidebarOpen: !state.sidebarOpen });
+export function toggleSidebar(persist = true) {
+  setUiState({ sidebarOpen: !state.sidebarOpen }, { persist });
 }
 
 export function toggleCommandMenu(open = !state.commandMenuOpen) {

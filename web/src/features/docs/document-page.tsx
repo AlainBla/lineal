@@ -40,8 +40,16 @@ function Editor({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    version.current = doc.contentVersion;
-  }, [doc.contentVersion]);
+    // Stufe 1 behält die geladene Version (sonst würde eine fremde Änderung die Konflikterkennung
+    // aushebeln); im Echtzeitbetrieb wird ohnehin ohne Versionsprüfung gespeichert.
+    if (isCollab) version.current = doc.contentVersion;
+  }, [doc.contentVersion, isCollab]);
+
+  // Titeländerungen anderer erscheinen live (Abfrage wird regelmäßig erneuert), sofern der eigene
+  // Titel gerade nicht in Bearbeitung ist.
+  useEffect(() => {
+    if (pending.current.title === undefined) setTitle(doc.title);
+  }, [doc.title]);
 
   const flush = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
@@ -125,7 +133,7 @@ function Editor({
               setTitle(e.target.value);
               queue({ title: e.target.value });
             }}
-            className="h-10 border-transparent text-xl font-semibold"
+            className="h-10 border-transparent px-0 text-xl font-semibold"
           />
           <RichEditor
             key={collab ? `collab:${collab.generation}` : "stage1"}

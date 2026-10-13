@@ -96,4 +96,16 @@ describe("DocumentPage", () => {
       input: { title: "Launch plan!", expectedVersion: 3 },
     });
   });
+
+  it("shows a title changed by someone else after the document is refetched", async () => {
+    let title = "Launch plan";
+    mockGraphql({ DocumentDetail: () => ({ document: { ...doc, title } }) });
+    const client = newClient();
+    await renderWithApp(<DocumentPage docRef="abc" />, client, "/acme/document/abc");
+    const input = await screen.findByLabelText("Document title");
+    expect(input).toHaveValue("Launch plan");
+    title = "Renamed by Bob";
+    await client.invalidateQueries();
+    await waitFor(() => expect(input).toHaveValue("Renamed by Bob"));
+  });
 });

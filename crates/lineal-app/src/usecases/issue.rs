@@ -1057,6 +1057,10 @@ impl App {
         if issue == old && !labels_changed && own.is_empty() {
             return load_view(tx, issue, true).await;
         }
+        // SLA-Regeln hängen an Priorität und Projekt: sofort neu auswerten, nicht erst im Minutenjob.
+        if issue.priority != old.priority || issue.project_id != old.project_id {
+            crate::usecases::triage::sla::evaluate_rules(tx, &team, &mut issue, now).await?;
+        }
         // Aktivität eines anderen als des Snoozenden beendet das Triage-Snooze (docs/03 §10).
         if issue != old && issue.snoozed_until_at.is_some() && issue.snoozed_by_id != actor {
             issue.snoozed_until_at = None;

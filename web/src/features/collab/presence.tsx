@@ -71,6 +71,7 @@ const STATUS_TEXT: Record<string, string> = {
   disconnected: "Offline – changes sync when reconnected",
   closed: "Disconnected",
   fallback: "Saved automatically",
+  rejected: "Change too large – not saved. Reload the page to discard it.",
 };
 
 export function ConnectionStatus({

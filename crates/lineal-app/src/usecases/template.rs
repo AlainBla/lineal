@@ -537,6 +537,14 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let t = load_template(&mut *tx, &snap, reference, None).await?;
         require_manage(&snap, ctx, t.team_id)?;
+        // Wiederkehrende Issues erzeugen ihre Issues aus dem Template: Löschen nur ohne Regeln.
+        let rules = tx.triage().count_recurring_for_template(t.id.0).await?;
+        if rules > 0 {
+            return Err(AppError::conflict(format!(
+                "The template is used by {rules} recurring issue rule(s); delete or change them first."
+            ))
+            .with_details(json!({ "reason": "template_in_use", "recurringIssues": rules })));
+        }
         tx.templates().archive(t.id, self.clock.now()).await?;
         emit(
             &mut *tx,

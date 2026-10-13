@@ -259,10 +259,11 @@ impl PgTx {
             Option<DateTime<Utc>>,
             Uuid,
             Option<DateTime<Utc>>,
+            DateTime<Utc>,
         );
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.id, t.organization_id, t.application_id, a.dcr_client_id, t.user_id, t.actor, t.scopes, \
-             t.refresh_token_hash, t.previous_refresh_token_hash, t.rotated_at, t.family_id, t.revoked_at \
+             t.refresh_token_hash, t.previous_refresh_token_hash, t.rotated_at, t.family_id, t.revoked_at, t.updated_at \
              FROM oauth_token t JOIN oauth_application a \
                ON a.organization_id = t.organization_id AND a.id = t.application_id \
              WHERE (t.refresh_token_hash = $1 OR t.previous_refresh_token_hash = $1) AND EXISTS (SELECT 1 FROM \"user\" u WHERE u.organization_id = t.organization_id \
@@ -287,6 +288,7 @@ impl PgTx {
                 rotated_at,
                 family,
                 revoked_at,
+                updated_at,
             )| {
                 OauthTokenRecord {
                     id,
@@ -301,6 +303,7 @@ impl PgTx {
                     rotated_at,
                     family_id: family,
                     revoked_at,
+                    updated_at,
                 }
             },
         ))

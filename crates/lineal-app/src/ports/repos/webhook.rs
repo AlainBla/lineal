@@ -210,6 +210,8 @@ pub struct OauthTokenRecord {
     pub rotated_at: Option<DateTime<Utc>>,
     pub family_id: Uuid,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// Letzte Ausstellung/Rotation (Basis der Refresh-Lebensdauer).
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Rotation eines Token-Paars.

@@ -14,6 +14,8 @@ import type { IssueLookup } from "./issue-lookup";
 import { describeHistory, type HistoryResolver } from "./history";
 import { relativeTime } from "./model";
 import { keys, setSubscription } from "./queries";
+import { useSingleFlight } from "@/lib/use-single-flight";
+
 import { RichEditor } from "./rich-editor";
 import { ErrorState } from "./states";
 import { errorMessage, showToast } from "./toast-store";
@@ -135,20 +137,20 @@ function CommentComposer({
     [users, session],
   );
   const empty = body.trim() === "";
+  const singleFlight = useSingleFlight();
   const submit = () => {
-    if (empty || create.isPending) return;
-    create.mutate(
-      { body, parentId },
-      {
-        onSuccess: () => {
-          setBody("");
-          setNonce((n) => n + 1);
-          onDone?.();
-        },
-        onError: (e) =>
-          showToast({ message: errorMessage(e, "Could not post comment."), tone: "error" }),
-      },
-    );
+    if (empty) return;
+    // Ref-Sperre: Doppelklick/mehrfaches Strg+Enter legt nur einen Kommentar an (B4.13).
+    void singleFlight(async () => {
+      try {
+        await create.mutateAsync({ body, parentId });
+        setBody("");
+        setNonce((n) => n + 1);
+        onDone?.();
+      } catch (e) {
+        showToast({ message: errorMessage(e, "Could not post comment."), tone: "error" });
+      }
+    });
   };
   return (
     <div className="rounded-lg border border-border-strong p-2.5">
@@ -158,6 +160,8 @@ function CommentComposer({
         ariaLabel={ariaLabel}
         placeholder={placeholder}
         users={mentionUsers}
+        // Antwortfeld sofort fokussieren, sonst lösen getippte Zeichen globale Shortcuts aus (B4.12).
+        autoFocus={!!onDone}
         onChange={setBody}
         onSubmit={submit}
       />
@@ -187,7 +191,7 @@ function CommentCard({
   const author = comment.user?.displayName || comment.user?.name || "Unknown user";
   return (
     <article
-      id={`comment-${comment.id.slice(0, 8)}`}
+      id={`comment-${comment.id}`}
       className="rounded-lg border border-border p-3"
       aria-label={`Comment by ${author}`}
     >
@@ -195,7 +199,7 @@ function CommentCard({
         <Avatar name={author} />
         <span className="font-medium">{author}</span>
         <a
-          href={`#comment-${comment.id.slice(0, 8)}`}
+          href={`#comment-${comment.id}`}
           className="text-xs text-subtle-foreground hover:underline"
           title={new Date(comment.createdAt).toLocaleString()}
         >

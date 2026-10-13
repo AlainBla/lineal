@@ -88,6 +88,22 @@ pub fn sanitized_markdown_of(doc: &Doc) -> String {
     sanitize(&markdown_of(doc))
 }
 
+/// Gehört der Zustand zu diesem Markdown? Gespeichertes Markdown, das beim Parsen und Ausgeben
+/// nicht stabil ist (`* a` statt `- a`, Umbrüche, Leerzeilen), gilt über seine kanonische Form:
+/// sonst würde der Zustand bei jedem API-Schreiben verworfen und der Raum verlöre ungespeicherte
+/// Eingaben (B2.01).
+pub fn state_matches_markdown(doc: &Doc, markdown: &str) -> bool {
+    let current = sanitized_markdown_of(doc);
+    current == markdown || current == canonical_markdown(markdown)
+}
+
+/// Kanonische Form eines Markdowns: so, wie es der Raum nach dem Laden wieder ausgäbe.
+/// Ein Raum, dessen Ausgabe der kanonischen Form des gespeicherten Textes entspricht, hat nichts
+/// geändert (bloßes Öffnen darf nichts umschreiben, B2.02).
+pub fn canonical_markdown(markdown: &str) -> String {
+    sanitized_markdown_of(&doc_from_markdown(markdown))
+}
+
 // --- Minimale Änderungen ------------------------------------------------------------------
 
 /// Setzt den Inhalt per minimaler Änderung auf `new_md`: Blöcke werden über ihr Markdown

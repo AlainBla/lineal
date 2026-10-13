@@ -121,8 +121,18 @@ fn prepare_row(org: Uuid, row: &Value, with_org: bool) -> AppResult<(Vec<String>
 
 /// Eine vom Schema abgelehnte Zeile (Eindeutigkeit, Referenz, Check) → `conflict`; Details im Log.
 fn row_rejected(e: &sqlx::Error) -> AppError {
-    tracing::warn!(error = %e, "import row rejected by the database");
-    AppError::conflict("the row was rejected by the database")
+    // Der Constraint-Name ist kein Nutzerinhalt und steht im Bericht; die Details nur im Debug-Log.
+    tracing::debug!(error = %e, "import row rejected by the database");
+    let constraint = e
+        .as_database_error()
+        .and_then(|d| d.constraint())
+        .map(str::to_owned);
+    match constraint {
+        Some(c) => AppError::conflict(format!(
+            "the row was rejected by the database (constraint {c})"
+        )),
+        None => AppError::conflict("the row was rejected by the database"),
+    }
 }
 
 /// Nur die Tabellen mit `organization_id`-Spalte (alle der Whitelist).
@@ -237,6 +247,26 @@ impl ImportRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(row.map(Into::into))
+    }
+
+    async fn fail_stale_import_runs(
+        &mut self,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE import_run SET status = 'failed', lease_until = NULL, finished_at = $1, \
+               error = 'the run was interrupted (process ended); resume or cancel it', \
+               updated_at = $1, version = version + 1 \
+             WHERE status = 'running' AND archived_at IS NULL AND source <> 'linear' \
+               AND COALESCE(lease_until, updated_at) < $2",
+        )
+        .bind(now)
+        .bind(stale_before)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
     }
 
     async fn set_import_lease(
@@ -731,6 +761,25 @@ impl ImportRepo for PgTx {
         Ok(())
     }
 
+    async fn extend_team_import_lock(
+        &mut self,
+        team_ids: &[Uuid],
+        until: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE team SET import_locked_until = $3 WHERE id IN ( \
+               SELECT id FROM team WHERE organization_id = $1 AND id = ANY($2) \
+                 AND import_locked_until IS NOT NULL FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(self.org.0)
+        .bind(team_ids)
+        .bind(until)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn set_team_states(
         &mut self,
         team_id: Uuid,
@@ -834,6 +883,28 @@ impl ImportRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn issue_parent_would_cycle(&mut self, child: Uuid, parent: Uuid) -> AppResult<bool> {
+        if child == parent {
+            return Ok(true);
+        }
+        // UNION (nicht UNION ALL) und Tiefengrenze: terminiert auch auf bereits zyklischen Daten.
+        sqlx::query_scalar(
+            "WITH RECURSIVE anc(id, depth) AS ( \
+               SELECT parent_id, 1 FROM issue WHERE organization_id = $1 AND id = $3 \
+                 AND parent_id IS NOT NULL \
+               UNION \
+               SELECT i.parent_id, a.depth + 1 FROM issue i JOIN anc a ON i.id = a.id \
+               WHERE i.organization_id = $1 AND i.parent_id IS NOT NULL AND a.depth < 1000) \
+             SELECT EXISTS (SELECT 1 FROM anc WHERE id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(child)
+        .bind(parent)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
     }
 
     async fn set_row_text(

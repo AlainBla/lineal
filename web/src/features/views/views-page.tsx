@@ -1,6 +1,6 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Plus, Star } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useActions } from "@/app/commands";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import { useCustomView, useCustomViews, useFavorites, useToggleFavorite } from "./queries";
 import { IssueView } from "./issue-view";
 import { ViewBuilderDialog } from "./view-builder";
+import { viewPath } from "./view-path";
 
 /** Stern-Schalter „Add to favorites“ für Views. */
 function FavoriteStar({ view }: { view: CustomView }) {
@@ -78,7 +79,7 @@ export function ViewsPage({
       <ul className="divide-y divide-border">
         {q.data.map((v) => (
           <li key={v.id} className="flex items-center gap-3 px-4 py-2 text-sm">
-            <Link to={`/${ws}/view/${v.slugId}` as "/"} className="font-medium hover:underline">
+            <Link to={viewPath(ws, v) as "/"} className="font-medium hover:underline">
               {v.name}
             </Link>
             <span className="text-xs text-muted-foreground">{v.modelName}</span>
@@ -113,6 +114,16 @@ export function ViewsPage({
 /** Eine gespeicherte View (`/view/{ref}`). */
 export function ViewPage({ ws, viewRef }: { ws: string; viewRef: string }) {
   const q = useCustomView(viewRef);
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (st) => st.location.pathname });
+  const data = q.data;
+  // Kanonische URL mit Namens-Slug (B4.20), ohne History-Eintrag.
+  useEffect(() => {
+    if (!data) return;
+    const wanted = viewPath(ws, data);
+    if (decodeURIComponent(pathname) !== wanted)
+      void navigate({ to: wanted as "/", replace: true });
+  }, [data, ws, pathname, navigate]);
   if (q.isLoading) return <ListSkeleton />;
   if (q.isError || !q.data)
     return (

@@ -30,6 +30,17 @@ pub fn generate() -> String {
     format!("req_{}", Uuid::now_v7().simple())
 }
 
+/// Pfad fürs Log: Fähigkeits-URLs (`/files/<Token>`, `/uploads/<Token>`) enthalten ein
+/// signiertes Token, das 1-5 min als Zugriffsrecht gilt, und werden nie im Klartext geloggt.
+pub fn loggable_path(path: &str) -> String {
+    for prefix in ["/files/", "/uploads/"] {
+        if path.starts_with(prefix) {
+            return format!("{prefix}<redacted>");
+        }
+    }
+    path.to_owned()
+}
+
 pub async fn middleware(mut req: Request, next: Next) -> Response {
     let id = generate();
     req.extensions_mut().insert(RequestId(id.clone()));
@@ -43,7 +54,7 @@ pub async fn middleware(mut req: Request, next: Next) -> Response {
         request_id = %id,
         client_ip = %client_ip,
         method = %req.method(),
-        path = %req.uri().path(),
+        path = %loggable_path(req.uri().path()),
     );
     let started = Instant::now();
     let mut res = REQUEST_ID
@@ -60,4 +71,17 @@ pub async fn middleware(mut req: Request, next: Next) -> Response {
         res.headers_mut().insert(HEADER, v);
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loggable_path;
+
+    #[test]
+    fn capability_urls_are_redacted_in_the_log() {
+        assert_eq!(loggable_path("/files/abc.def"), "/files/<redacted>");
+        assert_eq!(loggable_path("/uploads/abc.def"), "/uploads/<redacted>");
+        assert_eq!(loggable_path("/graphql"), "/graphql");
+        assert_eq!(loggable_path("/filesystem"), "/filesystem");
+    }
 }

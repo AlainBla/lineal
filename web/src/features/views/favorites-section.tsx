@@ -16,14 +16,16 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Link } from "@tanstack/react-router";
 import { Folder, GripVertical, Star, X } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
+import { useIssue } from "@/features/issues/hooks";
 import type { Favorite } from "@/gql/graphql";
 
 import { computeFavoriteMove } from "./favorites-order";
 import { useCustomViews, useFavorites, useMoveFavorite, useToggleFavorite } from "./queries";
+import { viewPath } from "./view-path";
 
 const PREDEFINED: Record<string, { label: string; path: (ws: string, key: string) => string }> = {
   activeIssues: { label: "Active", path: (ws, k) => teamPaths(ws, k).active },
@@ -48,7 +50,7 @@ export function resolveFavorite(
   switch (f.type) {
     case "customView": {
       const v = f.targetId ? ctx.views.get(f.targetId) : undefined;
-      return v ? { label: v.name, to: `/${ws}/view/${v.slugId}` } : null;
+      return v ? { label: v.name, to: viewPath(ws, v) } : null;
     }
     case "predefinedView": {
       const p = f.predefinedViewType ? PREDEFINED[f.predefinedViewType] : undefined;
@@ -74,7 +76,11 @@ export function resolveFavorite(
   }
 }
 
-/** Sortierbare Zeile: Griff zum Ziehen (Maus; Tastatur: Leertaste, Pfeiltasten). */
+/**
+ * Sortierbare Zeile. Die ganze Zeile ist Maus-Ziehfläche (der Link ist `draggable=false`, sonst
+ * übernimmt das native Link-Drag und dnd-kit bekommt `pointercancel`, B4.02); Tastatur über den
+ * Griff (Leertaste, Pfeiltasten), damit Enter/Leertaste auf dem Link weiter navigieren.
+ */
 function SortableRow({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -85,6 +91,9 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
       data-favorite={id}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={isDragging ? "relative z-10 opacity-70" : undefined}
+      onPointerDown={
+        listeners?.onPointerDown as React.PointerEventHandler<HTMLLIElement> | undefined
+      }
     >
       <div className="group/fav flex items-center">
         <button
@@ -92,13 +101,58 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
           aria-label={`Reorder favorite ${label}`}
           className="hidden size-4 shrink-0 cursor-grab items-center justify-center text-subtle-foreground group-hover/fav:flex focus-visible:flex"
           {...attributes}
-          {...listeners}
+          onKeyDown={
+            listeners?.onKeyDown as React.KeyboardEventHandler<HTMLButtonElement> | undefined
+          }
         >
           <GripVertical className="size-3" />
         </button>
         <div className="min-w-0 flex-1">{children}</div>
       </div>
     </li>
+  );
+}
+
+/** Eine Favoritenzeile; Issue-Favoriten zeigen Kennung und Titel statt der UUID (B4.39). */
+function FavoriteRow({
+  favorite: f,
+  target,
+  ws,
+  onRemove,
+}: {
+  favorite: Favorite;
+  target: FavoriteTarget;
+  ws: string;
+  onRemove: () => void;
+}) {
+  const issue = useIssue(f.type === "issue" ? (f.targetId ?? "") : "");
+  const t: FavoriteTarget = issue.data
+    ? {
+        label: `${issue.data.identifier} ${issue.data.title}`,
+        to: `/${ws}/issue/${issue.data.identifier}`,
+      }
+    : target;
+  return (
+    <SortableRow id={f.id} label={t.label}>
+      <div className="group flex items-center">
+        <Link
+          to={t.to as "/"}
+          draggable={false}
+          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-surface-hover"
+        >
+          <Star className="size-3.5 shrink-0 text-subtle-foreground" aria-hidden />
+          <span className="truncate">{t.label}</span>
+        </Link>
+        <button
+          type="button"
+          aria-label={`Remove favorite ${t.label}`}
+          className="mr-1 hidden size-5 items-center justify-center rounded text-subtle-foreground group-hover:flex hover:text-foreground"
+          onClick={onRemove}
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+    </SortableRow>
   );
 }
 
@@ -123,10 +177,27 @@ export function FavoritesSection({ ws }: { ws: string }) {
     }),
     [views.data, session?.teams],
   );
+  const dragEndedAt = useRef(0);
+  const dragActive = useRef(false);
+  // Nach dem Drag löst der Browser ein Click auf dem Link aus; dnd-kit stoppt nur dessen Weitergabe,
+  // die native Link-Navigation liefe weiter. Darum das Click schon in der Capture-Phase entschärfen
+  // (`onDragEnd` kommt zudem erst nach dem Click, also zählt auch ein noch aktiver Drag).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const dragged = dragActive.current || Date.now() - dragEndedAt.current < 400;
+      if (dragged && e.target instanceof Element && e.target.closest("[data-favorite]"))
+        e.preventDefault();
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
   const items = favs.data ?? [];
   if (items.length === 0) return null;
 
+  // Nach einem Drag feuert der Browser ein Click auf dem Link: kurz unterdrücken (B4.02).
   const onDragEnd = (e: DragEndEvent) => {
+    dragActive.current = false;
+    dragEndedAt.current = Date.now();
     if (!e.over) return;
     const m = computeFavoriteMove(items, String(e.active.id), String(e.over.id));
     if (m) move.mutate(m);
@@ -139,25 +210,13 @@ export function FavoritesSection({ ws }: { ws: string }) {
     const t = resolveFavorite(f, ws, ctx);
     if (!t) return null;
     return (
-      <SortableRow key={f.id} id={f.id} label={t.label}>
-        <div className="group flex items-center">
-          <Link
-            to={t.to as "/"}
-            className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-surface-hover"
-          >
-            <Star className="size-3.5 shrink-0 text-subtle-foreground" aria-hidden />
-            <span className="truncate">{t.label}</span>
-          </Link>
-          <button
-            type="button"
-            aria-label={`Remove favorite ${t.label}`}
-            className="mr-1 hidden size-5 items-center justify-center rounded text-subtle-foreground group-hover:flex hover:text-foreground"
-            onClick={() => remove.mutate(f.id)}
-          >
-            <X className="size-3" />
-          </button>
-        </div>
-      </SortableRow>
+      <FavoriteRow
+        key={f.id}
+        favorite={f}
+        target={t}
+        ws={ws}
+        onRemove={() => remove.mutate(f.id)}
+      />
     );
   };
 
@@ -166,7 +225,16 @@ export function FavoritesSection({ ws }: { ws: string }) {
       <h2 className="px-2 pt-4 pb-1 text-xs font-medium text-subtle-foreground select-none">
         Favorites
       </h2>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+        onDragStart={() => (dragActive.current = true)}
+        onDragCancel={() => {
+          dragActive.current = false;
+          dragEndedAt.current = Date.now();
+        }}
+      >
         <SortableContext items={items.map((f) => f.id)} strategy={verticalListSortingStrategy}>
           <ul className="flex flex-col gap-px">
             {top.map((f) =>

@@ -493,8 +493,13 @@ impl CommentMutation {
         ctx: &Context<'_>,
         input: CommentCreateInput,
     ) -> async_graphql::Result<CommentPayload> {
+        let anchor = match (&input.anchor_start, &input.anchor_end) {
+            (None, None) => None,
+            (Some(a), Some(b)) => Some((a.clone(), b.clone())),
+            _ => return Err(invalid("anchorStart and anchorEnd must be given together")),
+        };
         let m = app(ctx)?
-            .create_comment(
+            .create_comment_anchored(
                 request_ctx(ctx)?,
                 CreateCommentInput {
                     parent: parent_spec(&input)?,
@@ -502,17 +507,10 @@ impl CommentMutation {
                     body: input.body.clone(),
                     quoted_text: input.quoted_text.clone(),
                 },
+                anchor,
             )
             .await
             .map_err(gql_err)?;
-        let m = match (&input.anchor_start, &input.anchor_end) {
-            (None, None) => m,
-            (Some(a), Some(b)) => app(ctx)?
-                .set_comment_anchor(request_ctx(ctx)?, &m.view.comment.id.to_string(), a, b)
-                .await
-                .map_err(gql_err)?,
-            _ => return Err(invalid("anchorStart and anchorEnd must be given together")),
-        };
         Ok(CommentPayload {
             success: true,
             last_sync_id: sync_id(m.last_sync_id),

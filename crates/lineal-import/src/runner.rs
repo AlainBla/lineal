@@ -14,6 +14,9 @@ use uuid::Uuid;
 /// Wie lange ein Runner einen Lauf exklusiv hält, ohne die Lease zu erneuern.
 pub const LEASE: Duration = Duration::minutes(2);
 
+/// Nach dieser Zeit ohne Lebenszeichen gilt ein CLI-Lauf als abgebrochen (Zombie).
+pub const STALE_AFTER: Duration = Duration::minutes(30);
+
 /// Markiert einen Lauf als fehlgeschlagen (Meldung ohne Zugangsdaten).
 pub async fn fail_run(app: &App, org: OrgId, run_id: Uuid, message: &str) -> AppResult<()> {
     let now = app.clock.now();
@@ -55,7 +58,7 @@ pub async fn run_claimed(app: &App, run: &ImportRun) -> AppResult<()> {
         )
         .await;
     };
-    let source = match LinearSource::new(&token) {
+    let source = match LinearSource::from_env(&token) {
         Ok(s) => s,
         Err(e) => return fail_run(app, org, run.id, &e.to_string()).await,
     };
@@ -78,6 +81,13 @@ pub async fn tick(app: &App, now: DateTime<Utc>) -> AppResult<bool> {
     let purged = tx.imports().delete_expired_import_credentials(now).await?;
     if purged > 0 {
         tracing::info!(purged, "expired import credentials deleted");
+    }
+    let reaped = tx
+        .imports()
+        .fail_stale_import_runs(now, now - STALE_AFTER)
+        .await?;
+    if reaped > 0 {
+        tracing::warn!(reaped, "interrupted import runs marked as failed");
     }
     let claimed = tx.imports().claim_runnable_import(now, now + LEASE).await?;
     tx.commit().await?;

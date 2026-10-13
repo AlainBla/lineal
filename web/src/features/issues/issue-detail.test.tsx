@@ -8,6 +8,7 @@ import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 import { IssueDetailPage } from "./issue-detail";
 import type { IssueExtras } from "./queries";
 import { resetKnownUsers } from "./users";
+import { keys } from "./queries";
 import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
@@ -32,6 +33,7 @@ vi.mock("./rich-editor", () => ({
     editable?: boolean;
     onChange?: (v: string) => void;
     onBlur?: () => void;
+    autoFocus?: boolean;
   }) =>
     p.editable === false ? (
       <p data-testid="comment-body">{p.value}</p>
@@ -42,6 +44,7 @@ vi.mock("./rich-editor", () => ({
         defaultValue={p.value}
         onChange={(e) => p.onChange?.(e.target.value)}
         onBlur={p.onBlur}
+        autoFocus={p.autoFocus}
       />
     ),
 }));
@@ -371,5 +374,111 @@ describe("Issue-Detail", () => {
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the issue");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("Doppelklick auf Comment legt nur einen Kommentar an (B4.13)", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      CommentCreate: () => ({
+        commentCreate: {
+          success: true,
+          comment: {
+            id: "c-new",
+            body: "Hallo",
+            userId: "user-bob",
+            user: { id: "user-bob", name: "bob", displayName: "Bob" },
+            issueId: "i1",
+            parentId: null,
+            quotedText: null,
+            editedAt: null,
+            resolvedAt: null,
+            reactionData: [],
+            createdAt: "2026-10-04T08:00:00Z",
+            updatedAt: "2026-10-04T08:00:00Z",
+          },
+        },
+      }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await userEvent.type(await screen.findByLabelText("Leave a comment"), "Hallo");
+    await userEvent.dblClick(screen.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(gql.of("CommentCreate")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gql.of("CommentCreate")).toHaveLength(1);
+  });
+
+  it("Enter dreimal im Sub-Issue-Feld legt nur ein Sub-Issue an (B4.13)", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      IssueCreate: () => ({
+        issueCreate: {
+          success: true,
+          issue: makeIssue({ id: "i-new", identifier: "ENG-200", title: "Neu", parentId: "i1" }),
+        },
+      }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await userEvent.click(await screen.findByRole("button", { name: /New sub-issue/ }));
+    const input = await screen.findByLabelText("Sub-issue title");
+    await userEvent.type(input, "Neu{Enter}{Enter}{Enter}");
+    await waitFor(() => expect(gql.of("IssueCreate")).toHaveLength(1));
+  });
+
+  it("Leave a reply fokussiert das Antwortfeld (B4.12), Anker nutzen die volle ID (B4.22)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const comment = await screen.findByRole("article", { name: "Comment by Alice" });
+    expect(comment.id).toBe("comment-c1aaaaaa-1");
+    await userEvent.click(within(comment).getByRole("button", { name: "Leave a reply…" }));
+    expect(await screen.findByLabelText("Leave a reply")).toHaveFocus();
+  });
+
+  const coded = (message: string, code: string) => Object.assign(new Error(message), { code });
+
+  it("Geteiltes Issue ohne Teamzugriff: schreibgeschützt, Kennung statt „Team“ (B4.16)", async () => {
+    mockGraphql({
+      ...handlers(),
+      TeamMeta: () => coded("Could not find referenced Team", "not_found"),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect(title).toHaveAttribute("readonly"));
+    const sidebar = await screen.findByLabelText("Properties");
+    await waitFor(() => expect(within(sidebar).getByText("ENG")).toBeInTheDocument());
+    expect(within(sidebar).queryByRole("button", { name: "Priority: change" })).toBeNull();
+    expect(within(sidebar).queryByText("Team")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Set due date" })).toBeNull();
+  });
+
+  it("Teamdaten nicht ladbar (z. B. 429): Hinweis mit Retry statt „Team“ (B4.27)", async () => {
+    mockGraphql({ ...handlers(), TeamMeta: () => new Error("Too many requests") });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const sidebar = await screen.findByLabelText("Properties");
+    expect(await within(sidebar).findByText("Could not load team")).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(within(sidebar).queryByRole("button", { name: "Status: change" })).toBeNull();
+  });
+
+  it("Titel ist mehrzeilig (Textarea), fremde Titeländerung überschreibt keine Eingabe (B4.37, B4.34)", async () => {
+    mockGraphql(handlers());
+    const client = newClient();
+    await renderWithApp(page(), client, "/acme/issue/ENG-120/x");
+    const title = await screen.findByLabelText("Title");
+    expect(title.tagName).toBe("TEXTAREA");
+    await userEvent.type(title, " plus");
+    expect(title).toHaveValue("Checkout überarbeiten plus");
+    client.setQueryData(keys.issue("ENG-120"), { ...ISSUE, title: "Von Alice geändert" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Von Alice geändert");
+    expect(title).toHaveValue("Checkout überarbeiten plus");
+  });
+
+  it("Gelöschter Parent wird als gelöscht angezeigt (B4.36)", async () => {
+    const child = makeIssue({ id: "i1", identifier: "ENG-120", title: "Kind", parentId: "gone" });
+    mockGraphql({
+      ...handlers(),
+      IssueDetail: (v) => (v.id === "gone" ? coded("not found", "not_found") : { issue: child }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    expect(await screen.findByText("Parent issue was deleted")).toBeInTheDocument();
   });
 });

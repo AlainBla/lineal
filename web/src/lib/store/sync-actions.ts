@@ -190,6 +190,7 @@ function invalidateFor(a: SyncAction, pending: Pending): void {
       pending.add(["session"]);
       break;
     case "CustomView":
+    case "Favorite":
       pending.add(["views"]);
       break;
     case "User":

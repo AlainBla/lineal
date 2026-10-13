@@ -208,14 +208,28 @@ fn invalid(field: &str, msg: impl Into<String>) -> AppError {
     AppError::invalid_request(msg).with_details(json!({ "field": field }))
 }
 
-fn patch_error(e: patch::PatchError) -> AppError {
+/// Hinweis für `replace_range` mit vertauschten Ankern: `to` steht im Text vor `from`.
+fn reversed_range_hint(e: &patch::PatchError, ops: &[PatchOp], text: &str) -> Option<String> {
+    if e.reason != PatchFailure::AnchorNotFound {
+        return None;
+    }
+    let Some(PatchOp::ReplaceRange { from, to, .. }) = ops.get(e.op_index) else {
+        return None;
+    };
+    let (pf, pt) = (text.find(from.as_str())?, text.find(to.as_str())?);
+    (pt < pf).then(|| {
+        "; hint: `to` occurs before `from` in the document - did you swap `from` and `to`?".into()
+    })
+}
+
+fn patch_error(e: patch::PatchError, hint: Option<String>) -> AppError {
     let details = json!({
         "field": "content", "opIndex": e.op_index, "op": e.op,
         "anchor": e.anchor, "matches": e.matches,
     });
     match e.reason {
         PatchFailure::AnchorNotFound | PatchFailure::AnchorAmbiguous => {
-            AppError::conflict(e.to_string()).with_details(details)
+            AppError::conflict(format!("{e}{}", hint.unwrap_or_default())).with_details(details)
         }
         PatchFailure::LimitExceeded => {
             AppError::limit_exceeded(e.to_string()).with_details(details)
@@ -838,7 +852,8 @@ impl App {
                 now,
                 &scope.teams,
                 t,
-                title.clone(),
+                // Leerer Titel = nicht angegeben: dann gilt der Template-Titel (docs/06 §2.5).
+                title.clone().filter(|t| !t.trim().is_empty()),
                 content.clone(),
                 icon.clone(),
                 color.clone(),
@@ -936,10 +951,20 @@ impl App {
                 "`template` is only valid when creating a document",
             ));
         }
-        let (mut doc, parent, scope) = load_visible(tx, snap, ctx, reference, false).await?;
-        let loaded_updated_at = doc.updated_at;
+        let (doc, parent, scope) = load_visible(tx, snap, ctx, reference, false).await?;
         require_write(snap, ctx, parent, &scope)?;
         require_writable_parent(&scope)?;
+        // Inhaltszeile sperren (gleiche Reihenfolge wie der Raum: erst Inhalt, dann Dokument) und
+        // das Dokument auf frischem Stand neu lesen: sonst gewinnen bei parallelen Schreibern
+        // mehrere dieselbe `expectedVersion`, und Patches werden auf veraltetem Text angewandt.
+        tx.documents().content_state(doc.content_id, true).await?;
+        let mut doc = tx
+            .documents()
+            .get(doc.id)
+            .await?
+            .filter(|d| !d.trashed)
+            .ok_or_else(|| not_found(reference))?;
+        let loaded_updated_at = doc.updated_at;
         if let Some(v) = input.expected_version
             && v != doc.content_version
         {
@@ -1009,7 +1034,10 @@ impl App {
         let new_content = match (&input.content, &input.patch) {
             (Some(c), _) => Some(clean_markdown(c)?),
             (None, Some(ops)) => {
-                let out = patch::apply(&doc.content, ops).map_err(patch_error)?;
+                let out = patch::apply(&doc.content, ops).map_err(|e| {
+                    let hint = reversed_range_hint(&e, ops, &doc.content);
+                    patch_error(e, hint)
+                })?;
                 Some(clean_markdown(&out)?)
             }
             (None, None) => None,

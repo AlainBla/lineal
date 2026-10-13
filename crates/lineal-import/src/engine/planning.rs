@@ -31,6 +31,7 @@ impl Session<'_, '_> {
                 self.item_result("Cycle", n.id(), r)?;
             }
             let next = page.next_cursor;
+            self.sync_counters().await?;
             self.end_unit(Some(self.cp(Step::Cycles, next.clone())))
                 .await?;
             match next {

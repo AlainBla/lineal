@@ -174,15 +174,74 @@ describe("CollabProvider", () => {
     const check = new Y.Doc();
     Y.applyUpdate(check, reply.payload);
     expect(check.getText("t").toString()).toBe("offline");
-    // Jeder weitere Fehlschlag verdoppelt die Wartezeit.
+    // Jeder weitere Fehlschlag verdoppelt die Wartezeit (auch nach einem Hello ohne stabile Phase).
     b.drop(1006);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(199);
+    expect(FakeSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(1);
     expect(FakeSocket.instances).toHaveLength(3);
     FakeSocket.instances[2]!.drop(1006);
-    vi.advanceTimersByTime(199);
+    vi.advanceTimersByTime(399);
     expect(FakeSocket.instances).toHaveLength(3);
     vi.advanceTimersByTime(1);
     expect(FakeSocket.instances).toHaveLength(4);
+    p.destroy();
+  });
+
+  it("Backoff wächst bei Ablehnung nach dem Handshake (4400), Reset erst nach stabiler Phase", () => {
+    const p = make({ baseDelayMs: 100, maxDelayMs: 10_000, stableMs: 5000 });
+    const delays: number[] = [];
+    let n = 1;
+    for (let i = 0; i < 4; i++) {
+      const ws = FakeSocket.instances[n - 1]!;
+      ws.open();
+      ws.text(hello());
+      ws.drop(4400);
+      let waited = 0;
+      while (FakeSocket.instances.length === n && waited < 20_000) {
+        vi.advanceTimersByTime(1);
+        waited += 1;
+      }
+      delays.push(waited);
+      n += 1;
+    }
+    expect(delays).toEqual([100, 200, 400, 800]);
+    // Stabile Verbindung setzt den Backoff zurück.
+    const ok = FakeSocket.instances[n - 1]!;
+    ok.open();
+    ok.text(hello());
+    vi.advanceTimersByTime(5000);
+    ok.drop(1006);
+    vi.advanceTimersByTime(100);
+    expect(FakeSocket.instances).toHaveLength(n + 1);
+    p.destroy();
+  });
+
+  it("lehnt zu große Änderungen ehrlich ab, statt Offline zu melden und endlos zu verbinden", () => {
+    const p = make({ baseDelayMs: 10, maxUpdateBytes: 1000 });
+    const a = FakeSocket.instances[0]!;
+    a.open();
+    a.text(hello());
+    const before = a.binaries().length;
+    p.doc.getText("t").insert(0, "x".repeat(5000));
+    expect(p.status).toBe("rejected");
+    expect(p.canWrite).toBe(false);
+    expect(p.closeCode).toBe(1009);
+    expect(a.binaries().length).toBe(before);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    p.destroy();
+  });
+
+  it("verbindet nach Serverschluss 1009 nicht erneut", () => {
+    const p = make({ baseDelayMs: 10 });
+    const a = FakeSocket.instances[0]!;
+    a.open();
+    a.text(hello());
+    a.drop(1009);
+    expect(p.status).toBe("rejected");
+    vi.advanceTimersByTime(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
     p.destroy();
   });
 

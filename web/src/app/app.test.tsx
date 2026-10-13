@@ -33,13 +33,24 @@ const ME = {
   })),
 };
 
-function mockFetch(authed: boolean) {
+function mockFetch(authed: boolean, opts: { role?: string; graphql401?: boolean } = {}) {
   const fn = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/auth/me") {
       return authed
-        ? new Response(JSON.stringify(ME), { status: 200 })
+        ? new Response(
+            JSON.stringify(opts.role ? { ...ME, user: { ...ME.user, role: opts.role } } : ME),
+            { status: 200 },
+          )
         : new Response("{}", { status: 401 });
+    }
+    if (url.endsWith("/graphql") && opts.graphql401) {
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: "Sign in", extensions: { code: "unauthenticated" } }],
+        }),
+        { status: 401 },
+      );
     }
     if (url.endsWith("/graphql")) {
       return new Response(JSON.stringify({ data: { notificationsUnreadCount: 3 } }), {
@@ -142,6 +153,119 @@ describe("shell", () => {
     expect(await screen.findByRole("heading", { name: "Drafts" })).toBeInTheDocument();
     expect(screen.getByText(/not built yet/i)).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/acme/drafts");
+  });
+
+  it("unbekannte URLs zeigen eine 404-Seite ohne Try again (B4.21)", async () => {
+    mockFetch(true);
+    await renderApp("/acme/zzz");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Go to my issues" })).toBeInTheDocument();
+  });
+
+  it("Gäste sehen keine Workspace-Übersichten in der Navigation (B4.31)", async () => {
+    mockFetch(true, { role: "guest" });
+    await renderApp("/acme/inbox");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    for (const name of ["Overview", "Initiatives", "Workload", "Cycles"]) {
+      expect(within(nav).queryByRole("link", { name })).toBeNull();
+    }
+    expect(within(nav).getByRole("link", { name: "Projects" })).toBeInTheDocument();
+  });
+
+  it("Mitglieder sehen Overview, Initiatives, Workload und Cycles", async () => {
+    mockFetch(true, { role: "user" });
+    await renderApp("/acme/inbox");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    for (const name of ["Overview", "Initiatives", "Workload", "Cycles"]) {
+      expect(within(nav).getByRole("link", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("401 auf GraphQL leitet zum Login mit Rücksprungadresse um (B4.11)", async () => {
+    mockFetch(true, { graphql401: true });
+    const router = await renderApp("/acme/inbox");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toMatchObject({ redirect: "/acme/inbox" });
+  });
+
+  it("document.title folgt der Seite und bleibt nicht veraltet (B4.32)", async () => {
+    mockFetch(true);
+    const router = await renderApp("/acme/inbox");
+    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() => expect(document.title).toBe("Inbox · Lineal"));
+    await router.navigate({ to: "/acme/drafts" as "/" });
+    await waitFor(() => expect(document.title).toBe("Drafts · Lineal"));
+    await router.navigate({ to: "/acme/views/issues" as "/" });
+    await waitFor(() => expect(document.title).not.toMatch(/^Inbox|^Drafts/));
+    expect(document.title).toMatch(/Views/);
+  });
+
+  it("Skip-Link fokussiert den Hauptbereich ohne History-Eintrag (B4.29)", async () => {
+    const user = userEvent.setup();
+    mockFetch(true);
+    const router = await renderApp("/acme/inbox");
+    const skip = await screen.findByRole("link", { name: "Skip to content" });
+    const before = router.history.length;
+    await user.click(skip);
+    expect(document.getElementById("main")).toHaveFocus();
+    expect(router.history.length).toBe(before);
+    expect(router.state.location.hash).toBe("");
+  });
+
+  it("Login ersetzt den Login-Eintrag in der History (B4.29)", async () => {
+    const user = userEvent.setup();
+    let authed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/auth/login") {
+          authed = true;
+          return new Response("{}", { status: 200 });
+        }
+        if (url === "/auth/me")
+          return authed
+            ? new Response(JSON.stringify(ME), { status: 200 })
+            : new Response("{}", { status: 401 });
+        return new Response(JSON.stringify({ data: { notificationsUnreadCount: 0 } }), {
+          status: 200,
+        });
+      }),
+    );
+    const router = await renderApp("/acme/inbox");
+    await user.type(await screen.findByLabelText(/email/i), "alice@acme.example");
+    await user.type(screen.getByLabelText(/password/i), "geheim123");
+    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/inbox"));
+    expect(router.history.canGoBack()).toBe(false);
+  });
+
+  it("Schmaler Viewport: Sidebar startet eingeklappt und öffnet als Overlay mit Scrim (B4.28)", async () => {
+    const user = userEvent.setup();
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: q.includes("max-width"),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      mockFetch(true);
+      await renderApp("/acme/inbox");
+      const aside = await screen.findByLabelText("Sidebar", { selector: "aside" });
+      await waitFor(() => expect(aside).toHaveAttribute("data-open", "false"));
+      expect(localStorage.getItem("lineal-sidebar-open")).not.toBe("false");
+      expect(screen.queryByTestId("sidebar-scrim")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+      expect(await screen.findByTestId("sidebar-scrim")).toBeInTheDocument();
+      expect(aside.className).toContain("fixed");
+      await user.click(screen.getByTestId("sidebar-scrim"));
+      await waitFor(() => expect(screen.queryByTestId("sidebar-scrim")).toBeNull());
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it("navigates with key sequences (g i, g m)", async () => {

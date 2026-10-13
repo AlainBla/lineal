@@ -799,6 +799,80 @@ impl TriageRepo for PgTx {
         Ok(())
     }
 
+    async fn teams_with_tight_sort_order(
+        &mut self,
+        min_gap: f64,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<TeamRef>> {
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT DISTINCT o.organization_id, o.team_id FROM ( \
+               SELECT i.organization_id, i.team_id, \
+                      i.sort_order - lag(i.sort_order) OVER (PARTITION BY i.team_id \
+                                                             ORDER BY i.sort_order, i.id) AS gap \
+               FROM issue i WHERE i.archived_at IS NULL AND NOT i.trashed) o \
+             JOIN team t ON t.organization_id = o.organization_id AND t.id = o.team_id \
+             WHERE o.gap < $1 AND NOT t.trashed \
+               AND (t.import_locked_until IS NULL OR t.import_locked_until <= $2) \
+             ORDER BY 1, 2",
+        )
+        .bind(min_gap)
+        .bind(now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(refs(rows))
+    }
+
+    async fn renumber_team_sort_order(&mut self, team: TeamId) -> AppResult<Vec<IssueId>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "WITH ranked AS ( \
+               SELECT id, sort_order AS old, \
+                      min(sort_order) OVER () + (row_number() OVER (ORDER BY sort_order, id) - 1)::float8 AS new \
+               FROM issue WHERE organization_id = $1 AND team_id = $2 AND archived_at IS NULL AND NOT trashed) \
+             UPDATE issue i SET sort_order = r.new, version = i.version + 1 \
+             FROM ranked r WHERE i.id = r.id AND r.new <> r.old \
+             RETURNING i.id",
+        )
+        .bind(self.org.0)
+        .bind(team.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(IssueId).collect())
+    }
+
+    async fn count_recurring_for_template(&mut self, template: Uuid) -> AppResult<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM recurring_issue WHERE organization_id = $1 AND template_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(template)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn pause_recurring_run(
+        &mut self,
+        id: Uuid,
+        error: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE recurring_issue SET paused = true, last_error = left($3, 500), \
+             last_error_at = $4, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(error)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn orgs_with_recurring_due(&mut self, now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT organization_id FROM recurring_issue \

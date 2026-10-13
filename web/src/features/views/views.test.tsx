@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -135,7 +136,7 @@ describe("resolveFavorite", () => {
   it("maps custom and predefined views", () => {
     expect(resolveFavorite(fav({ targetId: "v1" }), "acme", ctx)).toEqual({
       label: "My bugs",
-      to: "/acme/view/abc",
+      to: "/acme/view/my-bugs-abc",
     });
     expect(
       resolveFavorite(
@@ -258,6 +259,36 @@ describe("IssueView mit gespeicherter View (WP31)", () => {
     });
   });
 
+  it("Save sendet die Basisversion des Entwurfs, nicht die live aktualisierte (B4.04)", async () => {
+    const saved: Array<Record<string, unknown>> = [];
+    mockGraphql(
+      handlers({
+        ViewUpdate: (v) => {
+          saved.push(v);
+          return { customViewUpdate: { success: true } };
+        },
+      }),
+    );
+    const base = view({ and: [{ assignee: { isMe: { eq: true } } }, { priority: { in: [1] } }] });
+    function Live() {
+      const [version, setVersion] = useState(3);
+      return (
+        <>
+          <button onClick={() => setVersion(4)}>live update</button>
+          <IssueView ws="acme" title="My bugs" view={{ ...base, version }} />
+        </>
+      );
+    }
+    await renderWithApp(<Live />, newClient(), "/acme/view/abc");
+    const user = userEvent.setup();
+    await screen.findByText("Issue ENG-1");
+    await user.click(screen.getByRole("button", { name: "Remove filter Priority" }));
+    await user.click(screen.getByRole("button", { name: "live update" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect((saved[0]!.input as Record<string, unknown>).expectedVersion).toBe(3);
+  });
+
   it("Chip bearbeiten: Dialog mit vorbelegtem Wert", async () => {
     const gql = mockGraphql(handlers());
     await renderWithApp(
@@ -347,6 +378,15 @@ describe("IssueView mit gespeicherter View (WP31)", () => {
     await user.click(screen.getByRole("button", { name: "Transfer" }));
     await waitFor(() =>
       expect(calls).toEqual([{ id: "v-1", input: { ownerId: "u-bob", expectedVersion: 3 } }]),
+    );
+  });
+});
+
+describe("viewPath (B4.20)", () => {
+  it("hängt den Namens-Slug vor die slugId", async () => {
+    const { viewPath } = await import("./view-path");
+    expect(viewPath("acme", { name: "Offene Bugs (Web)", slugId: "77aa00bb11cc" })).toBe(
+      "/acme/view/offene-bugs-web-77aa00bb11cc",
     );
   });
 });

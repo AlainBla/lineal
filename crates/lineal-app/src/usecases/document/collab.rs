@@ -110,7 +110,7 @@ pub(super) async fn advance_state(
     let Some(doc) = crdt::doc_from_state(state) else {
         return Ok(());
     };
-    if crdt::sanitized_markdown_of(&doc) != prev.markdown {
+    if !crdt::state_matches_markdown(&doc, &prev.markdown) {
         return Ok(());
     }
     crdt::apply_markdown(&doc, new_markdown);
@@ -303,7 +303,7 @@ impl App {
         // Zustand, der nicht (mehr) zum Text passt (Schreiben am Raum vorbei), wird verworfen.
         if let Some(state) = load.state.as_deref() {
             let fresh = crdt::doc_from_state(state).is_some_and(|d| {
-                crdt::check_limits(&d).is_ok() && crdt::sanitized_markdown_of(&d) == load.markdown
+                crdt::check_limits(&d).is_ok() && crdt::state_matches_markdown(&d, &load.markdown)
             });
             if !fresh {
                 load.state = None;
@@ -438,7 +438,7 @@ impl App {
             return Ok(PersistOutcome::Stale(cs.into()));
         }
         let clean = clean_markdown(markdown)?;
-        if clean == cs.markdown {
+        if clean == cs.markdown || clean == crdt::canonical_markdown(&cs.markdown) {
             tx.documents()
                 .set_content_state(
                     access.content_id,
@@ -502,7 +502,9 @@ impl App {
             return Ok(PersistOutcome::Stale(load));
         }
         let clean = clean_markdown(markdown)?;
-        let version = if clean == owner.markdown {
+        let version = if clean == owner.markdown
+            || clean == crdt::canonical_markdown(&owner.markdown)
+        {
             owner.version
         } else {
             match target {

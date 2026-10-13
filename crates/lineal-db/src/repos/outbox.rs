@@ -162,6 +162,31 @@ impl OutboxRepo for PgTx {
             .collect())
     }
 
+    async fn purge_processed(
+        &mut self,
+        before: DateTime<Utc>,
+        dead_letter_before: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<u64> {
+        // Zustellungen verschwinden per ON DELETE CASCADE.
+        let res = sqlx::query(
+            "DELETE FROM outbox_event WHERE event_id IN ( \
+               SELECT e.event_id FROM outbox_event e \
+               WHERE e.processed_at IS NOT NULL AND e.processed_at < $1 \
+                 AND (e.processed_at < $2 OR NOT EXISTS ( \
+                       SELECT 1 FROM outbox_delivery d \
+                       WHERE d.event_id = e.event_id AND d.last_error IS NOT NULL)) \
+               LIMIT $3 FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(before)
+        .bind(dead_letter_before)
+        .bind(limit)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
     async fn mark_processed(&mut self, consumers: &[String]) -> AppResult<u64> {
         if consumers.is_empty() {
             return Ok(0);

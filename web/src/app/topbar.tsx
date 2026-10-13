@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Keys } from "@/components/ui/kbd";
 import { Hint } from "@/components/ui/tooltip";
+import { NARROW_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { isThemePreference, useTheme } from "@/lib/theme";
 
 function ThemeMenu() {
@@ -54,6 +55,7 @@ export function Topbar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { sidebarOpen, detailsOpen } = useUiState();
   const crumbs = breadcrumbFor(pathname);
+  const narrow = useMediaQuery(NARROW_QUERY);
 
   return (
     <header className="flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border px-3">
@@ -63,7 +65,7 @@ export function Topbar() {
           size="icon"
           aria-label="Toggle sidebar"
           aria-pressed={sidebarOpen}
-          onClick={toggleSidebar}
+          onClick={() => toggleSidebar(!narrow)}
         >
           <PanelLeft />
         </Button>

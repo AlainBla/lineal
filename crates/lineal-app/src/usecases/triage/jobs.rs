@@ -104,7 +104,50 @@ fn closable_itself(
         && issue.sla_breaches_at.is_none_or(|b| b <= now)
 }
 
+/// Mindestabstand zweier benachbarter `sortOrder`-Werte (docs/03 §12); darunter wird neu nummeriert.
+pub const MIN_SORT_GAP: f64 = 1e-6;
+
 impl App {
+    /// Neunummerierung der manuellen Sortierung (docs/03 §12): Teams, in denen der Abstand
+    /// benachbarter Issues `MIN_SORT_GAP` unterschreitet, werden mit Abstand 1 neu nummeriert
+    /// (ohne History; die neue Reihenfolge wird per `IssueUpdated(sortOrder)` verteilt).
+    pub async fn run_sort_renumber(&self, now: DateTime<Utc>) -> AppResult<JobStats> {
+        let mut sys = self.store.begin_system().await?;
+        let teams = sys
+            .triage()
+            .teams_with_tight_sort_order(MIN_SORT_GAP, now)
+            .await?;
+        drop(sys);
+        let mut stats = JobStats::default();
+        for t in teams {
+            let r: AppResult<u64> = async {
+                let mut tx = self.store.begin(t.org_id).await?;
+                let ids = tx.triage().renumber_team_sort_order(t.team_id).await?;
+                for id in &ids {
+                    emit_system(
+                        &mut *tx,
+                        DomainEvent::IssueUpdated {
+                            previous: None,
+                            issue_id: *id,
+                            team_id: t.team_id,
+                            changed: vec!["sortOrder".into()],
+                            mentioned_user_ids: vec![],
+                        },
+                    )
+                    .await?;
+                }
+                tx.commit().await?;
+                Ok(ids.len() as u64)
+            }
+            .await;
+            match r {
+                Ok(n) => stats.processed += n,
+                Err(e) => stats.fail(&format!("sort_renumber team {}", t.team_id), e),
+            }
+        }
+        Ok(stats)
+    }
+
     /// Auto-Close (docs/03 §9.3): schließt offene Issues (`triage`/`backlog`/`unstarted`) ohne
     /// Aktualisierung seit `autoClosePeriod` Monaten. Ausnahmen: aktiver Cycle und unfertiges
     /// Projekt (nie), künftiges Due-Date, aktives SLA und nicht schließbare Sub-Issues

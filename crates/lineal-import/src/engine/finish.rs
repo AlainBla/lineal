@@ -99,7 +99,7 @@ impl Session<'_, '_> {
         }
     }
 
-    async fn mapped_team_ids(&mut self) -> AppResult<Vec<Uuid>> {
+    pub(crate) async fn mapped_team_ids(&mut self) -> AppResult<Vec<Uuid>> {
         let source = self.source().to_owned();
         let mut ids = Vec::new();
         let mut after: Option<String> = None;
@@ -115,6 +115,19 @@ impl Session<'_, '_> {
             after = page.last().map(|m| m.source_id.clone());
             ids.extend(page.iter().map(|m| m.target_id));
         }
+    }
+
+    /// Team-Nummernzähler auf das Maximum der vorhandenen Nummern nachführen (laufend nach jeder
+    /// Issue-Seite, damit ein abgebrochener Lauf ein benutzbares Team hinterlässt).
+    pub(crate) async fn sync_counters(&mut self) -> AppResult<()> {
+        if self.dry {
+            return Ok(());
+        }
+        let team_ids = self.mapped_team_ids().await?;
+        self.tx()?
+            .imports()
+            .finalize_import_counters(&team_ids)
+            .await
     }
 
     /// Phase 8: Zähler setzen, Verifikation, Sperren aufheben (im Lauf-Abschluss).
@@ -187,7 +200,21 @@ impl Session<'_, '_> {
         let now = self.eng.app.clock.now();
         let run_id = self.run.id;
         let stats = self.stats_json();
-        let report = std::mem::take(&mut self.report);
+        let mut report = std::mem::take(&mut self.report);
+        if matches!(result, Ok(RunOutcome::Completed)) && !dry {
+            let errors: u64 = self.stats.values().map(|c| c.errors).sum();
+            if errors > 0 {
+                report.push(lineal_app::ports::repos::import::ReportEntry {
+                    severity: "warning".into(),
+                    source_type: None,
+                    source_id: None,
+                    message: format!(
+                        "the run completed, but {errors} object(s) could not be imported; see the error entries of this report"
+                    ),
+                    created_at: None,
+                });
+            }
+        }
         let mut tx = self.eng.app.store.begin(self.org).await?;
         let outcome = match result {
             Ok(done) => {

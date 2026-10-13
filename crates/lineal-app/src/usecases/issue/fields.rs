@@ -55,7 +55,10 @@ pub fn validate_description(raw: String) -> AppResult<Option<String>> {
                 .with_details(json!({ "field": "description" })),
         );
     }
-    Ok((!raw.is_empty()).then_some(raw))
+    // Bereinigung beim Speichern (docs/15 §4.3), auch für API/MCP: sonst schreibt der Editor die
+    // Beschreibung beim bloßen Öffnen um.
+    let clean = lineal_domain::rules::markdown::sanitize(&raw);
+    Ok((!clean.is_empty()).then_some(clean))
 }
 
 /// Schätzskala des Teams (inkl. Vererbung von Parent-Teams).

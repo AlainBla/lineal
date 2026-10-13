@@ -7,9 +7,12 @@ import {
 } from "@tanstack/react-router";
 
 import { ensureSession, useSession } from "@/app/auth";
+import { useSessionExpiry } from "@/app/session-expiry";
+import { isPlannedPath } from "@/app/nav";
 import { PlaceholderPage } from "@/app/placeholder";
 import { Shell } from "@/app/shell";
 import { Button } from "@/components/ui/button";
+import { NotFound } from "@/components/not-found";
 
 export const Route = createRootRoute({
   // Auth-Guard: ohne gültige Session (GET /auth/me) geht jede Seite außer /login und den öffentlichen
@@ -22,15 +25,22 @@ export const Route = createRootRoute({
   },
   component: RootLayout,
   // Alle Pfade, die ein späteres Arbeitspaket baut, zeigen bis dahin eine Platzhalterseite in der Shell.
-  notFoundComponent: () => <PlaceholderPage />,
+  notFoundComponent: NotFoundRoute,
   errorComponent: RootError,
 });
+
+/** Geplante Bereiche zeigen den Platzhalter, alles andere eine echte 404-Seite (B4.21). */
+function NotFoundRoute() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return isPlannedPath(pathname) ? <PlaceholderPage /> : <NotFound />;
+}
 
 /** Öffentliche Seiten ohne Login und ohne App-Shell. */
 const isPublicPath = (pathname: string) => pathname.startsWith("/invite/");
 
 function RootLayout() {
   const session = useSession();
+  useSessionExpiry();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (!session || isPublicPath(pathname)) return <Outlet />;
   return (

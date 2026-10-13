@@ -340,7 +340,8 @@ async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
     let history = issue["history"].as_array().unwrap();
     // Änderungen im selben Moment werden mit dem Anlege-Eintrag zusammengefasst.
     assert!(!history.is_empty(), "{history:?}");
-    assert_eq!(history[0]["source"], "api");
+    // Die Test-Anfrage läuft als Cookie-Session: Herkunft `user` (API-Keys/OAuth ergäben `api`).
+    assert_eq!(history[0]["source"], "user");
     assert!(
         history[0]["flags"]
             .as_array()

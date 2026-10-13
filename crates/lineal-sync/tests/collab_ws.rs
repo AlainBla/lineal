@@ -417,6 +417,69 @@ async fn api_patch_over_multibyte_text_updates_open_room(pool: PgPool) {
     assert_eq!(alice.md(), "Hallo 👨‍👩‍👧 und é Welt ä 日本");
 }
 
+/// B2.01: Tipptext im offenen Raum (noch nicht gespeichert) darf durch ein API/MCP-Schreiben
+/// binnen des Debounce-Fensters nicht verloren gehen - auch beim Schreiben im selben Absatz.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn api_patch_within_debounce_window_keeps_unsaved_typing(pool: PgPool) {
+    let cfg = CollabConfig {
+        persist_quiet: Duration::from_millis(1500),
+        persist_max: Duration::from_millis(6000),
+        ..collab_cfg()
+    };
+    let e = env_with(pool, cfg).await;
+    // Mehrere Inhalte: u. a. solche, deren Markdown beim Parsen/Ausgeben nicht stabil ist.
+    let contents = [
+        "Anfang Text\n\nZweiter Absatz",
+        "* Anfang Text\n* eins\n\nZweiter Absatz",
+        "Anfang Text  \nmit Umbruch\n\nZweiter Absatz",
+        "Anfang Text\n\n\n\nZweiter Absatz",
+    ];
+    for (delay_ms, content) in [100u64, 400, 900, 1400]
+        .into_iter()
+        .zip(contents.into_iter().cycle())
+    {
+        let doc = e.doc(SeedUser::Alice, "ENG", "Spec", content).await;
+        let mut alice = e.join("alice", doc).await;
+        alice
+            .edit(|d| {
+                let md = crdt::markdown_of(d);
+                let typed = md.replacen("Anfang Text", "Anfang Text TIPP", 1);
+                crdt::apply_markdown(d, &typed);
+            })
+            .await;
+        alice.pump(Duration::from_millis(delay_ms)).await;
+        e.app
+            .save_document(
+                &user(SeedUser::Bob),
+                SaveDocumentInput {
+                    id: Some(doc.to_string()),
+                    patch: Some(vec![PatchOp::Replace {
+                        old_string: "Zweiter".into(),
+                        new_string: "API-Zweiter".into(),
+                        replace_all: None,
+                    }]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        for _ in 0..30 {
+            alice.pump(Duration::from_millis(100)).await;
+            if alice.md().contains("API-Zweiter") {
+                break;
+            }
+        }
+        assert!(alice.md().contains("API-Zweiter"), "{}", alice.md());
+        assert!(
+            alice.md().contains("TIPP"),
+            "delay {delay_ms}: Raum verlor Tipptext: {}",
+            alice.md()
+        );
+        wait_for_db(&e, doc, |m| m.contains("API-Zweiter") && m.contains("TIPP")).await;
+        drop(alice);
+    }
+}
+
 async fn wait_for_db(e: &Env, doc: Uuid, f: impl Fn(&str) -> bool) {
     for _ in 0..80 {
         if f(&e.db_doc(doc).await.0) {
@@ -832,6 +895,67 @@ async fn awareness_is_rewritten_to_the_authenticated_identity(pool: PgPool) {
     assert!(c.closed.is_some());
 }
 
+/// B2.07: Nach einem Verbindungsabbruch behält der Browser seine Client-ID; die alte (halboffene)
+/// Verbindung desselben Users hält sie noch. Der Reconnect darf nicht mit 4400 abgelehnt werden.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn reconnect_of_same_user_takes_over_awareness_id_of_stale_connection(pool: PgPool) {
+    let e = env(pool).await;
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", "x").await;
+    let mut old = e.join("alice", doc).await;
+    old.send(&aw(77, 1, json!({"user": {"name": "x"}}).to_string()))
+        .await;
+    old.pump(Duration::from_millis(300)).await;
+    // Neue Verbindung desselben Users mit derselben Client-ID, die alte lebt noch.
+    let mut fresh = e.join("alice", doc).await;
+    fresh
+        .send(&aw(77, 2, json!({"user": {"name": "x"}}).to_string()))
+        .await;
+    fresh.pump(Duration::from_millis(400)).await;
+    assert_eq!(fresh.closed, None, "Reconnect wurde abgelehnt");
+    // Die alte Verbindung räumt beim Schließen die übernommene ID nicht mehr ab.
+    drop(old);
+    fresh.pump(Duration::from_millis(400)).await;
+    let mut watcher = e.join("bob", doc).await;
+    watcher.pump(Duration::from_millis(400)).await;
+    assert!(watcher.awareness.iter().any(|(id, _)| *id == 77));
+}
+
+/// B2.02: bloßes Öffnen (auch mit einer Editor-Normalisierung) schreibt nichts um; Bearbeiten
+/// lässt Tabellen, Aufgabenlisten, Bilder und maskierte `<tag>`-Texte unverändert.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn opening_a_document_does_not_rewrite_it_and_edits_keep_tables_tasks_images(pool: PgPool) {
+    let e = env(pool).await;
+    let md = "Text \\<tag> mehr\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- [x] erledigt\n- [ ] offen\n\n![Logo](https://acme.example/l.png)";
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", md).await;
+    let (_, _, v0, _) = e.db_doc(doc).await;
+    let mut alice = e.join("alice", doc).await;
+    assert_eq!(alice.md(), md);
+    // Wie der Editor beim Laden: ein leerer Absatz am Ende.
+    alice
+        .edit(|d| {
+            let frag = d.get_or_insert_xml_fragment(pm::FRAGMENT);
+            let mut txn = d.transact_mut();
+            let n = frag.len(&txn);
+            frag.insert(&mut txn, n, yrs::XmlElementPrelim::empty("paragraph"));
+        })
+        .await;
+    alice.pump(Duration::from_millis(1500)).await;
+    let (stored, _, v1, _) = e.db_doc(doc).await;
+    assert_eq!(stored, md, "Öffnen hat den Inhalt umgeschrieben");
+    assert_eq!(v1, v0, "Öffnen hat eine Version erzeugt");
+    // Bearbeiten: nur die Änderung kommt hinzu.
+    alice
+        .edit(|d| {
+            let typed = crdt::markdown_of(d).replacen("mehr", "mehr TIPP", 1);
+            crdt::apply_markdown(d, &typed);
+        })
+        .await;
+    alice.pump(Duration::from_millis(300)).await;
+    wait_for_db(&e, doc, |m| m.contains("TIPP")).await;
+    let (stored, ..) = e.db_doc(doc).await;
+    assert_eq!(stored, md.replacen("mehr", "mehr TIPP", 1));
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn message_rate_is_limited(pool: PgPool) {
     let e = env_with(
@@ -1022,6 +1146,67 @@ async fn comment_anchors_survive_edits_and_detach_when_text_is_removed(pool: PgP
         .await
         .unwrap_err();
     assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+}
+
+/// B2.05/B2.06: ungültige Anker oder ein im Dokument fehlender quotedText legen keinen
+/// Kommentar an; gültige Anker werden zusammen mit dem Kommentar gespeichert.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn inline_comment_is_validated_before_anything_is_stored(pool: PgPool) {
+    use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
+    let e = env(pool).await;
+    let doc = e
+        .doc(SeedUser::Alice, "ENG", "Spec", "Hallo schöne Welt")
+        .await;
+    let input = |quoted: &str| CreateCommentInput {
+        parent: Some(ParentSpec::Document(doc.to_string())),
+        reply_to: None,
+        body: "Frage".into(),
+        quoted_text: Some(quoted.into()),
+    };
+    let count = |e: &Env| {
+        let pool = e.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM comment")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let before = count(&e).await;
+    // Ungültiger Anker: Fehler und kein Geisterkommentar.
+    let err = e
+        .app
+        .create_comment_anchored(
+            &user(SeedUser::Bob),
+            input("schöne"),
+            Some(("AAAA".into(), "AAAA".into())),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+    assert_eq!(
+        count(&e).await,
+        before,
+        "kein Kommentar bei ungültigem Anker"
+    );
+    // quotedText kommt im Dokument nicht vor.
+    let err = e
+        .app
+        .create_comment(&user(SeedUser::Bob), input("gibtsnicht"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+    assert_eq!(count(&e).await, before);
+    // Gültig: mit Anker in einer Transaktion.
+    let ydoc = crdt::doc_from_markdown("Hallo schöne Welt");
+    let (a, b) = crdt::anchors_for_quote(&ydoc, "schöne").unwrap();
+    let ok = e
+        .app
+        .create_comment_anchored(&user(SeedUser::Bob), input("schöne"), Some((a.clone(), b)))
+        .await
+        .unwrap();
+    assert_eq!(ok.view.comment.anchor_start.as_deref(), Some(a.as_str()));
+    assert_eq!(count(&e).await, before + 1);
 }
 
 async fn desc_client(e: &Env, who: &str, kind: &str, id: Uuid) -> Client {
@@ -1337,4 +1522,72 @@ async fn suspended_user_trashed_and_archived_owner_objects_end_or_downgrade_acce
             .await,
         404
     );
+}
+
+/// B2.02: API/MCP speichern die Issue-Beschreibung bereinigt; Öffnen im Raum ändert nichts.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: PgPool) {
+    use lineal_app::usecases::issue::{CreateIssueInput, DescriptionEdit, UpdateIssueInput};
+    let e = env(pool).await;
+    let created = e
+        .app
+        .create_issue(
+            &user(SeedUser::Alice),
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Roh".into()),
+                description: Some(
+                    "Text <b>fett</b> [x](javascript:alert(1))\n\n<script>alert(1)</script>".into(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = created.issue.id.0;
+    let stored = created.issue.description.clone().unwrap_or_default();
+    assert!(
+        !stored.contains('<') && !stored.contains("javascript"),
+        "{stored}"
+    );
+    let updated = e
+        .app
+        .update_issue(
+            &user(SeedUser::Alice),
+            UpdateIssueInput {
+                id: id.to_string(),
+                description: Some(DescriptionEdit::Set("<script>alert(1)</script>".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.issue.description, None);
+    let _ = e
+        .app
+        .update_issue(
+            &user(SeedUser::Alice),
+            UpdateIssueInput {
+                id: id.to_string(),
+                description: Some(DescriptionEdit::Set(stored.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut c = desc_client(&e, "alice", "issue", id).await;
+    c.edit(|d| {
+        let frag = d.get_or_insert_xml_fragment(pm::FRAGMENT);
+        let mut txn = d.transact_mut();
+        let n = frag.len(&txn);
+        frag.insert(&mut txn, n, yrs::XmlElementPrelim::empty("paragraph"));
+    })
+    .await;
+    c.pump(Duration::from_millis(1500)).await;
+    let now: Option<String> = sqlx::query_scalar("SELECT description FROM issue WHERE id = $1")
+        .bind(id)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(now.unwrap_or_default(), stored);
 }

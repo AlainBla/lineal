@@ -20,7 +20,8 @@ function LoginPage() {
 
   const onSuccess = async () => {
     queryClient.removeQueries({ queryKey: SESSION_QUERY_KEY });
-    await navigate({ to: safeRedirect(target) as "/" });
+    // replace: der Login-Eintrag bleibt nicht in der History (Zurück springt nicht dorthin).
+    await navigate({ to: safeRedirect(target) as "/", replace: true });
   };
 
   return (

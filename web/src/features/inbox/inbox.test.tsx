@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Notification } from "@/gql/graphql";
-import { mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fixtures";
+import { makeIssue, mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fixtures";
+import { useRouterState } from "@tanstack/react-router";
 
 import { InboxPage } from "./inbox-page";
-import { applyInboxAction } from "./queries";
+import { applyInboxAction, snoozePresets } from "./queries";
+import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 
 function note(id: string, over: Partial<Notification> = {}): Notification {
   return {
@@ -140,5 +142,74 @@ describe("InboxPage", () => {
     await screen.findByText("Note n1");
     await user.click(screen.getByRole("button", { name: /Mark all as read/ }));
     await waitFor(() => expect(gql.of("InboxMarkAllRead")).toHaveLength(1));
+  });
+
+  it("Issue-Eintrag bleibt in der Split-Ansicht, URL bleibt /inbox (B4.01)", async () => {
+    mockGraphql({
+      InboxNotifications: () => ({
+        notifications: {
+          nodes: [note("n1", { issueIdentifier: "ENG-120", issueId: "i1" }), note("n2")],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      }),
+      InboxMarkRead: () => ({ notificationUpdate: { success: true } }),
+      IssueDetail: () => ({
+        issue: makeIssue({ id: "i1", identifier: "ENG-120", title: "Checkout überarbeiten" }),
+      }),
+    });
+    function Path() {
+      const p = useRouterState({ select: (st) => st.location.pathname });
+      return <span data-testid="path">{p}</span>;
+    }
+    await renderWithApp(
+      <>
+        <Path />
+        <InboxPage ws="acme" />
+      </>,
+      newClient(),
+      "/acme/inbox",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Note n1"));
+    expect(await screen.findByLabelText("Title")).toHaveValue("Checkout überarbeiten");
+    // Auch nach dem Laden darf die eingebettete Issue-Seite die URL nicht auf /issue/… umschreiben.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByTestId("path")).toHaveTextContent("/acme/inbox");
+    expect(screen.getByText("Note n2")).toBeInTheDocument();
+    await user.keyboard("j");
+    expect(screen.getByTestId("path")).toHaveTextContent("/acme/inbox");
+  });
+
+  it("Taste H öffnet das Snooze-Menü mit This evening und Custom (B4.38)", async () => {
+    const gql = mockGraphql({
+      InboxNotifications: () => ({
+        notifications: { nodes: [note("n1")], pageInfo: { hasNextPage: false, endCursor: null } },
+      }),
+      InboxMarkRead: () => ({ notificationUpdate: { success: true } }),
+      InboxSnooze: () => ({ notificationUpdate: { success: true } }),
+    });
+    const detach = attachShortcuts();
+    await renderWithApp(<InboxPage ws="acme" />, newClient(), "/acme/inbox");
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Note n1"));
+    await user.keyboard("h");
+    expect(await screen.findByRole("menuitem", { name: "Custom…" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "This evening" }));
+    await waitFor(() => expect(gql.of("InboxSnooze")).toHaveLength(1));
+    detach();
+    shortcuts.reset();
+  });
+
+  it("snoozePresets enthält This evening (18 Uhr, danach morgen)", () => {
+    const morning = new Date(2026, 9, 13, 10, 0);
+    const ev = snoozePresets(morning).find((p) => p.id === "evening")!;
+    expect(ev.until.getHours()).toBe(18);
+    expect(ev.until.getDate()).toBe(13);
+    const late = new Date(2026, 9, 13, 19, 0);
+    expect(
+      snoozePresets(late)
+        .find((p) => p.id === "evening")!
+        .until.getDate(),
+    ).toBe(14);
   });
 });
