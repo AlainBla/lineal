@@ -514,6 +514,8 @@ impl App {
             }
         };
 
+        let state = lock_fresh_state(tx, state).await?;
+
         let id = input.id.unwrap_or_else(|| IssueId(self.ids.new_uuid()));
         let mut issue = Issue {
             id,
@@ -961,6 +963,7 @@ impl App {
         }
         if let Some(r) = &input.state {
             let s = resolve::state::resolve(tx, &team, r).await?;
+            let s = lock_fresh_state(tx, s).await?;
             change_state(
                 tx,
                 &team,
@@ -1886,4 +1889,22 @@ async fn state_spans(tx: &mut dyn Tx, issue: &Issue) -> AppResult<Vec<StateSpan>
         });
     }
     Ok(out)
+}
+
+/// Sperrt den Status gegen paralleles Archivieren (`delete_workflow_state` hält dieselbe Sperre)
+/// und liest ihn frisch: sonst entstehen Issues in einem Status, der gleichzeitig archiviert wird.
+async fn lock_fresh_state(
+    tx: &mut dyn Tx,
+    state: crate::ports::repos::state::WorkflowState,
+) -> AppResult<crate::ports::repos::state::WorkflowState> {
+    tx.advisory_lock("workflow_state", Some(state.id.0)).await?;
+    let fresh = tx
+        .states()
+        .get(state.id)
+        .await?
+        .ok_or_else(|| invalid("state", "state_archived", "state is archived"))?;
+    if fresh.archived_at.is_some() {
+        return Err(invalid("state", "state_archived", "state is archived"));
+    }
+    Ok(fresh)
 }

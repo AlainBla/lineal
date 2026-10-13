@@ -509,7 +509,19 @@ impl App {
         id: StateId,
         target: Option<StateId>,
     ) -> AppResult<()> {
+        crate::error::with_retry(|| self.delete_workflow_state_once(ctx, id, target)).await
+    }
+
+    async fn delete_workflow_state_once(
+        &self,
+        ctx: &RequestCtx,
+        id: StateId,
+        target: Option<StateId>,
+    ) -> AppResult<()> {
         let mut tx = self.store.begin(ctx.org_id).await?;
+        // Gegen parallele Anlage/Statuswechsel in diesen Status serialisieren (siehe
+        // `lock_fresh_state` im Issue-Use-Case); VOR dem Lesen des Zustands.
+        tx.advisory_lock("workflow_state", Some(id.0)).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let state = visible_state(&mut *tx, &snap, id).await?;
         snap.require_team(ctx, Action::UpdateTeamSettings, state.team_id)?;

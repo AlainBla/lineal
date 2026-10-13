@@ -9,11 +9,14 @@ use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
 use lineal_app::usecases::label::SaveLabelInput;
+use lineal_app::usecases::state::CreateStateInput;
+use lineal_app::usecases::team::{CreateTeamInput, NestOptions};
 use lineal_app::usecases::template::SaveTemplateInput;
 use lineal_app::usecases::view::{CreateViewInput, UpdateViewInput};
 use lineal_app::{App, AppError, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
-use lineal_domain::enums::TemplateType;
+use lineal_domain::enums::{StateType, TemplateType};
+use lineal_domain::ids::StateId;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -768,4 +771,188 @@ async fn b1_19_label_usage_ignores_trashed_issues(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(fx.app.issue_label_usage(&alice(), &label).await.unwrap(), 1);
+}
+
+impl Fx {
+    async fn team(&self, name: &str, key: &str, parent: Option<&str>) -> Uuid {
+        self.app
+            .create_team(
+                &alice(),
+                CreateTeamInput {
+                    name: name.into(),
+                    key: Some(key.into()),
+                    parent: parent.map(str::to_owned),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .team
+            .id
+            .0
+    }
+
+    async fn nest(&self, team: Uuid, parent: Uuid) -> Result<(), AppError> {
+        self.app
+            .nest_team(
+                &alice(),
+                &team.to_string(),
+                Some(&parent.to_string()),
+                NestOptions::default(),
+            )
+            .await
+            .map(|_| ())
+    }
+}
+
+/// B1.08: parallele nestTeam: kein Zyklus, maxTeamDepth (5) bleibt eingehalten.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_08_parallel_nest_team_keeps_tree_valid(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS / 2 {
+        let a = fx
+            .team(&format!("A{round}"), &format!("A{round:02}"), None)
+            .await;
+        let b = fx
+            .team(&format!("B{round}"), &format!("B{round:02}"), None)
+            .await;
+        let (r1, r2) = tokio::join!(fx.nest(a, b), fx.nest(b, a));
+        assert_no_internal("nest cycle", &[r1.clone(), r2.clone()]);
+        assert_eq!(
+            [r1.is_ok(), r2.is_ok()].iter().filter(|x| **x).count(),
+            1,
+            "round {round}: {r1:?} {r2:?}"
+        );
+        // Tiefe: x1 > x2 > x3 (Tiefe 3), y einzeln, z1 > z2 (Höhe 2): einzeln je erlaubt,
+        // zusammen 3 + 1 + 2 = 6 > 5.
+        let k = |p: &str, n: usize| format!("{p}{round:02}{n}");
+        let mut x = vec![fx.team(&k("x", 1), &k("X", 1), None).await];
+        for n in 2..=3 {
+            let t = fx
+                .team(&k("x", n), &k("X", n), Some(&x[n - 2].to_string()))
+                .await;
+            x.push(t);
+        }
+        let y = fx.team(&k("y", 1), &k("Y", 1), None).await;
+        let z1 = fx.team(&k("z", 1), &k("Z", 1), None).await;
+        let _z2 = fx.team(&k("z", 2), &k("Z", 2), Some(&z1.to_string())).await;
+        let (r1, r2) = tokio::join!(fx.nest(z1, y), fx.nest(y, x[2]));
+        assert_no_internal("nest depth", &[r1.clone(), r2.clone()]);
+        assert!(!(r1.is_ok() && r2.is_ok()), "Tiefe umgangen: {r1:?} {r2:?}");
+        let max_depth: i32 = sqlx::query_scalar(
+            "WITH RECURSIVE t AS (SELECT id, 1 AS d FROM team WHERE parent_id IS NULL \
+             UNION ALL SELECT c.id, t.d + 1 FROM team c JOIN t ON c.parent_id = t.id) \
+             SELECT max(d) FROM t",
+        )
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert!(max_depth <= 5, "round {round}: Tiefe {max_depth}");
+    }
+}
+
+/// B1.09: Mitglied eines Sub-Teams ist immer auch Mitglied des Parents.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_09_membership_invariant_under_parallel_changes(pool: PgPool) {
+    let fx = setup(pool).await;
+    let bob = fx.data.bob.to_string();
+    for round in 0..ROUNDS {
+        let p = fx
+            .team(&format!("P{round}"), &format!("P{round:02}"), None)
+            .await;
+        let c = fx
+            .team(
+                &format!("C{round}"),
+                &format!("C{round:02}"),
+                Some(&p.to_string()),
+            )
+            .await;
+        fx.app
+            .add_team_member(&alice(), &p.to_string(), &bob, false)
+            .await
+            .unwrap();
+        let (r1, r2) = {
+            let (a1, a2) = (fx.app.clone(), fx.app.clone());
+            let (ps, cs, b1, b2) = (p.to_string(), c.to_string(), bob.clone(), bob.clone());
+            tokio::join!(
+                async move { a1.remove_team_member(&alice(), &ps, &b1).await.map(|_| ()) },
+                async move {
+                    a2.add_team_member(&alice(), &cs, &b2, false)
+                        .await
+                        .map(|_| ())
+                }
+            )
+        };
+        assert_no_internal("membership", &[r1, r2]);
+        let orphan: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM team_membership c JOIN team t ON t.id = c.team_id \
+             JOIN \"user\" u ON u.id = c.user_id \
+             WHERE u.role <> 'guest' AND t.parent_id IS NOT NULL AND NOT EXISTS ( \
+               SELECT 1 FROM team_membership p WHERE p.team_id = t.parent_id AND p.user_id = c.user_id)",
+        )
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            orphan, 0,
+            "round {round}: Sub-Team-Mitglied ohne Parent-Mitgliedschaft"
+        );
+    }
+}
+
+/// B1.10: Status archivieren parallel zur Issue-Anlage: kein Issue im archivierten Status.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_10_state_archive_vs_issue_create(pool: PgPool) {
+    let fx = setup(pool).await;
+    let backlog_like = |round: usize| CreateStateInput {
+        team: "ENG".into(),
+        name: format!("Extra{round}"),
+        state_type: StateType::Started,
+        color: "#112233".into(),
+        description: None,
+        position: None,
+    };
+    for round in 0..ROUNDS {
+        let st = fx
+            .app
+            .create_workflow_state(&alice(), backlog_like(round))
+            .await
+            .unwrap();
+        let sid: StateId = st.state.id;
+        let del = {
+            let app = fx.app.clone();
+            async move { app.delete_workflow_state(&alice(), sid, None).await }
+        };
+        let creates = (0..6).map(|n| {
+            let app = fx.app.clone();
+            let name = st.state.name.clone();
+            async move {
+                app.create_issue(
+                    &alice(),
+                    CreateIssueInput {
+                        team: "ENG".into(),
+                        title: Some(format!("S{round}.{n}")),
+                        state: Some(name),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ())
+            }
+        });
+        let (d, rs) = tokio::join!(del, futures_join_all(creates));
+        assert_no_internal("state archive", &[d.clone()]);
+        assert_no_internal("issue create", &rs);
+        let stuck: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM issue i JOIN workflow_state s ON s.id = i.state_id \
+             WHERE s.archived_at IS NOT NULL",
+        )
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            stuck, 0,
+            "round {round}: Issues in archiviertem Status ({d:?})"
+        );
+    }
 }
