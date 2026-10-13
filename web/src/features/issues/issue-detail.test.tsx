@@ -32,6 +32,7 @@ vi.mock("./rich-editor", () => ({
     editable?: boolean;
     onChange?: (v: string) => void;
     onBlur?: () => void;
+    autoFocus?: boolean;
   }) =>
     p.editable === false ? (
       <p data-testid="comment-body">{p.value}</p>
@@ -42,6 +43,7 @@ vi.mock("./rich-editor", () => ({
         defaultValue={p.value}
         onChange={(e) => p.onChange?.(e.target.value)}
         onBlur={p.onBlur}
+        autoFocus={p.autoFocus}
       />
     ),
 }));
@@ -371,5 +373,62 @@ describe("Issue-Detail", () => {
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the issue");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("Doppelklick auf Comment legt nur einen Kommentar an (B4.13)", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      CommentCreate: () => ({
+        commentCreate: {
+          success: true,
+          comment: {
+            id: "c-new",
+            body: "Hallo",
+            userId: "user-bob",
+            user: { id: "user-bob", name: "bob", displayName: "Bob" },
+            issueId: "i1",
+            parentId: null,
+            quotedText: null,
+            editedAt: null,
+            resolvedAt: null,
+            reactionData: [],
+            createdAt: "2026-10-04T08:00:00Z",
+            updatedAt: "2026-10-04T08:00:00Z",
+          },
+        },
+      }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await userEvent.type(await screen.findByLabelText("Leave a comment"), "Hallo");
+    await userEvent.dblClick(screen.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(gql.of("CommentCreate")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gql.of("CommentCreate")).toHaveLength(1);
+  });
+
+  it("Enter dreimal im Sub-Issue-Feld legt nur ein Sub-Issue an (B4.13)", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      IssueCreate: () => ({
+        issueCreate: {
+          success: true,
+          issue: makeIssue({ id: "i-new", identifier: "ENG-200", title: "Neu", parentId: "i1" }),
+        },
+      }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await userEvent.click(await screen.findByRole("button", { name: /New sub-issue/ }));
+    const input = await screen.findByLabelText("Sub-issue title");
+    await userEvent.type(input, "Neu{Enter}{Enter}{Enter}");
+    await waitFor(() => expect(gql.of("IssueCreate")).toHaveLength(1));
+  });
+
+  it("Leave a reply fokussiert das Antwortfeld (B4.12), Anker nutzen die volle ID (B4.22)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const comment = await screen.findByRole("article", { name: "Comment by Alice" });
+    expect(comment.id).toBe("comment-c1aaaaaa-1");
+    await userEvent.click(within(comment).getByRole("button", { name: "Leave a reply…" }));
+    expect(await screen.findByLabelText("Leave a reply")).toHaveFocus();
   });
 });

@@ -5,6 +5,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Issue } from "@/gql/graphql";
+import { useSingleFlight } from "@/lib/use-single-flight";
 
 import { useCreateIssue, useIssueExtras } from "./hooks";
 import { Avatar, StatusIcon } from "./icons";
@@ -37,21 +38,21 @@ export function SubIssuesSection({
   const children = (extras.data?.children ?? []).filter((c) => !c.trashed);
   const progress = subIssueProgress(children);
 
+  const singleFlight = useSingleFlight();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = title.trim();
-    if (!t || create.isPending) return;
-    create.mutate(
-      { teamId: issue.teamId, title: t, parentId: issue.id },
-      {
-        onSuccess: () => {
-          setTitle("");
-          inputRef.current?.focus();
-        },
-        onError: (err) =>
-          showToast({ message: errorMessage(err, "Could not create sub-issue."), tone: "error" }),
-      },
-    );
+    if (!t) return;
+    // Ref-Sperre: mehrfaches Enter legt nur ein Sub-Issue an (B4.13).
+    void singleFlight(async () => {
+      try {
+        await create.mutateAsync({ teamId: issue.teamId, title: t, parentId: issue.id });
+        setTitle("");
+        inputRef.current?.focus();
+      } catch (err) {
+        showToast({ message: errorMessage(err, "Could not create sub-issue."), tone: "error" });
+      }
+    });
   };
 
   return (
