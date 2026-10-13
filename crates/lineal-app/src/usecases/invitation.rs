@@ -269,7 +269,13 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::InviteUsers)?;
-        tx.webhooks().list_invitations(pending_only).await
+        let mut all = tx.webhooks().list_invitations(pending_only).await?;
+        // Nur Admins/Owner sehen die Einladungen anderer (konsistent mit Resend/Revoke; B8.07).
+        if !snap.actor.is_admin() {
+            let me = resolve::user::actor_user_id(ctx);
+            all.retain(|i| Some(i.inviter_id) == me);
+        }
+        Ok(all)
     }
 
     /// Sendet die Einladung mit neuem Token und neuer Frist erneut (alter Link wird ungültig).

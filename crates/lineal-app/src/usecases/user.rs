@@ -21,17 +21,44 @@ use serde_json::json;
 pub const MIN_PASSWORD_LEN: usize = 8;
 
 pub(crate) fn validate_email(email: &str) -> AppResult<()> {
-    let ok = email.len() <= 254
-        && email.split_once('@').is_some_and(|(l, d)| {
-            !l.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.')
-        })
-        && !email.contains(char::is_whitespace);
-    if ok {
+    if is_valid_email(email) {
         Ok(())
     } else {
         Err(AppError::invalid_request("email is not a valid address")
             .with_details(json!({ "field": "email" })))
     }
+}
+
+/// Strenge Adressprüfung nach RFC 5321/5322 (ASCII, ohne Quoted-Strings und Kommentare):
+/// genau ein `@`, Local-Part höchstens 64 Zeichen aus dem Atom-Zeichensatz mit Punkten nur
+/// zwischen Atomen, Domain aus mindestens zwei Labels (je 1-63 Zeichen `a-z0-9-`, nicht mit
+/// `-` beginnend/endend), gesamt höchstens 254 Zeichen.
+pub(crate) fn is_valid_email(email: &str) -> bool {
+    if email.len() > 254 || !email.is_ascii() {
+        return false;
+    }
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let local_ok = !local.is_empty()
+        && local.len() <= 64
+        && local.split('.').all(|atom| {
+            !atom.is_empty()
+                && atom
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+/=?^_`{|}~-".contains(c))
+        });
+    let labels: Vec<&str> = domain.split('.').collect();
+    let domain_ok = labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    local_ok && domain_ok
 }
 
 /// Prüft die erlaubten Einladungs-Domains (`allowedInviteDomains`); `field` benennt das Eingabefeld.
@@ -544,6 +571,35 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_validation_is_strict() {
+        for ok in [
+            "alice@acme.example",
+            "a.b+tag@x.io",
+            "o'neil@sub.example.org",
+        ] {
+            assert!(is_valid_email(ok), "{ok}");
+        }
+        let long_local = format!("{}@example.test", "a".repeat(65));
+        for bad in [
+            "a@b@example.test",
+            "a@example.test,b@example.test",
+            "<script>@x.y",
+            "a b@x.y",
+            "a@x",
+            "a@-x.y",
+            "a@x..y",
+            ".a@x.y",
+            "a.@x.y",
+            "a@x.y\n",
+            "ä@x.y",
+            "",
+            long_local.as_str(),
+        ] {
+            assert!(!is_valid_email(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn display_names_come_from_the_email() {
