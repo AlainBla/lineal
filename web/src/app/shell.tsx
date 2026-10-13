@@ -68,6 +68,11 @@ export function Shell({ session, children }: { session: Session; children: React
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
       <a
         href="#main"
+        // Fokus statt Hash-Navigation: kein zusätzlicher History-Eintrag (B4.29).
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main")?.focus();
+        }}
         className="sr-only z-50 rounded-md bg-popover px-3 py-1.5 shadow-popover focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
       >
         Skip to content

@@ -195,11 +195,51 @@ describe("shell", () => {
     const router = await renderApp("/acme/inbox");
     await screen.findByRole("navigation", { name: "Main" });
     await waitFor(() => expect(document.title).toBe("Inbox · Lineal"));
-    await router.navigate({ to: "/acme/drafts" });
+    await router.navigate({ to: "/acme/drafts" as "/" });
     await waitFor(() => expect(document.title).toBe("Drafts · Lineal"));
-    await router.navigate({ to: "/acme/views/issues" });
+    await router.navigate({ to: "/acme/views/issues" as "/" });
     await waitFor(() => expect(document.title).not.toMatch(/^Inbox|^Drafts/));
     expect(document.title).toMatch(/Views/);
+  });
+
+  it("Skip-Link fokussiert den Hauptbereich ohne History-Eintrag (B4.29)", async () => {
+    const user = userEvent.setup();
+    mockFetch(true);
+    const router = await renderApp("/acme/inbox");
+    const skip = await screen.findByRole("link", { name: "Skip to content" });
+    const before = router.history.length;
+    await user.click(skip);
+    expect(document.getElementById("main")).toHaveFocus();
+    expect(router.history.length).toBe(before);
+    expect(router.state.location.hash).toBe("");
+  });
+
+  it("Login ersetzt den Login-Eintrag in der History (B4.29)", async () => {
+    const user = userEvent.setup();
+    let authed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/auth/login") {
+          authed = true;
+          return new Response("{}", { status: 200 });
+        }
+        if (url === "/auth/me")
+          return authed
+            ? new Response(JSON.stringify(ME), { status: 200 })
+            : new Response("{}", { status: 401 });
+        return new Response(JSON.stringify({ data: { notificationsUnreadCount: 0 } }), {
+          status: 200,
+        });
+      }),
+    );
+    const router = await renderApp("/acme/inbox");
+    await user.type(await screen.findByLabelText(/email/i), "alice@acme.example");
+    await user.type(screen.getByLabelText(/password/i), "geheim123");
+    await user.click(screen.getByRole("button", { name: /log in/i }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/inbox"));
+    expect(router.history.canGoBack()).toBe(false);
   });
 
   it("navigates with key sequences (g i, g m)", async () => {
