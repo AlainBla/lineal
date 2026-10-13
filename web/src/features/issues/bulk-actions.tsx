@@ -108,6 +108,8 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
     </Button>
   );
   const needsTeam = !single || !meta.data;
+  // Teams ohne Estimates: keine Estimate-Aktion anbieten (B4.35).
+  const estimatesOff = single && meta.data?.team.issueEstimationType === "notUsed";
 
   return (
     <>
@@ -126,7 +128,7 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
         {barButton("labels-remove", "Remove label", needsTeam)}
         {barButton("project", "Project", needsTeam)}
         {barButton("cycle", "Cycle", needsTeam)}
-        {barButton("estimate", "Estimate", needsTeam)}
+        {!estimatesOff && barButton("estimate", "Estimate", needsTeam)}
         {barButton("team", "Move")}
         <Button
           variant="ghost"
