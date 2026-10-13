@@ -13,6 +13,9 @@ const proxy = {
   // Nur der REST-Endpunkt; die Seite `/invite/<token>` liefert die SPA.
   "/invite/accept": backend,
   "/mcp": backend,
+  // Datei-Upload (PUT) und signierte Downloads (GET) des Blob-Speichers.
+  "/uploads": backend,
+  "/files": backend,
   "/sync": { target: backend, ws: true },
   // Echtzeit-Mitbearbeitung (WebSocket, WP36).
   "/collab": { target: backend, ws: true },

@@ -22,6 +22,7 @@ import {
   useIssueExtras,
   useReactions,
 } from "./hooks";
+import { uploadImageAsset } from "./assets";
 import { Avatar } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { describeHistory, type HistoryResolver } from "./history";
@@ -33,6 +34,9 @@ import { RichEditor } from "./rich-editor";
 import { ErrorState } from "./states";
 import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
+
+const uploadError = (e: unknown) =>
+  showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" });
 
 const QUICK_EMOJI = ["👍", "❤️", "🎉", "👀", "🚀"];
 
@@ -175,6 +179,8 @@ function CommentComposer({
         users={mentionUsers}
         // Antwortfeld sofort fokussieren, sonst lösen getippte Zeichen globale Shortcuts aus (B4.12).
         autoFocus={!!onDone}
+        uploadImage={uploadImageAsset}
+        onUploadError={uploadError}
         onChange={setBody}
         onSubmit={submit}
       />
@@ -220,6 +226,8 @@ function EditComment({
         ariaLabel="Edit comment"
         users={users}
         autoFocus
+        uploadImage={uploadImageAsset}
+        onUploadError={uploadError}
         onChange={setBody}
         onSubmit={save}
       />

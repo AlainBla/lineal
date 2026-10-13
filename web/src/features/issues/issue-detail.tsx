@@ -15,6 +15,8 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
 
+import { AttachmentsSection } from "./attachments";
+import { uploadImageAsset } from "./assets";
 import { DueDateDialog } from "./due-date-dialog";
 import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
@@ -27,7 +29,7 @@ import { RelationsSection } from "./relations";
 import { RichEditor } from "./rich-editor";
 import { ErrorState, isNotFound } from "./states";
 import { SubIssuesSection } from "./sub-issues";
-import { showToast } from "./toast-store";
+import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
 
@@ -155,6 +157,10 @@ function Stage1DescriptionEditor({
         ariaLabel="Description"
         placeholder="Add description…"
         users={mentionUsers}
+        uploadImage={uploadImageAsset}
+        onUploadError={(e) =>
+          showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" })
+        }
         onChange={(md) => {
           pending.current = md;
           setStatus("dirty");
@@ -394,6 +400,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               actions={actions}
               readOnly={readOnly}
             />
+            <AttachmentsSection key={`att-${issue.id}`} issue={issue} readOnly={readOnly} />
             <SubIssuesSection
               issue={issue}
               ws={ws}
@@ -424,6 +431,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             readOnly={readOnly}
             metaError={metaError}
             onRetryMeta={() => void meta.refetch()}
+            parent={parent.data ?? null}
           />
           {!issue.dueDate && !readOnly && !metaError && (
             <Button

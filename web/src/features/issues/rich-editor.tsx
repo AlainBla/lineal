@@ -13,12 +13,48 @@ import Placeholder from "@tiptap/extension-placeholder";
 import { TableKit } from "@tiptap/extension-table";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import type { EditorView } from "@tiptap/pm/view";
 import { useEffect, useRef, useState } from "react";
 
 import type { CollabProvider } from "@/features/collab/provider";
 import { cn } from "@/lib/cn";
 
+import { isAssetUrl, isImageFile, resolveAssetUrl } from "./assets";
 import type { KnownUser } from "./users";
+
+/**
+ * Bild-Node, dessen Markdown-Quelle die dauerhafte `assetUrl` bleibt; im DOM zeigt `<img>` die erst
+ * beim Anzeigen aufgelöste, signierte same-origin URL (nie gespeichert, CSP `img-src 'self'`).
+ */
+const AssetImage = Image.extend({
+  addNodeView() {
+    return ({ node }) => {
+      const img = document.createElement("img");
+      const apply = (src: string | null, alt: string | null) => {
+        img.alt = alt ?? "";
+        img.dataset.src = src ?? "";
+        if (src && isAssetUrl(src)) {
+          img.removeAttribute("src");
+          void resolveAssetUrl(src).then((url) => {
+            if (img.dataset.src === src && url) img.src = url;
+          });
+        } else if (src) {
+          img.src = src;
+        }
+      };
+      apply(node.attrs.src as string | null, node.attrs.alt as string | null);
+      img.className = "my-1 max-h-96 max-w-full rounded-md";
+      return {
+        dom: img,
+        update: (updated) => {
+          if (updated.type !== node.type) return false;
+          apply(updated.attrs.src as string | null, updated.attrs.alt as string | null);
+          return true;
+        },
+      };
+    };
+  },
+});
 
 export interface RichEditorProps {
   /** Anfangswert (Markdown); spätere Änderungen erfordern einen neuen `key`. */
@@ -41,6 +77,13 @@ export interface RichEditorProps {
    * ist der Editor schreibgeschützt.
    */
   collab?: { provider: CollabProvider; canWrite: boolean };
+  /**
+   * Bilder einfügen (Einfügen aus der Zwischenablage, Ziehen in den Editor): lädt die Datei hoch
+   * und liefert die dauerhafte `assetUrl`, die als Markdown-Bild gespeichert wird.
+   */
+  uploadImage?: (file: File) => Promise<string>;
+  /** Meldet Fehler beim Hochladen (z. B. als Toast). */
+  onUploadError?: (error: unknown) => void;
 }
 
 interface Suggestion {
@@ -62,12 +105,18 @@ export function RichEditor({
   editable = true,
   className,
   collab,
+  uploadImage,
+  onUploadError,
 }: RichEditorProps) {
   const usersRef = useRef(users);
   const submitRef = useRef(onSubmit);
   const blurRef = useRef(onBlur);
   const changeRef = useRef(onChange);
+  const uploadRef = useRef(uploadImage);
+  const uploadErrorRef = useRef(onUploadError);
   useEffect(() => {
+    uploadRef.current = uploadImage;
+    uploadErrorRef.current = onUploadError;
     usersRef.current = users;
     submitRef.current = onSubmit;
     blurRef.current = onBlur;
@@ -78,6 +127,21 @@ export function RichEditor({
   const setSug = (s: Suggestion | null) => {
     suggestionRef.current = s;
     setSuggestion(s);
+  };
+
+  const insertImages = async (view: EditorView, files: File[], pos: number) => {
+    for (const file of files) {
+      try {
+        const src = await uploadRef.current!(file);
+        const node = view.state.schema.nodes.image?.create({ src, alt: file.name });
+        if (!node) return;
+        const at = Math.min(pos, view.state.doc.content.size);
+        view.dispatch(view.state.tr.insert(at, node));
+        pos = at + node.nodeSize;
+      } catch (e) {
+        uploadErrorRef.current?.(e);
+      }
+    }
   };
 
   const editor = useEditor({
@@ -95,7 +159,7 @@ export function RichEditor({
       TableKit.configure({ table: { resizable: false } }),
       TaskList,
       TaskItem.configure({ nested: true }),
-      Image.configure({ inline: true, allowBase64: false }),
+      AssetImage.configure({ inline: true, allowBase64: false }),
       ...(collab
         ? [
             Collaboration.configure({ document: collab.provider.doc }),
@@ -164,6 +228,21 @@ export function RichEditor({
         role: "textbox",
         "aria-multiline": "true",
         class: "min-h-[4rem] outline-none",
+      },
+      handlePaste: (view, event) => {
+        const files = [...(event.clipboardData?.files ?? [])].filter(isImageFile);
+        if (files.length === 0 || !uploadRef.current) return false;
+        event.preventDefault();
+        void insertImages(view, files, view.state.selection.from);
+        return true;
+      },
+      handleDrop: (view, event) => {
+        const files = [...(event.dataTransfer?.files ?? [])].filter(isImageFile);
+        if (files.length === 0 || !uploadRef.current) return false;
+        event.preventDefault();
+        const at = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+        void insertImages(view, files, at ?? view.state.selection.from);
+        return true;
       },
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && submitRef.current) {
