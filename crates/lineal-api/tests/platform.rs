@@ -595,8 +595,8 @@ async fn switching_tokens_does_not_evade_the_ip_limit() {
         );
         req
     };
-    // Jeder Versuch mit einem anderen erfundenen Token kostet IP-Kontingent, bevor die
-    // Datenbank gefragt wird; nach drei Versuchen ist Schluss.
+    // Jeder Versuch mit einem anderen erfundenen Token kostet IP-Kontingent (ungültige
+    // Zugangsdaten); nach drei Versuchen ist Schluss, mit JSON-Fehler und Retry-After.
     for n in 0..3 {
         assert_eq!(
             send(&router, guess("203.0.113.5", n)).await.status,
@@ -605,19 +605,73 @@ async fn switching_tokens_does_not_evade_the_ip_limit() {
     }
     let r = send(&router, guess("203.0.113.5", 3)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
-    // Auch ein gültiges Token von dieser IP wird jetzt gedrosselt, eine andere IP nicht.
+    assert_eq!(r.json()["error"], "rate_limited");
+    assert!(r.headers.contains_key("retry-after"));
+    // B3.01: Ein GÜLTIGES Token von derselben IP (Büro-NAT) wird davon nicht getroffen, es
+    // zählt gegen seinen User-Bucket; eine andere IP ist ebenfalls frei.
     let mut valid = from_peer("203.0.113.5", "");
     valid
         .headers_mut()
         .insert("authorization", KEY_RW.parse().unwrap());
-    assert_eq!(
-        send(&router, valid).await.status,
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    assert_eq!(send(&router, valid).await.status, StatusCode::OK);
     assert_eq!(
         send(&router, guess("203.0.113.6", 0)).await.status,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn valid_credentials_are_limited_per_account_not_per_ip() {
+    // Mehr gültige Anfragen als jedes IP-Limit zulässt: alle kommen durch; erst das Konto-
+    // Limit greift, und nur für dieses Konto (zweiter Key von derselben IP bleibt frei).
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous.requests = 2.0;
+    cfg.rate.ip_credentialed = 2.0;
+    cfg.rate.api_key = ClassLimits {
+        requests: 6.0,
+        complexity: 100.0,
+    };
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let with = |key: &str| {
+        let mut req = from_peer("203.0.113.7", "");
+        req.headers_mut()
+            .insert("authorization", key.parse().unwrap());
+        req
+    };
+    for i in 0..6 {
+        assert_eq!(send(&router, with(KEY_RW)).await.status, StatusCode::OK, "{i}");
+    }
+    let r = send(&router, with(KEY_RW)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(r.json()["error"], "rate_limited");
+    assert!(r.headers.contains_key("retry-after"));
+    assert_eq!(send(&router, with(KEY_RO)).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cookie_sessions_behind_one_ip_are_not_throttled_by_the_ip_limit() {
+    // Web-App hinter NAT: viele Seitenaufrufe mit gültigem Cookie von einer IP. Das IP-Limit
+    // (hier 2) greift nicht; das Session-Limit gilt je Konto.
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous.requests = 2.0;
+    cfg.rate.ip_credentialed = 2.0;
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    for i in 0..20 {
+        let mut req = from_peer("198.51.100.77", "");
+        req.headers_mut()
+            .insert("cookie", "lineal_session=session-token".parse().unwrap());
+        assert_eq!(send(&router, req).await.status, StatusCode::OK, "{i}");
+    }
 }
 
 #[tokio::test]
