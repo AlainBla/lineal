@@ -150,25 +150,59 @@ pub(crate) async fn link_issue_mentions(
     Ok(())
 }
 
+/// Wählt die Treffer für einen `@handle`: zuerst der Anzeigename (`display`, ohne Beachtung der
+/// Groß-/Kleinschreibung), sonst der Name (`name`), aber nur wenn er eindeutig ist (B6.19).
+/// Alle Erwähnungs-Pfade (Issue, Kommentar, Dokument, Projekt, Initiative) nutzen diese Funktion.
+pub fn pick_mention_matches<'a, T>(
+    candidates: &'a [T],
+    handle: &str,
+    display: impl Fn(&T) -> &str,
+    name: impl Fn(&T) -> &str,
+) -> Vec<&'a T> {
+    let exact: Vec<&T> = candidates
+        .iter()
+        .filter(|c| display(c).eq_ignore_ascii_case(handle))
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    let by_name: Vec<&T> = candidates
+        .iter()
+        .filter(|c| name(c).eq_ignore_ascii_case(handle))
+        .collect();
+    if by_name.len() == 1 {
+        by_name
+    } else {
+        Vec::new()
+    }
+}
+
+/// Aktive User, die ein `@handle` trifft (Anzeigename, sonst eindeutiger Name).
+pub async fn users_for_handle(
+    tx: &mut dyn Tx,
+    handle: &str,
+) -> AppResult<Vec<crate::ports::repos::user::User>> {
+    let found: Vec<_> = tx
+        .users()
+        .find_by_name(handle)
+        .await?
+        .into_iter()
+        .filter(|u| u.active)
+        .collect();
+    Ok(
+        pick_mention_matches(&found, handle, |u| &u.display_name, |u| &u.name)
+            .into_iter()
+            .cloned()
+            .collect(),
+    )
+}
+
 /// Löst Erwähnungen eines Textes auf aktive User auf (Anzeigename, sonst eindeutiger Name),
 /// ohne Sichtbarkeitsprüfung: Sie liegt beim Empfänger-Check des Fan-outs.
 pub async fn resolve_handles(tx: &mut dyn Tx, text: &str) -> AppResult<Vec<UserId>> {
     let mut out: Vec<UserId> = Vec::new();
     for handle in extract_handles(text) {
-        let found = tx.users().find_by_name(&handle).await?;
-        let exact: Vec<_> = found
-            .iter()
-            .filter(|u| u.active && u.display_name.eq_ignore_ascii_case(&handle))
-            .collect();
-        let hits = if exact.is_empty() {
-            found
-                .iter()
-                .filter(|u| u.active && u.name.eq_ignore_ascii_case(&handle))
-                .collect()
-        } else {
-            exact
-        };
-        for u in hits {
+        for u in users_for_handle(tx, &handle).await? {
             if !out.contains(&u.id) {
                 out.push(u.id);
             }
@@ -186,8 +220,8 @@ pub async fn resolve_mentions(
 ) -> AppResult<Vec<UserId>> {
     let mut out: Vec<UserId> = Vec::new();
     for handle in extract_handles(text) {
-        for u in tx.users().find_by_name(&handle).await? {
-            if !u.active || u.display_name != handle || out.contains(&u.id) {
+        for u in users_for_handle(tx, &handle).await? {
+            if out.contains(&u.id) {
                 continue;
             }
             let memberships = tx.teams().list_memberships_of_user(u.id).await?;
@@ -241,6 +275,24 @@ mod tests {
         assert!(h.contains("dave"));
         assert!(!h.contains("bob") && !h.contains("carol"));
         assert!(!h.contains("erin") && !h.contains("frank"));
+    }
+
+    #[test]
+    fn handle_prefers_display_name_and_needs_unique_name() {
+        let users = [("dana", "Dana"), ("w3c-dana", "Dana"), ("erin", "Erin")];
+        let pick = |h: &str| {
+            pick_mention_matches(&users, h, |u| u.0, |u| u.1)
+                .iter()
+                .map(|u| u.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(pick("dana"), ["dana"], "Anzeigename gewinnt");
+        assert_eq!(pick("erin"), ["erin"]);
+        assert_eq!(pick("DANA").len(), 1);
+        let only_names = [("a", "Frank"), ("b", "Gina"), ("c", "Gina")];
+        let p = |h: &str| pick_mention_matches(&only_names, h, |u| u.0, |u| u.1).len();
+        assert_eq!(p("frank"), 1, "eindeutiger Name");
+        assert_eq!(p("gina"), 0, "mehrdeutiger Name löst nichts auf");
     }
 
     #[test]

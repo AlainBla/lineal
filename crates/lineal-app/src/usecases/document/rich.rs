@@ -207,8 +207,8 @@ impl App {
         let before = extract_handles(old);
         let mut mentioned: Vec<UserId> = Vec::new();
         for handle in extract_handles(new).difference(&before) {
-            for u in tx.users().find_by_name(handle).await? {
-                if !u.active || u.display_name != *handle || mentioned.contains(&u.id) {
+            for u in crate::usecases::issue::mentions::users_for_handle(tx, handle).await? {
+                if mentioned.contains(&u.id) {
                     continue;
                 }
                 if scope.workspace && u.role == UserRole::Guest {

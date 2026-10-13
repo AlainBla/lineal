@@ -589,9 +589,10 @@ impl CommentRepo for PgTx {
         if names.is_empty() {
             return Ok(vec![]);
         }
-        let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-            "SELECT id, display_name, role FROM \"user\" \
-             WHERE organization_id = $1 AND display_name = ANY($2) AND active AND status = 'active'",
+        let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+            "SELECT id, display_name, name, role FROM \"user\" \
+             WHERE organization_id = $1 AND (display_name = ANY($2) OR lower(name) = ANY($2)) \
+             AND active AND status = 'active'",
         )
         .bind(self.org.0)
         .bind(names)
@@ -599,10 +600,11 @@ impl CommentRepo for PgTx {
         .await
         .map_err(db_err)?;
         rows.into_iter()
-            .map(|(id, display_name, role)| {
+            .map(|(id, display_name, name, role)| {
                 Ok(MentionCandidate {
                     id: UserId(id),
                     display_name,
+                    name,
                     role: role
                         .parse()
                         .map_err(|_| AppError::internal("invalid user role in database"))?,

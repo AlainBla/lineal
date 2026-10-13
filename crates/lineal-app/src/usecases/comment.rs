@@ -353,13 +353,19 @@ pub(crate) async fn mentioned_users(
         .into_iter()
         .collect();
     let candidates = tx.comments().mention_candidates(&names).await?;
-    let by_name: HashMap<&str, &crate::ports::repos::comment::MentionCandidate> = candidates
-        .iter()
-        .map(|c| (c.display_name.as_str(), c))
-        .collect();
     let mut result: Vec<UserId> = Vec::new();
     for run in &runs {
-        let Some(c) = run.iter().find_map(|n| by_name.get(n.as_str())) else {
+        // Längster Kandidat zuerst; Anzeigename vor eindeutigem Namen (B6.19).
+        let Some(c) = run.iter().find_map(|n| {
+            super::issue::mentions::pick_mention_matches(
+                &candidates,
+                n,
+                |c| &c.display_name,
+                |c| &c.name,
+            )
+            .into_iter()
+            .next()
+        }) else {
             continue;
         };
         if result.contains(&c.id) {
