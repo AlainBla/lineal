@@ -983,6 +983,9 @@ input IssueCreateInput {
 	teamId: String!
 	title: String
 	description: String
+	"""
+	Explizites `null` überschreibt beim Anwenden eines Templates dessen Wert (docs/06 §2.5).
+	"""
 	stateId: String
 	assigneeId: String
 	priority: Int
@@ -1226,7 +1229,8 @@ type Mutation {
 	"""
 	issueBatchUpdate(input: IssueBatchUpdateInput!): IssueBatchPayload!
 	"""
-	Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
+	Archiviert das Issue (nur `archivedAt`, wiederherstellbar mit `issueUnarchive`); mit
+	`trash: true` landet es stattdessen im Papierkorb.
 	"""
 	issueArchive(id: String!, trash: Boolean): IssuePayload!
 	issueUnarchive(id: String!): IssuePayload!
