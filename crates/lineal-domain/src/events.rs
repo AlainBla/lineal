@@ -52,31 +52,80 @@ pub struct IssuePrevious {
     /// `duplicate`); gilt nur, wenn `stateId` in `changed` steht.
     #[serde(default)]
     pub state_type: Option<String>,
+    /// Neue Werte; der Notification-Handler wertet den Ereignis-Zustand aus, nicht den aktuellen
+    /// (B6.09). `None` bei Altdaten. Geboxt, damit `DomainEvent` klein bleibt (Debug-Stack).
+    #[serde(default)]
+    pub new: Option<Box<IssueNewValues>>,
+}
+
+/// Neue Werte der in `changed` genannten Felder (siehe [`IssuePrevious::new`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueNewValues {
+    /// Neuer Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = jetzt unzugewiesen).
+    #[serde(default)]
+    pub assignee_id: Option<UserId>,
+    /// Neuer Statustyp; gilt nur, wenn `stateId` in `changed` steht.
+    #[serde(default)]
+    pub state_type: Option<String>,
+    /// Neue Priorität; gilt nur, wenn `priority` in `changed` steht.
+    #[serde(default)]
+    pub priority: Option<i32>,
+    /// Neu gesetzte Labels (nur wenn `labelIds` in `changed` steht).
+    #[serde(default)]
+    pub labels_added: Vec<LabelId>,
 }
 
 impl IssuePrevious {
-    /// Alte Werte für die in `changed` genannten Felder; `None`, wenn weder `assigneeId` noch
-    /// `stateId` betroffen ist.
-    pub fn of(
-        changed: &[String],
-        old_assignee: Option<UserId>,
-        old_state_type: &str,
-    ) -> Option<Self> {
+    /// Alte und neue Werte für die in `changed` genannten Felder; `None`, wenn weder `assigneeId`,
+    /// `stateId`, `priority` noch `labelIds` betroffen ist.
+    pub fn of(changed: &[String], old: (Option<UserId>, &str), new: IssueNow) -> Option<Self> {
         let has = |f: &str| changed.iter().any(|c| c == f);
-        (has("assigneeId") || has("stateId")).then(|| Self {
-            assignee_id: has("assigneeId").then_some(old_assignee).flatten(),
-            state_type: has("stateId").then(|| old_state_type.to_owned()),
+        (has("assigneeId") || has("stateId") || has("priority") || has("labelIds")).then(|| Self {
+            assignee_id: has("assigneeId").then_some(old.0).flatten(),
+            state_type: has("stateId").then(|| old.1.to_owned()),
+            new: Some(Box::new(IssueNewValues {
+                assignee_id: has("assigneeId").then_some(new.assignee_id).flatten(),
+                state_type: has("stateId").then(|| new.state_type.to_owned()),
+                priority: has("priority").then_some(new.priority),
+                labels_added: if has("labelIds") {
+                    new.labels_added
+                } else {
+                    Vec::new()
+                },
+            })),
         })
     }
 }
 
+/// Neue Werte einer Issue-Änderung für [`IssuePrevious::of`].
+pub struct IssueNow<'a> {
+    pub assignee_id: Option<UserId>,
+    pub state_type: &'a str,
+    pub priority: i32,
+    pub labels_added: Vec<LabelId>,
+}
+
+/// Zustand des Issues bei der Anlage (`IssueCreated.initial`): Der Handler darf nicht den aktuellen
+/// Zustand lesen, wenn das Issue direkt danach geändert wurde (B6.09).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueInitial {
+    #[serde(default)]
+    pub assignee_id: Option<UserId>,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub state_type: String,
+    #[serde(default)]
+    pub label_ids: Vec<LabelId>,
+}
+
 macro_rules! domain_events {
-    ($($(#[$doc:meta])* $var:ident { $($f:ident : $t:ty),* $(,)? }),+ $(,)?) => {
+    ($($(#[$doc:meta])* $var:ident { $($(#[$fm:meta])* $f:ident : $t:ty),* $(,)? }),+ $(,)?) => {
         /// Alle Ereignisse, die Use-Cases in die Outbox schreiben.
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[serde(tag = "type")]
         pub enum DomainEvent {
-            $($(#[$doc])* $var { $($f: $t),* }),+
+            $($(#[$doc])* $var { $($(#[$fm])* $f: $t),* }),+
         }
 
         impl DomainEvent {
@@ -92,7 +141,8 @@ macro_rules! domain_events {
 
 domain_events! {
     /// `mentioned_user_ids`: @-Erwähnungen in der Beschreibung (für Notifications, WP08).
-    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId> },
+    /// `initial`: Zustand bei der Anlage (Assignee, Priorität, Statustyp, Labels); `None` bei Altdaten.
+    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId>, #[serde(default)] initial: Option<Box<IssueInitial>> },
     /// `changed`: geänderte Feldnamen (camelCase, z. B. `assigneeId`, `stateId`, `description`);
     /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen in der Beschreibung.
     /// `previous`: alte Werte der Felder `assigneeId`/`stateId` (WP32, nur wenn sie in `changed` stehen;
@@ -115,7 +165,9 @@ domain_events! {
     AttachmentUpdated { attachment_id: AttachmentId },
     AttachmentRemoved { attachment_id: AttachmentId },
     ProjectCreated { project_id: ProjectId },
-    ProjectUpdated { project_id: ProjectId },
+    /// `changed`: geänderte Feldnamen (camelCase, z. B. `leadId`); `previous_lead_id`: bisheriger Lead,
+    /// gilt nur, wenn `leadId` in `changed` steht (B6.02). Altdaten: leer bzw. `None`.
+    ProjectUpdated { project_id: ProjectId, #[serde(default)] changed: Vec<String>, #[serde(default)] previous_lead_id: Option<UserId> },
     ProjectRemoved { project_id: ProjectId },
     ProjectMilestoneCreated { milestone_id: MilestoneId, project_id: ProjectId },
     ProjectMilestoneUpdated { milestone_id: MilestoneId, project_id: ProjectId },
@@ -130,7 +182,9 @@ domain_events! {
     DocumentUpdated { document_id: DocumentId },
     DocumentRemoved { document_id: DocumentId },
     InitiativeCreated { initiative_id: InitiativeId },
-    InitiativeUpdated { initiative_id: InitiativeId },
+    /// `changed`: geänderte Feldnamen (camelCase, z. B. `ownerId`); `previous_owner_id`: bisheriger
+    /// Owner, gilt nur, wenn `ownerId` in `changed` steht (B6.02). Altdaten: leer bzw. `None`.
+    InitiativeUpdated { initiative_id: InitiativeId, #[serde(default)] changed: Vec<String>, #[serde(default)] previous_owner_id: Option<UserId> },
     InitiativeRemoved { initiative_id: InitiativeId },
     InitiativeUpdateCreated { update_id: InitiativeUpdateId, initiative_id: InitiativeId },
     InitiativeUpdateUpdated { update_id: InitiativeUpdateId, initiative_id: InitiativeId },
@@ -179,12 +233,20 @@ domain_events! {
 mod tests {
     use super::*;
 
+    /// Hält `DomainEvent` klein: es liegt in vielen Futures, und Debug-Builds legen jeden
+    /// Zwischenwert auf den Stack (Stack-Überlauf beim Issue-Anlegen in 2-MiB-Testthreads).
+    #[test]
+    fn domain_event_stays_small() {
+        assert!(std::mem::size_of::<DomainEvent>() <= 136);
+    }
+
     #[test]
     fn roundtrip_and_type_tag() {
         let ev = DomainEvent::IssueCreated {
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
             mentioned_user_ids: vec![],
+            initial: None,
         };
         let v = serde_json::to_value(&ev).unwrap();
         assert_eq!(v["type"], "IssueCreated");

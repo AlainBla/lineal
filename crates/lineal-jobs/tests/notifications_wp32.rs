@@ -576,6 +576,7 @@ async fn reassignment_tells_the_previous_assignee(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: Some(bob),
                 state_type: None,
+                ..Default::default()
             }),
         ),
     ))
@@ -596,6 +597,7 @@ async fn reassignment_tells_the_previous_assignee(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: Some(bob),
                 state_type: None,
+                ..Default::default()
             }),
         ),
     ))
@@ -626,6 +628,7 @@ async fn reopening_notifies_subscribers_only_from_closed_to_open(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: None,
                 state_type: Some("completed".into()),
+                ..Default::default()
             }),
         ),
     ))
@@ -642,6 +645,7 @@ async fn reopening_notifies_subscribers_only_from_closed_to_open(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: None,
                 state_type: Some("unstarted".into()),
+                ..Default::default()
             }),
         ),
     ))
@@ -678,6 +682,7 @@ async fn closing_the_last_blocker_unblocks_the_blocked_issue(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: None,
                 state_type: Some("unstarted".into()),
+                ..Default::default()
             }),
         ),
     ))
@@ -694,6 +699,7 @@ async fn closing_the_last_blocker_unblocks_the_blocked_issue(pool: PgPool) {
             Some(IssuePrevious {
                 assignee_id: None,
                 state_type: Some("unstarted".into()),
+                ..Default::default()
             }),
         ),
     ))
@@ -723,6 +729,7 @@ async fn events_of_the_same_actor_within_a_minute_become_one_notification(pool: 
             issue_id: issue,
             team_id: e.d.eng,
             mentioned_user_ids: vec![],
+            initial: None,
         },
     );
     e.handle(&created).await;
@@ -741,6 +748,7 @@ async fn events_of_the_same_actor_within_a_minute_become_one_notification(pool: 
             Some(IssuePrevious {
                 assignee_id: None,
                 state_type: Some("unstarted".into()),
+                ..Default::default()
             }),
         ),
     ))
@@ -885,6 +893,7 @@ async fn view_subscribers_get_notifications_with_visibility_and_self_suppression
             issue_id: issue,
             team_id: e.d.eng,
             mentioned_user_ids: vec![],
+            initial: None,
         },
     );
     consumer.handle(&e.app, &ev).await.unwrap();
@@ -918,6 +927,7 @@ async fn view_subscribers_get_notifications_with_visibility_and_self_suppression
             issue_id: issue2,
             team_id: e.d.eng,
             mentioned_user_ids: vec![],
+            initial: None,
         },
     ))
     .await;

@@ -341,9 +341,13 @@ export function ApiSettingsPage({ ws }: { ws: string }) {
         description="Personal keys for scripts and MCP clients. They act as you, within the access you choose."
       >
         <div>
-          <Button size="sm" onClick={() => setCreating(true)}>
-            New key
-          </Button>
+          {session?.user.role === "guest" ? (
+            <p className="text-sm text-muted-foreground">Guests cannot create API keys.</p>
+          ) : (
+            <Button size="sm" onClick={() => setCreating(true)}>
+              New key
+            </Button>
+          )}
         </div>
         {q.isLoading && <ListSkeleton rows={3} />}
         {q.isError && (

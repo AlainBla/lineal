@@ -34,12 +34,24 @@ export interface SessionTeam {
   parentId: string | null;
   cyclesEnabled: boolean;
   triageEnabled: boolean;
+  /** Effektiver Team-Owner (Stilllegen, Löschen, Key ändern); fehlt bei älteren Servern. */
+  owner?: boolean;
 }
 
 export interface Session {
   user: SessionUser;
   workspace: SessionWorkspace;
   teams: SessionTeam[];
+}
+
+/**
+ * Ob der User Owner-Aktionen im Team ausführen darf (Danger zone). Admins/Owner immer, sonst Team-Owner
+ * laut Server. Ohne Rolleninfo (ältere Server) entscheidet der Server beim Ausführen.
+ */
+export function canOwnTeam(session: Session | null | undefined, teamId: string): boolean {
+  const role = session?.user.role;
+  if (role === undefined || role === "owner" || role === "admin") return true;
+  return session?.teams.find((t) => t.id === teamId)?.owner === true;
 }
 
 export const SESSION_QUERY_KEY = ["session"] as const;
@@ -64,6 +76,7 @@ function parseTeams(raw: unknown): SessionTeam[] {
         parentId: str(o.parentId),
         cyclesEnabled: o.cyclesEnabled === true,
         triageEnabled: o.triageEnabled === true,
+        ...(typeof o.owner === "boolean" ? { owner: o.owner } : {}),
       },
     ];
   });

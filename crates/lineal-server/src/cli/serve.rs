@@ -42,6 +42,8 @@ pub async fn run() -> Result<()> {
         )
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            // WebSockets mit 1001 schliessen (Clients verbinden sich neu), bevor die Gnadenfrist laeuft.
+            lineal_sync::begin_shutdown();
             stop_tx.notify_one();
         }),
     );

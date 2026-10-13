@@ -490,6 +490,25 @@ impl From<AppError> for End {
     }
 }
 
+/// Prozessweites Signal "Server faehrt herunter" (B3.10): offene `/sync`- und `/collab`-Verbindungen
+/// schliessen daraufhin mit 1001 ("going away"), der Client verbindet sich neu.
+static SHUTDOWN: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+
+fn shutdown_tx() -> &'static tokio::sync::watch::Sender<bool> {
+    SHUTDOWN.get_or_init(|| tokio::sync::watch::channel(false).0)
+}
+
+/// Meldet allen offenen WebSocket-Verbindungen den Shutdown.
+pub fn begin_shutdown() {
+    shutdown_tx().send_replace(true);
+}
+
+/// Wartet, bis [`begin_shutdown`] aufgerufen wurde.
+pub(crate) async fn shutdown_requested() {
+    let mut rx = shutdown_tx().subscribe();
+    let _ = rx.wait_for(|v| *v).await;
+}
+
 async fn connection(
     mut socket: WebSocket,
     shared: Arc<Shared>,
@@ -497,7 +516,11 @@ async fn connection(
     since: Option<i64>,
     _guard: ConnGuard,
 ) {
-    match drive(&mut socket, &shared, &mut ctx, &token_hash, since).await {
+    let outcome = tokio::select! {
+        r = drive(&mut socket, &shared, &mut ctx, &token_hash, since) => r,
+        () = shutdown_requested() => Err(End::Code(1001, "server going away")),
+    };
+    match outcome {
         Ok(()) | Err(End::Closed) => {}
         Err(End::Unauthorized) => {
             tracing::info!("sync token no longer valid, disconnecting");

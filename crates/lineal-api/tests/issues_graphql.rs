@@ -37,6 +37,7 @@ fn data(res: async_graphql::Response) -> Value {
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn issue_mutations_queries_and_visibility(pool: sqlx::PgPool) {
+    let sql_pool = pool.clone();
     let store = PgStore::new(pool);
     let mut tx = store.begin(SeedData::acme().org).await.unwrap();
     seed::run(&mut *tx).await.unwrap();
@@ -55,6 +56,30 @@ async fn issue_mutations_queries_and_visibility(pool: sqlx::PgPool) {
     assert_eq!(created["issueCreate"]["issue"]["identifier"], "ENG-1");
     assert_eq!(created["issueCreate"]["issue"]["priority"], 2);
     assert_eq!(created["issueCreate"]["issue"]["stateType"], "backlog");
+
+    // B7.11: die SLA-Felder sind lesbar.
+    sqlx::query(
+        "UPDATE issue SET sla_type = 'all', sla_started_at = '2026-10-01T00:00:00Z', \
+         sla_breaches_at = '2026-10-05T12:00:00Z' WHERE identifier = 'ENG-1'",
+    )
+    .execute(&sql_pool)
+    .await
+    .unwrap();
+    let sla = data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"{ issue(id: "ENG-1") { slaType slaStartedAt slaBreachesAt } }"#,
+        )
+        .await,
+    );
+    assert_eq!(sla["issue"]["slaType"], "all");
+    assert!(
+        sla["issue"]["slaBreachesAt"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("2026-10-05T12:00:00"))
+    );
+    assert!(sla["issue"]["slaStartedAt"].is_string());
 
     // Tri-State: null leert, weggelassen bleibt
     let upd = data(

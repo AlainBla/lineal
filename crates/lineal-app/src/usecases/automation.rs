@@ -247,7 +247,11 @@ impl App {
                 if tx.cycles().auto_archive_project(id, now).await? {
                     tx.outbox()
                         .push(NewEvent::new(
-                            DomainEvent::ProjectUpdated { project_id: id },
+                            DomainEvent::ProjectUpdated {
+                                project_id: id,
+                                changed: vec![],
+                                previous_lead_id: None,
+                            },
                             EventOrigin::System,
                         ))
                         .await?;

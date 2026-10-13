@@ -143,8 +143,36 @@ export function useInboxAction() {
   });
 }
 
+/** Start des nächsten Cycles des Teams (für „Next cycle“, docs/05 §6.7); `null` ohne künftigen Cycle. */
+export function useNextCycleStart(teamKey: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["inbox", "next-cycle", teamKey] as const,
+    enabled: enabled && !!teamKey,
+    staleTime: 60_000,
+    queryFn: async (): Promise<Date | null> => {
+      const res = await gqlRequest<
+        { cycles: Array<{ startsAt: string }> },
+        { teamId: string; type: string }
+      >(
+        `query InboxNextCycle($teamId: String!, $type: String) { cycles(teamId: $teamId, type: $type) { startsAt } }`,
+        {
+          teamId: teamKey ?? "",
+          type: "next",
+        },
+      );
+      const start = res.cycles
+        .map((c) => new Date(c.startsAt))
+        .find((d) => d.getTime() > Date.now());
+      return start ?? null;
+    },
+  });
+}
+
 /** Snooze-Ziele (docs/08 §2.9); `now` injizierbar für Tests. */
-export function snoozePresets(now: Date): Array<{ id: string; label: string; until: Date }> {
+export function snoozePresets(
+  now: Date,
+  nextCycleStart?: Date | null,
+): Array<{ id: string; label: string; until: Date }> {
   const at = (d: Date, h: number) => {
     const x = new Date(d);
     x.setHours(h, 0, 0, 0);
@@ -164,5 +192,8 @@ export function snoozePresets(now: Date): Array<{ id: string; label: string; unt
     { id: "tomorrow", label: "Tomorrow", until: at(tomorrow, 9) },
     { id: "week", label: "Next week", until: at(nextWeek, 9) },
     { id: "month", label: "A month from now", until: at(month, 9) },
+    ...(nextCycleStart && nextCycleStart.getTime() > now.getTime()
+      ? [{ id: "cycle", label: "Next cycle", until: nextCycleStart }]
+      : []),
   ];
 }

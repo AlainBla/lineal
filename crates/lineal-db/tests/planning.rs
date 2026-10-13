@@ -562,11 +562,8 @@ async fn project_lifecycle_status_dates_lead_team_and_labels(pool: PgPool) {
             },
         )
         .await;
-    assert_eq!(
-        kind(two),
-        ErrorKind::InvalidRequest,
-        "höchstens ein Label je Gruppe"
-    );
+    // B5.18: Projekt-Gruppen sind multiSelect – mehrere Labels einer Gruppe sind erlaubt.
+    assert_eq!(two.unwrap().labels.len(), 2);
     assert_eq!(
         kind(
             app.save_project(
@@ -593,6 +590,16 @@ async fn project_lifecycle_status_dates_lead_team_and_labels(pool: PgPool) {
     )
     .await
     .unwrap();
+    // B6.02: der Lead-Wechsel steht im Ereignis (geänderte Felder, bisheriger Lead).
+    let lead_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE type = 'ProjectUpdated' \
+         AND payload->>'project_id' = $1 AND payload->'changed' ? 'leadId'",
+    )
+    .bind(id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(lead_events >= 1, "ProjectUpdated meldet leadId");
     app.set_project_archived(&bob, &id.to_string(), true)
         .await
         .unwrap();
@@ -1781,6 +1788,51 @@ async fn deactivating_cycles_closes_the_active_one_and_removes_upcoming(pool: Pg
         .await
         .unwrap();
     assert!(max >= 4);
+}
+
+/// B5.21: Cycles aus/ein am selben Tag, dann „Start cycle today“ – der Vorgänger wurde heute
+/// geschlossen; der Cycle beginnt direkt nach dessen Ende statt zu überlappen.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn start_cycle_today_after_cycles_toggled_same_day(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    app.configure_team_cycles(&bob, "DES", settings_on(date(2026, 10, 5)))
+        .await
+        .unwrap();
+    app.configure_team_cycles(
+        &bob,
+        "DES",
+        CycleSettingsInput {
+            cycles_enabled: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    app.configure_team_cycles(
+        &bob,
+        "DES",
+        CycleSettingsInput {
+            cycles_enabled: Some(true),
+            first_start_date: Some(date(2026, 10, 12)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let next: Uuid = sqlx::query_scalar(
+        "SELECT id FROM cycle WHERE team_id = $1 AND completed_at IS NULL AND starts_at > $2 ORDER BY starts_at LIMIT 1",
+    )
+    .bind(data.des.0)
+    .bind(utc(2026, 10, 10, 7, 15))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let v = app
+        .start_cycle_today(&bob, &next.to_string())
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(v.is_active);
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

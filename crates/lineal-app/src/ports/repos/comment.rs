@@ -151,6 +151,8 @@ pub struct Reaction {
 pub struct MentionCandidate {
     pub id: UserId,
     pub display_name: String,
+    /// Vollständiger Name (B6.19: `@Name` löst auf, wenn er eindeutig ist).
+    pub name: String,
     pub role: UserRole,
 }
 

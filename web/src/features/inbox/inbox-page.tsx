@@ -43,7 +43,7 @@ import {
   type InboxTab,
 } from "./inbox-model";
 import { bundleSummary, targetKind, typeLabel } from "./notification-types";
-import { snoozePresets, useInboxAction, useNotifications } from "./queries";
+import { snoozePresets, useInboxAction, useNextCycleStart, useNotifications } from "./queries";
 import { requestRemind, useRemindAction, type RemindTarget } from "./remind";
 
 /** Snooze-Auswahl: Vorgaben plus „Custom…“ (Datum/Uhrzeit); `open` steuert die Taste H. */
@@ -51,13 +51,17 @@ function SnoozeMenu({
   onPick,
   open,
   onOpenChange,
+  teamKey = null,
   children,
 }: {
   onPick: (until: Date) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Team des Issues der Notification: „Next cycle“ = Start von dessen nächstem Cycle (B4.38). */
+  teamKey?: string | null;
   children: ReactNode;
 }) {
+  const nextCycle = useNextCycleStart(teamKey, open);
   const [customOpen, setCustomOpen] = useState(false);
   const [custom, setCustom] = useState("");
   const customDate = custom ? new Date(custom) : null;
@@ -67,7 +71,7 @@ function SnoozeMenu({
       <DropdownMenu open={open} onOpenChange={onOpenChange}>
         <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {snoozePresets(new Date()).map((p) => (
+          {snoozePresets(new Date(), nextCycle.data).map((p) => (
             <DropdownMenuItem key={p.id} onSelect={() => onPick(p.until)}>
               {p.label}
             </DropdownMenuItem>
@@ -763,6 +767,7 @@ export function InboxPage({ ws }: { ws: string }) {
                   <SnoozeMenu
                     open={snoozeOpen}
                     onOpenChange={setSnoozeOpen}
+                    teamKey={selected.issueIdentifier?.split("-")[0] ?? null}
                     onPick={(d) =>
                       act.mutate({ kind: "snooze", id: selected.id, until: d.toISOString() })
                     }

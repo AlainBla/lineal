@@ -705,7 +705,14 @@ impl App {
             ));
         }
         let tz = team_tz(&team);
-        let new_start = local_midnight_to_utc(utc_to_local_date(now, tz), tz);
+        // Heute 00:00 lokal, aber nie vor dem Ende eines früheren (heute geschlossenen) Cycles.
+        let earlier_end = all
+            .iter()
+            .filter(|x| x.id != c.id && x.starts_at < c.starts_at && !x.is_active(now))
+            .map(|x| x.ends_at)
+            .max();
+        let new_start = local_midnight_to_utc(utc_to_local_date(now, tz), tz)
+            .max(earlier_end.unwrap_or(DateTime::<Utc>::MIN_UTC));
         let non_inh = self.non_inheriting(&mut *tx).await?;
         let env = Env {
             tree: &snap.tree,

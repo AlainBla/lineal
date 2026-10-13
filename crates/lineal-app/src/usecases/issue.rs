@@ -40,7 +40,7 @@ use fields::{
 };
 use history::Delta;
 use lineal_domain::enums::{Priority, SlaType, StateType};
-use lineal_domain::events::{DomainEvent, IssuePrevious};
+use lineal_domain::events::{DomainEvent, IssueInitial, IssueNow, IssuePrevious};
 use lineal_domain::ids::{IssueId, LabelId, StateId, TeamId, UserId};
 use lineal_domain::rules::patch::{self, PatchFailure, PatchOp};
 use lineal_domain::rules::state::{IssueTimestamps, TransitionSource, apply_transition};
@@ -760,6 +760,12 @@ impl App {
                 issue_id: stored.id,
                 team_id: stored.team_id,
                 mentioned_user_ids: mentioned,
+                initial: Some(Box::new(IssueInitial {
+                    assignee_id: stored.assignee_id,
+                    priority: i32::from(stored.priority.value()),
+                    state_type: stored.state_type.as_str().to_owned(),
+                    label_ids: plan.added.iter().map(|(l, _)| *l).collect(),
+                })),
             },
         )
         .await?;
@@ -875,7 +881,15 @@ impl App {
                 "archived issues are read-only",
             ));
         }
-        snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::UpdateIssue,
+        )
+        .await?;
         // Issue-Graph (Parent/Kinder): Änderungen, die mehrere Issue-Zeilen betreffen (Parent
         // setzen, Auto-Close-Kaskade), laufen seriell und VOR der ersten Zeilensperre. Sonst sperren
         // gegenläufige Transaktionen (Kind->Parent und Parent->Kind) in entgegengesetzter
@@ -1144,7 +1158,16 @@ impl App {
                 .await?;
         }
         if !changed.is_empty() {
-            let previous = IssuePrevious::of(&changed, old.assignee_id, old.state_type.as_str());
+            let previous = IssuePrevious::of(
+                &changed,
+                (old.assignee_id, old.state_type.as_str()),
+                IssueNow {
+                    assignee_id: saved.assignee_id,
+                    state_type: saved.state_type.as_str(),
+                    priority: i32::from(saved.priority.value()),
+                    labels_added: delta.added_labels.clone(),
+                },
+            );
             emit(
                 tx,
                 ctx,
@@ -1299,11 +1322,41 @@ impl App {
         ctx: &RequestCtx,
         reference: &str,
     ) -> AppResult<Vec<HistoryEntry>> {
+        Ok(self
+            .issue_history_with_actors(ctx, reference)
+            .await?
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect())
+    }
+
+    /// Wie [`Self::issue_history`], zusätzlich mit dem Namen des Akteurs je Eintrag – auch für Gäste
+    /// einer Freigabe (B4.16: kein „Someone“). `HistoryEntry` selbst bleibt klein (Stack im Debug-Build).
+    pub async fn issue_history_with_actors(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<Vec<(HistoryEntry, Option<String>)>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
         let entries = tx.issues().list_history(issue.id, 1000).await?;
-        redact_history(&mut *tx, &snap, ctx, entries).await
+        let entries = redact_history(&mut *tx, &snap, ctx, entries).await?;
+        let mut names: HashMap<UserId, Option<String>> = HashMap::new();
+        let mut out = Vec::with_capacity(entries.len());
+        for e in entries {
+            let name = match e.actor_id {
+                Some(actor) => {
+                    if let std::collections::hash_map::Entry::Vacant(v) = names.entry(actor) {
+                        v.insert(tx.users().get(actor).await?.map(|u| u.name));
+                    }
+                    names.get(&actor).cloned().flatten()
+                }
+                None => None,
+            };
+            out.push((e, name));
+        }
+        Ok(out)
     }
 
     /// Issues filtern (docs/07 §3.2 `list_issues`).
@@ -1514,7 +1567,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        snap.require_team(ctx, Action::DeleteIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            &mut *tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::DeleteIssue,
+        )
+        .await?;
         let mut issue = tx
             .issues()
             .get(found.id, true)
@@ -1584,7 +1645,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            &mut *tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::UpdateIssue,
+        )
+        .await?;
         let mut issue = tx
             .issues()
             .get(found.id, true)

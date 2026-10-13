@@ -1235,6 +1235,29 @@ impl IssueRepo for PgTx {
             .collect())
     }
 
+    async fn find_milestones_any(&mut self, reference: &str) -> AppResult<Vec<MilestoneLookup>> {
+        let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT m.id, m.project_id, m.name FROM project_milestone m \
+             JOIN project p ON p.organization_id = m.organization_id AND p.id = m.project_id \
+             WHERE m.organization_id = $1 AND m.archived_at IS NULL AND p.archived_at IS NULL \
+             AND NOT p.trashed AND (m.id::text = lower($2) OR lower(m.name) = lower($2)) \
+             ORDER BY m.created_at, m.id",
+        )
+        .bind(self.org.0)
+        .bind(reference.trim())
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, p, name)| MilestoneLookup {
+                id: MilestoneId(id),
+                project_id: ProjectId(p),
+                name,
+            })
+            .collect())
+    }
+
     async fn insert_share(&mut self, s: &IssueShare) -> AppResult<bool> {
         let res = sqlx::query(
             "INSERT INTO issue_share (organization_id, issue_id, user_id, shared_by_id, created_at) \

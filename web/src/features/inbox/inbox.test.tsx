@@ -200,6 +200,18 @@ describe("InboxPage", () => {
     shortcuts.reset();
   });
 
+  it("snoozePresets bietet Next cycle nur mit künftigem Cycle-Start (B4.38)", () => {
+    const now = new Date("2026-10-13T08:00:00Z");
+    expect(snoozePresets(now).some((p) => p.id === "cycle")).toBe(false);
+    expect(snoozePresets(now, new Date("2026-10-12T00:00:00Z")).some((p) => p.id === "cycle")).toBe(
+      false,
+    );
+    const start = new Date("2026-10-19T00:00:00Z");
+    const cycle = snoozePresets(now, start).find((p) => p.id === "cycle");
+    expect(cycle?.label).toBe("Next cycle");
+    expect(cycle?.until).toEqual(start);
+  });
+
   it("snoozePresets enthält This evening (18 Uhr, danach morgen)", () => {
     const morning = new Date(2026, 9, 13, 10, 0);
     const ev = snoozePresets(morning).find((p) => p.id === "evening")!;

@@ -105,6 +105,7 @@ impl Env {
                 issue_id: issue,
                 team_id: team,
                 mentioned_user_ids: vec![],
+                initial: None,
             },
         )
         .await;
@@ -175,6 +176,7 @@ fn state_changed(issue: IssueId, team: TeamId, previous: &str) -> DomainEvent {
         previous: Some(IssuePrevious {
             assignee_id: None,
             state_type: Some(previous.into()),
+            ..Default::default()
         }),
     }
 }

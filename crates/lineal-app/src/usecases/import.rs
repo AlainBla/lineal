@@ -705,6 +705,9 @@ async fn ensure_no_overlapping_run(
     run: &ImportRun,
     teams: &[String],
 ) -> AppResult<()> {
+    // Prüfung und Statuswechsel auf `running` laufen unter einer Sperre je Workspace: zwei
+    // gleichzeitige Starts würden sonst beide „kein anderer Lauf“ sehen (B7.08, Race).
+    tx.advisory_lock("import_start", None).await?;
     let mine: std::collections::BTreeSet<String> = teams.iter().map(|t| t.to_uppercase()).collect();
     for other in tx.imports().list_import_runs(200).await? {
         if other.id == run.id

@@ -677,6 +677,17 @@ async fn single_select_label_groups(pool: PgPool) {
             .as_ref()
             .is_some_and(|r| r.contains(&ios))
     }));
+    // B4.16: der Verlauf nennt den Akteur beim Namen.
+    let named = fx
+        .app
+        .issue_history_with_actors(&alice(), "ENG-1")
+        .await
+        .unwrap();
+    assert!(
+        named
+            .iter()
+            .any(|(h, n)| h.actor_id.is_some() && n.as_deref() == Some("Alice Example"))
+    );
     // ersetzendes labels mit zwei Geschwistern: Fehler
     let err = fx
         .app
@@ -913,21 +924,48 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         ),
         ErrorKind::NotFound
     );
-    // Meilenstein ohne Projekt
+    // Meilenstein ohne Projekt: unbekannt -> not_found, bekannt -> Issue übernimmt das Projekt (B5.24)
     assert_eq!(
         kind(
             fx.app
                 .update_issue(
                     &alice(),
                     UpdateIssueInput {
-                        milestone: Some(Some("Beta".into())),
+                        milestone: Some(Some("Nope".into())),
                         ..update("ENG-1")
                     }
                 )
                 .await
         ),
-        ErrorKind::InvalidRequest
+        ErrorKind::NotFound
     );
+    let adopted = fx
+        .app
+        .update_issue(
+            &alice(),
+            UpdateIssueInput {
+                milestone: Some(Some("Beta".into())),
+                ..update("ENG-1")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(adopted.issue.project_id.map(|p| p.0), Some(project));
+    assert_eq!(
+        adopted.issue.project_milestone_id.map(|m| m.0),
+        Some(milestone)
+    );
+    assert!(adopted.issue.added_to_project_at.is_some());
+    fx.app
+        .update_issue(
+            &alice(),
+            UpdateIssueInput {
+                project: Some(None),
+                ..update("ENG-1")
+            },
+        )
+        .await
+        .unwrap();
     // alles korrekt; aktiver Cycle schiebt Backlog → Todo
     let ok = fx
         .app
@@ -1798,7 +1836,7 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
             .title,
         "Intern"
     );
-    // Schreiben bleibt verwehrt
+    // Schreiben bleibt verwehrt: forbidden, weil das Issue über die Freigabe sichtbar ist (B8.20)
     assert_eq!(
         kind(
             fx.app
@@ -1811,7 +1849,7 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
                 )
                 .await
         ),
-        ErrorKind::NotFound
+        ErrorKind::Forbidden
     );
     // idempotent; Mitglied hat ohnehin Zugriff
     assert!(

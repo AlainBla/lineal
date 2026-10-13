@@ -134,6 +134,7 @@ async fn user_assigned_subscription_notifies_on_new_assignment(pool: PgPool) {
             issue_id: issue,
             team_id: d.eng,
             mentioned_user_ids: vec![],
+            initial: None,
         },
         created_at: Utc::now(),
     };

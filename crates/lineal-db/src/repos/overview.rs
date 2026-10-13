@@ -107,8 +107,18 @@ impl OverviewRepo for PgTx {
     }
 
     async fn project_health(&mut self, q: &OverviewQuery) -> AppResult<Vec<ProjectHealthRow>> {
-        let rows: Vec<(Uuid, Uuid, Option<String>)> = sqlx::query_as(
-            "SELECT pt.team_id, p.id, p.health FROM project p \
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(
+            Uuid,
+            Uuid,
+            Option<String>,
+            Option<DateTime<Utc>>,
+            String,
+            Option<i32>,
+            bool,
+        )> = sqlx::query_as(
+            "SELECT pt.team_id, p.id, p.health, p.health_updated_at, p.update_reminder_mode, \
+                    p.update_reminder_frequency_in_weeks, ps.indefinite FROM project p \
              JOIN project_team pt ON pt.project_id = p.id \
              JOIN project_status ps ON ps.id = p.status_id \
              WHERE p.organization_id = $1 AND NOT p.trashed AND p.archived_at IS NULL \
@@ -125,6 +135,10 @@ impl OverviewRepo for PgTx {
                 team_id: TeamId(r.0),
                 project_id: ProjectId(r.1),
                 health: r.2,
+                health_updated_at: r.3,
+                reminder_mode: r.4,
+                reminder_weeks: r.5,
+                indefinite: r.6,
             })
             .collect())
     }

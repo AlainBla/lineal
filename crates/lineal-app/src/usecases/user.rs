@@ -14,7 +14,7 @@ use crate::resolve;
 use crate::resolve::team::Visibility;
 use lineal_domain::enums::UserRole;
 use lineal_domain::events::DomainEvent;
-use lineal_domain::ids::UserId;
+use lineal_domain::ids::{TeamId, UserId};
 use serde_json::json;
 
 /// Mindestlänge von Passwörtern.
@@ -161,6 +161,19 @@ fn forbid_system(ctx: &RequestCtx) -> AppResult<()> {
 }
 
 impl App {
+    /// Teams, in denen der Akteur effektiver Team-Owner ist (Stilllegen, Löschen, Key ändern;
+    /// docs/02 §6.2) – für die Web-Oberfläche, die Admin-Aktionen sonst nicht ausblenden kann (B5.36).
+    pub async fn owned_team_ids(&self, ctx: &RequestCtx) -> AppResult<Vec<TeamId>> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        Ok(snap
+            .visible_team_ids()
+            .iter()
+            .copied()
+            .filter(|t| snap.require_team(ctx, Action::RetireTeam, *t).is_ok())
+            .collect())
+    }
+
     /// `get_user`: UUID, `"me"`, E-Mail oder Name.
     pub async fn get_user(&self, ctx: &RequestCtx, reference: &str) -> AppResult<UserView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
@@ -345,6 +358,16 @@ impl App {
                             now,
                         })
                         .await?;
+                    // B4.41: Mitgliedschaft per Admin-Anlage meldet das Membership-Ereignis.
+                    emit(
+                        &mut *tx,
+                        ctx,
+                        DomainEvent::TeamMembershipCreated {
+                            team_id: t,
+                            user_id: id,
+                        },
+                    )
+                    .await?;
                 }
             }
         }

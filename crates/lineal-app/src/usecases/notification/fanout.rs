@@ -17,7 +17,7 @@ use crate::ports::repos::notification::{
 use crate::ports::repos::{NewEvent, StoredEvent};
 use chrono::{DateTime, Duration, Utc};
 use lineal_domain::enums::UserRole;
-use lineal_domain::events::{DomainEvent, EventOrigin, IssuePrevious};
+use lineal_domain::events::{DomainEvent, EventOrigin, IssueInitial, IssuePrevious};
 use lineal_domain::ids::{CommentId, IssueId, NotificationId, ProjectId, TeamId, UserId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use uuid::Uuid;
@@ -339,8 +339,12 @@ impl<'a> Fan<'a> {
             DomainEvent::IssueCreated {
                 issue_id,
                 mentioned_user_ids,
+                initial,
                 ..
-            } => self.issue_created(ev, *issue_id, mentioned_user_ids).await,
+            } => {
+                self.issue_created(ev, *issue_id, mentioned_user_ids, initial.as_deref())
+                    .await
+            }
             DomainEvent::IssueUpdated {
                 issue_id,
                 changed,
@@ -394,8 +398,13 @@ impl<'a> Fan<'a> {
             DomainEvent::ProjectCreated { project_id } => {
                 self.project_changed(*project_id, true).await
             }
-            DomainEvent::ProjectUpdated { project_id } => {
-                self.project_changed(*project_id, false).await
+            DomainEvent::ProjectUpdated {
+                project_id,
+                changed,
+                ..
+            } => {
+                let lead = changed.iter().any(|c| c == "leadId");
+                self.project_changed(*project_id, lead).await
             }
             DomainEvent::ProjectMilestoneCreated { milestone_id, .. }
             | DomainEvent::ProjectMilestoneUpdated { milestone_id, .. } => {
@@ -404,8 +413,13 @@ impl<'a> Fan<'a> {
             DomainEvent::InitiativeCreated { initiative_id } => {
                 self.initiative_changed(initiative_id.0, true).await
             }
-            DomainEvent::InitiativeUpdated { initiative_id } => {
-                self.initiative_changed(initiative_id.0, false).await
+            DomainEvent::InitiativeUpdated {
+                initiative_id,
+                changed,
+                ..
+            } => {
+                let owner = changed.iter().any(|c| c == "ownerId");
+                self.initiative_changed(initiative_id.0, owner).await
             }
             DomainEvent::InitiativeUpdateCreated { update_id, .. } => {
                 self.initiative_update(ev, update_id.0, true).await
@@ -428,9 +442,16 @@ impl<'a> Fan<'a> {
         ev: &StoredEvent,
         issue: IssueId,
         mentioned: &[UserId],
+        initial: Option<&IssueInitial>,
     ) -> AppResult<bool> {
         let Some(f) = self.tx.notifications().issue_facts(issue).await? else {
             return Ok(false);
+        };
+        // Ereignis-Zustand statt aktuellem: wurde das Issue direkt nach der Anlage geändert, zählt
+        // hier der Stand bei der Anlage (B6.09).
+        let (assignee, priority, state_type) = match initial {
+            Some(i) => (i.assignee_id, i.priority, i.state_type.clone()),
+            None => (f.assignee_id, f.priority, f.state_type.clone()),
         };
         self.target_issue(&f);
         self.fallback_actor(ev.origin, f.creator_id);
@@ -438,11 +459,11 @@ impl<'a> Fan<'a> {
             self.subscribe(&f, creator, None, SubscriptionReason::Creator)
                 .await?;
         }
-        if let Some(a) = f.assignee_id {
+        if let Some(a) = assignee {
             self.subscribe(&f, a, None, SubscriptionReason::Assignee)
                 .await?;
             self.add(a, "issueAssignedToYou");
-            if f.priority == 1 {
+            if priority == 1 {
                 self.add(a, "issuePriorityUrgent");
             }
         }
@@ -470,12 +491,20 @@ impl<'a> Fan<'a> {
                     .await?,
             );
         }
-        created.extend(
-            notifications
-                .label_subscribers_of_issue(f.id, "issueCreated")
-                .await?,
-        );
-        let triage = if f.state_type == "triage" {
+        created.extend(match initial {
+            Some(i) => {
+                let labels: Vec<Uuid> = i.label_ids.iter().map(|l| l.0).collect();
+                notifications
+                    .label_subscribers_of_labels(&labels, "issueCreated")
+                    .await?
+            }
+            None => {
+                notifications
+                    .label_subscribers_of_issue(f.id, "issueCreated")
+                    .await?
+            }
+        });
+        let triage = if state_type == "triage" {
             notifications
                 .object_subscribers(ObjectKind::Team, f.team_id.0, "issueAddedToTriage")
                 .await?
@@ -529,13 +558,20 @@ impl<'a> Fan<'a> {
         };
         self.target_issue(&f);
         let has = |name: &str| changed.iter().any(|c| c == name);
+        // Neue Werte aus dem Ereignis (B6.09); Altdaten ohne sie lesen den aktuellen Zustand.
+        let ev_new = previous.and_then(|p| p.new.as_deref());
+        let new_assignee = ev_new.map_or(f.assignee_id, |p| p.assignee_id);
+        let new_priority = ev_new.and_then(|p| p.priority).unwrap_or(f.priority);
+        let new_state_type = ev_new
+            .and_then(|p| p.state_type.clone())
+            .unwrap_or_else(|| f.state_type.clone());
         for m in mentioned {
             self.subscribe(&f, *m, None, SubscriptionReason::Mention)
                 .await?;
             self.add(*m, "issueMention");
         }
         if has("assigneeId")
-            && let Some(a) = f.assignee_id
+            && let Some(a) = new_assignee
         {
             self.subscribe(&f, a, None, SubscriptionReason::Assignee)
                 .await?;
@@ -544,7 +580,7 @@ impl<'a> Fan<'a> {
         // Der bisherige Assignee erfährt von der Abgabe (docs/05 §6.2 `issueUnassignedFromYou`).
         if has("assigneeId")
             && let Some(old) = previous.and_then(|p| p.assignee_id)
-            && Some(old) != f.assignee_id
+            && Some(old) != new_assignee
         {
             self.add(old, "issueUnassignedFromYou");
         }
@@ -560,7 +596,7 @@ impl<'a> Fan<'a> {
             self.add_all(watchers, "issueAddedToView");
         }
         if has("priority")
-            && f.priority == 1
+            && new_priority == 1
             && let Some(a) = f.assignee_id
         {
             self.add(a, "issuePriorityUrgent");
@@ -577,7 +613,7 @@ impl<'a> Fan<'a> {
             }
         }
         if has("stateId") {
-            let closed = CLOSED.contains(&f.state_type.as_str());
+            let closed = CLOSED.contains(&new_state_type.as_str());
             let was_closed = previous
                 .and_then(|p| p.state_type.as_deref())
                 .is_some_and(|t| CLOSED.contains(&t));
@@ -627,7 +663,7 @@ impl<'a> Fan<'a> {
                             .await?,
                     );
                 }
-            } else if f.state_type == "triage" {
+            } else if new_state_type == "triage" {
                 triage = notifications
                     .object_subscribers(ObjectKind::Team, f.team_id.0, "issueAddedToTriage")
                     .await?;
@@ -643,6 +679,19 @@ impl<'a> Fan<'a> {
             self.add_all(subs, "issueStatusChanged");
             self.add_all(all, "issueStatusChangedAll");
             self.add_all(triage, "issueAddedToTriage");
+        }
+        // Label-Abo (`issueAddedToView`): nachträglich gesetztes Label (docs/05 §6.3).
+        if has("labelIds")
+            && let Some(p) = ev_new
+            && !p.labels_added.is_empty()
+        {
+            let labels: Vec<Uuid> = p.labels_added.iter().map(|l| l.0).collect();
+            let subs = self
+                .tx
+                .notifications()
+                .label_subscribers_of_labels(&labels, "issueAddedToView")
+                .await?;
+            self.add_all(subs, "issueAddedToView");
         }
         self.add_view_recipients(&f, false, changed, previous)
             .await?;
@@ -1061,16 +1110,15 @@ impl<'a> Fan<'a> {
     /// Projekt angelegt oder geändert: neuer Lead (`projectAddedAsLead`) und Erwähnungen in
     /// Beschreibung/Inhalt (`projectMention`); je Projekt und Empfänger einmalig.
     ///
-    /// Lead und Owner nur bei der Anlage: `ProjectUpdated`/`InitiativeUpdated` tragen keine
-    /// Änderungsliste, ein späterer Wechsel ist daher nicht erkennbar (und eine Selbstzuweisung
-    /// würde sonst bei der nächsten fremden Änderung gemeldet).
-    async fn project_changed(&mut self, project: ProjectId, is_new: bool) -> AppResult<bool> {
+    /// `lead_new`: Anlage oder Lead-Wechsel (`leadId` in `ProjectUpdated.changed`, B6.02); nur dann
+    /// wird der aktuelle Lead gemeldet, sonst würde ihn jede fremde Änderung erneut melden.
+    async fn project_changed(&mut self, project: ProjectId, lead_new: bool) -> AppResult<bool> {
         let Some(p) = self.tx.notifications().project_facts(project).await? else {
             return Ok(false);
         };
         self.target_project(project).await?;
         self.dedup_override = Some(format!("once:project:{}", project.0));
-        if is_new && let Some(lead) = p.lead_id {
+        if lead_new && let Some(lead) = p.lead_id {
             self.add(lead, "projectAddedAsLead");
         }
         let mentioned = self.mention_users(&p.text).await?;
@@ -1091,13 +1139,13 @@ impl<'a> Fan<'a> {
     }
 
     /// Initiative angelegt oder geändert: neuer Owner und Erwähnungen.
-    async fn initiative_changed(&mut self, initiative: Uuid, is_new: bool) -> AppResult<bool> {
+    async fn initiative_changed(&mut self, initiative: Uuid, owner_new: bool) -> AppResult<bool> {
         let Some(i) = self.tx.notifications().initiative_facts(initiative).await? else {
             return Ok(false);
         };
         self.target_initiative(initiative);
         self.dedup_override = Some(format!("once:initiative:{initiative}"));
-        if is_new && let Some(owner) = i.owner_id {
+        if owner_new && let Some(owner) = i.owner_id {
             self.add(owner, "initiativeAddedAsOwner");
         }
         let mentioned = self.mention_users(&i.text).await?;

@@ -912,6 +912,18 @@ type Issue {
 	canceledAt: String
 	archivedAt: String
 	trashed: Boolean!
+	"""
+	SLA-Art (`calendar` | `business`), wenn eine SLA-Regel greift.
+	"""
+	slaType: String
+	"""
+	Beginn der SLA-Frist.
+	"""
+	slaStartedAt: String
+	"""
+	Ende der SLA-Frist (Verletzung), sofort nach Prioritäts-/Projektänderung neu berechnet.
+	"""
+	slaBreachesAt: String
 	createdAt: String!
 	updatedAt: String!
 	"""
@@ -1046,6 +1058,10 @@ Ein Eintrag der Aktivitätshistorie.
 type IssueHistoryEntry {
 	id: String!
 	actorId: String
+	"""
+	Name des Akteurs (auch für Gäste einer Freigabe sichtbar).
+	"""
+	actorName: String
 	source: String!
 	"""
 	`{ "<feld>": { "from": …, "to": … } }` (camelCase-Feldnamen).

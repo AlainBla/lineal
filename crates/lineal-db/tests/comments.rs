@@ -1444,3 +1444,40 @@ async fn attachment_ids_are_scoped_and_deletes_restricted(pool: PgPool) {
         .await
         .unwrap();
 }
+
+/// B6.19: `@Name` löst auf, wenn der Name eindeutig ist; der Anzeigename hat Vorrang.
+#[sqlx::test(migrations = "./migrations")]
+async fn mention_resolves_unique_name_when_display_name_differs(pool: PgPool) {
+    let env = setup(pool).await;
+    sqlx::query("UPDATE \"user\" SET name = 'Bobby', display_name = 'bob-w3c' WHERE id = $1")
+        .bind(env.data.bob.0)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let issue = make_issue(&env, env.data.eng).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let by_name = env
+        .app
+        .create_comment(&alice, on_issue(issue, "cc @Bobby"))
+        .await
+        .unwrap();
+    assert_eq!(by_name.mentioned_user_ids, vec![env.data.bob]);
+    let by_display = env
+        .app
+        .create_comment(&alice, on_issue(issue, "cc @bob-w3c"))
+        .await
+        .unwrap();
+    assert_eq!(by_display.mentioned_user_ids, vec![env.data.bob]);
+    // Mehrdeutiger Name löst nichts auf.
+    sqlx::query("UPDATE \"user\" SET name = 'Bobby' WHERE id = $1")
+        .bind(env.data.carol.0)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let ambiguous = env
+        .app
+        .create_comment(&alice, on_issue(issue, "cc @bobby"))
+        .await
+        .unwrap();
+    assert!(ambiguous.mentioned_user_ids.is_empty());
+}

@@ -19,7 +19,8 @@ import { gqlRequest } from "@/lib/graphql";
 export const ISSUE_FIELDS = `
   id identifier previousIdentifiers title description priority estimate teamId
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
-  labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed createdAt updatedAt
+  labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed
+  slaType slaStartedAt slaBreachesAt createdAt updatedAt
   stateEnteredAt snoozedUntilAt startedTriageAt linkCount
 `;
 
@@ -151,7 +152,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
       blocks { ${RELATED} } blockedBy { ${RELATED} } relatedTo { ${RELATED} }
       duplicateOf { ${RELATED} } duplicates { ${RELATED} }
     }
-    history { id actorId source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
+    history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
     attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
   }
 }`;

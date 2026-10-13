@@ -20,6 +20,7 @@ function entry(over: Partial<IssueHistoryEntry>): IssueHistoryEntry {
   return {
     id: "h1",
     actorId: "u-alice",
+    actorName: null,
     source: "user",
     changes: {},
     addedLabelIds: [],
@@ -126,6 +127,12 @@ describe("describeHistory", () => {
     expect(auto.via).toBeNull();
     const unknown = describeHistory(entry({ actorId: "u-fremd", flags: ["created"] }), resolver);
     expect(unknown.actor).toBe("Someone");
+    // Server liefert den Namen (z. B. für Gäste einer Freigabe, B4.16).
+    const named = describeHistory(
+      entry({ actorId: "u-fremd", actorName: "Dana", flags: ["created"] }),
+      resolver,
+    );
+    expect(named.actor).toBe("Dana");
     expect(describeHistory(entry({ source: "import", actorId: null }), resolver).actor).toBe(
       "Import",
     );

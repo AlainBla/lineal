@@ -160,6 +160,18 @@ export function PropertySidebar({
           <span>{issue.dueDate}</span>
         </PropertyRow>
       )}
+      {issue.slaBreachesAt && (
+        <PropertyRow label="SLA">
+          <span title={`Started ${issue.slaStartedAt ?? "—"}`}>
+            {issue.slaType === "business" ? "Business days · " : ""}
+            Breaches {new Date(issue.slaBreachesAt)
+              .toISOString()
+              .slice(0, 16)
+              .replace("T", " ")}{" "}
+            UTC
+          </span>
+        </PropertyRow>
+      )}
       <PropertyRow label="Labels" keys="l" onOpen={open(() => onOpen("labels"))}>
         {labels.length > 0 ? (
           <span className="flex flex-wrap gap-1">

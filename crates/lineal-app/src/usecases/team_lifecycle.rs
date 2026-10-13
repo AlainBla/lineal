@@ -294,7 +294,16 @@ impl App {
             tx.documents()
                 .cascade_trash(DocParent::Project(id), now)
                 .await?;
-            emit(tx, ctx, DomainEvent::ProjectUpdated { project_id: id }).await?;
+            emit(
+                tx,
+                ctx,
+                DomainEvent::ProjectUpdated {
+                    project_id: id,
+                    changed: vec![],
+                    previous_lead_id: None,
+                },
+            )
+            .await?;
         }
         // Multi-Team-Projekte: Team entfernen, bei Bedarf neues Lead-Team.
         for (pid, lead) in tx.webhooks().shared_team_projects(team).await? {
@@ -344,7 +353,16 @@ impl App {
                 .detach_team_issues(id, team, actor, now)
                 .await?;
             tx.projects().remove_team(id, team).await?;
-            emit(tx, ctx, DomainEvent::ProjectUpdated { project_id: id }).await?;
+            emit(
+                tx,
+                ctx,
+                DomainEvent::ProjectUpdated {
+                    project_id: id,
+                    changed: vec![],
+                    previous_lead_id: None,
+                },
+            )
+            .await?;
         }
         emit(tx, ctx, DomainEvent::TeamUpdated { team_id: team }).await?;
         Ok(())
@@ -476,7 +494,11 @@ impl App {
                     emit(
                         &mut *tx,
                         ctx,
-                        DomainEvent::ProjectUpdated { project_id: id },
+                        DomainEvent::ProjectUpdated {
+                            project_id: id,
+                            changed: vec![],
+                            previous_lead_id: None,
+                        },
                     )
                     .await?;
                 }

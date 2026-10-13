@@ -2,7 +2,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
-import { useSession } from "@/app/auth";
+import { canOwnTeam, useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -127,6 +127,7 @@ export function TeamDangerZone({ team }: { team: Team }) {
   const [handling, setHandling] = useState<Handling>("");
   const [typed, setTyped] = useState("");
   const ws = session?.workspace.urlKey ?? "";
+  const mayOwn = canOwnTeam(session, team.id);
 
   const close = () => {
     setDialog(null);
@@ -137,6 +138,9 @@ export function TeamDangerZone({ team }: { team: Team }) {
   };
   const needsRetireChoice = activeChildren.length > 0;
   const needsDeleteChoice = children.length > 0;
+
+  // Nur Team-Owner/Admins; für alle anderen wären die Aktionen vom Server ohnehin abgelehnt (B5.36).
+  if (!mayOwn) return null;
 
   return (
     <Section

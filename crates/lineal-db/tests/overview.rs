@@ -299,3 +299,66 @@ async fn workload_and_active_cycles(pool: PgPool) {
         ErrorKind::NotFound
     );
 }
+
+/// B5.25: veraltete Health-Werte laufender Projekte zählen als „no update“.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn stale_health_counts_as_no_update(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = fx.data;
+    let status: Uuid = sqlx::query_scalar(
+        "SELECT id FROM project_status WHERE organization_id = $1 AND type = 'started' AND NOT indefinite LIMIT 1",
+    )
+    .bind(d.org.0)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    let before = fx
+        .app
+        .workspace_overview(&alice(), OverviewInput::default())
+        .await
+        .unwrap()
+        .projects;
+    for (n, updated) in [(901, "2026-10-09T00:00:00Z"), (902, "2020-01-01T00:00:00Z")] {
+        let p = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id, health, \
+             health_updated_at, update_reminder_mode, update_reminder_frequency_in_weeks) \
+             VALUES ($1,$2,$3,$4,$5,$6,'onTrack',$7::timestamptz,'custom',1)",
+        )
+        .bind(p)
+        .bind(d.org.0)
+        .bind(format!("P{n}"))
+        .bind(d.eng.0)
+        .bind(n)
+        .bind(status)
+        .bind(updated)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+        )
+        .bind(d.org.0)
+        .bind(p)
+        .bind(d.eng.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    }
+    let after = fx
+        .app
+        .workspace_overview(&alice(), OverviewInput::default())
+        .await
+        .unwrap()
+        .projects;
+    assert_eq!(
+        after.on_track,
+        before.on_track + 1,
+        "frisches Update bleibt onTrack"
+    );
+    assert_eq!(
+        after.no_update,
+        before.no_update + 1,
+        "veraltetes zählt als no update"
+    );
+}

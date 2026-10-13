@@ -2,7 +2,14 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { mockGraphql, newClient, renderWithApp, TEAM_META } from "@/features/issues/test-fixtures";
+import { SESSION_QUERY_KEY } from "@/app/auth";
+import {
+  mockGraphql,
+  newClient,
+  renderWithApp,
+  SESSION,
+  TEAM_META,
+} from "@/features/issues/test-fixtures";
 
 import { TeamSettingsPage } from "./settings-pages";
 import type { TeamRow } from "./teams-queries";
@@ -136,5 +143,38 @@ describe("Team danger zone", () => {
       id: "team-eng",
       input: { visibility: "private", allMembersCanJoin: false },
     });
+  });
+  it("hides the danger zone for members who are not team owners (B5.36)", async () => {
+    mockGraphql(base([ENG]));
+    const client = newClient();
+    client.setQueryData(SESSION_QUERY_KEY, {
+      ...SESSION,
+      user: { ...SESSION.user, role: "user" },
+      teams: SESSION.teams.map((t) => ({ ...t, owner: false })),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="general" />,
+      client,
+      "/acme/settings/teams/ENG/general",
+    );
+    await screen.findByText("Identifier");
+    expect(screen.queryByText("Danger zone")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete team…" })).not.toBeInTheDocument();
+  });
+
+  it("shows the danger zone for team owners", async () => {
+    mockGraphql(base([ENG]));
+    const client = newClient();
+    client.setQueryData(SESSION_QUERY_KEY, {
+      ...SESSION,
+      user: { ...SESSION.user, role: "user" },
+      teams: SESSION.teams.map((t) => ({ ...t, owner: t.id === "team-eng" })),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="general" />,
+      client,
+      "/acme/settings/teams/ENG/general",
+    );
+    expect(await screen.findByRole("button", { name: "Delete team…" })).toBeInTheDocument();
   });
 });
