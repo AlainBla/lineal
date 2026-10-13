@@ -3,6 +3,7 @@ import { BellOff, Check, Clock, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,18 +20,63 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import { bundleSummary, targetKind, typeLabel } from "./notification-types";
 import { snoozePresets, useInboxAction, useNotifications } from "./queries";
 
-function SnoozeMenu({ onPick, children }: { onPick: (until: Date) => void; children: ReactNode }) {
+/** Snooze-Auswahl: Vorgaben plus „Custom…“ (Datum/Uhrzeit); `open` steuert die Taste H. */
+function SnoozeMenu({
+  onPick,
+  open,
+  onOpenChange,
+  children,
+}: {
+  onPick: (until: Date) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  const [customOpen, setCustomOpen] = useState(false);
+  const [custom, setCustom] = useState("");
+  const customDate = custom ? new Date(custom) : null;
+  const customValid =
+    !!customDate && !Number.isNaN(customDate.getTime()) && customDate.getTime() > Date.now();
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {snoozePresets(new Date()).map((p) => (
-          <DropdownMenuItem key={p.id} onSelect={() => onPick(p.until)}>
-            {p.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu open={open} onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {snoozePresets(new Date()).map((p) => (
+            <DropdownMenuItem key={p.id} onSelect={() => onPick(p.until)}>
+              {p.label}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem onSelect={() => setCustomOpen(true)}>Custom…</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent className="max-w-sm">
+          <form
+            className="flex flex-col gap-3 p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!customValid || !customDate) return;
+              onPick(customDate);
+              setCustomOpen(false);
+            }}
+          >
+            <DialogTitle className="text-sm font-medium">Snooze until…</DialogTitle>
+            <DialogDescription className="sr-only">Pick a date and time.</DialogDescription>
+            <input
+              type="datetime-local"
+              aria-label="Snooze until"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
+            />
+            <Button type="submit" size="sm" disabled={!customValid}>
+              Snooze
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -100,6 +146,7 @@ export function InboxPage({ ws }: { ws: string }) {
   const q = useNotifications({ unreadOnly, showSnoozed });
   const act = useInboxAction();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const list = useMemo(() => q.data ?? [], [q.data]);
   const idx = list.findIndex((n) => n.id === selectedId);
   const selected = idx >= 0 ? list[idx]! : null;
@@ -142,6 +189,16 @@ export function InboxPage({ ws }: { ws: string }) {
       context: "list",
       description: "Previous notification",
       run: () => move(-1),
+    },
+    {
+      id: "inbox.snooze",
+      keys: "h",
+      context: "list",
+      description: "Snooze notification",
+      run: () => {
+        if (!selected) return false;
+        setSnoozeOpen(true);
+      },
     },
     {
       id: "inbox.toggle-read",
@@ -258,6 +315,8 @@ export function InboxPage({ ws }: { ws: string }) {
                 )}
                 <div className="ml-auto flex items-center gap-1">
                   <SnoozeMenu
+                    open={snoozeOpen}
+                    onOpenChange={setSnoozeOpen}
                     onPick={(d) =>
                       act.mutate({ kind: "snooze", id: selected.id, until: d.toISOString() })
                     }
@@ -278,7 +337,12 @@ export function InboxPage({ ws }: { ws: string }) {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 {selected.issueIdentifier ? (
-                  <IssueDetailPage key={selected.id} ws={ws} splat={selected.issueIdentifier} />
+                  <IssueDetailPage
+                    key={selected.id}
+                    ws={ws}
+                    splat={selected.issueIdentifier}
+                    embedded
+                  />
                 ) : (
                   <div className="p-6 text-sm">
                     <p className="mb-1 text-xs tracking-wide text-muted-foreground uppercase">

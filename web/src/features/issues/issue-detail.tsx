@@ -419,7 +419,16 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
 }
 
 /** Issue-Detail unter `/{ws}/issue/{KEY-n}[/{slug}]` (docs/08 §1.3); alte Kennungen leiten um. */
-export function IssueDetailPage({ ws, splat }: { ws: string; splat: string }) {
+export function IssueDetailPage({
+  ws,
+  splat,
+  embedded = false,
+}: {
+  ws: string;
+  splat: string;
+  /** Eingebettet (z. B. Inbox-Split): keine URL-Normalisierung, kein Titelwechsel (B4.01). */
+  embedded?: boolean;
+}) {
   const parts = splat.split("/").filter(Boolean);
   const reference = decodeURIComponent(parts[0] ?? "");
   const slug = parts[1];
@@ -429,7 +438,7 @@ export function IssueDetailPage({ ws, splat }: { ws: string; splat: string }) {
   const data = issue.isError ? undefined : issue.data;
 
   useEffect(() => {
-    if (!data) return;
+    if (!data || embedded) return;
     const wanted = `${issuePath(ws, data.identifier)}/${slugify(data.title)}`;
     if (parts[0] !== data.identifier || !slug) {
       void navigate({ to: wanted as "/", replace: true });
@@ -439,7 +448,7 @@ export function IssueDetailPage({ ws, splat }: { ws: string; splat: string }) {
   }, [data?.identifier, splat, ws]);
 
   useEffect(() => {
-    if (!data) return;
+    if (!data || embedded) return;
     const prev = document.title;
     document.title = `${data.identifier} ${data.title} · Lineal`;
     return () => {

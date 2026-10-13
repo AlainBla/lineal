@@ -144,9 +144,13 @@ export function snoozePresets(now: Date): Array<{ id: string; label: string; unt
   const nextWeek = new Date(now.getTime() + 7 * 24 * 3600_000);
   const month = new Date(now);
   month.setMonth(month.getMonth() + 1);
+  // Heute Abend 18:00; ab 18 Uhr morgen Abend.
+  const evening = at(now, 18);
+  if (evening.getTime() <= now.getTime()) evening.setDate(evening.getDate() + 1);
   return [
     { id: "1h", label: "An hour from now", until: new Date(now.getTime() + 3600_000) },
     { id: "3h", label: "In 3 hours", until: new Date(now.getTime() + 3 * 3600_000) },
+    { id: "evening", label: "This evening", until: evening },
     { id: "tomorrow", label: "Tomorrow", until: at(tomorrow, 9) },
     { id: "week", label: "Next week", until: at(nextWeek, 9) },
     { id: "month", label: "A month from now", until: at(month, 9) },
