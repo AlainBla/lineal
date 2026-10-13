@@ -1058,3 +1058,45 @@ async fn parallel_patches_and_expected_version_are_atomic(pool: PgPool) {
         assert_eq!(wins, 1, "Runde {round}: genau ein Gewinner erwartet");
     }
 }
+
+/// B2.11: erneutes Senden desselben Inhalts (auch ohne Änderung durch Patch) ändert weder
+/// Version noch Historie.
+#[sqlx::test(migrations = "./migrations")]
+async fn identical_content_does_not_bump_the_version(pool: PgPool) {
+    let env = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let d = create(&env, SeedUser::Alice, in_team("ENG", "Same", "Hallo\n\nWelt")).await;
+    let id = d.doc.id.to_string();
+    let v0 = d.doc.content_version;
+    let history0 = env.app.document_history(&alice, &id, None, 50).await.unwrap();
+    for input in [
+        SaveDocumentInput {
+            id: Some(id.clone()),
+            content: Some("Hallo\n\nWelt".into()),
+            ..Default::default()
+        },
+        SaveDocumentInput {
+            id: Some(id.clone()),
+            content: Some("Hallo\n\nWelt".into()),
+            title: Some("Same".into()),
+            expected_version: Some(v0),
+            ..Default::default()
+        },
+        SaveDocumentInput {
+            id: Some(id.clone()),
+            patch: Some(vec![PatchOp::Replace {
+                old_string: "Welt".into(),
+                new_string: "Welt".into(),
+                replace_all: None,
+            }]),
+            ..Default::default()
+        },
+    ] {
+        let v = env.app.save_document(&alice, input).await.unwrap();
+        assert_eq!(v.doc.content_version, v0);
+    }
+    let again = env.app.get_document(&alice, &id).await.unwrap();
+    assert_eq!(again.doc.content_version, v0);
+    let history1 = env.app.document_history(&alice, &id, None, 50).await.unwrap();
+    assert_eq!(history1.items.len(), history0.items.len());
+}
