@@ -579,6 +579,9 @@ impl App {
             Some(None) => Some(None),
             None => None,
         };
+        if let Some(d) = &input.description {
+            pure::check_len("description", d, 500_000)?;
+        }
         let content_from_description = input
             .description
             .as_deref()
@@ -688,9 +691,11 @@ impl App {
                 }
                 if input.target_date.is_some() || input.target_date_resolution.is_some() {
                     let target = input.target_date.unwrap_or(cur.target_date);
-                    let res = input
-                        .target_date_resolution
-                        .unwrap_or(cur.target_date_resolution);
+                    let res = match (&input.target_date, input.target_date_resolution) {
+                        (_, Some(r)) => r,
+                        (Some(_), None) => None,
+                        (None, None) => cur.target_date_resolution,
+                    };
                     let res = if target.is_none() { None } else { res };
                     let (_, _, t, tr) = pure::resolve_dates(
                         None,

@@ -112,7 +112,7 @@ impl OverviewRepo for PgTx {
              JOIN project_team pt ON pt.project_id = p.id \
              JOIN project_status ps ON ps.id = p.status_id \
              WHERE p.organization_id = $1 AND NOT p.trashed AND p.archived_at IS NULL \
-               AND ps.type NOT IN ('completed','canceled') AND pt.team_id = ANY($2)",
+               AND ps.type = 'started' AND pt.team_id = ANY($2)",
         )
         .bind(self.org.0)
         .bind(ids(&q.teams))

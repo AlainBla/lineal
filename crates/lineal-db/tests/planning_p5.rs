@@ -21,7 +21,7 @@ use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpt
 use lineal_app::usecases::team::{CreateTeamInput, UpdateTeamInput};
 use lineal_app::{App, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
-use lineal_domain::enums::{Health, TeamVisibility};
+use lineal_domain::enums::{DateResolution, Health, TeamVisibility};
 use lineal_testkit::seed::planning::{seed_cycle_id, seed_initiative_id, seed_project_id};
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use serde_json::Value;
@@ -727,6 +727,80 @@ async fn b5_29_activation_with_old_start_date_ends_with_an_active_cycle(pool: Pg
         .list_cycles(&alice, "WEB", Some(CycleKind::Current))
         .await
         .unwrap();
-    assert_eq!(current.len(), 1, "ein aktiver Cycle sofort nach Aktivierung");
+    assert_eq!(
+        current.len(),
+        1,
+        "ein aktiver Cycle sofort nach Aktivierung"
+    );
     let _ = (data, pool);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_19_new_date_without_resolution_resets_the_resolution(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let p = app
+        .save_project(
+            &alice,
+            SaveProjectInput {
+                start_date: Some(Some(date(2026, 12, 5))),
+                start_date_resolution: Some(Some(DateResolution::Month)),
+                ..teams_input(&["ENG"])
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(p.project.start_date, Some(date(2026, 12, 1)));
+    let p = app
+        .save_project(
+            &alice,
+            SaveProjectInput {
+                id: Some(p.identifier.clone()),
+                start_date: Some(Some(date(2026, 12, 15))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(p.project.start_date, Some(date(2026, 12, 15)));
+    assert_eq!(p.project.start_date_resolution, None);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_31_rich_text_fields_have_length_limits(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let e = app
+        .save_project(
+            &alice,
+            SaveProjectInput {
+                description: Some("x".repeat(500_001)),
+                ..teams_input(&["ENG"])
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::LimitExceeded);
+    let p = app
+        .save_project(&alice, teams_input(&["ENG"]))
+        .await
+        .unwrap();
+    let e = app
+        .post_project_update(&alice, &p.identifier, &"y".repeat(100_001), None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::LimitExceeded);
+    let e = app
+        .save_milestone(
+            &alice,
+            SaveMilestoneInput {
+                project: p.identifier.clone(),
+                name: Some("M".into()),
+                description: Some("z".repeat(100_001)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::LimitExceeded);
 }

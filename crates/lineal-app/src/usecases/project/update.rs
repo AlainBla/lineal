@@ -238,6 +238,7 @@ impl App {
         let r = resolve::project::resolve_in(&mut *tx, &snap, project).await?;
         require_manage(&snap, ctx, Action::PostProjectUpdate, &r.teams)?;
         writable(&r.project)?;
+        super::pure::check_len("body", body, 100_000)?;
         let body = lineal_domain::rules::markdown::sanitize(body.trim());
         if body.is_empty() {
             return Err(AppError::invalid_request("`body` must not be empty")
@@ -329,6 +330,9 @@ impl App {
         if u.archived_at.is_some() {
             return Err(AppError::invalid_request("The status update is archived.")
                 .with_details(json!({ "reason": "update_archived" })));
+        }
+        if let Some(b) = body {
+            super::pure::check_len("body", b, 100_000)?;
         }
         let clean = body.map(|b| lineal_domain::rules::markdown::sanitize(b.trim()));
         if clean.as_deref().is_some_and(str::is_empty) {

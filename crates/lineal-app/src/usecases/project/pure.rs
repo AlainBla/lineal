@@ -40,6 +40,17 @@ fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
         .unwrap_or_default()
 }
 
+/// Längengrenze für Rich-Text-Felder (Zeichen); darüber `limit_exceeded` (B5.31).
+pub fn check_len(field: &str, s: &str, max: usize) -> AppResult<()> {
+    if s.chars().count() > max {
+        return Err(
+            AppError::limit_exceeded(format!("`{field}` exceeds {max} characters"))
+                .with_details(json!({ "field": field, "limit": max })),
+        );
+    }
+    Ok(())
+}
+
 /// Periodenlänge der Auflösung in Monaten.
 fn period_months(res: DateResolution) -> u32 {
     match res {

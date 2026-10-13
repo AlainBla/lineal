@@ -284,7 +284,12 @@ pub(crate) async fn resolve_labels(
     for r in refs {
         let r = r.trim();
         let label = if let Ok(id) = Uuid::parse_str(r) {
-            tx.projects().get_label(id).await?.filter(&is_available)
+            tx.projects()
+                .get_label(id)
+                .await?
+                .filter(&is_available)
+                // Stillgelegte Labels nur behalten, nicht neu zuordnen (B5.17).
+                .filter(|l| !l.retired || existing.iter().any(|e| e.id == l.id))
         } else {
             let (group, name) = match r.split_once('/') {
                 Some((g, n)) => (Some(g.trim()), n.trim()),
@@ -748,6 +753,9 @@ impl App {
             now,
         );
         let creator = resolve::user::actor_user_id(ctx);
+        if let Some(d) = &input.description {
+            pure::check_len("description", d, 500_000)?;
+        }
         let content = input
             .description
             .as_deref()
@@ -938,6 +946,7 @@ impl App {
             ));
         }
         if let Some(d) = &input.description {
+            pure::check_len("description", d, 500_000)?;
             let clean = lineal_domain::rules::markdown::sanitize(d);
             patch.content = Some((!clean.is_empty()).then_some(clean));
             changed = true;
@@ -1042,13 +1051,18 @@ impl App {
             || input.target_date_resolution.is_some()
         {
             let start = input.start_date.unwrap_or(project.start_date);
-            let start_res = input
-                .start_date_resolution
-                .unwrap_or(project.start_date_resolution);
+            // Neues Datum ohne Auflösung: die alte Auflösung entfällt (B5.19).
+            let start_res = match (&input.start_date, input.start_date_resolution) {
+                (_, Some(r)) => r,
+                (Some(_), None) => None,
+                (None, None) => project.start_date_resolution,
+            };
             let target = input.target_date.unwrap_or(project.target_date);
-            let target_res = input
-                .target_date_resolution
-                .unwrap_or(project.target_date_resolution);
+            let target_res = match (&input.target_date, input.target_date_resolution) {
+                (_, Some(r)) => r,
+                (Some(_), None) => None,
+                (None, None) => project.target_date_resolution,
+            };
             // Wird ein Datum geleert, wird auch die Auflösung geleert.
             let start_res = if start.is_none() { None } else { start_res };
             let target_res = if target.is_none() { None } else { target_res };

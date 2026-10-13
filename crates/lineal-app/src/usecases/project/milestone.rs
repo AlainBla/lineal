@@ -117,6 +117,9 @@ impl App {
         require_manage(&snap, ctx, Action::ManageProject, &r.teams)?;
         writable(&r.project)?;
         let now = self.clock.now();
+        if let Some(d) = &input.description {
+            super::pure::check_len("description", d, 100_000)?;
+        }
         let description = input
             .description
             .as_deref()
