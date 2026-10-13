@@ -317,4 +317,22 @@ describe("Create-Issue-Modal", () => {
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]).toMatchObject({ title: "Fokus bleibt", priority: 1 });
   });
+  it("Tab-Reihenfolge: Titel, Beschreibung, Eigenschaften, Create more, Create issue (B4.25)", async () => {
+    mockGraphql(handlers());
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    await userEvent.type(title, "Reihenfolge");
+    expect(title).toHaveFocus();
+    const seen: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      await userEvent.tab();
+      const el = document.activeElement as HTMLElement;
+      seen.push(el.getAttribute("aria-label") ?? el.textContent ?? "");
+    }
+    expect(seen[0]).toBe("Description");
+    expect(seen[1]).toMatch(/^Status/);
+    expect(seen[2]).toMatch(/^Priority/);
+    expect(seen[3]).toMatch(/^Assignee/);
+    expect(seen.indexOf("Create more")).toBeGreaterThan(seen.findIndex((l) => /^Assignee/.test(l)));
+  });
 });
