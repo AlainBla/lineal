@@ -24,6 +24,9 @@ use lineal_domain::rules::cycle_calendar::{local_midnight_to_utc, utc_to_local_d
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 
+/// Obergrenze für `cycleShiftAll` (Tage, je Richtung).
+const MAX_SHIFT_DAYS: i64 = 3660;
+
 /// `type`-Filter von `list_cycles`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CycleKind {
@@ -538,6 +541,12 @@ impl App {
         id: &str,
         days: i64,
     ) -> AppResult<Vec<CycleView>> {
+        if !(-MAX_SHIFT_DAYS..=MAX_SHIFT_DAYS).contains(&days) {
+            return Err(invalid(
+                "daysToShift",
+                "daysToShift must be between -3660 and 3660.",
+            ));
+        }
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
@@ -564,14 +573,16 @@ impl App {
             .filter(|x| x.starts_at >= c.starts_at && x.completed_at.is_none())
             .collect();
         moving.sort_by_key(|x| x.starts_at);
-        let shift = |t: DateTime<Utc>| {
-            let d = utc_to_local_date(t, tz) + Duration::days(days);
-            local_midnight_to_utc(d, tz)
+        let shift = |t: DateTime<Utc>| -> AppResult<DateTime<Utc>> {
+            let d = utc_to_local_date(t, tz)
+                .checked_add_signed(Duration::days(days))
+                .ok_or_else(|| invalid("daysToShift", "The shifted date is out of range."))?;
+            Ok(local_midnight_to_utc(d, tz))
         };
         let moves: Vec<_> = moving
             .iter()
-            .map(|x| (x.id, shift(x.starts_at), shift(x.ends_at)))
-            .collect();
+            .map(|x| Ok((x.id, shift(x.starts_at)?, shift(x.ends_at)?)))
+            .collect::<AppResult<_>>()?;
         let first_start = moves.first().map(|m| m.1).unwrap_or(c.starts_at);
         if first_start <= now {
             return Err(invalid(
