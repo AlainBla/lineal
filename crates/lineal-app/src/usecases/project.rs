@@ -149,8 +149,15 @@ pub(crate) fn require_manage(
     } else {
         &active
     };
-    snap.require_teams(ctx, action, to_check)?;
-    Ok(())
+    // Ein Recht über mindestens ein zugängliches Team genügt (wie bei Dokumenten).
+    let mut last: Option<AppError> = None;
+    for t in to_check {
+        match snap.require_team(ctx, action, *t) {
+            Ok(_) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(crate::policy::team_not_found))
 }
 
 fn writable(p: &Project) -> AppResult<()> {
@@ -964,6 +971,13 @@ impl App {
             .ok_or_else(|| AppError::internal("project status missing"))?;
         let mut target_status: ProjectStatus = current_status.clone();
         if new_lead != project.lead_team_id {
+            // Das für den Aufrufer unsichtbare Lead-Team (und dessen Kennung) bleibt unangetastet.
+            if !snap.visible_team_ids().contains(&project.lead_team_id) {
+                return Err(AppError::forbidden(
+                    "The lead team of this project cannot be changed by you.",
+                )
+                .with_details(json!({ "reason": "lead_team_hidden" })));
+            }
             let number = tx.teams().next_project_number(new_lead).await?;
             tx.projects()
                 .add_alias(

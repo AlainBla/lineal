@@ -11,6 +11,7 @@ use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::ports::{Clock, IdGen, Store};
 use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput};
+use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
 use lineal_app::usecases::initiative::{ListInitiativesInput, SaveInitiativeInput};
 use lineal_app::usecases::project::milestone::SaveMilestoneInput;
 use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpts};
@@ -190,4 +191,246 @@ async fn b5_03_timezone_change_with_gapless_cycles_recomputes_future(pool: PgPoo
         // Aktiver Cycle (#2) bleibt unverändert.
         assert_eq!(w[1], (utc(2026, 10, 4, 22, 0), utc(2026, 10, 18, 22, 0)));
     }
+}
+
+/// B5.04 / Sicherheitsprüfung: dieselbe Rechteprüfung auf allen Schreibpfaden eines Projekts mit
+/// für den Aufrufer unsichtbarem Team; nichts über das unsichtbare Team in Antworten/Fehlern.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_04_all_project_write_paths_share_one_rights_rule(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let bob = ctx_for(SeedUser::Bob);
+    let carol = ctx_for(SeedUser::Carol);
+    let shared = app
+        .save_project(&bob, teams_input(&["ENG", "DES"]))
+        .await
+        .unwrap();
+    let pid = shared.identifier.clone();
+    let ms = app
+        .save_milestone(
+            &bob,
+            SaveMilestoneInput {
+                project: pid.clone(),
+                name: Some("M1".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .1
+        .milestone
+        .id
+        .0
+        .to_string();
+    let upd = app
+        .post_project_update(&bob, &pid, "hi", None, false)
+        .await
+        .unwrap();
+    let upd_id = upd.update.id.0.to_string();
+
+    // Erwartung je Akteur: Some(true) = nicht not_found/forbidden, None = not_found.
+    // Pfad -> Ergebnis-Art je Akteur (Alice, Bob, Carol).
+    macro_rules! check {
+        ($name:expr, $actor:expr, $expect_ok:expr, $call:expr) => {{
+            let r = $call;
+            match ($expect_ok, r) {
+                (true, Ok(_)) => {}
+                (true, Err(e)) => {
+                    panic!("{} als {}: unerwartet {:?}", $name, stringify!($actor), e)
+                }
+                (false, Ok(_)) => panic!(
+                    "{} als {}: hätte scheitern müssen",
+                    $name,
+                    stringify!($actor)
+                ),
+                (false, Err(e)) => {
+                    assert_eq!(
+                        e.kind,
+                        ErrorKind::NotFound,
+                        "{} als {}",
+                        $name,
+                        stringify!($actor)
+                    );
+                    assert!(!e.message.contains("DES"), "{}: {}", $name, e.message);
+                    assert!(!format!("{:?}", e.details).contains("DES"), "{}", $name);
+                }
+            }
+        }};
+    }
+    for (actor_name, ctx, ok) in [
+        ("alice", &alice, true),
+        ("bob", &bob, true),
+        ("carol", &carol, false),
+    ] {
+        check!(
+            "projectUpdate",
+            ctx,
+            ok,
+            app.save_project(
+                ctx,
+                SaveProjectInput {
+                    id: Some(pid.clone()),
+                    name: Some("N".into()),
+                    ..Default::default()
+                }
+            )
+            .await
+        );
+        check!(
+            "setTeams",
+            ctx,
+            ok,
+            app.save_project(
+                ctx,
+                SaveProjectInput {
+                    id: Some(pid.clone()),
+                    set_teams: Some(if actor_name == "bob" {
+                        vec!["ENG".into(), "DES".into()]
+                    } else {
+                        vec!["ENG".into()]
+                    }),
+                    ..Default::default()
+                }
+            )
+            .await
+        );
+        check!(
+            "milestoneCreate",
+            ctx,
+            ok,
+            app.save_milestone(
+                ctx,
+                SaveMilestoneInput {
+                    project: pid.clone(),
+                    name: Some(format!("M2-{actor_name}")),
+                    ..Default::default()
+                }
+            )
+            .await
+        );
+        check!(
+            "milestoneUpdate",
+            ctx,
+            ok,
+            app.save_milestone(
+                ctx,
+                SaveMilestoneInput {
+                    project: pid.clone(),
+                    id: Some(ms.clone()),
+                    name: Some("M1b".into()),
+                    ..Default::default()
+                }
+            )
+            .await
+        );
+        check!(
+            "statusUpdateCreate",
+            ctx,
+            ok,
+            app.post_project_update(ctx, &pid, "x", None, false).await
+        );
+        check!(
+            "documentCreate",
+            ctx,
+            ok,
+            app.save_document(
+                ctx,
+                SaveDocumentInput {
+                    title: Some("Doc".into()),
+                    content: Some("c".into()),
+                    parent: ParentRefs {
+                        project: Some(pid.clone()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            )
+            .await
+        );
+        let del = if ok {
+            let m = app
+                .save_milestone(
+                    &bob,
+                    SaveMilestoneInput {
+                        project: pid.clone(),
+                        name: Some(format!("tmp-{actor_name}")),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .1
+                .milestone
+                .id
+                .0
+                .to_string();
+            app.delete_milestone(ctx, &pid, &m).await
+        } else {
+            app.delete_milestone(ctx, &pid, &ms).await
+        };
+        check!("milestoneDelete", ctx, ok, del);
+        // Lesen: Hülle sichtbar für Alice/Bob; Carol not_found; kein DES in der Sicht.
+        match app.get_project(ctx, &pid, ViewOpts::default()).await {
+            Ok(v) => {
+                assert!(ok);
+                if std::ptr::eq(ctx, &alice) {
+                    assert!(v.teams.iter().all(|t| t.key != "DES"));
+                }
+            }
+            Err(e) => {
+                assert!(!ok);
+                assert_eq!(e.kind, ErrorKind::NotFound);
+            }
+        }
+    }
+    // Edit/Delete eines Updates: Autor Bob ok, Alice (nicht Autor) nicht not_found sondern forbidden,
+    // Carol not_found.
+    assert_eq!(
+        kind(
+            app.edit_project_update(&carol, &upd_id, Some("z"), None)
+                .await
+        ),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        kind(app.delete_project_update(&carol, &upd_id).await),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        kind(
+            app.edit_project_update(&alice, &upd_id, Some("z"), None)
+                .await
+        ),
+        ErrorKind::Forbidden
+    );
+    assert_eq!(
+        kind(app.set_project_archived(&carol, &pid, true).await),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        kind(app.set_project_trashed(&carol, &pid, true).await),
+        ErrorKind::NotFound
+    );
+    // Alice darf weder DES entfernen noch das Lead-Team von DES wegwechseln.
+    assert_eq!(
+        kind(
+            app.save_project(
+                &alice,
+                SaveProjectInput {
+                    id: Some(pid.clone()),
+                    remove_teams: vec!["DES".into()],
+                    ..Default::default()
+                }
+            )
+            .await
+        ),
+        ErrorKind::NotFound
+    );
+    // DES bleibt nach allen Schreibzugriffen am Projekt.
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM project_team WHERE project_id = $1")
+        .bind(shared.project.id.0)
+        .fetch_one(&_pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
 }

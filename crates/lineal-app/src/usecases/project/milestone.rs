@@ -223,6 +223,14 @@ impl App {
             .projects()
             .archive_milestone(m.id, resolve::user::actor_user_id(ctx), now)
             .await?;
+        // Issues unsichtbarer Teams dürfen nicht mitverändert werden.
+        let visible = snap.visible_team_ids();
+        if affected.iter().any(|(_, t)| !visible.contains(t)) {
+            return Err(AppError::forbidden(
+                "The milestone is used by issues of teams you cannot access.",
+            )
+            .with_details(json!({ "reason": "milestone_in_hidden_team" })));
+        }
         for (issue, team) in affected {
             emit(
                 &mut *tx,
