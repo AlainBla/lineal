@@ -18,7 +18,11 @@ use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Default)]
-pub(crate) struct MemBlobs(pub(crate) Mutex<HashMap<String, (u64, String)>>);
+pub(crate) struct MemBlobs(
+    pub(crate) Mutex<HashMap<String, (u64, String)>>,
+    /// Dateiinhalte für `read` (optional).
+    pub(crate) Mutex<HashMap<String, Vec<u8>>>,
+);
 
 #[async_trait]
 impl BlobStore for MemBlobs {
@@ -27,6 +31,15 @@ impl BlobStore for MemBlobs {
     }
     async fn signed_get_url(&self, key: &str, ttl: Duration) -> AppResult<String> {
         Ok(format!("mem://get/{key}?ttl={}", ttl.as_secs()))
+    }
+    async fn read(&self, key: &str, max_bytes: u64) -> AppResult<Option<Vec<u8>>> {
+        Ok(self
+            .1
+            .lock()
+            .unwrap()
+            .get(key)
+            .filter(|b| b.len() as u64 <= max_bytes)
+            .cloned())
     }
     async fn head(&self, key: &str) -> AppResult<Option<BlobInfo>> {
         Ok(self.0.lock().unwrap().get(key).map(|(size, ct)| BlobInfo {

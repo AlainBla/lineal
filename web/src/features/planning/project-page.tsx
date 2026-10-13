@@ -1,10 +1,10 @@
 import { Plus } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
-import { openCreateIssue } from "@/features/issues/create-store";
+import { openCreateIssue, setCreateContext } from "@/features/issues/create-store";
 import { useTeamMetas } from "@/features/issues/hooks";
 import { IssueList } from "@/features/issues/issue-list";
 import { useIssueLookup } from "@/features/issues/issue-lookup";
@@ -257,6 +257,14 @@ export function ProjectPage({
   const q = useProject(projectRef);
   const p = q.data;
   const updates = useProjectUpdates(p?.id);
+  // `c` und der Stift legen Issues im Projekt an (Team und Projekt vorbelegt).
+  const ctxTeamKey = p?.leadTeam?.key ?? p?.teams[0]?.key ?? undefined;
+  const ctxProjectId = p?.id;
+  useEffect(() => {
+    if (!ctxProjectId) return;
+    setCreateContext({ teamKey: ctxTeamKey, projectId: ctxProjectId });
+    return () => setCreateContext(null);
+  }, [ctxProjectId, ctxTeamKey]);
 
   if (q.isLoading) return <ListSkeleton />;
   if (q.isError || !p)

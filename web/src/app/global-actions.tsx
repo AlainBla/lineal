@@ -48,6 +48,8 @@ export function buildGlobalActions(args: {
   currentTeamKey: string | null;
   go: (path: string) => void;
   logout: () => void;
+  /** Gäste sehen keine Workspace-Übersichten (Overview, Initiatives, Workload, Cycles). */
+  guest?: boolean;
 }): Action[] {
   const { ws, teams, go, logout } = args;
   const w = workspacePaths(ws);
@@ -113,7 +115,7 @@ export function buildGlobalActions(args: {
       section: "Interface",
       keys: "[",
       icon: PanelLeft,
-      perform: toggleSidebar,
+      perform: () => toggleSidebar(),
     },
     {
       id: "ui.details",
@@ -326,11 +328,18 @@ export function buildGlobalActions(args: {
       perform: () => go(teamPaths(ws, team.key).home),
     });
   });
-  return actions;
+  return args.guest ? actions.filter((a) => !GUEST_HIDDEN.has(a.id)) : actions;
 }
 
+const GUEST_HIDDEN = new Set([
+  "nav.overview",
+  "nav.workload",
+  "nav.workspace-cycles",
+  "nav.initiatives",
+]);
+
 /** Registriert die globalen Aktionen als Shortcuts und Commands (einmal in der Shell). */
-export function useGlobalActions(args: { ws: string; onLogout: () => void }) {
+export function useGlobalActions(args: { ws: string; onLogout: () => void; guest?: boolean }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data } = useSidebarData();
@@ -344,6 +353,7 @@ export function useGlobalActions(args: { ws: string; onLogout: () => void }) {
     currentTeamKey,
     go: (path) => void navigate({ to: path as "/" }),
     logout: args.onLogout,
+    guest: args.guest,
   });
   useActions(actions);
 }

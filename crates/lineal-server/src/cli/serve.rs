@@ -1,6 +1,6 @@
 //! `lineal serve`.
 
-use super::{connect, shutdown_signal};
+use super::{connect, shutdown_grace, shutdown_signal};
 use crate::build_router;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -33,11 +33,29 @@ pub async fn run() -> Result<()> {
         .with_context(|| format!("cannot bind {}", config.bind))?;
     tracing::info!(addr = %config.bind, dev = config.dev, "lineal listening");
     // `ConnectInfo` liefert dem Rate-Limit die Client-IP (unauthentifizierte Buckets).
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("server error")
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let stop_tx = stop.clone();
+    let server = std::future::IntoFuture::into_future(
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            stop_tx.notify_one();
+        }),
+    );
+    tokio::pin!(server);
+    let grace = shutdown_grace();
+    tokio::select! {
+        r = &mut server => r.context("server error"),
+        () = async {
+            stop.notified().await;
+            tokio::time::sleep(grace).await;
+        } => {
+            // Offene WebSockets/Streams halten das geordnete Beenden sonst bis zum SIGKILL auf.
+            tracing::warn!(grace_secs = grace.as_secs(), "open connections did not finish in time; exiting");
+            Ok(())
+        }
+    }
 }

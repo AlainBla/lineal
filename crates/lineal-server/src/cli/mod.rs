@@ -82,11 +82,50 @@ pub(crate) async fn connect() -> Result<(Config, PgPool, Arc<App>)> {
     Ok((config, pool, app))
 }
 
-/// Wartet auf Ctrl-C.
+/// Wartet auf SIGTERM (`docker stop`, systemd, Kubernetes) oder Ctrl-C/SIGINT.
 pub(crate) async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = term.recv() => tracing::info!("received SIGTERM"),
+                    r = tokio::signal::ctrl_c() => match r {
+                        Ok(()) => tracing::info!("received SIGINT"),
+                        Err(e) => {
+                            tracing::error!(error = %e, "cannot listen for ctrl-c");
+                            std::future::pending::<()>().await;
+                        }
+                    },
+                }
+            }
+            Err(e) => {
+                // Ohne SIGTERM-Handler wäre `docker stop` wieder ein SIGKILL: laut scheitern.
+                tracing::error!(error = %e, "cannot install the SIGTERM handler");
+                wait_ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    wait_ctrl_c().await;
+    tracing::info!("shutting down");
+}
+
+async fn wait_ctrl_c() {
     if let Err(e) = tokio::signal::ctrl_c().await {
         tracing::error!(error = %e, "cannot listen for ctrl-c");
         std::future::pending::<()>().await;
     }
-    tracing::info!("shutting down");
+}
+
+/// Wie lange `serve` nach dem Signal auf laufende Verbindungen wartet (`LINEAL_SHUTDOWN_GRACE_SECS`,
+/// Default 10 s; unter dem `stop_grace_period` des Containers). Danach wird beendet, auch wenn
+/// langlebige Verbindungen (WebSockets) noch offen sind.
+pub(crate) fn shutdown_grace() -> std::time::Duration {
+    let secs = std::env::var("LINEAL_SHUTDOWN_GRACE_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(10);
+    std::time::Duration::from_secs(secs)
 }

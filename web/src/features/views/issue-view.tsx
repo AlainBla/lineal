@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import { useFocusNav } from "@/features/issues/use-focus-nav";
 import { useIssueShortcuts } from "@/features/issues/use-issue-shortcuts";
 import type { CustomView, Issue } from "@/gql/graphql";
+import { GraphQLRequestError } from "@/lib/graphql";
 
 import { DisplayMenu } from "./display-menu";
 import {
@@ -54,13 +55,20 @@ export function IssueView({
   const [chips, setChipsState] = useState<FilterChip[]>(initial.chips);
   const [advanced, setAdvancedState] = useState<Filter[]>(initial.rest);
   const [touched, setTouched] = useState(false);
+  // Version der View, auf der der lokale Entwurf aufbaut: nicht die live nachgeführte, sonst
+  // überschreibt „Save“ stille Änderungen aus einem anderen Kontext (B4.04).
+  const [baseVersion, setBaseVersion] = useState<number | null>(null);
+  const markTouched = () => {
+    if (!touched) setBaseVersion(view?.version ?? null);
+    setTouched(true);
+  };
   const setChips = (c: FilterChip[]) => {
     setChipsState(c);
-    setTouched(true);
+    markTouched();
   };
   const setAdvanced = (r: Filter[]) => {
     setAdvancedState(r);
-    setTouched(true);
+    markTouched();
   };
   const updateView = useUpdateView();
   const [local, setLocal] = useState<Partial<DisplayOptions>>({});
@@ -172,6 +180,7 @@ export function IssueView({
                   setChipsState(initial.chips);
                   setAdvancedState(initial.rest);
                   setTouched(false);
+                  setBaseVersion(null);
                 }}
               >
                 Discard
@@ -182,8 +191,19 @@ export function IssueView({
                   disabled={updateView.isPending}
                   onClick={() =>
                     updateView.mutate(
-                      { id: view.id, input: { filterData: filter, expectedVersion: view.version } },
-                      { onSuccess: () => setTouched(false) },
+                      {
+                        id: view.id,
+                        input: {
+                          filterData: filter,
+                          expectedVersion: baseVersion ?? view.version,
+                        },
+                      },
+                      {
+                        onSuccess: () => {
+                          setTouched(false);
+                          setBaseVersion(null);
+                        },
+                      },
                     )
                   }
                 >
@@ -194,7 +214,10 @@ export function IssueView({
           )}
           {updateView.isError && (
             <span role="alert" className="text-xs text-destructive">
-              Could not save the view.
+              {updateView.error instanceof GraphQLRequestError &&
+              updateView.error.code === "conflict"
+                ? "The view was changed elsewhere. Discard your changes and apply them again."
+                : "Could not save the view."}
             </span>
           )}
           {view && view.modelName === "Issue" && <ViewSubscriptionButton view={view} />}

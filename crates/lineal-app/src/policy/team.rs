@@ -391,6 +391,11 @@ impl PolicySnapshot {
         Ok(views)
     }
 
+    /// Initiative ohne Lead-Team anlegen (`workspaceInitiativesRole`).
+    pub fn require_initiative_without_lead_team(&self, ctx: &RequestCtx) -> AppResult<()> {
+        super::auth::require_initiative_without_lead_team(ctx, &self.org)
+    }
+
     /// `require` für Workspace-Aktionen.
     pub fn require_workspace(&self, ctx: &RequestCtx, action: Action) -> AppResult<()> {
         require(ctx, action, Resource::Workspace(&self.org))

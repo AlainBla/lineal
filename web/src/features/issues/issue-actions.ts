@@ -6,7 +6,6 @@ import type { Issue, WorkflowState } from "@/gql/graphql";
 
 import { useUpdateIssue, type UpdateArgs } from "./hooks";
 import { describeStatePatch } from "./model";
-import { errorMessage, showToast } from "./toast-store";
 
 export interface IssueActions {
   setState: (issue: Issue, stateId: string, states: WorkflowState[]) => void;
@@ -36,11 +35,8 @@ export function useIssueActions(): IssueActions {
   const { mutate, mutateAsync } = mutation;
 
   return useMemo(() => {
-    const send = (args: UpdateArgs) =>
-      mutate(args, {
-        onError: (e) =>
-          showToast({ message: errorMessage(e, "Could not update issue."), tone: "error" }),
-      });
+    // Fehler-Toast und Rollback übernimmt `useUpdateIssue` (gilt für jeden Aufruf).
+    const send = (args: UpdateArgs) => mutate(args);
     return {
       setState: (i, stateId, states) =>
         send({ id: i.id, input: { stateId }, patch: describeStatePatch(states, stateId) }),
@@ -62,19 +58,13 @@ export function useIssueActions(): IssueActions {
       setDueDate: (i, dueDate) => send({ id: i.id, input: { dueDate }, patch: { dueDate } }),
       setTitle: (i, title) => send({ id: i.id, input: { title }, patch: { title } }),
       setDescription: async (i, description) => {
-        try {
-          await mutateAsync({ id: i.id, input: { description }, patch: { description } });
-        } catch (e) {
-          showToast({ message: errorMessage(e, "Could not save description."), tone: "error" });
-          throw e;
-        }
+        await mutateAsync({ id: i.id, input: { description }, patch: { description } });
       },
       setParent: (i, parentId) => send({ id: i.id, input: { parentId }, patch: { parentId } }),
       moveToTeam: async (i, teamId) => {
         try {
           return await mutateAsync({ id: i.id, input: { teamId } });
-        } catch (e) {
-          showToast({ message: errorMessage(e, "Could not move issue."), tone: "error" });
+        } catch {
           return null;
         }
       },

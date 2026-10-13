@@ -52,6 +52,9 @@ struct Claims {
     ct: Option<String>,
     /// Ablauf (Unix-Sekunden).
     exp: i64,
+    /// Reservierte Größe in Bytes (nur Upload): der PUT darf sie nicht überschreiten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -192,6 +195,21 @@ impl BlobStore for LocalBlobStore {
         }
     }
 
+    async fn read(&self, key: &str, max_bytes: u64) -> AppResult<Option<Vec<u8>>> {
+        let Some(info) = self.head(key).await? else {
+            return Ok(None);
+        };
+        if info.size > max_bytes {
+            return Ok(None);
+        }
+        let (data_path, _) = self.paths(key);
+        match tokio::fs::read(&data_path).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io_err(e)),
+        }
+    }
+
     async fn delete(&self, key: &str) -> AppResult<()> {
         check_key(key)?;
         let (data_path, meta_path) = self.paths(key);
@@ -220,6 +238,27 @@ impl BlobStore for LocalBlobStore {
                 key: key.into(),
                 ct: Some(content_type.into()),
                 exp: self.expiry(ttl),
+                max: None,
+            },
+        ))
+    }
+
+    async fn signed_put_url_sized(
+        &self,
+        key: &str,
+        content_type: &str,
+        max_size: u64,
+        ttl: Duration,
+    ) -> AppResult<String> {
+        check_key(key)?;
+        Ok(self.url(
+            "uploads",
+            &Claims {
+                op: "put".into(),
+                key: key.into(),
+                ct: Some(content_type.into()),
+                exp: self.expiry(ttl),
+                max: Some(max_size),
             },
         ))
     }
@@ -233,6 +272,7 @@ impl BlobStore for LocalBlobStore {
                 key: key.into(),
                 ct: None,
                 exp: self.expiry(ttl),
+                max: None,
             },
         ))
     }
@@ -259,7 +299,11 @@ async fn write_upload(store: &LocalBlobStore, claims: &Claims, body: Body) -> Ap
         }
     }
     let tmp = store.dir.join(format!("{}.tmp", Uuid::now_v7().simple()));
-    let result = stream_to_file(&tmp, body, store.max_bytes).await;
+    let limit = claims
+        .max
+        .map_or(store.max_bytes, |m| m.min(store.max_bytes));
+    let ct = essence(claims.ct.as_deref().unwrap_or_default());
+    let result = stream_to_file(&tmp, body, limit, &ct).await;
     let size = match result {
         Ok(size) => size,
         Err(e) => {
@@ -279,9 +323,27 @@ async fn write_upload(store: &LocalBlobStore, claims: &Claims, body: Body) -> Ap
     Ok(size)
 }
 
-async fn stream_to_file(tmp: &FsPath, mut body: Body, max_bytes: u64) -> AppResult<u64> {
+/// Prüft die Anfangsbytes gegen den deklarierten Typ (Bilder, PDF). Andere Typen sind frei.
+fn magic_matches(content_type: &str, head: &[u8]) -> bool {
+    match content_type {
+        "image/png" => head.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => head.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "image/gif" => head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a"),
+        "image/webp" => head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP",
+        "application/pdf" => head.starts_with(b"%PDF-"),
+        _ => true,
+    }
+}
+
+async fn stream_to_file(
+    tmp: &FsPath,
+    mut body: Body,
+    max_bytes: u64,
+    content_type: &str,
+) -> AppResult<u64> {
     let mut file = tokio::fs::File::create(tmp).await.map_err(io_err)?;
     let mut size: u64 = 0;
+    let mut head: Vec<u8> = Vec::with_capacity(16);
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| AppError::invalid_request("Could not read request body."))?;
         if let Ok(data) = frame.into_data() {
@@ -292,10 +354,19 @@ async fn stream_to_file(tmp: &FsPath, mut body: Body, max_bytes: u64) -> AppResu
                 ))
                 .with_details(serde_json::json!({ "maxBytes": max_bytes })));
             }
+            if head.len() < 16 {
+                let take = (16 - head.len()).min(data.len());
+                head.extend_from_slice(&data[..take]);
+            }
             file.write_all(&data).await.map_err(io_err)?;
         }
     }
     file.flush().await.map_err(io_err)?;
+    if !magic_matches(content_type, &head) {
+        return Err(AppError::invalid_request(
+            "The file content does not match the declared content type.",
+        ));
+    }
     Ok(size)
 }
 
@@ -317,15 +388,20 @@ pub async fn upload(
             AppError::invalid_request("Content-Type does not match the signed URL.").into(),
         );
     }
+    let limit = claims
+        .max
+        .map_or(store.max_bytes, |m| m.min(store.max_bytes));
     if let Some(len) = headers
         .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
-        && len > store.max_bytes
+        && len > limit
     {
-        return Err(AppError::limit_exceeded("Upload exceeds the maximum size.")
-            .with_details(serde_json::json!({ "maxBytes": store.max_bytes }))
-            .into());
+        return Err(
+            AppError::limit_exceeded("Upload exceeds the reserved size.")
+                .with_details(serde_json::json!({ "maxBytes": limit }))
+                .into(),
+        );
     }
     write_upload(&store, &claims, body).await?;
     Ok(StatusCode::OK)
@@ -469,6 +545,7 @@ mod tests {
                 key: "other".into(),
                 ct: None,
                 exp: 9_999_999,
+                max: None,
             })
             .unwrap(),
         );
@@ -510,6 +587,7 @@ mod tests {
             key: key.into(),
             ct: Some("text/plain".into()),
             exp: 1,
+            max: None,
         };
         let err = write_upload(&s, &claims("big"), Body::from(vec![0u8; 20]))
             .await

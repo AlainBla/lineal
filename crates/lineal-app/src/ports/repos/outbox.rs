@@ -101,6 +101,19 @@ pub trait OutboxRepo: Send {
     /// Aufgegebene Events (Dead-Letter), neueste zuerst.
     async fn list_dead_letters(&mut self, limit: i64) -> AppResult<Vec<DeadLetter>>;
 
+    /// Aufbewahrung: löscht verarbeitete Events (samt Zustellungen) mit `processed_at <
+    /// before`; Events mit Dead-Letter-Eintrag erst ab `dead_letter_before`. Höchstens `limit`
+    /// Zeilen je Aufruf. Liefert die Anzahl.
+    async fn purge_processed(
+        &mut self,
+        before: DateTime<Utc>,
+        dead_letter_before: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<u64> {
+        let _ = (before, dead_letter_before, limit);
+        Ok(0)
+    }
+
     /// Setzt `processed_at` bei allen Events, die an alle `consumers` zugestellt wurden.
     async fn mark_processed(&mut self, consumers: &[String]) -> AppResult<u64>;
 

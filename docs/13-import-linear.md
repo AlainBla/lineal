@@ -167,6 +167,10 @@ lineal import linear --org acme --token-env LINEAR_API_KEY --resume <runId>
 lineal import linear-csv --org acme --file export.csv --team ENG
 ```
 
+**Betrieb (Paket 7):** Der Runner führt Importe in einer eigenen Task aus (der Worker-Takt mit Outbox-Konsumenten und periodischen Jobs bleibt frei, je Prozess höchstens ein Lauf). Ein Heartbeat verlängert Lease und Team-Sperren auch während langer Rate-Limit-Wartezeiten; Pause/Abbruch werden währenddessen alle 2 s geprüft. Die Team-Nummernzähler werden nach jeder Issue-Seite nachgeführt, `importCancel` repariert sie; von der CLI gestartete Läufe ohne Lebenszeichen (30 min) markiert der Runner als `failed` (fortsetzbar). Ein zweiter echter Lauf für ein überlappendes Team wird abgelehnt, solange ein anderer `running` ist. Parent-Zyklen aus der Quelle werden verworfen (Bericht-Warnung), ebenso meldet der CSV-Import jede stille Datenänderung als Warnung.
+
+**Konfiguration:** `LINEAL_IMPORT_LINEAR_ENDPOINT` überschreibt den Linear-GraphQL-Endpunkt (z. B. lokaler Mock für Tests). Nur mit `LINEAL_DEV=1` oder `LINEAL_IMPORT_ALLOW_CUSTOM_ENDPOINT=1` erlaubt; `http(s)` ohne Zugangsdaten in der URL, wird protokolliert. Der API-Key geht an diesen Endpunkt; Downloads bleiben auf `uploads.linear.app` beschränkt. Aufbewahrung (Job `purge`): erledigte Jobs 1 Tag, fehlgeschlagene 14 Tage, verarbeitete Outbox-Events 7 Tage (mit Dead-Letter 30 Tage).
+
 **MCP:** kein Tool – der Import ist eine Admin-Aktion und bewusst nicht für Agenten freigegeben.
 
 ## 7. User Flow

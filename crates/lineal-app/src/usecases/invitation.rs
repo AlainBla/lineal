@@ -115,7 +115,9 @@ impl App {
         );
         Mail {
             to: to.to_string(),
-            subject: format!("You have been invited to {org_name} on Lineal"),
+            subject: lineal_domain::rules::text::sanitize_header_value(&format!(
+                "You have been invited to {org_name} on Lineal"
+            )),
             body: format!(
                 "You have been invited to join {org_name}.\n\nAccept the invitation: {link}\n\nThe link is valid for {INVITATION_TTL_DAYS} days."
             ),
@@ -267,7 +269,13 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         snap.require_workspace(ctx, Action::InviteUsers)?;
-        tx.webhooks().list_invitations(pending_only).await
+        let mut all = tx.webhooks().list_invitations(pending_only).await?;
+        // Nur Admins/Owner sehen die Einladungen anderer (konsistent mit Resend/Revoke; B8.07).
+        if !snap.actor.is_admin() {
+            let me = resolve::user::actor_user_id(ctx);
+            all.retain(|i| Some(i.inviter_id) == me);
+        }
+        Ok(all)
     }
 
     /// Sendet die Einladung mit neuem Token und neuer Frist erneut (alter Link wird ungültig).
@@ -479,13 +487,10 @@ impl App {
         {
             return Err(invitation_not_found());
         }
-        if let Some(n) = name {
-            let n = n.trim();
-            if n.is_empty() || n.chars().count() > 255 {
-                return Err(AppError::invalid_request("name must be 1-255 characters")
-                    .with_details(json!({ "field": "name" })));
-            }
-        }
+        let name_norm = name
+            .map(|n| lineal_domain::rules::text::validate_single_line_name("name", n, 255))
+            .transpose()?;
+        let name = name_norm.as_deref();
         let mut tx = self.store.begin(inv.org_id).await?;
         // Erneut im Workspace prüfen (Wettlauf mit widerrufen/angenommen).
         let inv = tx

@@ -34,6 +34,13 @@ pub trait BlobStore: Send + Sync {
         Err(AppError::internal("blob head not supported by this store"))
     }
 
+    /// Liest den Inhalt eines Objekts (höchstens `max_bytes`); `None`, wenn es fehlt, größer ist
+    /// oder der Store das Lesen nicht unterstützt (MCP `get_attachment`, B8.12).
+    async fn read(&self, key: &str, max_bytes: u64) -> AppResult<Option<Vec<u8>>> {
+        let _ = (key, max_bytes);
+        Ok(None)
+    }
+
     /// Löscht das Objekt endgültig. Ein fehlendes Objekt ist kein Fehler (idempotent).
     /// Der Standard ist ein No-op für Stores ohne Löschfunktion (Fakes in Tests).
     async fn delete(&self, key: &str) -> AppResult<()> {
@@ -48,6 +55,18 @@ pub trait BlobStore: Send + Sync {
         content_type: &str,
         ttl: Duration,
     ) -> AppResult<String>;
+    /// Wie [`Self::signed_put_url`], mit der reservierten Größe: der Upload darf sie nicht
+    /// überschreiten. Der Standard ignoriert die Größe (Stores ohne Durchsetzung, Fakes).
+    async fn signed_put_url_sized(
+        &self,
+        key: &str,
+        content_type: &str,
+        max_size: u64,
+        ttl: Duration,
+    ) -> AppResult<String> {
+        let _ = max_size;
+        self.signed_put_url(key, content_type, ttl).await
+    }
     /// Signierte Download-URL (GET).
     async fn signed_get_url(&self, key: &str, ttl: Duration) -> AppResult<String>;
 }

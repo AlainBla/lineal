@@ -8,6 +8,7 @@ import type {
   Issue,
   IssueConnection,
   IssueLabel,
+  PageInfo,
   Project,
   Team,
   WorkflowState,
@@ -153,15 +154,32 @@ export async function fetchIssueExtras(id: string, signal?: AbortSignal): Promis
   return res.issue;
 }
 
+const COMMENTS_PAGE = 100;
+const COMMENTS_MAX_PAGES = 50;
+
+/** Alle Kommentare eines Issues, seitenweise nachgeladen (B4.14: nicht nur die ersten 100). */
 export async function fetchComments(issueId: string, signal?: AbortSignal): Promise<Comment[]> {
-  const res = await gqlRequest<{ comments: { nodes: Comment[] } }, { issueId: string }>(
-    `query IssueComments($issueId: String) {
-      comments(issueId: $issueId, first: 100, orderBy: createdAt) { nodes { ${COMMENT_FIELDS} } }
+  const all: Comment[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < COMMENTS_MAX_PAGES; page++) {
+    const res: { comments: { nodes: Comment[]; pageInfo: PageInfo } } = await gqlRequest<
+      { comments: { nodes: Comment[]; pageInfo: PageInfo } },
+      { issueId: string; first: number; after: string | null }
+    >(
+      `query IssueComments($issueId: String, $first: Int, $after: String) {
+      comments(issueId: $issueId, first: $first, after: $after, orderBy: createdAt) {
+        nodes { ${COMMENT_FIELDS} } pageInfo { hasNextPage endCursor }
+      }
     }`,
-    { issueId },
-    { signal },
-  );
-  return res.comments.nodes;
+      { issueId, first: COMMENTS_PAGE, after },
+      { signal },
+    );
+    all.push(...res.comments.nodes);
+    const info = res.comments.pageInfo;
+    if (!info?.hasNextPage || !info.endCursor) break;
+    after = info.endCursor;
+  }
+  return all;
 }
 
 /** Eingabe von `issueUpdate`; `null` leert ein Feld (Tri-State), ein fehlender Schlüssel lässt es unverändert. */

@@ -12,6 +12,7 @@ pub mod purge;
 pub mod recurring_issues;
 pub mod sla;
 pub mod snooze;
+pub mod sort_renumber;
 pub mod sync_purge;
 pub mod team_purge;
 pub mod triage_rotation;

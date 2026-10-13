@@ -251,11 +251,18 @@ export class ShortcutRegistry {
       return { exact, prefix };
     };
 
-    let { exact, prefix } = tryMatch(step);
+    const { exact, prefix } = tryMatch(step);
     if (step.length > 0 && exact.length === 0 && !prefix) {
-      // Sequenz abgebrochen: Taste als Neustart interpretieren.
+      // Sequenz abgebrochen (docs/08 §3.3): die Folge wird verworfen. Wäre die Taste allein ein
+      // Kürzel (z. B. `o` dann `p`), wird sie verschluckt, statt als Einzelkürzel zu feuern; alle
+      // anderen Tasten (Tab, Enter, Pfeile …) behalten ihr Browserverhalten.
       this.clearPending();
-      ({ exact, prefix } = tryMatch([]));
+      const restart = tryMatch([]);
+      if (restart.exact.length > 0 || restart.prefix) {
+        e.preventDefault?.();
+        return true;
+      }
+      return false;
     }
 
     const pressed = comboFromEvent(e);

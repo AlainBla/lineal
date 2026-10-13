@@ -337,7 +337,10 @@ impl TeamQuery {
                     ancestor_team,
                     include_archived: include_archived.unwrap_or(false),
                     page: PageRequest {
-                        limit: i64::from(first.unwrap_or(50).clamp(1, 250)),
+                        limit: i64::from(crate::error::GqlResultExt::gql(
+                            crate::pagination::first_arg(first, 50, 250),
+                            ctx,
+                        )?),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -467,7 +470,7 @@ impl TeamMutation {
             .as_deref()
             .map(|s| {
                 EstimationType::from_str(s).map_err(|_| {
-                    async_graphql::Error::new(format!("invalid issueEstimationType `{s}`"))
+                    crate::error::invalid_input(format!("invalid issueEstimationType `{s}`"))
                 })
             })
             .transpose()?;

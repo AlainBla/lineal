@@ -78,7 +78,8 @@ fn invalid(field: &str, reason: &str, msg: impl Into<String>) -> AppError {
 }
 
 fn validate_name(kind: LabelKind, raw: &str) -> AppResult<String> {
-    let n = raw.trim();
+    let n = lineal_domain::rules::text::validate_single_line_name("name", raw, 80)?;
+    let n = n.as_str();
     if n.is_empty() || n.chars().count() > 80 {
         return Err(invalid(
             "name",

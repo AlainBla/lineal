@@ -5,7 +5,6 @@ use super::org::gql_err;
 use crate::context::{app, charge_detail_field, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use chrono::{DateTime, NaiveDate, Utc};
-use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
 use lineal_app::usecases::issue::{
     BatchPatch, BatchUpdateInput, CreateIssueInput, DescriptionEdit, IssueView, ListIssuesInput,
@@ -144,7 +143,10 @@ impl IssueGql {
                     parent: Some(self.id.clone()),
                     include_archived: false,
                     order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(first.unwrap_or(50).clamp(1, 100)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 100),
+                        ctx,
+                    )?),
                     ..Default::default()
                 },
             )
@@ -230,16 +232,17 @@ pub struct IssueCreateInput {
     pub team_id: String,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub state_id: Option<String>,
-    pub assignee_id: Option<String>,
-    pub priority: Option<i32>,
-    pub estimate: Option<f64>,
+    /// Explizites `null` überschreibt beim Anwenden eines Templates dessen Wert (docs/06 §2.5).
+    pub state_id: MaybeUndefined<String>,
+    pub assignee_id: MaybeUndefined<String>,
+    pub priority: MaybeUndefined<i32>,
+    pub estimate: MaybeUndefined<f64>,
     pub label_ids: Option<Vec<String>>,
     pub parent_id: Option<String>,
     pub project_id: Option<String>,
     pub project_milestone_id: Option<String>,
     pub cycle_id: Option<String>,
-    pub due_date: Option<String>,
+    pub due_date: MaybeUndefined<String>,
     pub sort_order: Option<f64>,
     /// Template (UUID oder Name); hat Vorrang vor `useDefaultTemplate`.
     pub template_id: Option<String>,
@@ -327,8 +330,20 @@ pub struct IssueRelationCreateInput {
 }
 
 fn date(s: &str) -> AppResult<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD"))
+    lineal_domain::rules::date::parse_iso_date("dueDate", s)
+        .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD (year 1900-2200)"))
+}
+
+/// Wert eines Create-Felds; ein explizites `null` wird in `nulls` vermerkt (Template-Override).
+fn value_or_note_null<T>(m: MaybeUndefined<T>, name: &str, nulls: &mut Vec<String>) -> Option<T> {
+    match m {
+        MaybeUndefined::Value(v) => Some(v),
+        MaybeUndefined::Null => {
+            nulls.push(name.to_owned());
+            None
+        }
+        MaybeUndefined::Undefined => None,
+    }
 }
 
 fn tri<T>(m: MaybeUndefined<T>) -> Option<Option<T>> {
@@ -386,6 +401,7 @@ impl IssueQuery {
     ) -> async_graphql::Result<IssueConnection> {
         let cursor = after
             .as_deref()
+            .filter(|c| !c.is_empty())
             .map(|c| -> AppResult<PageCursor> {
                 let (k, i) = c
                     .split_once('|')
@@ -414,7 +430,10 @@ impl IssueQuery {
                     priority: priority.map(i64::from),
                     include_archived: include_archived.unwrap_or(false),
                     order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(first.unwrap_or(50)),
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
                     cursor,
                     ..Default::default()
                 },
@@ -470,33 +489,34 @@ impl IssueMutation {
                 value: x.value.0,
             })
             .collect();
+        let mut null_fields: Vec<String> = Vec::new();
+        let state = value_or_note_null(input.state_id, "state", &mut null_fields);
+        let priority = value_or_note_null(input.priority, "priority", &mut null_fields);
+        let assignee = value_or_note_null(input.assignee_id, "assignee", &mut null_fields);
+        let estimate = value_or_note_null(input.estimate, "estimate", &mut null_fields);
+        let due_date = value_or_note_null(input.due_date, "dueDate", &mut null_fields);
         let create = CreateIssueInput {
             id,
             team: input.team_id,
             title: input.title,
             description: input.description,
-            state: input.state_id,
-            priority: input.priority.map(i64::from),
-            assignee: input.assignee_id,
-            estimate: input.estimate,
+            state,
+            priority: priority.map(i64::from),
+            assignee,
+            estimate,
             labels: input.label_ids,
-            due_date: input
-                .due_date
-                .as_deref()
-                .map(date)
-                .transpose()
-                .map_err(gql_err)?,
+            due_date: due_date.as_deref().map(date).transpose().map_err(gql_err)?,
             cycle: input.cycle_id,
             project: input.project_id,
             milestone: input.project_milestone_id,
             parent: input.parent_id,
             sort_order: input.sort_order,
-            source: HistorySource::Api,
+            source: crate::context::history_source(request_ctx(ctx)?),
             ..Default::default()
         };
         let v = match template {
             Some(t) => {
-                a.create_issue_with_form(rctx, &t, create, answers, &[])
+                a.create_issue_with_form(rctx, &t, create, answers, &null_fields)
                     .await
                     .map_err(gql_err)?
                     .root
@@ -541,7 +561,7 @@ impl IssueMutation {
                     parent: tri(input.parent_id),
                     sort_order: input.sort_order,
                     move_sub_issues: input.move_sub_issues.unwrap_or(false),
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                     ..Default::default()
                 },
             )
@@ -594,29 +614,36 @@ impl IssueMutation {
         })
     }
 
-    /// Legt das Issue in den Papierkorb (`trash`) bzw. stellt es mit `issueUnarchive` wieder her.
+    /// Archiviert das Issue (nur `archivedAt`, wiederherstellbar mit `issueUnarchive`); mit
+    /// `trash: true` landet es stattdessen im Papierkorb.
     async fn issue_archive(
         &self,
         ctx: &Context<'_>,
         id: String,
         trash: Option<bool>,
     ) -> async_graphql::Result<IssuePayload> {
-        let _ = trash;
-        let issue = app(ctx)?
-            .delete_issue(request_ctx(ctx)?, &id, false)
+        if trash == Some(true) {
+            let issue = app(ctx)?
+                .delete_issue(request_ctx(ctx)?, &id, false)
+                .await
+                .map_err(gql_err)?;
+            return Ok(IssuePayload {
+                success: true,
+                issue: Some(
+                    IssueView {
+                        extras: Default::default(),
+                        previous_identifiers: vec![],
+                        issue,
+                    }
+                    .into(),
+                ),
+            });
+        }
+        let v = app(ctx)?
+            .archive_issue(request_ctx(ctx)?, &id)
             .await
             .map_err(gql_err)?;
-        Ok(IssuePayload {
-            success: true,
-            issue: Some(
-                IssueView {
-                    extras: Default::default(),
-                    previous_identifiers: vec![],
-                    issue,
-                }
-                .into(),
-            ),
-        })
+        Ok(payload(v))
     }
 
     async fn issue_unarchive(
@@ -689,7 +716,7 @@ impl IssueMutation {
                 UpdateIssueInput {
                     id: input.issue_id,
                     relations,
-                    source: HistorySource::Api,
+                    source: crate::context::history_source(request_ctx(ctx)?),
                     ..Default::default()
                 },
             )

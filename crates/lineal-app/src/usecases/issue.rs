@@ -660,7 +660,7 @@ impl App {
         };
         // sortOrder: oben im Zielstatus (docs/03 §2.1)
         issue.sort_order = match input.sort_order {
-            Some(v) => v,
+            Some(v) => lineal_domain::rules::sort_order::validate("sortOrder", v)?,
             None => {
                 let (min, _) = tx.issues().sort_extent(team.id, issue.state_id).await?;
                 min.map_or(0.0, |m| m - 1.0)
@@ -1009,7 +1009,7 @@ impl App {
             }
         }
         if let Some(s) = input.sort_order {
-            issue.sort_order = s;
+            issue.sort_order = lineal_domain::rules::sort_order::validate("sortOrder", s)?;
         }
         // Labels
         let plan = if input.labels.is_some()
@@ -1047,6 +1047,10 @@ impl App {
         let labels_changed = !plan.added.is_empty() || !plan.removed.is_empty();
         if issue == old && !labels_changed && own.is_empty() {
             return load_view(tx, issue, true).await;
+        }
+        // SLA-Regeln hängen an Priorität und Projekt: sofort neu auswerten, nicht erst im Minutenjob.
+        if issue.priority != old.priority || issue.project_id != old.project_id {
+            crate::usecases::triage::sla::evaluate_rules(tx, &team, &mut issue, now).await?;
         }
         // Aktivität eines anderen als des Snoozenden beendet das Triage-Snooze (docs/03 §10).
         if issue != old && issue.snoozed_until_at.is_some() && issue.snoozed_by_id != actor {
@@ -1762,6 +1766,7 @@ async fn redact_history(
     let mut cache: HashMap<(&'static str, String), bool> = HashMap::new();
     let mut out = Vec::with_capacity(entries.len());
     for mut e in entries {
+        let had_relations = e.relation_changes.is_some();
         if let Some(Value::Array(items)) = e.relation_changes.take() {
             let mut kept = Vec::new();
             for item in items {
@@ -1800,6 +1805,22 @@ async fn redact_history(
                     }
                 }
             }
+        }
+        // Ein Eintrag, der nur aus unsichtbaren Relationsänderungen bestand, würde leer
+        // erscheinen und verriete, dass dort etwas geschah (B8.24): unterdrücken.
+        let changes_empty = match &e.changes {
+            Value::Object(m) => m.is_empty(),
+            Value::Null => true,
+            _ => false,
+        };
+        if had_relations
+            && e.relation_changes.is_none()
+            && changes_empty
+            && e.flags.is_empty()
+            && e.added_label_ids.as_ref().is_none_or(Vec::is_empty)
+            && e.removed_label_ids.as_ref().is_none_or(Vec::is_empty)
+        {
+            continue;
         }
         out.push(e);
     }

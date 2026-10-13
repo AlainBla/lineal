@@ -46,6 +46,7 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
     };
     Router::new()
         .route("/graphql", post(graphql_post).get(graphiql))
+        .route("/graphql/schema.graphql", get(schema_sdl))
         .route("/auth/login", post(rest::auth::login))
         .route("/auth/logout", post(rest::auth::logout))
         .route("/auth/me", get(rest::auth::me))
@@ -89,6 +90,22 @@ async fn graphql_post(
         }
         Err(rejection) => gql::bad_body(&rejection),
     }
+}
+
+/// `GET /graphql/schema.graphql`: das SDL (docs/09 §1.1), nur für angemeldete Clients.
+async fn schema_sdl(_auth: crate::middleware::auth::Authenticated) -> Response {
+    let mut sdl = crate::graphql::schema_sdl();
+    if !sdl.ends_with('\n') {
+        sdl.push('\n');
+    }
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        sdl,
+    )
+        .into_response()
 }
 
 async fn graphiql(State(state): State<ApiState>) -> impl IntoResponse {

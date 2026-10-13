@@ -270,8 +270,11 @@ impl NotificationQuery {
         first: Option<i32>,
         after: Option<String>,
     ) -> async_graphql::Result<NotificationConnection> {
-        let limit = i64::from(first.unwrap_or(50).clamp(1, 250));
-        let cursor = match after {
+        let limit = i64::from(crate::error::GqlResultExt::gql(
+            crate::pagination::first_arg(first, 50, 250),
+            ctx,
+        )?);
+        let cursor = match after.filter(|c| !c.is_empty()) {
             Some(c) => {
                 let c = crate::pagination::Cursor::decode(
                     &c,
@@ -280,7 +283,7 @@ impl NotificationQuery {
                 .gql(ctx)?;
                 Some(PageCursor {
                     key: DateTime::parse_from_rfc3339(&c.sort_key)
-                        .map_err(|_| async_graphql::Error::new("Invalid cursor."))?
+                        .map_err(|_| crate::error::invalid_input("Invalid cursor."))?
                         .with_timezone(&Utc),
                     id: c.id,
                 })
@@ -376,7 +379,7 @@ impl NotificationQuery {
         id: String,
     ) -> async_graphql::Result<bool> {
         let doc = Uuid::parse_str(id.trim())
-            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+            .map_err(|_| crate::error::invalid_input("id must be a UUID."))?;
         app(ctx)?
             .is_document_subscribed(request_ctx(ctx)?, doc)
             .await
@@ -413,13 +416,13 @@ impl NotificationMutation {
         let id = parse_id(&id).gql(ctx)?;
         let snoozed = match (&input.snoozed_until_at, input.unsnooze) {
             (Some(_), Some(true)) => {
-                return Err(async_graphql::Error::new(
+                return Err(crate::error::invalid_input(
                     "Use either snoozedUntilAt or unsnooze, not both.",
                 ));
             }
             (Some(s), _) => Some(Some(
                 DateTime::parse_from_rfc3339(s)
-                    .map_err(|_| async_graphql::Error::new("snoozedUntilAt must be ISO-8601."))?
+                    .map_err(|_| crate::error::invalid_input("snoozedUntilAt must be ISO-8601."))?
                     .with_timezone(&Utc),
             )),
             (None, Some(true)) => Some(None),
@@ -537,7 +540,7 @@ impl NotificationMutation {
         id: String,
     ) -> async_graphql::Result<DocumentSubscriptionPayload> {
         let doc = Uuid::parse_str(id.trim())
-            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+            .map_err(|_| crate::error::invalid_input("id must be a UUID."))?;
         let r = app(ctx)?
             .subscribe_document(request_ctx(ctx)?, doc)
             .await
@@ -557,7 +560,7 @@ impl NotificationMutation {
         id: String,
     ) -> async_graphql::Result<DocumentSubscriptionPayload> {
         let doc = Uuid::parse_str(id.trim())
-            .map_err(|_| async_graphql::Error::new("id must be a UUID."))?;
+            .map_err(|_| crate::error::invalid_input("id must be a UUID."))?;
         let r = app(ctx)?
             .unsubscribe_document(request_ctx(ctx)?, doc)
             .await
@@ -578,7 +581,7 @@ impl NotificationMutation {
     ) -> async_graphql::Result<NotificationSubscriptionGql> {
         let kind = parse_kind(&input.target_type).gql(ctx)?;
         let target = Uuid::parse_str(input.target_id.trim())
-            .map_err(|_| async_graphql::Error::new("targetId must be a UUID."))?;
+            .map_err(|_| crate::error::invalid_input("targetId must be a UUID."))?;
         let sub = app(ctx)?
             .set_notification_subscription(
                 request_ctx(ctx)?,

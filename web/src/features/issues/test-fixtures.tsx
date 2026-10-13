@@ -186,9 +186,13 @@ export function mockGraphql(handlers: Record<string, Handler>) {
     }
     const result = handler(variables);
     if (result instanceof Error) {
-      return new Response(JSON.stringify({ errors: [{ message: result.message }] }), {
-        status: 200,
-      });
+      const code = (result as Error & { code?: string }).code;
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: result.message, ...(code ? { extensions: { code } } : {}) }],
+        }),
+        { status: 200 },
+      );
     }
     return new Response(JSON.stringify({ data: result }), { status: 200 });
   });

@@ -329,11 +329,8 @@ impl App {
                 "Token scope does not allow write operations.",
             ));
         }
-        let label = input.label.trim().to_string();
-        if label.is_empty() || label.chars().count() > 100 {
-            return Err(AppError::invalid_request("label must be 1-100 characters")
-                .with_details(json!({ "field": "label" })));
-        }
+        let label =
+            lineal_domain::rules::text::validate_single_line_name("label", &input.label, 100)?;
         let mut scopes = vec!["read".to_string()];
         for s in &input.scopes {
             match s.as_str() {

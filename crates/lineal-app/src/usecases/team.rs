@@ -10,7 +10,7 @@ use super::state::{
 };
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorKind};
 use crate::policy::{
     Action, PolicySnapshot, TeamTree, team_not_found, visibility_allowed_under_parent,
 };
@@ -147,11 +147,24 @@ async fn generate_team_key(tx: &mut dyn Tx, name: &str) -> AppResult<String> {
 }
 
 fn validate_team_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > 80 {
-        return Err(invalid("name", "must be 1-80 characters"));
-    }
-    Ok(n.to_string())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", name, 80,
+    )?)
+}
+
+/// Ist der Teamname für den Akteur schon vergeben? Zählt nur Teams, die er sehen darf
+/// (Admin/Owner: alle, auch private als Metadaten); private Namen verraten nichts (B8.26),
+/// der Vergleich ist unicode-normalisiert (B8.22).
+fn team_name_taken(snap: &PolicySnapshot, name: &str, except: Option<TeamId>) -> bool {
+    let key = lineal_domain::rules::text::name_key(name);
+    let visible = snap.visible_team_ids();
+    let admin = snap.actor.is_admin();
+    snap.tree.all().any(|t| {
+        !t.trashed
+            && Some(t.id) != except
+            && (admin || visible.contains(&t.id))
+            && lineal_domain::rules::text::name_key(&t.name) == key
+    })
 }
 
 pub(crate) fn validate_timezone(tz: &str) -> AppResult<()> {
@@ -330,6 +343,16 @@ async fn ensure_member(
             now,
         })
         .await?;
+    // Der Betroffene erhält die Aktion über seine persönliche Sync-Gruppe (B4.41).
+    tx.outbox()
+        .push(crate::ports::repos::NewEvent::new(
+            DomainEvent::TeamMembershipCreated {
+                team_id: team,
+                user_id: user,
+            },
+            EventOrigin::User,
+        ))
+        .await?;
     Ok(true)
 }
 
@@ -342,14 +365,19 @@ impl App {
     ) -> AppResult<Page<TeamView>> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let visible = snap.visible_team_ids();
+        // Admin/Owner sehen auch private Teams als Metadaten (docs/02 §5.1, §6.5; B8.05).
+        let mut visible = snap.visible_team_ids();
+        if snap.actor.is_admin() && snap.actor.team_scope.is_none() {
+            visible.extend(snap.tree.all().filter(|t| !t.trashed).map(|t| t.id));
+        }
         let mut scope: Option<BTreeSet<TeamId>> = None;
         if let Some(p) = &input.parent_team {
-            let parent = resolve::team::resolve_in(&mut *tx, &snap, p, Visibility::Content).await?;
+            let parent =
+                resolve::team::resolve_in(&mut *tx, &snap, p, Visibility::Management).await?;
             scope = Some(snap.tree.children(parent.id).iter().map(|t| t.id).collect());
         }
         if let Some(a) = &input.ancestor_team {
-            let anc = resolve::team::resolve_in(&mut *tx, &snap, a, Visibility::Content).await?;
+            let anc = resolve::team::resolve_in(&mut *tx, &snap, a, Visibility::Management).await?;
             let ids: BTreeSet<TeamId> =
                 snap.tree.descendants(anc.id).iter().map(|t| t.id).collect();
             scope = Some(match scope {
@@ -406,8 +434,9 @@ impl App {
     pub async fn get_team(&self, ctx: &RequestCtx, reference: &str) -> AppResult<TeamView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        // Admin/Owner: private Teams als Metadaten (docs/02 §5.1, §6.5; B8.05).
         let team =
-            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Content).await?;
+            resolve::team::resolve_in(&mut *tx, &snap, reference, Visibility::Management).await?;
         Ok(view_of(&snap.tree, &team))
     }
 
@@ -466,11 +495,7 @@ impl App {
             ));
         }
         let name = validate_team_name(&input.name)?;
-        if snap
-            .tree
-            .all()
-            .any(|t| !t.trashed && t.name.to_lowercase() == name.to_lowercase())
-        {
+        if team_name_taken(&snap, &name, None) {
             return Err(AppError::conflict("A team with this name already exists")
                 .with_details(json!({ "field": "name" })));
         }
@@ -556,7 +581,10 @@ impl App {
                 name,
                 key,
                 description: input.description.clone(),
-                icon: input.icon.clone(),
+                icon: match input.icon.as_deref() {
+                    Some(i) => super::project::validate_icon(i)?,
+                    None => None,
+                },
                 color: input.color.clone(),
                 parent_id: parent.as_ref().map(|p| p.id),
                 visibility,
@@ -736,11 +764,7 @@ impl App {
 
         if let Some(n) = &input.name {
             let n = validate_team_name(n)?;
-            if snap
-                .tree
-                .all()
-                .any(|t| t.id != team.id && !t.trashed && t.name.to_lowercase() == n.to_lowercase())
-            {
+            if team_name_taken(&snap, &n, Some(team.id)) {
                 return Err(AppError::conflict("A team with this name already exists")
                     .with_details(json!({ "field": "name" })));
             }
@@ -752,7 +776,11 @@ impl App {
             return Err(invalid("description", "must be at most 2000 characters"));
         }
         patch.description = input.description.clone();
-        patch.icon = input.icon.clone();
+        patch.icon = match &input.icon {
+            Some(Some(i)) => Some(super::project::validate_icon(i)?),
+            Some(None) => Some(None),
+            None => None,
+        };
         if let Some(Some(c)) = &input.color {
             validate_color(c)?;
         }
@@ -826,6 +854,36 @@ impl App {
                 return Err(invalid("defaultIssueEstimate", "must not be negative"));
             }
             patch.default_issue_estimate = Some(v);
+        }
+        // Der Standardwert muss auf der (neuen) Skala liegen (B8.28); bei geänderter Skala ohne
+        // neuen Standardwert wird ein ungültig gewordener auf den kleinsten Wert zurückgesetzt.
+        if estimation_touched {
+            let ty = input
+                .issue_estimation_type
+                .unwrap_or(team.issue_estimation_type);
+            let allowed = lineal_domain::rules::estimate::allowed_values(
+                ty,
+                input
+                    .issue_estimation_extended
+                    .unwrap_or(team.issue_estimation_extended),
+                input
+                    .issue_estimation_allow_zero
+                    .unwrap_or(team.issue_estimation_allow_zero),
+            );
+            if !allowed.is_empty() {
+                let effective = patch
+                    .default_issue_estimate
+                    .unwrap_or(team.default_issue_estimate);
+                if !allowed.contains(&f64::from(effective)) {
+                    if input.default_issue_estimate.is_some() {
+                        return Err(invalid(
+                            "defaultIssueEstimate",
+                            "must be a value of the team's estimation scale",
+                        ));
+                    }
+                    patch.default_issue_estimate = Some(allowed[0] as i32);
+                }
+            }
         }
 
         // Cycles: bei Parent mit Cycles read-only (docs/02 §2.5).
@@ -1019,6 +1077,22 @@ impl App {
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         let view = reload_view(&mut *tx, team.id).await?;
+        let visibility_changed = input.visibility.is_some_and(|v| v != team.visibility);
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                if visibility_changed {
+                    "team.visibility_changed"
+                } else {
+                    "team.updated"
+                },
+                "team",
+                Some(team.id.0),
+                json!({ "visibility": format!("{:?}", view.team.visibility) }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -1063,7 +1137,10 @@ impl App {
             return Err(invalid("user", "the user is suspended"));
         }
         let guest = target.role == UserRole::Guest;
-        snap.require_team(
+        // Selbstbeitritt (`canJoin`, docs/02 §6.4): wer niemanden hinzufügen darf, darf sich selbst
+        // zu einem beitretbaren Team hinzufügen (B8.06).
+        let mut self_join = false;
+        if let Err(e) = snap.require_team(
             ctx,
             if guest {
                 Action::AddGuest
@@ -1071,7 +1148,16 @@ impl App {
                 Action::AddMember
             },
             team.id,
-        )?;
+        ) {
+            self_join = e.kind == ErrorKind::Forbidden
+                && !guest
+                && !owner
+                && actor_id(ctx) == Some(target.id);
+            if !self_join {
+                return Err(e);
+            }
+            snap.require_team(ctx, Action::JoinTeam, team.id)?;
+        }
         if owner {
             snap.require_team(ctx, Action::SetTeamOwner, team.id)?;
             if matches!(target.role, UserRole::Guest | UserRole::App) {
@@ -1101,7 +1187,12 @@ impl App {
                     .await?
                     .is_none()
                 {
-                    snap.require_team(ctx, Action::AddMember, anc.id)?;
+                    let anc_action = if self_join {
+                        Action::JoinTeam
+                    } else {
+                        Action::AddMember
+                    };
+                    snap.require_team(ctx, anc_action, anc.id)?;
                     ensure_member(self, &mut *tx, anc.id, target.id, false, now).await?;
                 }
             }
@@ -1113,6 +1204,17 @@ impl App {
             .await?
             .ok_or_else(|| AppError::internal("membership vanished"))?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.member_added",
+                "team",
+                Some(team.id.0),
+                json!({ "user_id": target.id.0, "owner": owner, "self_join": self_join }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(TeamMember {
             user: target,
@@ -1166,6 +1268,17 @@ impl App {
             .await?
             .ok_or_else(|| AppError::internal("membership vanished"))?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.member_added",
+                "team",
+                Some(team.id.0),
+                json!({ "user_id": me.0, "owner": false, "self_join": true }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(TeamMember { user, membership })
     }
@@ -1187,9 +1300,30 @@ impl App {
         }
         let guest = snap.actor.role == UserRole::Guest;
         for t in leave_closure(&snap.tree, team.id, also_leave_parent_teams, guest) {
-            tx.teams().delete_membership(t, me).await?;
+            if tx.teams().delete_membership(t, me).await? {
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::TeamMembershipRemoved {
+                        team_id: t,
+                        user_id: me,
+                    },
+                )
+                .await?;
+            }
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.member_removed",
+                "team",
+                Some(team.id.0),
+                json!({ "user_id": me.0, "self_leave": true }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -1222,9 +1356,30 @@ impl App {
         }
         let guest = target.role == UserRole::Guest;
         for t in leave_closure(&snap.tree, team.id, false, guest) {
-            tx.teams().delete_membership(t, target.id).await?;
+            if tx.teams().delete_membership(t, target.id).await? {
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::TeamMembershipRemoved {
+                        team_id: t,
+                        user_id: target.id,
+                    },
+                )
+                .await?;
+            }
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.member_removed",
+                "team",
+                Some(team.id.0),
+                json!({ "user_id": target.id.0, "self_leave": own }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -1262,6 +1417,17 @@ impl App {
             .await?
             .ok_or_else(|| AppError::internal("membership vanished"))?;
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "team.owner_changed",
+                "team",
+                Some(team.id.0),
+                json!({ "user_id": target.id.0, "owner": owner }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(TeamMember {
             user: target,

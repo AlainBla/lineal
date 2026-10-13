@@ -1,6 +1,8 @@
 /** Minimaler Toast-Speicher (docs/08 §1.4: Toast mit Link und Undo). */
 import { useSyncExternalStore } from "react";
 
+import { describeError } from "@/lib/graphql";
+
 export interface Toast {
   id: number;
   message: string;
@@ -33,7 +35,7 @@ export function clearToasts(): void {
 }
 
 export function errorMessage(err: unknown, fallback = "Something went wrong."): string {
-  return err instanceof Error && err.message ? err.message : fallback;
+  return describeError(err, fallback);
 }
 
 function subscribe(l: () => void) {

@@ -5,8 +5,10 @@ use chrono::Duration as ChronoDuration;
 use lineal_app::App;
 use lineal_app::AppResult;
 use lineal_app::ports::repos::NewJob;
+use lineal_domain::ids::JobId;
+use std::collections::HashSet;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const PERIODIC_PREFIX: &str = "periodic:";
@@ -55,6 +57,8 @@ pub struct Worker {
     consumers: Vec<Arc<dyn EventConsumer>>,
     periodic: Vec<Arc<dyn PeriodicJob>>,
     cfg: WorkerConfig,
+    /// Namen der gerade laufenden abgekoppelten Jobs (höchstens eine Instanz je Name).
+    running_detached: Arc<Mutex<HashSet<&'static str>>>,
 }
 
 impl Worker {
@@ -75,6 +79,7 @@ impl Worker {
             consumers,
             periodic,
             cfg,
+            running_detached: Arc::default(),
         }
     }
 
@@ -198,8 +203,17 @@ impl Worker {
         tx.commit().await?;
 
         for job in &claimed {
+            let periodic = job
+                .kind
+                .strip_prefix(PERIODIC_PREFIX)
+                .and_then(|name| self.periodic.iter().find(|p| p.name() == name));
+            if let Some(p) = periodic.filter(|p| p.detached()) {
+                self.spawn_detached(p, job.id, job.attempts, &job.kind, now)
+                    .await?;
+                continue;
+            }
             let outcome = match job.kind.strip_prefix(PERIODIC_PREFIX) {
-                Some(name) => match self.periodic.iter().find(|p| p.name() == name) {
+                Some(name) => match periodic {
                     Some(p) => p
                         .run(&self.app, now)
                         .await
@@ -208,18 +222,82 @@ impl Worker {
                 },
                 None => Err((format!("no handler for job kind `{}`", job.kind), false)),
             };
-            let mut tx = self.app.store.begin_system().await?;
-            match outcome {
-                Ok(()) => tx.jobs().complete(job.id, self.app.clock.now()).await?,
-                Err((msg, retry)) => {
-                    tracing::warn!(job = %job.id, kind = %job.kind, error = %msg, "job failed");
-                    let backoff = ChronoDuration::seconds(60 * i64::from(job.attempts.max(1)));
-                    let retry_at = retry.then(|| self.app.clock.now() + backoff);
-                    tx.jobs().fail(job.id, &msg, retry_at).await?;
-                }
-            }
-            tx.commit().await?;
+            finish_job(&self.app, job.id, job.attempts, &job.kind, outcome).await?;
         }
         Ok(claimed.len())
     }
+
+    /// Startet einen abgekoppelten Job in eigener Task. Läuft bereits eine Instanz, wird der Slot
+    /// als erledigt markiert (übersprungen).
+    async fn spawn_detached(
+        &self,
+        job: &Arc<dyn PeriodicJob>,
+        id: JobId,
+        attempts: i32,
+        kind: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let name = job.name();
+        let started = self
+            .running_detached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(name);
+        if !started {
+            return finish_job(&self.app, id, attempts, kind, Ok(())).await;
+        }
+        let (app, job, busy, kind) = (
+            Arc::clone(&self.app),
+            Arc::clone(job),
+            Arc::clone(&self.running_detached),
+            kind.to_owned(),
+        );
+        tokio::spawn(async move {
+            // Gibt den Namen auch bei einer Panic in `run` frei, sonst liefe der Job in diesem
+            // Prozess nie wieder.
+            let _busy = BusyGuard { busy, name };
+            let outcome = job.run(&app, now).await.map_err(|e| (e.to_string(), true));
+            drop(_busy);
+            if let Err(e) = finish_job(&app, id, attempts, &kind, outcome).await {
+                tracing::error!(job = %id, error = %e, "could not record the job result");
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Gibt beim Drop den Namen eines abgekoppelten Jobs wieder frei.
+struct BusyGuard {
+    busy: Arc<Mutex<HashSet<&'static str>>>,
+    name: &'static str,
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(self.name);
+    }
+}
+
+/// Ergebnis eines Jobs in der Queue vermerken (erledigt bzw. fehlgeschlagen mit Backoff).
+async fn finish_job(
+    app: &App,
+    id: JobId,
+    attempts: i32,
+    kind: &str,
+    outcome: Result<(), (String, bool)>,
+) -> AppResult<()> {
+    let mut tx = app.store.begin_system().await?;
+    match outcome {
+        Ok(()) => tx.jobs().complete(id, app.clock.now()).await?,
+        Err((msg, retry)) => {
+            tracing::warn!(job = %id, kind = %kind, error = %msg, "job failed");
+            let backoff = ChronoDuration::seconds(60 * i64::from(attempts.max(1)));
+            let retry_at = retry.then(|| app.clock.now() + backoff);
+            tx.jobs().fail(id, &msg, retry_at).await?;
+        }
+    }
+    tx.commit().await
 }

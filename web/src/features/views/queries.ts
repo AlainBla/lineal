@@ -157,6 +157,8 @@ export function useFavorites() {
         )
       ).favorites,
     staleTime: 30_000,
+    // Änderungen aus anderen Tabs/Geräten kommen über das Sync-Event `Favorite` (B4.03).
+    refetchOnWindowFocus: true,
   });
 }
 

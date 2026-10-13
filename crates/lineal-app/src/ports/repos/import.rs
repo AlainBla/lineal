@@ -228,6 +228,18 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Zombie-Läufe aufräumen: von der CLI gestartete Läufe (`source <> 'linear'`) im Status
+    /// `running`, deren Lease bzw. letzte Änderung vor `stale_before` liegt (Prozess hart beendet),
+    /// werden `failed` (fortsetzbar). Liefert die Anzahl.
+    async fn fail_stale_import_runs(
+        &mut self,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let _ = (now, stale_before);
+        nyi()
+    }
+
     /// Verlängert (`Some`) oder löscht (`None`) die Lease eines Laufs.
     async fn set_import_lease(
         &mut self,
@@ -432,6 +444,18 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Wie `set_team_import_lock`, aber ohne zu warten: Teams, deren Zeile gerade von einer anderen
+    /// Transaktion (der laufenden Einheit des Imports) gesperrt ist, werden übersprungen. Für den
+    /// Heartbeat, der nie mit der Einheit verklemmen darf.
+    async fn extend_team_import_lock(
+        &mut self,
+        team_ids: &[Uuid],
+        until: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let _ = (team_ids, until);
+        nyi()
+    }
+
     /// Standardstatus/Triage-/Auto-Close-Status eines Teams setzen (Zirkelreferenz Team/Status).
     async fn set_team_states(
         &mut self,
@@ -482,6 +506,13 @@ pub trait ImportRepo: Send {
     }
 
     /// Setzt eine Textspalte (ohne `version`/`updated_at` zu ändern).
+    /// Würde `parent` als Eltern-Issue von `child` einen Zyklus bilden (`parent == child` oder
+    /// `child` ist Vorfahr von `parent`)?
+    async fn issue_parent_would_cycle(&mut self, child: Uuid, parent: Uuid) -> AppResult<bool> {
+        let _ = (child, parent);
+        nyi()
+    }
+
     async fn set_row_text(
         &mut self,
         table: ImportTable,

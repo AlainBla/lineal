@@ -79,7 +79,7 @@ fn priority_of(id: &str, v: &Value) -> AppResult<i64> {
 }
 
 fn date_of(id: &str, v: &Value) -> AppResult<NaiveDate> {
-    NaiveDate::parse_from_str(text_of(id, v)?.as_str(), "%Y-%m-%d")
+    lineal_domain::rules::date::parse_iso_date(id, text_of(id, v)?.as_str())
         .map_err(|_| invalid(id, format!("`{id}` must be a date (YYYY-MM-DD)")))
 }
 

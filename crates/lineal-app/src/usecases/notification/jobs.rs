@@ -2,7 +2,7 @@
 //! (docs/05 §6.4, §6.8–6.10).
 
 use super::fanout::Fan;
-use super::kinds::{Urgency, category_of, channel_default, render, urgency_of};
+use super::kinds::{Urgency, category_of, channel_default, render, urgency_of, urgency_of_view};
 use crate::app::App;
 use crate::error::AppResult;
 use crate::ports::Mail;
@@ -52,7 +52,23 @@ pub fn email_release_at(
     hold_off_hours: bool,
     tz: Tz,
 ) -> DateTime<Utc> {
-    let urgency = urgency_of(kind);
+    release_at(
+        created_at,
+        urgency_of(kind),
+        immediate_format,
+        hold_off_hours,
+        tz,
+    )
+}
+
+/// Wie [`email_release_at`] mit bereits bestimmter Dringlichkeit.
+pub fn release_at(
+    created_at: DateTime<Utc>,
+    urgency: Urgency,
+    immediate_format: bool,
+    hold_off_hours: bool,
+    tz: Tz,
+) -> DateTime<Utc> {
     let delay = if immediate_format {
         Duration::zero()
     } else {
@@ -106,7 +122,7 @@ fn mail_for(prefs: &UserNotificationPrefs, items: &[&NotificationView], base: &s
     };
     Mail {
         to: prefs.email.clone(),
-        subject,
+        subject: lineal_domain::rules::text::sanitize_header_value(&subject),
         body,
     }
 }
@@ -210,6 +226,7 @@ impl App {
                 let immediate = prefs.email_format == "immediate";
                 let hold = setting(&prefs, "emailHoldOutsideWorkHours", true);
                 let only_priority = setting(&prefs, "emailOnlyPriority", false);
+                let immediate_urgent = setting(&prefs, "emailImmediateUrgent", true);
                 // Zum Versandzeitpunkt noch Zugriff auf das Bezugsobjekt? (kein Inhalt aus entzogenen Teams)
                 let mut allowed: Vec<&NotificationView> = Vec::new();
                 for v in &views {
@@ -221,7 +238,11 @@ impl App {
                         _ => Vec::new(),
                     };
                     let mut fan = Fan::new(&mut *tx, now, None).await?;
-                    if fan.can_see_any(user, &teams).await? {
+                    let seen = match (v.n.issue_id, v.issue_team_id) {
+                        (Some(issue), Some(team)) => fan.can_see_issue(user, issue, team).await?,
+                        _ => fan.can_see_any(user, &teams).await?,
+                    };
+                    if seen {
                         allowed.push(v);
                     }
                 }
@@ -230,7 +251,15 @@ impl App {
                     .filter(|v| channel_enabled(&channels, category_of(&v.n.kind), "email"))
                     .filter(|v| !only_priority || v.n.is_priority)
                     .filter(|v| {
-                        email_release_at(v.n.created_at, &v.n.kind, immediate, hold, tz) <= now
+                        // Auch gebündelte Typen zählen: ein Prioritätswechsel auf Urgent in einer
+                        // Zuweisung hebt die Dringlichkeit (created_at bleibt der Bezug der Verzögerung).
+                        release_at(
+                            v.n.created_at,
+                            urgency_of_view(v, immediate_urgent),
+                            immediate,
+                            hold,
+                            tz,
+                        ) <= now
                     })
                     .collect();
                 if due.is_empty() {

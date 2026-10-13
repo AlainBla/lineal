@@ -434,7 +434,19 @@ impl IssueRepo for PgTx {
         .bind(i.updated_at)
         .fetch_one(&mut *self.tx)
         .await
-        .map_err(|e| super::org::conflict_or_internal(e, "issue number already in use"))?;
+        .map_err(|e| {
+            // Client-ID kollidiert (B8.25): eigene Meldung, für sichtbare und unsichtbare Issues gleich.
+            let id_conflict = e
+                .as_database_error()
+                .and_then(|d| d.constraint())
+                .is_some_and(|c| c == "issue_pkey" || c == "issue_organization_id_id_key");
+            let msg = if id_conflict {
+                "id already in use"
+            } else {
+                "issue number already in use"
+            };
+            super::org::conflict_or_internal(e, msg)
+        })?;
         row.into_issue()
     }
 

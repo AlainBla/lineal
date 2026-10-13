@@ -179,11 +179,9 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
 }
 
 fn validate_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > 255 {
-        return Err(invalid("name", "name must be 1-255 characters"));
-    }
-    Ok(n.to_owned())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name", name, 255,
+    )?)
 }
 
 fn clean_opt(v: &Option<String>) -> Option<String> {
@@ -512,6 +510,14 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let t = load_template(&mut *tx, &snap, reference, None).await?;
         require_manage(&snap, ctx, t.team_id)?;
+        // Wiederkehrende Issues erzeugen ihre Issues aus dem Template: Löschen nur ohne Regeln.
+        let rules = tx.triage().count_recurring_for_template(t.id.0).await?;
+        if rules > 0 {
+            return Err(AppError::conflict(format!(
+                "The template is used by {rules} recurring issue rule(s); delete or change them first."
+            ))
+            .with_details(json!({ "reason": "template_in_use", "recurringIssues": rules })));
+        }
         tx.templates().archive(t.id, self.clock.now()).await?;
         emit(
             &mut *tx,

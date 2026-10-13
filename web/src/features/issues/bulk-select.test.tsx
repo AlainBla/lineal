@@ -121,6 +121,30 @@ describe("Mehrfachauswahl", () => {
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull());
   });
 
+  it("Teams ohne Estimates: keine Bulk-Estimate-Aktion (B4.35)", async () => {
+    mockGraphql({
+      ...base,
+      TeamMeta: () => ({
+        team: { ...TEAM_META.team, issueEstimationType: "notUsed" },
+        workflowStates: TEAM_META.states,
+        issueLabels: TEAM_META.labels,
+        cycles: [],
+        projects: [],
+      }),
+    });
+    await renderWithApp(page());
+    await screen.findByText("Erstes");
+    const user = userEvent.setup();
+    await user.keyboard("{Control>}");
+    await user.click(screen.getByText("Im Backlog"));
+    await user.keyboard("{/Control}");
+    const bar = await screen.findByRole("toolbar", { name: "Bulk actions" });
+    await waitFor(() =>
+      expect(within(bar).getByRole("button", { name: "Bulk Status" })).toBeEnabled(),
+    );
+    expect(within(bar).queryByRole("button", { name: "Bulk Estimate" })).toBeNull();
+  });
+
   it("X markiert das fokussierte Issue, Escape hebt die Auswahl auf", async () => {
     mockGraphql(base);
     await renderWithApp(page());

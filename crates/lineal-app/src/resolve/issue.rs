@@ -99,7 +99,19 @@ pub async fn authorize_issue(
         action,
         Action::ViewTeam | Action::CommentIssue | Action::ReactIssue
     );
-    if err.kind != crate::error::ErrorKind::NotFound || !shareable {
+    if err.kind != crate::error::ErrorKind::NotFound {
+        return Err(err);
+    }
+    if !shareable {
+        // Wer das Issue über eine Freigabe sieht, kennt seine Existenz: `forbidden` statt
+        // `not_found` für weitergehende Aktionen (docs/02 §6.6; B8.20).
+        if share_grants_access(tx, snap, ctx, issue).await? {
+            return Err(
+                AppError::forbidden(format!("Not allowed to perform {action:?}.")).with_details(
+                    json!({ "action": format!("{action:?}"), "reason": "shared_issue" }),
+                ),
+            );
+        }
         return Err(err);
     }
     if !share_grants_access(tx, snap, ctx, issue).await? {

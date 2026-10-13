@@ -1,6 +1,6 @@
 import { useRouterState } from "@tanstack/react-router";
 import { X } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamKeyFromPath } from "@/app/nav";
@@ -11,7 +11,16 @@ import { Keys } from "@/components/ui/kbd";
 import { cn } from "@/lib/cn";
 import { useShortcutContext } from "@/lib/shortcuts";
 
-import { clearCreatePreset, useCreatePreset, type CreatePreset } from "./create-store";
+import {
+  clearCreateDraft,
+  clearCreatePreset,
+  draftScope,
+  getCreateDraft,
+  hasCreateDraft,
+  saveCreateDraft,
+  useCreatePreset,
+  type CreatePreset,
+} from "./create-store";
 import { useCreateIssue, useTeamMeta, useTeams } from "./hooks";
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import { estimateLabel, priorityLabel, toggleLabel } from "./model";
@@ -29,7 +38,7 @@ import {
 } from "./property-options";
 import { RichEditor } from "./rich-editor";
 import { errorMessage, showToast } from "./toast-store";
-import { useKnownUsers } from "./users";
+import { useAssignableUsers, useKnownUsers } from "./users";
 
 type ChipKind =
   "team" | "status" | "priority" | "assignee" | "labels" | "estimate" | "project" | "cycle";
@@ -61,18 +70,23 @@ function Chip({
 
 interface FormProps {
   preset: CreatePreset | null;
+  /** Schließt das Modal endgültig (nach erfolgreichem Anlegen). */
   onClose: () => void;
+  /** Schließen durch den Nutzer (X): fragt bei ungespeichertem Inhalt nach. */
+  onRequestClose: () => void;
 }
 
-function CreateIssueForm({ preset, onClose }: FormProps) {
+function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
   const session = useSession();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const teams = useTeams();
   const users = useKnownUsers();
   const create = useCreateIssue();
   const [chosenTeamId, setChosenTeamId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const scope = session ? draftScope(session.user.id, session.workspace.id) : null;
+  const [initialDraft] = useState(() => (scope ? getCreateDraft(scope) : null));
+  const [title, setTitle] = useState(initialDraft?.title ?? "");
+  const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [nonce, setNonce] = useState(0);
   const [stateId, setStateId] = useState<string | null>(null);
   const [priority, setPriority] = useState<number | null>(null);
@@ -94,6 +108,8 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
     teamList.find((t) => t.key === defaultKey) ??
     teamList[0];
   const meta = useTeamMeta(team?.id);
+  // Nur Personen mit Teamzugang als Assignee anbieten (B4.33).
+  const assignable = useAssignableUsers(team?.id);
   const presetApplies = chosenTeamId === null; // Kontextwerte gelten nur fürs Vorgabeteam
   const m = meta.data;
   const states = m?.states ?? [];
@@ -116,6 +132,11 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
       : id === me?.id
         ? me.name
         : (users.find((u) => u.id === id)?.name ?? "Assigned");
+
+  // Entwurf mitschreiben: übersteht Session-Ablauf (Login-Rücksprung) und Reload.
+  useEffect(() => {
+    if (scope) saveCreateDraft(scope, { title, description });
+  }, [scope, title, description]);
 
   const titleMissing = title.trim() === "";
   const canSubmit = !!team && !titleMissing && !create.isPending;
@@ -157,6 +178,7 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
       },
       {
         onSuccess: (issue) => {
+          if (scope) clearCreateDraft(scope);
           showToast({
             message: `${issue.identifier} created`,
             href: `/${session?.workspace.urlKey ?? ""}/issue/${issue.identifier}`,
@@ -207,7 +229,13 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
         </span>
         <DialogTitle className="text-sm font-normal text-muted-foreground">New issue</DialogTitle>
         <div className="ml-auto flex items-center gap-1">
-          <Button type="button" variant="ghost" size="icon" aria-label="Close" onClick={onClose}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Close"
+            onClick={onRequestClose}
+          >
             <X className="size-3.5" />
           </Button>
         </div>
@@ -240,7 +268,7 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
         />
         <RichEditor
           key={nonce}
-          value=""
+          value={nonce === 0 ? (initialDraft?.description ?? "") : ""}
           ariaLabel="Description"
           placeholder="Add description…"
           users={[...(me ? [me] : []), ...users.filter((u) => u.id !== me?.id)]}
@@ -345,7 +373,7 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
       <PropertyPicker
         {...pickerProps("assignee")}
         title="Assign to…"
-        options={assigneeOptions(users, me)}
+        options={assigneeOptions(assignable, me)}
         selected={effectiveAssignee ?? NONE}
         onSelect={(id) => setAssigneeId(id === NONE ? null : id)}
       />
@@ -386,17 +414,53 @@ function CreateIssueForm({ preset, onClose }: FormProps) {
 export function CreateIssueModal() {
   const { createIssueOpen } = useUiState();
   const preset = useCreatePreset();
+  const session = useSession();
+  const scope = session ? draftScope(session.user.id, session.workspace.id) : null;
+  const [confirming, setConfirming] = useState(false);
   useShortcutContext("modal", createIssueOpen);
 
   const close = () => {
+    setConfirming(false);
     setUiState({ createIssueOpen: false });
     clearCreatePreset();
   };
+  // Esc, Backdrop-Klick und X: bei ungespeichertem Inhalt erst nachfragen (B4.26).
+  const requestClose = () => {
+    if (scope && hasCreateDraft(scope)) setConfirming(true);
+    else close();
+  };
 
   return (
-    <Dialog open={createIssueOpen} onOpenChange={(o) => !o && close()}>
+    <Dialog open={createIssueOpen} onOpenChange={(o) => !o && requestClose()}>
       <DialogContent className="max-w-2xl">
-        {createIssueOpen && <CreateIssueForm preset={preset} onClose={close} />}
+        {createIssueOpen && (
+          <CreateIssueForm preset={preset} onClose={close} onRequestClose={requestClose} />
+        )}
+        {createIssueOpen && confirming && (
+          <div
+            role="alertdialog"
+            aria-label="Discard this issue?"
+            className="flex items-center gap-3 border-t border-border bg-surface px-4 py-2.5 text-sm"
+          >
+            <span className="mr-auto">
+              Discard this issue? Your title and description are lost.
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setConfirming(false)}>
+              Keep editing
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (scope) clearCreateDraft(scope);
+                close();
+              }}
+            >
+              Discard
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

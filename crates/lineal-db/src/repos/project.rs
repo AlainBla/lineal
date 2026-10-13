@@ -987,7 +987,8 @@ impl ProjectRepo for PgTx {
     ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO notification_subscription (organization_id, subscriber_id, target_type, project_id, \
-             created_at, updated_at) VALUES ($1, $2, 'project', $3, $4, $4) ON CONFLICT DO NOTHING",
+             notification_subscription_types, created_at, updated_at) \
+             VALUES ($1, $2, 'project', $3, ARRAY['projectUpdateCreated']::text[], $4, $4) ON CONFLICT DO NOTHING",
         )
         .bind(self.org.0)
         .bind(user.0)
@@ -1646,7 +1647,10 @@ impl ProjectRepo for PgTx {
         };
         sqlx::query(
             "INSERT INTO notification (organization_id, user_id, type, category, target_type, project_id, \
-             initiative_id, created_at, updated_at) VALUES ($1, $2, $3, 'reminders', $4, $5, $6, $7, $7)",
+             initiative_id, is_priority, created_at, updated_at) \
+             VALUES ($1, $2, $3, 'reminders', $4, $5, $6, \
+                     COALESCE((SELECT 'reminders' = ANY(u.notification_priority_categories) FROM \"user\" u \
+                               WHERE u.organization_id = $1 AND u.id = $2), false), $7, $7)",
         )
         .bind(self.org.0)
         .bind(recipient.0)

@@ -38,6 +38,7 @@ pub fn periodic_jobs() -> Vec<Arc<dyn PeriodicJob>> {
         Arc::new(team_purge::TeamPurgeJob),
         Arc::new(audit_retention::AuditRetentionJob),
         Arc::new(recurring_issues::RecurringIssuesJob),
+        Arc::new(sort_renumber::SortRenumberJob),
     ]
 }
 

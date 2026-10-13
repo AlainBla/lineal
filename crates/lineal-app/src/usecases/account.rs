@@ -104,11 +104,9 @@ impl App {
         require_write(ctx)?;
         let mut patch = ProfilePatch::default();
         if let Some(n) = &input.name {
-            let n = n.trim();
-            if n.is_empty() || n.chars().count() > 255 {
-                return Err(field_error("name", "name must be 1-255 characters"));
-            }
-            patch.name = Some(n.to_owned());
+            patch.name = Some(lineal_domain::rules::text::validate_single_line_name(
+                "name", n, 255,
+            )?);
         }
         if let Some(tz) = &input.timezone {
             if let Some(tz) = tz {
