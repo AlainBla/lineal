@@ -50,7 +50,6 @@ export function useNotifications(f: InboxFilter) {
 
 export type InboxAction =
   | { kind: "read"; id: string; read: boolean }
-  | { kind: "readMany"; ids: string[] }
   | { kind: "snooze"; id: string; until: string }
   | { kind: "archive"; id: string }
   | { kind: "markAllRead" }
@@ -64,18 +63,6 @@ async function run(a: InboxAction): Promise<void> {
           notificationUpdate(id: $id, input: $input) { success }
         }`,
         { id: a.id, input: { read: a.read } },
-      );
-      return;
-    case "readMany":
-      await Promise.all(
-        a.ids.map((id) =>
-          gqlRequest(
-            `mutation InboxMarkRead($id: String!, $input: NotificationUpdateInput!) {
-              notificationUpdate(id: $id, input: $input) { success }
-            }`,
-            { id, input: { read: true } },
-          ),
-        ),
       );
       return;
     case "snooze":
@@ -112,10 +99,13 @@ export function applyInboxAction(
   now: string,
 ): Notification[] {
   switch (a.kind) {
-    case "read":
-      return list.map((n) => (n.id === a.id ? { ...n, readAt: a.read ? now : null } : n));
-    case "readMany":
-      return list.map((n) => (a.ids.includes(n.id) && !n.readAt ? { ...n, readAt: now } : n));
+    case "read": {
+      // Der Server setzt gelesen/ungelesen für die ganze Gruppe (docs/05 §6.8).
+      const key = list.find((n) => n.id === a.id)?.groupKey;
+      return list.map((n) =>
+        n.id === a.id || (key && n.groupKey === key) ? { ...n, readAt: a.read ? now : null } : n,
+      );
+    }
     case "snooze":
     case "archive": {
       // Snooze und Löschen gelten für die ganze Gruppe (docs/05 §6.4/§6.8).

@@ -118,7 +118,7 @@ describe("inbox-model", () => {
 });
 
 describe("InboxPage F.09", () => {
-  it("zeigt je groupKey eine Zeile mit Zähler und markiert beim Öffnen alle Ungelesenen", async () => {
+  it("zeigt je groupKey eine Zeile mit Zähler und markiert beim Öffnen die ganze Gruppe mit einem Aufruf", async () => {
     const gql = mockGraphql({
       InboxNotifications: () =>
         page([
@@ -135,7 +135,8 @@ describe("InboxPage F.09", () => {
     expect(screen.getByTestId("group-badge")).toHaveTextContent("+1");
     expect(screen.getByText("2 unread")).toBeInTheDocument();
     await user.click(screen.getAllByText("Login kaputt")[0]!);
-    await waitFor(() => expect(gql.of("InboxMarkRead")).toHaveLength(2));
+    await waitFor(() => expect(gql.of("InboxMarkRead")).toHaveLength(1));
+    expect(gql.of("InboxMarkRead")[0]!.variables).toMatchObject({ input: { read: true } });
   });
 
   it("Priority inbox: Tabs Priority und Other aus den Display options", async () => {

@@ -435,12 +435,10 @@ export function InboxPage({ ws }: { ws: string }) {
     document.title = "Inbox · Lineal";
   }, []);
 
-  // Öffnen einer Gruppe markiert alle ungelesenen Notifications darin als gelesen.
+  // Öffnen einer Gruppe markiert sie als gelesen (der Server gilt für die ganze Gruppe).
   const open = (g: InboxGroup) => {
     setSelectedId(g.latest.id);
-    const unread = g.items.filter((n) => !n.readAt);
-    if (unread.length === 1) act.mutate({ kind: "read", id: unread[0]!.id, read: true });
-    else if (unread.length > 1) act.mutate({ kind: "readMany", ids: unread.map((n) => n.id) });
+    if (g.unread > 0) act.mutate({ kind: "read", id: g.latest.id, read: true });
   };
   const move = (d: 1 | -1) => {
     const from = idx < 0 ? (d === 1 ? -1 : groups.length) : idx;
@@ -495,12 +493,7 @@ export function InboxPage({ ws }: { ws: string }) {
       description: "Mark read / unread",
       run: () => {
         if (!selectedGroup) return false;
-        if (selectedGroup.unread > 0)
-          act.mutate({
-            kind: "readMany",
-            ids: selectedGroup.items.filter((n) => !n.readAt).map((n) => n.id),
-          });
-        else act.mutate({ kind: "read", id: selectedGroup.latest.id, read: false });
+        act.mutate({ kind: "read", id: selectedGroup.latest.id, read: selectedGroup.unread === 0 });
       },
     },
     {
