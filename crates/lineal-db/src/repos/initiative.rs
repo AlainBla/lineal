@@ -198,12 +198,9 @@ impl InitiativeRepo for PgTx {
     }
 
     async fn lock_hierarchy(&mut self) -> AppResult<()> {
-        sqlx::query("SELECT 1 FROM organization WHERE id = $1 FOR UPDATE")
-            .bind(self.org.0)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
-        Ok(())
+        // Advisory-Sperre statt `FOR UPDATE` auf der organization-Zeile: Letzteres kollidiert mit
+        // den KEY-SHARE-Sperren jedes Inserts mit `organization_id` (Deadlock, Workspace-Stau).
+        self.advisory_lock_inner("initiative_hierarchy", None).await
     }
 
     async fn insert(&mut self, i: &NewInitiative) -> AppResult<()> {

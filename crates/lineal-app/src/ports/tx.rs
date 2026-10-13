@@ -25,6 +25,16 @@ pub trait Tx: Send {
     /// aus der Sequenz `sync_seq` gezogen und danach wiederverwendet).
     async fn last_sync_id(&mut self) -> AppResult<i64>;
 
+    /// Nimmt eine transaktionsgebundene Advisory-Sperre `(Workspace, scope, key)`; sie wird mit
+    /// Commit/Rollback frei. Dient dazu, Hierarchie-Prüfungen (Zyklus, Tiefe, Invarianten)
+    /// serialisiert auszuführen, ohne Zeilen mit `FOR UPDATE` zu sperren (das kollidiert mit
+    /// Fremdschlüssel-Inserts anderer Transaktionen und erzeugt Deadlocks).
+    /// Reihenfolge-Regel: Advisory-Sperren vor Zeilensperren und nie mehrere verschiedene
+    /// `scope`-Werte in wechselnder Reihenfolge. Standard: keine Sperre (Fake-Store).
+    async fn advisory_lock(&mut self, _scope: &str, _key: Option<uuid::Uuid>) -> AppResult<()> {
+        Ok(())
+    }
+
     fn orgs(&mut self) -> &mut dyn OrgRepo;
     fn users(&mut self) -> &mut dyn UserRepo;
     fn auth(&mut self) -> &mut dyn AuthRepo;

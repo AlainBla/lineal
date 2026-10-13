@@ -86,6 +86,24 @@ pub struct PgTx {
 }
 
 impl PgTx {
+    /// Siehe [`Tx::advisory_lock`].
+    pub(crate) async fn advisory_lock_inner(
+        &mut self,
+        scope: &str,
+        key: Option<uuid::Uuid>,
+    ) -> AppResult<()> {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!(
+                "lineal:{}:{scope}:{}",
+                self.org.0,
+                key.map(|k| k.to_string()).unwrap_or_default()
+            ))
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Zieht beim ersten Aufruf `nextval('sync_seq')` und liefert danach denselben Wert.
     pub(crate) async fn last_sync_id_inner(&mut self) -> AppResult<i64> {
         if let Some(id) = self.sync_id {
@@ -108,6 +126,10 @@ impl Tx for PgTx {
 
     async fn last_sync_id(&mut self) -> AppResult<i64> {
         self.last_sync_id_inner().await
+    }
+
+    async fn advisory_lock(&mut self, scope: &str, key: Option<uuid::Uuid>) -> AppResult<()> {
+        self.advisory_lock_inner(scope, key).await
     }
 
     fn orgs(&mut self) -> &mut dyn OrgRepo {
