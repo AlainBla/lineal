@@ -1345,9 +1345,8 @@ impl App {
         for e in entries {
             let name = match e.actor_id {
                 Some(actor) => {
-                    if !names.contains_key(&actor) {
-                        let name = tx.users().get(actor).await?.map(|u| u.name);
-                        names.insert(actor, name);
+                    if let std::collections::hash_map::Entry::Vacant(v) = names.entry(actor) {
+                        v.insert(tx.users().get(actor).await?.map(|u| u.name));
                     }
                     names.get(&actor).cloned().flatten()
                 }
