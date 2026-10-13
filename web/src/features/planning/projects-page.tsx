@@ -1,9 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
+import { Plus } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Project } from "@/gql/graphql";
 
+import { openCreateProject } from "./create-dialogs";
 import { useProjects } from "./queries";
 import { DateText, HealthBadge, PageHeader, ProgressBar } from "./ui";
 
@@ -111,6 +115,11 @@ export function ProjectsPage({
             active: false,
           },
         ]}
+        actions={
+          <Button size="sm" onClick={() => openCreateProject({ teamKey })}>
+            <Plus /> New project
+          </Button>
+        }
       />
       <div className="min-h-0 flex-1 overflow-auto">{body}</div>
     </div>

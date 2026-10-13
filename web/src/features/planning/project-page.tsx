@@ -13,17 +13,20 @@ import { RichEditor } from "@/features/issues/rich-editor";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Issue, Project } from "@/gql/graphql";
 
+import { DateField, TextField } from "./fields";
+import { ProjectActions, ProjectDetails } from "./project-details";
 import {
   HEALTH_LABEL,
   useCreateMilestone,
   useDeleteMilestone,
+  useUpdateMilestone,
   usePostProjectUpdate,
   useProject,
   useProjectUpdates,
   useScopedIssues,
   type Health,
 } from "./queries";
-import { DateText, HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
+import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
 export const PROJECT_TABS: ProjectTab[] = ["overview", "issues", "updates", "milestones"];
@@ -127,6 +130,7 @@ function UpdatesFeed({ projectId }: { projectId: string }) {
 function Milestones({ project }: { project: Project }) {
   const create = useCreateMilestone(project.id);
   const del = useDeleteMilestone(project.id);
+  const upd = useUpdateMilestone(project.id);
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
   return (
@@ -136,9 +140,22 @@ function Milestones({ project }: { project: Project }) {
           <li className="px-3 py-2 text-sm text-muted-foreground">No milestones.</li>
         )}
         {project.milestones.map((m) => (
-          <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-            <span className="font-medium">{m.name}</span>
-            <span className="text-xs text-muted-foreground">{shortDate(m.targetDate)}</span>
+          <li key={m.id} className="flex flex-wrap items-end gap-3 px-3 py-2 text-sm">
+            <div className="w-56">
+              <TextField
+                label={`Milestone name ${m.name}`}
+                value={m.name}
+                required
+                maxLength={255}
+                onCommit={(name) => upd.mutate({ id: m.id, input: { name } })}
+              />
+            </div>
+            <DateField
+              label={`Target date of ${m.name}`}
+              date={m.targetDate}
+              dayOnly
+              onChange={(targetDate) => upd.mutate({ id: m.id, input: { targetDate } })}
+            />
             <ProgressBar value={m.progress} label={`Progress of ${m.name}`} />
             <span className="text-xs text-muted-foreground">
               {m.completedIssueCount} / {m.issueCount}
@@ -149,7 +166,12 @@ function Milestones({ project }: { project: Project }) {
               className="ml-auto"
               aria-label={`Delete milestone ${m.name}`}
               onClick={() => {
-                if (window.confirm(`Delete milestone "${m.name}"?`)) del.mutate(m.id);
+                if (
+                  window.confirm(
+                    `Delete milestone "${m.name}"? Its issues stay in the project without a milestone.`,
+                  )
+                )
+                  del.mutate(m.id);
               }}
             >
               Delete
@@ -192,9 +214,9 @@ function Milestones({ project }: { project: Project }) {
           <Plus /> Add milestone
         </Button>
       </form>
-      {(create.isError || del.isError) && (
+      {(create.isError || del.isError || upd.isError) && (
         <p role="alert" className="text-xs text-destructive">
-          {errorText(create.error ?? del.error)}
+          {errorText(create.error ?? del.error ?? upd.error)}
         </p>
       )}
     </div>
@@ -339,26 +361,20 @@ export function ProjectPage({
           to: `/${ws}/project/${projectRef}/${t}`,
           active: t === tab,
         }))}
-        actions={<HealthBadge health={p.health} />}
+        actions={
+          <>
+            <HealthBadge health={p.health} />
+            <ProjectActions project={p} ws={ws} />
+          </>
+        }
       />
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "overview" && (
           <div className="flex max-w-3xl flex-col gap-6 p-4">
-            {p.summary && <p className="text-sm text-muted-foreground">{p.summary}</p>}
-            <dl className="grid grid-cols-3 gap-4">
-              <Prop label="Status">{p.status.name}</Prop>
-              <Prop label="Lead">{p.lead?.name ?? "No lead"}</Prop>
-              <Prop label="Teams">{p.teams.map((t) => t.key ?? t.name).join(", ") || "–"}</Prop>
-              <Prop label="Start">
-                <DateText iso={p.startDate} resolution={p.startDateResolution} />
-              </Prop>
-              <Prop label="Target">
-                <DateText iso={p.targetDate} resolution={p.targetDateResolution} />
-              </Prop>
-              <Prop label="Progress">
-                <ProgressBar value={p.progress} />
-              </Prop>
-            </dl>
+            <ProjectDetails project={p} ws={ws} />
+            <Prop label="Progress">
+              <ProgressBar value={p.progress} />
+            </Prop>
             <section aria-label="Latest update">
               <h2 className="mb-2 text-xs font-medium text-muted-foreground">Latest update</h2>
               {latest ? (
@@ -378,17 +394,6 @@ export function ProjectPage({
                 <p className="text-sm text-muted-foreground">No updates yet.</p>
               )}
             </section>
-            {p.description && (
-              <section aria-label="Description">
-                <h2 className="mb-2 text-xs font-medium text-muted-foreground">Description</h2>
-                <RichEditor
-                  key={p.id}
-                  value={p.description}
-                  editable={false}
-                  ariaLabel="Description"
-                />
-              </section>
-            )}
             <section aria-label="Milestones">
               <h2 className="mb-2 text-xs font-medium text-muted-foreground">Milestones</h2>
               {p.milestones.length === 0 ? (

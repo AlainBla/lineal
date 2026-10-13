@@ -1,9 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 
+import { Plus } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Initiative } from "@/gql/graphql";
 
+import { openCreateInitiative } from "./create-dialogs";
 import { useInitiatives } from "./queries";
 import { DateText, HealthBadge, PageHeader } from "./ui";
 
@@ -120,6 +124,11 @@ export function InitiativesPage({ ws, tab }: { ws: string; tab: InitiativesTab }
           })),
           { label: "Roadmap", to: `/${ws}/roadmap`, active: false },
         ]}
+        actions={
+          <Button size="sm" onClick={openCreateInitiative}>
+            <Plus /> New initiative
+          </Button>
+        }
       />
       <div className="min-h-0 flex-1 overflow-auto">{body}</div>
     </div>

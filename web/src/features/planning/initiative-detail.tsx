@@ -2,21 +2,28 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { errorText } from "@/features/issues/error-text";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Initiative } from "@/gql/graphql";
 
+import { openCreateProject } from "./create-dialogs";
+import { RefList } from "./fields";
+import { InitiativeActions, InitiativeDetails } from "./initiative-details";
 import {
   HEALTH_LABEL,
   useInitiative,
+  useInitiatives,
+  useInitiativeLinks,
+  useProjects,
   useInitiativeDocuments,
   useInitiativeUpdates,
   usePostInitiativeUpdate,
   type Health,
 } from "./queries";
 import { RoadmapPage } from "./roadmap-page";
-import { DateText, HealthBadge, PageHeader } from "./ui";
+import { HealthBadge, PageHeader } from "./ui";
 
 export type InitiativeTab =
   "overview" | "projects" | "updates" | "documents" | "sub-initiatives" | "roadmap";
@@ -44,59 +51,63 @@ function Overview({ i }: { i: Initiative }) {
   const r = i.healthRollup;
   return (
     <div className="flex max-w-3xl flex-col gap-6 overflow-auto p-4">
-      {i.summary && <p className="text-sm text-muted-foreground">{i.summary}</p>}
-      <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-        <div>
-          <dt className="text-xs text-muted-foreground">Status</dt>
-          <dd>{i.status}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Owner</dt>
-          <dd>{i.owner?.name ?? "–"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Target</dt>
-          <dd>
-            <DateText iso={i.targetDate} resolution={i.targetDateResolution} />
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Lead team</dt>
-          <dd>{i.leadTeam?.name ?? "–"}</dd>
-        </div>
-      </dl>
+      <InitiativeDetails initiative={i} />
       <section aria-label="Project health">
         <h2 className="mb-2 text-xs font-medium text-muted-foreground">Project health</h2>
         <p className="text-sm tabular-nums">
           {r.onTrack} on track · {r.atRisk} at risk · {r.offTrack} off track · {r.none} no update
         </p>
       </section>
-      {i.description && (
-        <section aria-label="Description">
-          <h2 className="mb-2 text-xs font-medium text-muted-foreground">Description</h2>
-          <RichEditor key={i.id} value={i.description} editable={false} ariaLabel="Description" />
-        </section>
-      )}
     </div>
   );
 }
 
 function Projects({ ws, i }: { ws: string; i: Initiative }) {
-  if (i.projects.length === 0) return <EmptyState title="No projects" />;
+  const links = useInitiativeLinks(i.id);
+  const all = useProjects({});
+  const error = links.addProject.error ?? links.removeProject.error;
   return (
-    <ul className="m-4 max-w-3xl divide-y divide-border rounded-lg border border-border">
-      {i.projects.map((p) => (
-        <li key={p.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-          <Link to={`/${ws}/project/${p.identifier}/overview` as "/"} className="hover:underline">
-            {p.name}
-          </Link>
-          <span className="text-xs text-muted-foreground">{p.status}</span>
-          <span className="ml-auto">
-            <HealthBadge health={p.health} />
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex max-w-3xl flex-col gap-3 p-4">
+      <div>
+        <Button size="sm" onClick={() => openCreateProject({ initiativeRef: i.id })}>
+          New project in this initiative
+        </Button>
+      </div>
+      <RefList
+        label="Projects"
+        items={i.projects}
+        choices={(all.data ?? []).map((p) => ({ value: p.id, label: p.name }))}
+        addLabel="Add project…"
+        busy={links.addProject.isPending || links.removeProject.isPending}
+        onAdd={(id) => links.addProject.mutate(id)}
+        onRemove={(id) => links.removeProject.mutate(id)}
+      />
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(error)}
+        </p>
+      )}
+      {i.projects.length === 0 ? (
+        <EmptyState title="No projects" />
+      ) : (
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {i.projects.map((p) => (
+            <li key={p.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+              <Link
+                to={`/${ws}/project/${p.identifier}/overview` as "/"}
+                className="hover:underline"
+              >
+                {p.name}
+              </Link>
+              <span className="text-xs text-muted-foreground">{p.status}</span>
+              <span className="ml-auto">
+                <HealthBadge health={p.health} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -201,17 +212,41 @@ function Documents({ ws, initiativeId }: { ws: string; initiativeId: string }) {
 }
 
 function SubInitiatives({ ws, i }: { ws: string; i: Initiative }) {
-  if (i.subInitiatives.length === 0) return <EmptyState title="No sub-initiatives" />;
+  const links = useInitiativeLinks(i.id);
+  const all = useInitiatives();
+  const error = links.addSub.error ?? links.removeSub.error;
   return (
-    <ul className="m-4 max-w-3xl divide-y divide-border rounded-lg border border-border">
-      {i.subInitiatives.map((s) => (
-        <li key={s.id} className="px-3 py-1.5 text-sm">
-          <Link to={`/${ws}/initiative/${s.id}/overview` as "/"} className="hover:underline">
-            {s.name}
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <div className="flex max-w-3xl flex-col gap-3 p-4">
+      <RefList
+        label="Sub-initiatives"
+        items={i.subInitiatives}
+        choices={(all.data ?? [])
+          .filter((x) => x.id !== i.id)
+          .map((x) => ({ value: x.id, label: x.name }))}
+        addLabel="Add sub-initiative…"
+        busy={links.addSub.isPending || links.removeSub.isPending}
+        onAdd={(id) => links.addSub.mutate(id)}
+        onRemove={(id) => links.removeSub.mutate(id)}
+      />
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(error)}
+        </p>
+      )}
+      {i.subInitiatives.length === 0 ? (
+        <EmptyState title="No sub-initiatives" />
+      ) : (
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {i.subInitiatives.map((s) => (
+            <li key={s.id} className="px-3 py-1.5 text-sm">
+              <Link to={`/${ws}/initiative/${s.id}/overview` as "/"} className="hover:underline">
+                {s.name}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -268,7 +303,12 @@ export function InitiativeDetail({
           to: `${base}/${t}`,
           active: t === tab,
         }))}
-        actions={<HealthBadge health={i.health} />}
+        actions={
+          <>
+            <HealthBadge health={i.health} />
+            <InitiativeActions initiative={i} ws={ws} />
+          </>
+        }
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{body}</div>
     </div>

@@ -12,6 +12,7 @@ import { Topbar } from "@/app/topbar";
 import { setUiState, useUiState } from "@/app/ui-state";
 import { clearAllCreateDrafts } from "@/features/issues/create-store";
 import { IssuesHost } from "@/features/issues/host";
+import { PlanningDialogHost } from "@/features/planning/create-dialogs";
 import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
 import { NARROW_QUERY, useMediaQuery } from "@/lib/use-media-query";
@@ -107,6 +108,7 @@ export function Shell({ session, children }: { session: Session; children: React
       <ShortcutHelp />
       <IssuesHost />
       <ConnectedNewTeamDialog />
+      <PlanningDialogHost />
     </div>
   );
 }

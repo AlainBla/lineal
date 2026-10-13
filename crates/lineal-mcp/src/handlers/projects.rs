@@ -277,6 +277,8 @@ fn save_input(args: &Value) -> AppResult<SaveProjectInput> {
         set_teams: args.get("setTeams").map(|_| arg_list(args, "setTeams")),
         add_teams: arg_list(args, "addTeams"),
         remove_teams: arg_list(args, "removeTeams"),
+        add_members: Vec::new(),
+        remove_members: Vec::new(),
         labels: args.get("labels").map(|_| arg_list(args, "labels")),
         set_initiatives: args
             .get("setInitiatives")

@@ -7,6 +7,18 @@ import type { Initiative } from "@/gql/graphql";
 
 import { InitiativeDetail, INITIATIVE_TABS, isInitiativeTab } from "./initiative-detail";
 
+// Echtzeit-Endpunkt nicht erreichbar: die Beschreibung fällt auf Stufe 1 (Autosave) zurück.
+vi.mock("@/features/collab/use-collab", () => ({
+  useCollab: () => ({
+    provider: null,
+    status: "fallback",
+    canWrite: false,
+    synced: false,
+    everConnected: false,
+    generation: 0,
+  }),
+}));
+
 const ref = (id: string, name: string) => ({ id, name, key: null });
 
 const initiative = (): Initiative => ({
@@ -106,7 +118,7 @@ describe("InitiativeDetail", () => {
     ]) {
       expect(screen.getByRole("link", { name: t })).toBeInTheDocument();
     }
-    expect(screen.getByText("Grow the base")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Grow the base")).toBeInTheDocument();
     expect(screen.getByText(/1 at risk/)).toBeInTheDocument();
   });
 

@@ -294,6 +294,8 @@ pub struct ProjectInput {
     /// Beim Entfernen eines Teams dessen Issues vom Projekt lösen (sonst `invalid_request`).
     pub detach_issues_of_removed_teams: Option<bool>,
     pub labels: Option<Vec<String>>,
+    pub add_members: Option<Vec<String>>,
+    pub remove_members: Option<Vec<String>>,
     pub set_initiatives: Option<Vec<String>>,
     pub add_initiatives: Option<Vec<String>>,
     pub remove_initiatives: Option<Vec<String>>,
@@ -368,6 +370,8 @@ fn project_input(id: Option<String>, i: ProjectInput) -> async_graphql::Result<S
         add_teams: i.add_teams.unwrap_or_default(),
         remove_teams: i.remove_teams.unwrap_or_default(),
         labels: i.labels,
+        add_members: i.add_members.unwrap_or_default(),
+        remove_members: i.remove_members.unwrap_or_default(),
         set_initiatives: i.set_initiatives,
         add_initiatives: i.add_initiatives.unwrap_or_default(),
         remove_initiatives: i.remove_initiatives.unwrap_or_default(),

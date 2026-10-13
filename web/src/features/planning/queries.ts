@@ -11,6 +11,7 @@ import type {
   Initiative,
   InitiativeUpdate,
   IssueConnection,
+  IssueLabel,
   Project,
   ProjectMilestone,
   ProjectUpdate,
@@ -204,7 +205,7 @@ export function useCreateMilestone(projectId: string) {
         }`,
         { projectId, input },
       ),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["planning", "project"] }),
+    onSuccess: () => invalidatePlanning(qc),
   });
 }
 
@@ -218,7 +219,7 @@ export function useDeleteMilestone(projectId: string) {
         }`,
         { projectId, id },
       ),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["planning", "project"] }),
+    onSuccess: () => invalidatePlanning(qc),
   });
 }
 
@@ -233,7 +234,7 @@ export function useUpdateProject() {
         }`,
         v,
       ),
-    onSettled: () => void qc.invalidateQueries({ queryKey: ["planning"] }),
+    onSettled: () => invalidatePlanning(qc),
   });
 }
 
@@ -353,7 +354,7 @@ export function useUpdateInitiative() {
         }`,
         v,
       ),
-    onSettled: () => void qc.invalidateQueries({ queryKey: ["planning"] }),
+    onSettled: () => invalidatePlanning(qc),
   });
 }
 
@@ -406,5 +407,182 @@ export function useInitiativeDocuments(initiativeId: string | undefined) {
           { signal },
         )
       ).documents.nodes,
+  });
+}
+
+// ---------- Anlegen, Bearbeiten, Verknüpfen (F.01) ----------
+// Rechte und Regeln entscheidet allein der Server; die Hooks reichen Fehler an die Oberfläche durch.
+
+const invalidatePlanning = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ["planning"] });
+  void qc.invalidateQueries({ queryKey: ["trash"] });
+  // Teams-Metadaten der Issue-Screens enthalten Projekte und Meilensteine.
+  void qc.invalidateQueries({ queryKey: ["team-meta"] });
+};
+
+export function useProjectLabels() {
+  return useQuery({
+    queryKey: ["planning", "project-labels"] as const,
+    staleTime: 60_000,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ projectLabels: IssueLabel[] }>(
+          `query PlanningProjectLabels { projectLabels(includeGroups: false, first: 200) { id name color } }`,
+          undefined,
+          { signal },
+        )
+      ).projectLabels,
+  });
+}
+
+export function useCreateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: Record<string, unknown>) => {
+      const res = await gqlRequest<
+        { projectCreate: { project: Project | null } },
+        { input: Record<string, unknown> }
+      >(
+        `mutation PlanningProjectCreate($input: ProjectInput!) {
+          projectCreate(input: $input) { success project { id identifier slugId name } }
+        }`,
+        { input },
+      );
+      if (!res.projectCreate.project) throw new Error("Project was not created");
+      return res.projectCreate.project;
+    },
+    onSuccess: () => invalidatePlanning(qc),
+  });
+}
+
+export function useCreateInitiative() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: Record<string, unknown>) => {
+      const res = await gqlRequest<
+        { initiativeCreate: { initiative: Initiative | null } },
+        { input: Record<string, unknown> }
+      >(
+        `mutation PlanningInitiativeCreate($input: InitiativeInput!) {
+          initiativeCreate(input: $input) { success initiative { id identifier slugId name } }
+        }`,
+        { input },
+      );
+      if (!res.initiativeCreate.initiative) throw new Error("Initiative was not created");
+      return res.initiativeCreate.initiative;
+    },
+    onSuccess: () => invalidatePlanning(qc),
+  });
+}
+
+/** Archivieren/Wiederherstellen und Löschen (Papierkorb) eines Projekts. */
+export function useProjectLifecycle() {
+  const qc = useQueryClient();
+  return {
+    archive: useMutation({
+      mutationFn: async (v: { id: string; archived: boolean }) =>
+        gqlRequest(
+          `mutation PlanningProjectArchive($id: String!, $archived: Boolean) {
+            projectArchive(id: $id, archived: $archived) { success }
+          }`,
+          v,
+        ),
+      onSuccess: () => invalidatePlanning(qc),
+    }),
+    remove: useMutation({
+      mutationFn: async (id: string) =>
+        gqlRequest(
+          `mutation PlanningProjectDelete($id: String!) { projectDelete(id: $id) { success } }`,
+          { id },
+        ),
+      onSuccess: () => invalidatePlanning(qc),
+    }),
+  };
+}
+
+export function useInitiativeLifecycle() {
+  const qc = useQueryClient();
+  return {
+    archive: useMutation({
+      mutationFn: async (v: { id: string; archived: boolean }) =>
+        gqlRequest(
+          `mutation PlanningInitiativeArchive($id: String!, $archived: Boolean) {
+            initiativeArchive(id: $id, archived: $archived) { success }
+          }`,
+          v,
+        ),
+      onSuccess: () => invalidatePlanning(qc),
+    }),
+    remove: useMutation({
+      mutationFn: async (id: string) =>
+        gqlRequest(
+          `mutation PlanningInitiativeDelete($id: String!) { initiativeDelete(id: $id) { success } }`,
+          { id },
+        ),
+      onSuccess: () => invalidatePlanning(qc),
+    }),
+  };
+}
+
+/** Projekte und Sub-Initiativen einer Initiative zu-/abordnen. */
+export function useInitiativeLinks(initiativeId: string) {
+  const qc = useQueryClient();
+  const done = () => invalidatePlanning(qc);
+  return {
+    addProject: useMutation({
+      mutationFn: async (projectId: string) =>
+        gqlRequest(
+          `mutation PlanningInitiativeProjectAdd($initiativeId: String!, $projectId: String!) {
+            initiativeToProjectCreate(initiativeId: $initiativeId, projectId: $projectId) { success }
+          }`,
+          { initiativeId, projectId },
+        ),
+      onSuccess: done,
+    }),
+    removeProject: useMutation({
+      mutationFn: async (projectId: string) =>
+        gqlRequest(
+          `mutation PlanningInitiativeProjectRemove($initiativeId: String!, $projectId: String!) {
+            initiativeToProjectDelete(initiativeId: $initiativeId, projectId: $projectId) { success }
+          }`,
+          { initiativeId, projectId },
+        ),
+      onSuccess: done,
+    }),
+    // Eine Sub-Initiative entsteht, indem die Kind-Initiative diese als Eltern bekommt.
+    addSub: useMutation({
+      mutationFn: async (childId: string) =>
+        gqlRequest(
+          `mutation PlanningSubInitiativeAdd($id: String!, $input: InitiativeInput!) {
+            initiativeUpdate(id: $id, input: $input) { success }
+          }`,
+          { id: childId, input: { parentInitiatives: [initiativeId] } },
+        ),
+      onSuccess: done,
+    }),
+    removeSub: useMutation({
+      mutationFn: async (childId: string) =>
+        gqlRequest(
+          `mutation PlanningSubInitiativeRemove($initiativeId: String!, $parentId: String!) {
+            initiativeParentRemove(initiativeId: $initiativeId, parentId: $parentId) { success }
+          }`,
+          { initiativeId: childId, parentId: initiativeId },
+        ),
+      onSuccess: done,
+    }),
+  };
+}
+
+export function useUpdateMilestone(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; input: Record<string, unknown> }) =>
+      gqlRequest(
+        `mutation PlanningMilestoneUpdate($projectId: String!, $id: String!, $input: MilestoneInput!) {
+          projectMilestoneUpdate(projectId: $projectId, id: $id, input: $input) { success }
+        }`,
+        { projectId, ...v },
+      ),
+    onSuccess: () => invalidatePlanning(qc),
   });
 }

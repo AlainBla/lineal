@@ -61,6 +61,10 @@ pub struct SaveProjectInput {
     pub remove_teams: Vec<String>,
     /// Ersetzt die Label-Menge.
     pub labels: Option<Vec<String>>,
+    /// Fügt Mitglieder hinzu (Gäste nur mit Zugriff auf ein Projekt-Team, docs/04 §2.2).
+    pub add_members: Vec<String>,
+    /// Entfernt Mitglieder (der Lead bleibt Mitglied).
+    pub remove_members: Vec<String>,
     pub set_initiatives: Option<Vec<String>>,
     pub add_initiatives: Vec<String>,
     pub remove_initiatives: Vec<String>,
@@ -800,6 +804,11 @@ impl App {
             tx.projects().add_member(id, l.id, now).await?;
             tx.projects().subscribe(id, l.id, now).await?;
         }
+        for r in &input.add_members {
+            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
+            check_member_allowed(tx, snap, &u, &ids).await?;
+            tx.projects().add_member(id, u.id, now).await?;
+        }
         if !labels.is_empty() {
             tx.projects().set_labels(id, &labels, now).await?;
         }
@@ -1162,6 +1171,28 @@ impl App {
             tx.projects().subscribe(project.id, l, now).await?;
         }
         if !added.is_empty() || !removed.is_empty() {
+            changed = true;
+        }
+        let lead_now = match &input.lead {
+            Some(None) => None,
+            Some(Some(_)) => new_lead_user,
+            None => project.lead_id,
+        };
+        for r in &input.add_members {
+            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
+            check_member_allowed(tx, snap, &u, &final_teams).await?;
+            tx.projects().add_member(project.id, u.id, now).await?;
+            changed = true;
+        }
+        for r in &input.remove_members {
+            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
+            if lead_now == Some(u.id) {
+                return Err(AppError::invalid_request(
+                    "The project lead stays a member; change the lead first.",
+                )
+                .with_details(json!({ "field": "removeMembers", "user": u.id.to_string() })));
+            }
+            tx.projects().remove_member(project.id, u.id).await?;
             changed = true;
         }
         for (url, title) in &input.links {

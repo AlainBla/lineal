@@ -1894,6 +1894,8 @@ input ProjectInput {
 	"""
 	detachIssuesOfRemovedTeams: Boolean
 	labels: [String!]
+	addMembers: [String!]
+	removeMembers: [String!]
 	setInitiatives: [String!]
 	addInitiatives: [String!]
 	removeInitiatives: [String!]

@@ -9,6 +9,18 @@ import { buildInitiativeTree } from "./initiatives-page";
 import { ProjectPage } from "./project-page";
 import { filterProjects } from "./projects-page";
 
+// Echtzeit-Endpunkt nicht erreichbar: die Beschreibung fällt auf Stufe 1 (Autosave) zurück.
+vi.mock("@/features/collab/use-collab", () => ({
+  useCollab: () => ({
+    provider: null,
+    status: "fallback",
+    canWrite: false,
+    synced: false,
+    everConnected: false,
+    generation: 0,
+  }),
+}));
+
 const ref = (id: string, name: string, key: string | null = null) => ({ id, name, key });
 
 function project(over: Partial<Project> = {}): Project {
@@ -92,8 +104,9 @@ describe("ProjectPage", () => {
       expect(screen.getByRole("link", { name: t })).toBeInTheDocument();
     }
     expect(screen.getByText("At risk")).toBeInTheDocument();
-    expect(screen.getByText("Rebuild checkout")).toBeInTheDocument();
-    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Rebuild checkout")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveValue("Checkout Relaunch");
+    expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
   });
 
   it("posts a status update with health", async () => {
