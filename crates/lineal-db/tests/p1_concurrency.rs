@@ -3,10 +3,12 @@
 //! Erwartung: nie `internal`, Invarianten per SQL geprüft.
 
 use lineal_app::ports::Store;
+use lineal_app::ports::repos::label::LabelKind;
 use lineal_app::ports::repos::view::ViewModel;
 use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::initiative::SaveInitiativeInput;
 use lineal_app::usecases::issue::{CreateIssueInput, RelationChanges, UpdateIssueInput};
+use lineal_app::usecases::label::SaveLabelInput;
 use lineal_app::usecases::template::SaveTemplateInput;
 use lineal_app::usecases::view::{CreateViewInput, UpdateViewInput};
 use lineal_app::{App, AppError, ErrorKind, RequestCtx};
@@ -627,4 +629,143 @@ async fn b1_06_template_updates_are_not_lost(pool: PgPool) {
             "round {round}: Update verloren"
         );
     }
+}
+
+impl Fx {
+    async fn label(&self, name: &str) -> String {
+        self.app
+            .save_label(
+                &alice(),
+                LabelKind::Issue,
+                SaveLabelInput {
+                    name: Some(name.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .label
+            .id
+            .to_string()
+    }
+
+    fn add_label(
+        &self,
+        issue: Uuid,
+        label: &str,
+    ) -> impl std::future::Future<Output = Result<(), AppError>> + Send + 'static {
+        let app = self.app.clone();
+        let label = label.to_owned();
+        async move {
+            app.update_issue(
+                &alice(),
+                UpdateIssueInput {
+                    id: issue.to_string(),
+                    add_labels: vec![label],
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+        }
+    }
+}
+
+/// B1.07: Label-Merge parallel zur Zuordnung: nichts geht still verloren.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_07_label_merge_does_not_lose_assignments(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let src = fx.label(&format!("src{round}")).await;
+        let dst = fx.label(&format!("dst{round}")).await;
+        let mut issues = Vec::new();
+        for n in 0..6 {
+            issues.push(fx.issue(&format!("L{round}.{n}")).await);
+        }
+        let merge = {
+            let app = fx.app.clone();
+            let (src, dst) = (src.clone(), dst.clone());
+            async move {
+                app.merge_issue_label(&alice(), &src, &dst)
+                    .await
+                    .map(|_| ())
+            }
+        };
+        let adds = issues.iter().map(|i| fx.add_label(*i, &src));
+        let (m, rs) = tokio::join!(merge, futures_join_all(adds));
+        assert_no_internal("label merge", &[m]);
+        assert_no_internal("label add", &rs);
+        for (i, r) in issues.iter().zip(&rs) {
+            let has_dst: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM issue_to_label WHERE issue_id = $1 AND label_id = $2::uuid)",
+            )
+            .bind(i)
+            .bind(&dst)
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+            if r.is_ok() {
+                assert!(has_dst, "round {round}: erfolgreiche Zuordnung verloren");
+            } else {
+                assert_eq!(r.as_ref().unwrap_err().kind, ErrorKind::NotFound, "{r:?}");
+            }
+        }
+    }
+}
+
+/// B1.07: Label löschen parallel zur Zuordnung: kein internal.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_07_label_delete_parallel_to_assignment(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let label = fx.label(&format!("del{round}")).await;
+        let mut issues = Vec::new();
+        for n in 0..6 {
+            issues.push(fx.issue(&format!("D{round}.{n}")).await);
+        }
+        let del = {
+            let app = fx.app.clone();
+            let label = label.clone();
+            async move { app.delete_issue_label(&alice(), &label).await.map(|_| ()) }
+        };
+        let adds = issues.iter().map(|i| fx.add_label(*i, &label));
+        let (d, rs) = tokio::join!(del, futures_join_all(adds));
+        assert_no_internal("label delete", &[d]);
+        assert_no_internal("label add", &rs);
+    }
+}
+
+/// Führt Futures gleichzeitig aus (ohne futures-Crate).
+async fn futures_join_all<F, T>(it: impl IntoIterator<Item = F>) -> Vec<T>
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut set = tokio::task::JoinSet::new();
+    for (n, f) in it.into_iter().enumerate() {
+        set.spawn(async move { (n, f.await) });
+    }
+    let mut out = Vec::new();
+    while let Some(r) = set.join_next().await {
+        out.push(r.unwrap());
+    }
+    out.sort_by_key(|(n, _)| *n);
+    out.into_iter().map(|(_, t)| t).collect()
+}
+
+/// B1.19: Nutzungsanzahl eines Labels ignoriert Issues im Papierkorb.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_19_label_usage_ignores_trashed_issues(pool: PgPool) {
+    let fx = setup(pool).await;
+    let label = fx.label("usage").await;
+    let a = fx.issue("A").await;
+    let b = fx.issue("B").await;
+    fx.add_label(a, &label).await.unwrap();
+    fx.add_label(b, &label).await.unwrap();
+    assert_eq!(fx.app.issue_label_usage(&alice(), &label).await.unwrap(), 2);
+    fx.app
+        .delete_issue(&alice(), &b.to_string(), false)
+        .await
+        .unwrap();
+    assert_eq!(fx.app.issue_label_usage(&alice(), &label).await.unwrap(), 1);
 }

@@ -841,6 +841,15 @@ impl IssueRepo for PgTx {
             .await
             .map_err(db_err)?;
         }
+        // Zuordnung und Merge/Löschen desselben Labels serialisieren (B1.07): Merge/Delete halten
+        // dieselbe Sperre; ein Nachzügler landet danach im Ziel-Label oder scheitert sauber
+        // (Fremdschlüssel, als not_found abgebildet) statt still zu verschwinden.
+        let mut locked: Vec<Uuid> = add.iter().map(|(l, _)| l.0).collect();
+        locked.sort();
+        locked.dedup();
+        for l in locked {
+            self.advisory_lock_inner("issue_label", Some(l)).await?;
+        }
         for (label, group) in add {
             sqlx::query(
                 "INSERT INTO issue_to_label (organization_id, issue_id, label_id, single_select_group_id, created_at) \
