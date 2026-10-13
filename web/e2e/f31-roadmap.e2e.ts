@@ -41,7 +41,8 @@ test("WP31: drag a project bar on the roadmap to move its dates", async ({ page 
   await page.reload();
   await expect(moved).toBeVisible();
   await moved.click();
-  await expect(page.getByText("28 Dec 2026").first()).toBeVisible();
+  // F.01: die Projektseite zeigt das Zieldatum als bearbeitbares Datumsfeld.
+  await expect(page.getByLabel("Target date", { exact: true })).toHaveValue("2026-12-28");
 
   // Zurück auf den Ausgangszustand (die Flows teilen sich die Datenbank).
   sql(

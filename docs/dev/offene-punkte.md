@@ -120,8 +120,10 @@ WP32-Leftovers:
 ## WP36 Echtzeit-Mitbearbeitung (offen)
 
 - Mehrere Server-Instanzen: Räume leben im Prozessspeicher; nötig sind Sticky Sessions je Inhalt oder Pub/Sub zwischen Instanzen (docs/15 §3.5).
-- Web: Projekt- und Initiativ-Beschreibungen haben noch keinen Editor (der Endpunkt `/collab/project|initiative/{id}` ist fertig); Inline-Kommentar-Anker werden im Editor noch nicht als Markierung dargestellt/angelegt (API/GraphQL `anchorStart`/`anchorEnd` und `anchorState` existieren).
+- Web: Projekt- und Initiativ-Beschreibungen nutzen seit F.01 den Collab-Editor (Stufe 1 als Fallback); Inline-Kommentar-Anker werden im Editor noch nicht als Markierung dargestellt/angelegt (API/GraphQL `anchorStart`/`anchorEnd` und `anchorState` existieren).
 - `yrs` ist als gepatchte Kopie `vendor/yrs` eingebunden (zwei Korrekturen, PATCH.md); bei Toolchain-Update auf die Upstream-Version (>= 0.28) zurückwechseln, `exclude` im Workspace streichen.
 - Beschreibungs-Räume führen den Zustand bei API-Schreibvorgängen nicht nach (Abgleich per Markdown-Diff im offenen Raum, sonst Neuaufbau mit neuer Epoche); ungespeicherte Raumänderungen der letzten ≤ 2 s können bei Schreiben ohne Zustandsführung verloren gehen.
 - Ein Schreib-Scope-Verlust trennt die Verbindung (4403); der Client verbindet sich danach nur lesend. Gewonnene Rechte gelten erst nach dem nächsten Verbindungsaufbau.
 - cargo-deny ist hier nicht installiert: Lizenzen von yrs (MIT) und Abhängigkeiten manuell geprüft.
+
+F-A (Planung, F.01/F.04/F.07/F.14/F.19) erledigt, siehe docs/15 §2.2. Offen: Projektstatus nur nach Kategorie wählbar (keine Statusnamen-Abfrage); `addMembers/removeMembers` nicht in MCP; Papierkorb-Listen ohne Cursor (100); Gruppierung nach Meilenstein nur im Projekt-Tab (Team-Listen warten auf F.18); Beitritt zu privaten Teams ohne `confirmPrivateJoin` in der GraphQL-Mutation; Initiativ-Labels und -Eltern (außer Sub-Initiativen) nicht im Web bearbeitbar.
