@@ -686,10 +686,10 @@ impl App {
         if let (ParentRef::Document(doc_id), Some(q)) = (parent, &quoted_text)
             && !quoted_text_occurs(&mut *tx, doc_id, q).await?
         {
-            return Err(AppError::invalid_request(
-                "quotedText does not occur in the document",
-            )
-            .with_details(json!({ "field": "quotedText" })));
+            return Err(
+                AppError::invalid_request("quotedText does not occur in the document")
+                    .with_details(json!({ "field": "quotedText" })),
+            );
         }
 
         let mentioned = mentioned_users(&mut *tx, &snap, &scope, &body).await?;

@@ -822,7 +822,9 @@ fn inline_md(content: &[Pm]) -> String {
 /// `![alt](src "title")`; ohne sichere Adresse nur der Alternativtext.
 fn image_md(n: &Pm) -> String {
     let alt = n.attr_str("alt").unwrap_or("");
-    let src = n.attr_str("src").filter(|s| is_safe_url(s) && !s.is_empty());
+    let src = n
+        .attr_str("src")
+        .filter(|s| is_safe_url(s) && !s.is_empty());
     let alt = alt
         .replace(['\n', '\r'], " ")
         .replace('\\', "\\\\")

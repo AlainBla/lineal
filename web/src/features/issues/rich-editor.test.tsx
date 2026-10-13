@@ -78,13 +78,7 @@ describe("RichEditor (TipTap)", () => {
     frag.insert(0, [table, taskList, imgPara]);
     const before = frag.toString();
 
-    render(
-      <RichEditor
-        value=""
-        ariaLabel="Description"
-        collab={{ provider, canWrite: true }}
-      />,
-    );
+    render(<RichEditor value="" ariaLabel="Description" collab={{ provider, canWrite: true }} />);
     const box = await screen.findByRole("textbox", { name: "Description" });
     await waitFor(() => expect(box.querySelector("table")).not.toBeNull());
     await new Promise((r) => setTimeout(r, 100));

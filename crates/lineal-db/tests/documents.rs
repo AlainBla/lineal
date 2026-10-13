@@ -991,7 +991,10 @@ async fn parallel_patches_and_expected_version_are_atomic(pool: PgPool) {
             .collect::<Vec<_>>()
             .join("\n\n");
         let d = app
-            .save_document(&alice, in_team("ENG", &format!("Parallel {round}"), &content))
+            .save_document(
+                &alice,
+                in_team("ENG", &format!("Parallel {round}"), &content),
+            )
             .await
             .unwrap();
         let id = d.doc.id.to_string();
@@ -1065,10 +1068,19 @@ async fn parallel_patches_and_expected_version_are_atomic(pool: PgPool) {
 async fn identical_content_does_not_bump_the_version(pool: PgPool) {
     let env = setup(pool).await;
     let alice = ctx_for(SeedUser::Alice);
-    let d = create(&env, SeedUser::Alice, in_team("ENG", "Same", "Hallo\n\nWelt")).await;
+    let d = create(
+        &env,
+        SeedUser::Alice,
+        in_team("ENG", "Same", "Hallo\n\nWelt"),
+    )
+    .await;
     let id = d.doc.id.to_string();
     let v0 = d.doc.content_version;
-    let history0 = env.app.document_history(&alice, &id, None, 50).await.unwrap();
+    let history0 = env
+        .app
+        .document_history(&alice, &id, None, 50)
+        .await
+        .unwrap();
     for input in [
         SaveDocumentInput {
             id: Some(id.clone()),
@@ -1097,7 +1109,11 @@ async fn identical_content_does_not_bump_the_version(pool: PgPool) {
     }
     let again = env.app.get_document(&alice, &id).await.unwrap();
     assert_eq!(again.doc.content_version, v0);
-    let history1 = env.app.document_history(&alice, &id, None, 50).await.unwrap();
+    let history1 = env
+        .app
+        .document_history(&alice, &id, None, 50)
+        .await
+        .unwrap();
     assert_eq!(history1.items.len(), history0.items.len());
 }
 
@@ -1113,7 +1129,9 @@ async fn empty_title_with_template_uses_the_template_title(pool: PgPool) {
             lineal_app::usecases::template::SaveTemplateInput {
                 template_type: Some(lineal_domain::enums::TemplateType::Document),
                 name: Some("Testplan".into()),
-                template_data: Some(serde_json::json!({ "title": "Testplan", "content": "## Scope" })),
+                template_data: Some(
+                    serde_json::json!({ "title": "Testplan", "content": "## Scope" }),
+                ),
                 ..Default::default()
             },
         )

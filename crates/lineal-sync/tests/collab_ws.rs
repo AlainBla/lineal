@@ -1184,7 +1184,11 @@ async fn inline_comment_is_validated_before_anything_is_stored(pool: PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
-    assert_eq!(count(&e).await, before, "kein Kommentar bei ungültigem Anker");
+    assert_eq!(
+        count(&e).await,
+        before,
+        "kein Kommentar bei ungültigem Anker"
+    );
     // quotedText kommt im Dokument nicht vor.
     let err = e
         .app
@@ -1532,7 +1536,9 @@ async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: P
             CreateIssueInput {
                 team: "ENG".into(),
                 title: Some("Roh".into()),
-                description: Some("Text <b>fett</b> [x](javascript:alert(1))\n\n<script>alert(1)</script>".into()),
+                description: Some(
+                    "Text <b>fett</b> [x](javascript:alert(1))\n\n<script>alert(1)</script>".into(),
+                ),
                 ..Default::default()
             },
         )
@@ -1540,7 +1546,10 @@ async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: P
         .unwrap();
     let id = created.issue.id.0;
     let stored = created.issue.description.clone().unwrap_or_default();
-    assert!(!stored.contains('<') && !stored.contains("javascript"), "{stored}");
+    assert!(
+        !stored.contains('<') && !stored.contains("javascript"),
+        "{stored}"
+    );
     let updated = e
         .app
         .update_issue(
