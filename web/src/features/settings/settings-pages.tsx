@@ -105,6 +105,10 @@ export function TeamSettingsPage({
 
 function WorkspaceForm({ ws }: { ws: Organization }) {
   const update = useUpdateWorkspace();
+  const session = useSession();
+  // Nur Admins dürfen den Workspace ändern; für alle anderen ist das Formular gesperrt (B5.36).
+  const role = session?.user.role;
+  const canEdit = role === "owner" || role === "admin";
   const [name, setName] = useState(ws.name);
   const [month, setMonth] = useState(ws.fiscalYearStartMonth);
   const [initiatives, setInitiatives] = useState(ws.initiativesEnabled);
@@ -112,10 +116,16 @@ function WorkspaceForm({ ws }: { ws: Organization }) {
     name !== ws.name || month !== ws.fiscalYearStartMonth || initiatives !== ws.initiativesEnabled;
   return (
     <Section title="Workspace" description="Name and basic settings of your workspace.">
+      {!canEdit && (
+        <p role="note" className="text-xs text-muted-foreground">
+          Only workspace admins can change these settings.
+        </p>
+      )}
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
+          if (!canEdit) return;
           update.mutate({
             ...(name !== ws.name ? { name } : {}),
             ...(month !== ws.fiscalYearStartMonth ? { fiscalYearStartMonth: month } : {}),
@@ -123,42 +133,44 @@ function WorkspaceForm({ ws }: { ws: Organization }) {
           });
         }}
       >
-        <Field label="Name">
-          <Input
-            aria-label="Workspace name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </Field>
-        <Field label="URL">
-          <Input aria-label="Workspace URL" value={ws.urlKey} readOnly disabled />
-        </Field>
-        <Field label="Fiscal year starts in">
-          <select
-            aria-label="Fiscal year start"
-            className={selectClass}
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-          >
-            {MONTH_NAMES.map((n, i) => (
-              // Die API zählt 0-11 (0 = Januar); die Anzeige nennt den Monat.
-              <option key={n} value={i}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            aria-label="Enable initiatives"
-            checked={initiatives}
-            onChange={(e) => setInitiatives(e.target.checked)}
-          />
-          Enable initiatives
-        </label>
+        <fieldset disabled={!canEdit} className="flex flex-col gap-3">
+          <Field label="Name">
+            <Input
+              aria-label="Workspace name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </Field>
+          <Field label="URL">
+            <Input aria-label="Workspace URL" value={ws.urlKey} readOnly disabled />
+          </Field>
+          <Field label="Fiscal year starts in">
+            <select
+              aria-label="Fiscal year start"
+              className={selectClass}
+              value={month}
+              onChange={(e) => setMonth(Number(e.target.value))}
+            >
+              {MONTH_NAMES.map((n, i) => (
+                // Die API zählt 0-11 (0 = Januar); die Anzeige nennt den Monat.
+                <option key={n} value={i}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="Enable initiatives"
+              checked={initiatives}
+              onChange={(e) => setInitiatives(e.target.checked)}
+            />
+            Enable initiatives
+          </label>
+        </fieldset>
         <div className="flex items-center gap-3">
-          <Button type="submit" size="sm" disabled={!dirty || update.isPending}>
+          <Button type="submit" size="sm" disabled={!canEdit || !dirty || update.isPending}>
             Save
           </Button>
           {update.isError && (

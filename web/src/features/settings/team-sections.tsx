@@ -230,10 +230,15 @@ export function MembersSection({ team }: { team: Team }) {
   const { add, remove } = useMembership(team.id);
   const [adding, setAdding] = useState(false);
   const all = useWorkspaceMembers(adding);
+  const [search, setSearch] = useState("");
   const candidates = useMemo(() => {
     const ids = new Set((members.data ?? []).map((m) => m.id));
-    return (all.data ?? []).filter((u) => !ids.has(u.id));
-  }, [all.data, members.data]);
+    const q = search.trim().toLowerCase();
+    return (all.data ?? [])
+      .filter((u) => !ids.has(u.id))
+      .filter((u) => !q || `${u.displayName} ${u.name}`.toLowerCase().includes(q))
+      .sort((a, b) => (a.displayName || a.name).localeCompare(b.displayName || b.name));
+  }, [all.data, members.data, search]);
   const [pick, setPick] = useState("");
   return (
     <>
@@ -249,15 +254,30 @@ export function MembersSection({ team }: { team: Team }) {
                 size="sm"
                 className="ml-auto"
                 aria-label={`Remove ${m.displayName || m.name}`}
-                onClick={() => remove.mutate(m.id)}
+                onClick={() => {
+                  if (window.confirm(`Remove ${m.displayName || m.name} from ${team.name}?`))
+                    remove.mutate(m.id);
+                }}
               >
                 Remove
               </Button>
             </li>
           ))}
         </ul>
+        {remove.isError && (
+          <p role="alert" className="text-xs text-destructive">
+            {errorText(remove.error)}
+          </p>
+        )}
         {adding ? (
           <div className="flex items-center gap-2">
+            <Input
+              aria-label="Search people"
+              placeholder="Search people…"
+              className="w-48"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
             <select
               aria-label="Add member"
               className={selectClass}

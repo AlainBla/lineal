@@ -2,10 +2,12 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SESSION_QUERY_KEY } from "@/app/auth";
 import {
   mockGraphql,
   newClient,
   renderWithApp,
+  SESSION,
   STATES,
   TEAM_META,
 } from "@/features/issues/test-fixtures";
@@ -145,11 +147,9 @@ describe("TeamSettingsPage", () => {
       }),
       SettingsWorkspaceUpdate: () => ({ workspaceUpdate: { success: true } }),
     });
-    await renderWithApp(
-      <WorkspaceSettingsPage ws="acme" />,
-      newClient(),
-      "/acme/settings/workspace",
-    );
+    const admin = newClient();
+    admin.setQueryData(SESSION_QUERY_KEY, { ...SESSION, user: { ...SESSION.user, role: "admin" } });
+    await renderWithApp(<WorkspaceSettingsPage ws="acme" />, admin, "/acme/settings/workspace");
     const user = userEvent.setup();
     const select = await screen.findByLabelText("Fiscal year start");
     expect(select).toHaveValue("0");
@@ -159,5 +159,71 @@ describe("TeamSettingsPage", () => {
     expect(gql.of("SettingsWorkspaceUpdate")[0]!.variables).toEqual({
       input: { fiscalYearStartMonth: 11 },
     });
+  });
+
+  it("B5.35: removing a member asks first; the picker is sorted and searchable", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsTeamMembers: () => ({ users: [{ id: "u1", name: "zed", displayName: "Zed" }] }),
+      SettingsWorkspaceMembers: () => ({
+        users: [
+          { id: "u1", name: "zed", displayName: "Zed" },
+          { id: "u3", name: "carl", displayName: "Carl" },
+          { id: "u2", name: "anna", displayName: "Anna" },
+        ],
+      }),
+      SettingsMemberRemove: () => ({ teamMembershipDelete: { success: true } }),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="members" />,
+      newClient(),
+      "/acme/settings/teams/ENG/members",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Remove Zed" }));
+    expect(gql.of("SettingsMemberRemove")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Remove Zed" }));
+    await waitFor(() => expect(gql.of("SettingsMemberRemove")).toHaveLength(1));
+    expect(confirm).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: /Add a member/ }));
+    const select = await screen.findByLabelText("Add member");
+    await waitFor(() =>
+      expect(
+        within(select)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["Choose a person…", "Anna", "Carl"]),
+    );
+    await user.type(screen.getByLabelText("Search people"), "car");
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Choose a person…", "Carl"]);
+    confirm.mockRestore();
+  });
+
+  it("B5.36: non-admins see the workspace form read-only", async () => {
+    mockGraphql({
+      SettingsWorkspace: () => ({
+        workspace: {
+          id: "o1",
+          name: "Acme",
+          urlKey: "acme",
+          fiscalYearStartMonth: 0,
+          initiativesEnabled: true,
+          logoUrl: null,
+        },
+      }),
+    });
+    const member = newClient();
+    member.setQueryData(SESSION_QUERY_KEY, {
+      ...SESSION,
+      user: { ...SESSION.user, role: "user" },
+    });
+    await renderWithApp(<WorkspaceSettingsPage ws="acme" />, member, "/acme/settings/workspace");
+    expect(await screen.findByLabelText("Workspace name")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });
