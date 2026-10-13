@@ -7,6 +7,8 @@ import { useSyncExternalStore } from "react";
 export interface UiState {
   sidebarOpen: boolean;
   commandMenuOpen: boolean;
+  /** Vorbelegter Text beim Öffnen des Command-Menüs (z. B. `i ` für „Open issue…“). */
+  commandMenuQuery: string;
   shortcutHelpOpen: boolean;
   createIssueOpen: boolean;
   /** Dialog „New team“ (Sidebar „+“, Command-Menü, Settings → Teams). */
@@ -28,6 +30,7 @@ function initialSidebar(): boolean {
 let state: UiState = {
   sidebarOpen: initialSidebar(),
   commandMenuOpen: false,
+  commandMenuQuery: "",
   shortcutHelpOpen: false,
   createIssueOpen: false,
   createTeamOpen: false,
@@ -57,8 +60,12 @@ export function toggleSidebar(persist = true) {
   setUiState({ sidebarOpen: !state.sidebarOpen }, { persist });
 }
 
-export function toggleCommandMenu(open = !state.commandMenuOpen) {
-  setUiState({ commandMenuOpen: open, ...(open ? { shortcutHelpOpen: false } : {}) });
+export function toggleCommandMenu(open = !state.commandMenuOpen, query = "") {
+  setUiState({
+    commandMenuOpen: open,
+    commandMenuQuery: open ? query : "",
+    ...(open ? { shortcutHelpOpen: false } : {}),
+  });
 }
 
 export function toggleShortcutHelp(open = !state.shortcutHelpOpen) {
