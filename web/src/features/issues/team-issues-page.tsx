@@ -21,6 +21,7 @@ import { IssueList } from "./issue-list";
 import { buildBoardColumns, filterByView, groupByState, type TeamView } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { useSelection } from "./selection";
+import { useSelectAll } from "./use-select-all";
 import { GroupedIssueList, TeamViewControls, useTeamViewControls } from "./team-view-controls";
 import { BoardSkeleton, EmptyState, ErrorState, isNotFound, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
@@ -160,6 +161,7 @@ export function TeamIssuesPage({
   });
   const closePicker = useCallback(() => setRequest(null), []);
 
+  useSelectAll(selection, visible.length > 0);
   useActions([
     {
       id: "issue.select",

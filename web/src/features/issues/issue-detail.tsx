@@ -258,6 +258,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
+  const navigate = useNavigate();
   const parent = useIssue(issue.parentId ?? "");
   // Geteiltes Issue ohne Teamzugriff (Gast): nur lesen; andere Ladefehler (429, Netz): Retry (B4.16/B4.27).
   const metaCode = meta.error instanceof GraphQLRequestError ? meta.error.code : undefined;
@@ -313,6 +314,25 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
       keys: "mod+shift+o",
       context: "issue",
       perform: () => setAddingSub(true),
+    },
+    {
+      id: "issue.focus-description",
+      title: "Focus description",
+      section: "Issues",
+      keys: "mod+shift+i",
+      context: "issue",
+      enabled: !readOnly,
+      perform: () => document.querySelector<HTMLElement>('[aria-label="Description"]')?.focus(),
+    },
+    {
+      id: "issue.open-parent",
+      title: "Open parent issue",
+      section: "Issues",
+      keys: "mod+shift+arrowup",
+      context: "issue",
+      enabled: !!parent.data,
+      perform: () =>
+        parent.data && void navigate({ to: issuePath(ws, parent.data.identifier) as "/" }),
     },
     {
       id: "issue.comment",

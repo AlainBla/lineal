@@ -11,6 +11,7 @@ import type { Issue } from "@/gql/graphql";
 import { useShortcuts, type ShortcutContext } from "@/lib/shortcuts";
 
 import type { IssueActions } from "./issue-actions";
+import { useIssueExtraShortcuts } from "./issue-extra-shortcuts";
 import type { PickerKind, PickerRequest } from "./picker-host";
 
 interface Args {
@@ -74,6 +75,7 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
     });
   }
   useActions(list);
+  useIssueExtraShortcuts({ context, target });
   // Remind me (docs/08 §3.2, Shift+H); in der Inbox bleibt H = Snooze, Shift+H = Erinnerung am Issue.
   useRemindAction(
     target ? { targetType: "issue", target: target.id, label: target.identifier } : null,

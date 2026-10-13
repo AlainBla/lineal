@@ -11,6 +11,7 @@ import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
 import { setUiState, useUiState } from "@/app/ui-state";
 import { clearAllCreateDrafts } from "@/features/issues/create-store";
+import { clearUndo } from "@/features/issues/undo";
 import { RemindHost } from "@/features/inbox/remind";
 import { IssuesHost } from "@/features/issues/host";
 import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
@@ -54,6 +55,7 @@ export function Shell({ session, children }: { session: Session; children: React
   const onLogout = () => {
     void logout().then(() => {
       clearAllCreateDrafts();
+      clearUndo();
       client.clear();
       void navigate({ to: "/login", search: { redirect: undefined } });
     });

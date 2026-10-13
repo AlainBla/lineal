@@ -31,6 +31,24 @@ describe("parsing", () => {
     expect(matchesCombo(key("k", { ctrlKey: true, shiftKey: true }), k)).toBe(false);
   });
 
+  it("uses the physical key for punctuation with Ctrl/Alt (Ctrl ⇧ , und Ctrl ⇧ ')", () => {
+    const comma = parseCombo("mod+shift+,");
+    expect(
+      matchesCombo({ ...key("<", { ctrlKey: true, shiftKey: true }), code: "Comma" }, comma),
+    ).toBe(true);
+    const quote = parseCombo("mod+shift+'");
+    expect(
+      matchesCombo({ ...key('"', { ctrlKey: true, shiftKey: true }), code: "Quote" }, quote),
+    ).toBe(true);
+    expect(
+      matchesCombo({ ...key(".", { ctrlKey: true }), code: "Period" }, parseCombo("mod+.")),
+    ).toBe(true);
+    // Shift allein bleibt beim Zeichen: `?` und `#` hängen nicht von der Taste ab.
+    expect(matchesCombo({ ...key("?", { shiftKey: true }), code: "Slash" }, parseCombo("?"))).toBe(
+      true,
+    );
+  });
+
   it("uses the physical key for shifted digits", () => {
     const c = parseCombo("mod+shift+1");
     expect(
