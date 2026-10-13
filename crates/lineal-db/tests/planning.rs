@@ -590,6 +590,16 @@ async fn project_lifecycle_status_dates_lead_team_and_labels(pool: PgPool) {
     )
     .await
     .unwrap();
+    // B6.02: der Lead-Wechsel steht im Ereignis (geänderte Felder, bisheriger Lead).
+    let lead_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE type = 'ProjectUpdated' \
+         AND payload->>'project_id' = $1 AND payload->'changed' ? 'leadId'",
+    )
+    .bind(id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(lead_events >= 1, "ProjectUpdated meldet leadId");
     app.set_project_archived(&bob, &id.to_string(), true)
         .await
         .unwrap();

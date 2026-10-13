@@ -71,12 +71,12 @@ impl IssuePrevious {
 }
 
 macro_rules! domain_events {
-    ($($(#[$doc:meta])* $var:ident { $($f:ident : $t:ty),* $(,)? }),+ $(,)?) => {
+    ($($(#[$doc:meta])* $var:ident { $($(#[$fm:meta])* $f:ident : $t:ty),* $(,)? }),+ $(,)?) => {
         /// Alle Ereignisse, die Use-Cases in die Outbox schreiben.
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[serde(tag = "type")]
         pub enum DomainEvent {
-            $($(#[$doc])* $var { $($f: $t),* }),+
+            $($(#[$doc])* $var { $($(#[$fm])* $f: $t),* }),+
         }
 
         impl DomainEvent {
@@ -115,7 +115,9 @@ domain_events! {
     AttachmentUpdated { attachment_id: AttachmentId },
     AttachmentRemoved { attachment_id: AttachmentId },
     ProjectCreated { project_id: ProjectId },
-    ProjectUpdated { project_id: ProjectId },
+    /// `changed`: geänderte Feldnamen (camelCase, z. B. `leadId`); `previous_lead_id`: bisheriger Lead,
+    /// gilt nur, wenn `leadId` in `changed` steht (B6.02). Altdaten: leer bzw. `None`.
+    ProjectUpdated { project_id: ProjectId, #[serde(default)] changed: Vec<String>, #[serde(default)] previous_lead_id: Option<UserId> },
     ProjectRemoved { project_id: ProjectId },
     ProjectMilestoneCreated { milestone_id: MilestoneId, project_id: ProjectId },
     ProjectMilestoneUpdated { milestone_id: MilestoneId, project_id: ProjectId },
@@ -130,7 +132,9 @@ domain_events! {
     DocumentUpdated { document_id: DocumentId },
     DocumentRemoved { document_id: DocumentId },
     InitiativeCreated { initiative_id: InitiativeId },
-    InitiativeUpdated { initiative_id: InitiativeId },
+    /// `changed`: geänderte Feldnamen (camelCase, z. B. `ownerId`); `previous_owner_id`: bisheriger
+    /// Owner, gilt nur, wenn `ownerId` in `changed` steht (B6.02). Altdaten: leer bzw. `None`.
+    InitiativeUpdated { initiative_id: InitiativeId, #[serde(default)] changed: Vec<String>, #[serde(default)] previous_owner_id: Option<UserId> },
     InitiativeRemoved { initiative_id: InitiativeId },
     InitiativeUpdateCreated { update_id: InitiativeUpdateId, initiative_id: InitiativeId },
     InitiativeUpdateUpdated { update_id: InitiativeUpdateId, initiative_id: InitiativeId },

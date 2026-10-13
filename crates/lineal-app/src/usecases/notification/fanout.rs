@@ -341,8 +341,13 @@ impl<'a> Fan<'a> {
             DomainEvent::ProjectCreated { project_id } => {
                 self.project_changed(*project_id, true).await
             }
-            DomainEvent::ProjectUpdated { project_id } => {
-                self.project_changed(*project_id, false).await
+            DomainEvent::ProjectUpdated {
+                project_id,
+                changed,
+                ..
+            } => {
+                let lead = changed.iter().any(|c| c == "leadId");
+                self.project_changed(*project_id, lead).await
             }
             DomainEvent::ProjectMilestoneCreated { milestone_id, .. }
             | DomainEvent::ProjectMilestoneUpdated { milestone_id, .. } => {
@@ -351,8 +356,13 @@ impl<'a> Fan<'a> {
             DomainEvent::InitiativeCreated { initiative_id } => {
                 self.initiative_changed(initiative_id.0, true).await
             }
-            DomainEvent::InitiativeUpdated { initiative_id } => {
-                self.initiative_changed(initiative_id.0, false).await
+            DomainEvent::InitiativeUpdated {
+                initiative_id,
+                changed,
+                ..
+            } => {
+                let owner = changed.iter().any(|c| c == "ownerId");
+                self.initiative_changed(initiative_id.0, owner).await
             }
             DomainEvent::InitiativeUpdateCreated { update_id, .. } => {
                 self.initiative_update(ev, update_id.0, true).await
@@ -981,16 +991,15 @@ impl<'a> Fan<'a> {
     /// Projekt angelegt oder geändert: neuer Lead (`projectAddedAsLead`) und Erwähnungen in
     /// Beschreibung/Inhalt (`projectMention`); je Projekt und Empfänger einmalig.
     ///
-    /// Lead und Owner nur bei der Anlage: `ProjectUpdated`/`InitiativeUpdated` tragen keine
-    /// Änderungsliste, ein späterer Wechsel ist daher nicht erkennbar (und eine Selbstzuweisung
-    /// würde sonst bei der nächsten fremden Änderung gemeldet).
-    async fn project_changed(&mut self, project: ProjectId, is_new: bool) -> AppResult<bool> {
+    /// `lead_new`: Anlage oder Lead-Wechsel (`leadId` in `ProjectUpdated.changed`, B6.02); nur dann
+    /// wird der aktuelle Lead gemeldet, sonst würde ihn jede fremde Änderung erneut melden.
+    async fn project_changed(&mut self, project: ProjectId, lead_new: bool) -> AppResult<bool> {
         let Some(p) = self.tx.notifications().project_facts(project).await? else {
             return Ok(false);
         };
         self.target_project(project).await?;
         self.dedup_override = Some(format!("once:project:{}", project.0));
-        if is_new && let Some(lead) = p.lead_id {
+        if lead_new && let Some(lead) = p.lead_id {
             self.add(lead, "projectAddedAsLead");
         }
         let mentioned = self.mention_users(&p.text).await?;
@@ -1011,13 +1020,13 @@ impl<'a> Fan<'a> {
     }
 
     /// Initiative angelegt oder geändert: neuer Owner und Erwähnungen.
-    async fn initiative_changed(&mut self, initiative: Uuid, is_new: bool) -> AppResult<bool> {
+    async fn initiative_changed(&mut self, initiative: Uuid, owner_new: bool) -> AppResult<bool> {
         let Some(i) = self.tx.notifications().initiative_facts(initiative).await? else {
             return Ok(false);
         };
         self.target_initiative(initiative);
         self.dedup_override = Some(format!("once:initiative:{initiative}"));
-        if is_new && let Some(owner) = i.owner_id {
+        if owner_new && let Some(owner) = i.owner_id {
             self.add(owner, "initiativeAddedAsOwner");
         }
         let mentioned = self.mention_users(&i.text).await?;

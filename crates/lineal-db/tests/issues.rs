@@ -940,7 +940,10 @@ async fn cycle_project_milestone_assignment_is_validated(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(adopted.issue.project_id.map(|p| p.0), Some(project));
-    assert_eq!(adopted.issue.project_milestone_id.map(|m| m.0), Some(milestone));
+    assert_eq!(
+        adopted.issue.project_milestone_id.map(|m| m.0),
+        Some(milestone)
+    );
     assert!(adopted.issue.added_to_project_at.is_some());
     fx.app
         .update_issue(

@@ -794,6 +794,8 @@ impl App {
                 ctx,
                 DomainEvent::InitiativeUpdated {
                     initiative_id: i.id,
+                    changed: vec![],
+                    previous_owner_id: None,
                 },
             )
             .await?;
@@ -1165,6 +1167,14 @@ impl App {
             .apply_initiative_links(tx, snap, ctx, project.id, input, now)
             .await?;
         if changed {
+            let lead_changed = patch.lead_id.is_some_and(|l| l != project.lead_id);
+            let mut changed_fields: Vec<String> = Vec::new();
+            if lead_changed {
+                changed_fields.push("leadId".to_owned());
+            }
+            if patch.status_id.is_some() {
+                changed_fields.push("statusId".to_owned());
+            }
             if patch == ProjectPatch::default() {
                 // Nur Beziehungen geändert: `updated_at`/`version` trotzdem erhöhen.
                 tx.projects()
@@ -1176,6 +1186,8 @@ impl App {
                 ctx,
                 DomainEvent::ProjectUpdated {
                     project_id: project.id,
+                    changed: changed_fields,
+                    previous_lead_id: lead_changed.then_some(project.lead_id).flatten(),
                 },
             )
             .await?;
@@ -1235,13 +1247,31 @@ impl App {
             };
         for i in to_add {
             if tx.initiatives().link_project(i, project, now).await? {
-                emit(tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i }).await?;
+                emit(
+                    tx,
+                    ctx,
+                    DomainEvent::InitiativeUpdated {
+                        initiative_id: i,
+                        changed: vec![],
+                        previous_owner_id: None,
+                    },
+                )
+                .await?;
                 changed = true;
             }
         }
         for i in to_remove {
             if tx.initiatives().unlink_project(i, project).await? {
-                emit(tx, ctx, DomainEvent::InitiativeUpdated { initiative_id: i }).await?;
+                emit(
+                    tx,
+                    ctx,
+                    DomainEvent::InitiativeUpdated {
+                        initiative_id: i,
+                        changed: vec![],
+                        previous_owner_id: None,
+                    },
+                )
+                .await?;
                 changed = true;
             }
         }
@@ -1283,6 +1313,8 @@ impl App {
             ctx,
             DomainEvent::ProjectUpdated {
                 project_id: r.project.id,
+                changed: vec![],
+                previous_lead_id: None,
             },
         )
         .await?;
@@ -1353,6 +1385,8 @@ impl App {
         } else {
             DomainEvent::ProjectUpdated {
                 project_id: r.project.id,
+                changed: vec![],
+                previous_lead_id: None,
             }
         };
         emit(&mut *tx, ctx, ev).await?;

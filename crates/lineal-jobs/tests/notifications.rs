@@ -2639,28 +2639,43 @@ async fn project_lead_and_mentions_are_notified_once_and_only_if_visible(pool: P
         0,
         "kein Zugriff auf ENG: keine Notification"
     );
-    // Lead wechselt auf Bob (Mitglied von ENG): projectAddedAsLead, Alice im Code nicht erwähnt.
-    sqlx::query("UPDATE project SET lead_id = $1, content = 'Plan mit @bob' WHERE id = $2")
+    // Lead wechselt auf Bob (Mitglied von ENG): projectAddedAsLead (B6.02), Alice im Code nicht erwähnt.
+    sqlx::query("UPDATE project SET lead_id = $1 WHERE id = $2")
         .bind(bob.0)
         .bind(project)
         .execute(&e.pool)
         .await
         .unwrap();
-    let updated = e.user_ev(
-        alice,
-        DomainEvent::ProjectUpdated {
-            project_id: ProjectId(project),
-        },
-    );
-    e.handle(&updated).await;
     e.handle(&e.user_ev(
         alice,
         DomainEvent::ProjectUpdated {
             project_id: ProjectId(project),
+            changed: vec!["leadId".into()],
+            previous_lead_id: Some(carol),
         },
     ))
     .await;
-    assert_eq!(e.kinds(bob).await, vec!["projectMention"]);
+    // Eine spätere Änderung ohne Lead-Wechsel meldet den Lead nicht erneut, aber die Erwähnung.
+    sqlx::query("UPDATE project SET content = 'Plan mit @bob' WHERE id = $1")
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        e.handle(&e.user_ev(
+            alice,
+            DomainEvent::ProjectUpdated {
+                project_id: ProjectId(project),
+                changed: vec![],
+                previous_lead_id: None,
+            },
+        ))
+        .await;
+    }
+    assert_eq!(
+        e.kinds(bob).await,
+        vec!["projectAddedAsLead", "projectMention"]
+    );
     assert_eq!(e.count(alice).await, 0);
     assert_eq!(e.count(carol).await, 0);
 }
@@ -2919,6 +2934,8 @@ async fn self_assigned_lead_is_not_reported_after_later_edits(pool: PgPool) {
         alice,
         DomainEvent::ProjectUpdated {
             project_id: ProjectId(project),
+            changed: vec![],
+            previous_lead_id: None,
         },
     ))
     .await;
@@ -2935,8 +2952,48 @@ async fn self_assigned_lead_is_not_reported_after_later_edits(pool: PgPool) {
         alice,
         DomainEvent::InitiativeUpdated {
             initiative_id: InitiativeId(initiative),
+            changed: vec![],
+            previous_owner_id: None,
         },
     ))
     .await;
     assert_eq!(e.count(bob).await, 0);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn initiative_owner_change_after_creation_is_notified(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let initiative = e.initiative(130, None, "").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(bob).await, 0);
+    sqlx::query("UPDATE initiative SET owner_id = $1 WHERE id = $2")
+        .bind(bob.0)
+        .bind(initiative)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // Ohne Änderungsliste (Altdaten) keine Meldung, mit `ownerId` genau eine.
+    for changed in [
+        vec![],
+        vec!["ownerId".to_owned()],
+        vec!["ownerId".to_owned()],
+    ] {
+        e.handle(&e.user_ev(
+            alice,
+            DomainEvent::InitiativeUpdated {
+                initiative_id: InitiativeId(initiative),
+                changed,
+                previous_owner_id: None,
+            },
+        ))
+        .await;
+    }
+    assert_eq!(e.kinds(bob).await, vec!["initiativeAddedAsOwner"]);
 }

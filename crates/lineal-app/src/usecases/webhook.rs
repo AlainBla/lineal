@@ -381,7 +381,7 @@ pub fn map_event(ev: &DomainEvent) -> Option<MappedEvent> {
         E::AttachmentUpdated { attachment_id } => m("Attachment", "update", attachment_id.0),
         E::AttachmentRemoved { attachment_id } => m("Attachment", "remove", attachment_id.0),
         E::ProjectCreated { project_id } => m("Project", "create", project_id.0),
-        E::ProjectUpdated { project_id } => m("Project", "update", project_id.0),
+        E::ProjectUpdated { project_id, .. } => m("Project", "update", project_id.0),
         E::ProjectRemoved { project_id } => m("Project", "remove", project_id.0),
         E::ProjectUpdateCreated { update_id, .. } => m("ProjectUpdate", "create", update_id.0),
         E::ProjectUpdateUpdated { update_id, .. } => m("ProjectUpdate", "update", update_id.0),
@@ -402,7 +402,7 @@ pub fn map_event(ev: &DomainEvent) -> Option<MappedEvent> {
         E::DocumentUpdated { document_id } => m("Document", "update", document_id.0),
         E::DocumentRemoved { document_id } => m("Document", "remove", document_id.0),
         E::InitiativeCreated { initiative_id } => m("Initiative", "create", initiative_id.0),
-        E::InitiativeUpdated { initiative_id } => m("Initiative", "update", initiative_id.0),
+        E::InitiativeUpdated { initiative_id, .. } => m("Initiative", "update", initiative_id.0),
         E::InitiativeRemoved { initiative_id } => m("Initiative", "remove", initiative_id.0),
         E::InitiativeUpdateCreated { update_id, .. } => {
             m("InitiativeUpdate", "create", update_id.0)

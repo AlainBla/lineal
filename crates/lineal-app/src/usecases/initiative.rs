@@ -697,11 +697,18 @@ impl App {
                     patch.target_date_resolution = Some(tr);
                 }
                 tx.initiatives().update(cur.id, &patch, now).await?;
+                let owner_changed = patch.owner_id.is_some_and(|o| o != cur.owner_id);
                 emit(
                     &mut *tx,
                     ctx,
                     DomainEvent::InitiativeUpdated {
                         initiative_id: cur.id,
+                        changed: if owner_changed {
+                            vec!["ownerId".to_owned()]
+                        } else {
+                            vec![]
+                        },
+                        previous_owner_id: owner_changed.then_some(cur.owner_id).flatten(),
                     },
                 )
                 .await?;
@@ -737,6 +744,8 @@ impl App {
                         ctx,
                         DomainEvent::InitiativeUpdated {
                             initiative_id: parent.id,
+                            changed: vec![],
+                            previous_owner_id: None,
                         },
                     )
                     .await?;
@@ -780,6 +789,8 @@ impl App {
                 ctx,
                 DomainEvent::InitiativeUpdated {
                     initiative_id: p.id,
+                    changed: vec![],
+                    previous_owner_id: None,
                 },
             )
             .await?;
@@ -788,6 +799,8 @@ impl App {
                 ctx,
                 DomainEvent::InitiativeUpdated {
                     initiative_id: child.id,
+                    changed: vec![],
+                    previous_owner_id: None,
                 },
             )
             .await?;
@@ -824,6 +837,8 @@ impl App {
                 ctx,
                 DomainEvent::InitiativeUpdated {
                     initiative_id: i.id,
+                    changed: vec![],
+                    previous_owner_id: None,
                 },
             )
             .await?;
@@ -832,6 +847,8 @@ impl App {
                 ctx,
                 DomainEvent::ProjectUpdated {
                     project_id: p.project.id,
+                    changed: vec![],
+                    previous_lead_id: None,
                 },
             )
             .await?;
@@ -866,6 +883,8 @@ impl App {
             ctx,
             DomainEvent::InitiativeUpdated {
                 initiative_id: i.id,
+                changed: vec![],
+                previous_owner_id: None,
             },
         )
         .await?;

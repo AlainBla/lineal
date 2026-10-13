@@ -168,7 +168,7 @@ fn plan(ev: &StoredEvent) -> Vec<Plan> {
         E::AttachmentUpdated { attachment_id } => model("Attachment", attachment_id.0, Updated),
         E::AttachmentRemoved { attachment_id } => model("Attachment", attachment_id.0, Removed),
         E::ProjectCreated { project_id } => model("Project", project_id.0, Created),
-        E::ProjectUpdated { project_id } => model("Project", project_id.0, Updated),
+        E::ProjectUpdated { project_id, .. } => model("Project", project_id.0, Updated),
         E::ProjectRemoved { project_id } => model("Project", project_id.0, Removed),
         E::ProjectMilestoneCreated { milestone_id, .. } => {
             model("ProjectMilestone", milestone_id.0, Created)
@@ -207,7 +207,7 @@ fn plan(ev: &StoredEvent) -> Vec<Plan> {
         E::DocumentUpdated { document_id } => model("Document", document_id.0, Updated),
         E::DocumentRemoved { document_id } => model("Document", document_id.0, Removed),
         E::InitiativeCreated { initiative_id } => model("Initiative", initiative_id.0, Created),
-        E::InitiativeUpdated { initiative_id } => model("Initiative", initiative_id.0, Updated),
+        E::InitiativeUpdated { initiative_id, .. } => model("Initiative", initiative_id.0, Updated),
         E::InitiativeRemoved { initiative_id } => model("Initiative", initiative_id.0, Removed),
         E::InitiativeUpdateCreated { update_id, .. } => {
             model("InitiativeUpdate", update_id.0, Created)
