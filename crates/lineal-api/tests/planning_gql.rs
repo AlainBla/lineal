@@ -91,7 +91,8 @@ async fn projects_cycles_initiatives_over_graphql(pool: PgPool) {
         "mutation { projectUpdate(id: \"P-ENG-2\", input: { name: \"X\" }) { success } }",
     )
     .await;
-    assert_eq!(e, ["\"not_found\""]);
+    // Zugriff auf ein Projekt-Team genügt (docs/04 §2.2): Alice darf ändern, DES bleibt unsichtbar.
+    assert!(e.is_empty(), "{e:?}");
     let (_, e) = run(
         &schema,
         SeedUser::Bob,
