@@ -1,4 +1,4 @@
-/** Feldänderungen an Issues als benannte Aktionen (optimistisch, mit Fehler-Toast). */
+/** Feldänderungen an Issues als benannte Aktionen (optimistisch, mit Fehler-Toast, Undo über `Ctrl Z`). */
 import { useMemo } from "react";
 
 import { useSession } from "@/app/auth";
@@ -6,6 +6,7 @@ import type { Issue, WorkflowState } from "@/gql/graphql";
 
 import { useUpdateIssue, type UpdateArgs } from "./hooks";
 import { describeStatePatch } from "./model";
+import { inverseInput, recordUndo } from "./undo";
 
 export interface IssueActions {
   setState: (issue: Issue, stateId: string, states: WorkflowState[]) => void;
@@ -35,32 +36,58 @@ export function useIssueActions(): IssueActions {
   const { mutate, mutateAsync } = mutation;
 
   return useMemo(() => {
-    // Fehler-Toast und Rollback übernimmt `useUpdateIssue` (gilt für jeden Aufruf).
-    const send = (args: UpdateArgs) => mutate(args);
+    // Fehler-Toast und Rollback übernimmt `useUpdateIssue` (gilt für jeden Aufruf). Mit `before`
+    // (Issue vor der Änderung) merkt sich der Undo-Stapel die Gegenaktion (Ctrl Z / Ctrl ⇧ Z).
+    const send = (args: UpdateArgs, before?: Issue, label?: string) => {
+      mutate(args);
+      const inverse = before ? inverseInput(before, args.input) : null;
+      if (before && inverse) {
+        recordUndo({
+          label: `${before.identifier}: ${label ?? "change"}`,
+          undo: () => mutate({ id: args.id, input: inverse }),
+          redo: () => mutate({ id: args.id, input: args.input }),
+        });
+      }
+    };
     return {
       setState: (i, stateId, states) =>
-        send({ id: i.id, input: { stateId }, patch: describeStatePatch(states, stateId) }),
-      setPriority: (i, priority) => send({ id: i.id, input: { priority }, patch: { priority } }),
+        send(
+          { id: i.id, input: { stateId }, patch: describeStatePatch(states, stateId) },
+          i,
+          "status",
+        ),
+      setPriority: (i, priority) =>
+        send({ id: i.id, input: { priority }, patch: { priority } }, i, "priority"),
       setAssignee: (i, assigneeId) =>
-        send({ id: i.id, input: { assigneeId }, patch: { assigneeId } }),
+        send({ id: i.id, input: { assigneeId }, patch: { assigneeId } }, i, "assignee"),
       assignToMe: (i) => {
         if (!session) return;
-        send({
-          id: i.id,
-          input: { assigneeId: session.user.id },
-          patch: { assigneeId: session.user.id },
-        });
+        send(
+          {
+            id: i.id,
+            input: { assigneeId: session.user.id },
+            patch: { assigneeId: session.user.id },
+          },
+          i,
+          "assignee",
+        );
       },
-      setLabels: (i, labelIds) => send({ id: i.id, input: { labelIds }, patch: { labelIds } }),
-      setEstimate: (i, estimate) => send({ id: i.id, input: { estimate }, patch: { estimate } }),
-      setProject: (i, projectId) => send({ id: i.id, input: { projectId }, patch: { projectId } }),
-      setCycle: (i, cycleId) => send({ id: i.id, input: { cycleId }, patch: { cycleId } }),
-      setDueDate: (i, dueDate) => send({ id: i.id, input: { dueDate }, patch: { dueDate } }),
+      setLabels: (i, labelIds) =>
+        send({ id: i.id, input: { labelIds }, patch: { labelIds } }, i, "labels"),
+      setEstimate: (i, estimate) =>
+        send({ id: i.id, input: { estimate }, patch: { estimate } }, i, "estimate"),
+      setProject: (i, projectId) =>
+        send({ id: i.id, input: { projectId }, patch: { projectId } }, i, "project"),
+      setCycle: (i, cycleId) =>
+        send({ id: i.id, input: { cycleId }, patch: { cycleId } }, i, "cycle"),
+      setDueDate: (i, dueDate) =>
+        send({ id: i.id, input: { dueDate }, patch: { dueDate } }, i, "due date"),
       setTitle: (i, title) => send({ id: i.id, input: { title }, patch: { title } }),
       setDescription: async (i, description) => {
         await mutateAsync({ id: i.id, input: { description }, patch: { description } });
       },
-      setParent: (i, parentId) => send({ id: i.id, input: { parentId }, patch: { parentId } }),
+      setParent: (i, parentId) =>
+        send({ id: i.id, input: { parentId }, patch: { parentId } }, i, "parent"),
       moveToTeam: async (i, teamId) => {
         try {
           return await mutateAsync({ id: i.id, input: { teamId } });
@@ -69,14 +96,18 @@ export function useIssueActions(): IssueActions {
         }
       },
       setSortOrder: (i, p, states) =>
-        send({
-          id: i.id,
-          input: { ...(p.stateId ? { stateId: p.stateId } : {}), sortOrder: p.sortOrder },
-          patch: {
-            sortOrder: p.sortOrder,
-            ...(p.stateId ? describeStatePatch(states, p.stateId) : {}),
+        send(
+          {
+            id: i.id,
+            input: { ...(p.stateId ? { stateId: p.stateId } : {}), sortOrder: p.sortOrder },
+            patch: {
+              sortOrder: p.sortOrder,
+              ...(p.stateId ? describeStatePatch(states, p.stateId) : {}),
+            },
           },
-        }),
+          i,
+          p.stateId ? "status" : "order",
+        ),
     };
   }, [mutate, mutateAsync, session]);
 }

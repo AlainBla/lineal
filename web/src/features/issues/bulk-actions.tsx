@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import type { Issue } from "@/gql/graphql";
 import { useShortcutContext } from "@/lib/shortcuts";
 
-import { useBatchUpdate, useTeamMeta, useTeams } from "./hooks";
+import { useBatchUpdate, useTeamMeta, useTeams, useUpdateIssue } from "./hooks";
 import { PropertyPicker } from "./picker";
 import type { PickerKind } from "./picker-host";
 import {
@@ -30,9 +30,10 @@ import {
 import { summarizeBatch } from "./bulk-summary";
 import type { IssueBatchVars } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
+import { inverseBulk, recordUndo } from "./undo";
 import { useKnownUsers } from "./users";
 
-export type BulkKind = Exclude<PickerKind, "due"> | "labels-remove" | "delete";
+export type BulkKind = Exclude<PickerKind, "due" | "parent"> | "labels-remove" | "delete";
 
 const TITLES: Record<Exclude<BulkKind, "delete" | "team">, string> = {
   status: "Change status…",
@@ -56,6 +57,7 @@ interface Props {
 
 export function BulkActions({ issues, onClear, request, onRequest }: Props) {
   const batch = useBatchUpdate();
+  const update = useUpdateIssue();
   const session = useSession();
   const users = useKnownUsers();
   const teams = useTeams();
@@ -72,11 +74,22 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
 
   const run = (vars: Omit<IssueBatchVars, "ids">) => {
     onRequest(null);
+    // Gegenaktion vor der Änderung festhalten: Undo im Toast und per Ctrl Z (docs/08 §1.4, §3.2).
+    const inverse = inverseBulk(issues, vars);
     batch.mutate(
       { ids, ...vars },
       {
         onSuccess: (result) => {
-          showToast(summarizeBatch(ids.length, result, (id) => identifiers.get(id) ?? id));
+          const undo = () => inverse?.forEach((p) => update.mutate({ id: p.id, input: p.input }));
+          const summary = summarizeBatch(ids.length, result, (id) => identifiers.get(id) ?? id);
+          const undoable = inverse !== null && result.failures.length === 0;
+          showToast(undoable ? { ...summary, onUndo: undo } : summary);
+          if (undoable)
+            recordUndo({
+              label: `${ids.length} issue${ids.length === 1 ? "" : "s"}`,
+              undo,
+              redo: () => batch.mutate({ ids, ...vars }),
+            });
           if (result.failures.length === 0) onClear();
         },
         onError: (e) =>

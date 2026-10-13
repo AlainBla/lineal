@@ -42,7 +42,8 @@ async fn run(app: &Arc<App>, ctx: RequestCtx, query: &str, vars: Value) -> async
         .execute(
             async_graphql::Request::new(query)
                 .variables(async_graphql::Variables::from_json(vars))
-                .data(ctx),
+                .data(ctx)
+                .data(crate::context::DetailBudget::default()),
         )
         .await
 }
@@ -329,4 +330,56 @@ async fn attachments_over_graphql(pool: sqlx::PgPool) {
     )
     .await;
     assert_eq!(code(&res), "not_found");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_attachments_link_count_and_resolve_assets(pool: sqlx::PgPool) {
+    let (app, pool) = setup(pool).await;
+    let eng = issue(&pool, SeedData::acme().eng, 1).await;
+    let bob = ctx_for(SeedUser::Bob);
+    let link = "mutation($id: String!, $url: String!) { attachmentLinkURL(issueId: $id, url: $url, title: \"PR\") { success } }";
+    data(
+        run(
+            &app,
+            bob.clone(),
+            link,
+            json!({ "id": eng.to_string(), "url": "https://example.com/pr/9" }),
+        )
+        .await,
+    );
+
+    let q = "query($id: String!) { issue(id: $id) { linkCount stateEnteredAt snoozedUntilAt attachments { title url sourceType } } }";
+    let d = data(run(&app, bob.clone(), q, json!({ "id": eng.to_string() })).await);
+    assert_eq!(d["issue"]["linkCount"], 1);
+    assert_eq!(d["issue"]["attachments"][0]["title"], "PR");
+    assert_eq!(d["issue"]["snoozedUntilAt"], Value::Null);
+    assert!(d["issue"]["stateEnteredAt"].is_string());
+
+    // Ein Upload ohne Ziel-Issue (Markdown-Bild) wird in eine signierte URL aufgelöst.
+    let up = data(
+        run(
+            &app,
+            bob.clone(),
+            "mutation { fileUpload(filename: \"a.png\", contentType: \"image/png\", size: 10) { uploadFile { assetUrl } } }",
+            json!({}),
+        )
+        .await,
+    );
+    let asset = up["fileUpload"]["uploadFile"]["assetUrl"].as_str().unwrap();
+    let resolve = "query($urls: [String!]!) { resolveAssets(urls: $urls) { assetUrl downloadUrl title contentType } }";
+    let r = data(
+        run(
+            &app,
+            bob.clone(),
+            resolve,
+            json!({ "urls": [asset, "https://evil.example/assets/x/y/z"] }),
+        )
+        .await,
+    );
+    let list = r["resolveAssets"].as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["assetUrl"], asset);
+    assert!(list[0]["downloadUrl"].as_str().unwrap().contains("/files/"));
+    // Die dauerhafte URL bleibt unsigniert.
+    assert!(!asset.contains("/files/"));
 }

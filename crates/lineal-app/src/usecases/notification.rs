@@ -6,6 +6,7 @@
 pub mod fanout;
 pub mod jobs;
 pub mod kinds;
+pub mod reminder;
 pub mod views;
 
 use crate::app::App;
@@ -469,7 +470,7 @@ impl App {
 
     // --- Issue-Abos ---
 
-    async fn issue_for_subscription(
+    pub(super) async fn issue_for_subscription(
         &self,
         tx: &mut dyn Tx,
         snap: &PolicySnapshot,
@@ -609,7 +610,7 @@ impl App {
 
     /// Lädt das Dokument für ein Abo und prüft die Sichtbarkeit (Gäste nur bei Teambezug,
     /// sonst `not_found`).
-    async fn document_for_subscription(
+    pub(super) async fn document_for_subscription(
         &self,
         tx: &mut dyn Tx,
         snap: &PolicySnapshot,
@@ -719,11 +720,22 @@ impl App {
     pub async fn set_notification_subscription(
         &self,
         ctx: &RequestCtx,
-        input: SetObjectSubscriptionInput,
+        mut input: SetObjectSubscriptionInput,
     ) -> AppResult<ObjectSubscription> {
         require_write(ctx)?;
         let user = me(ctx)?;
-        if let Some(c) = &input.context_view_type {
+        if input.kind == ObjectKind::User {
+            // Abo der Assigned-Ansicht eines Users: einziger Kontext ist `assigned`.
+            match input.context_view_type.as_deref() {
+                None | Some("assigned") => input.context_view_type = Some("assigned".to_owned()),
+                Some(_) => {
+                    return Err(AppError::invalid_request(
+                        "`contextViewType` must be `assigned` for user subscriptions.",
+                    )
+                    .with_details(json!({ "field": "contextViewType" })));
+                }
+            }
+        } else if let Some(c) = &input.context_view_type {
             if input.kind != ObjectKind::Team || !CONTEXTS.contains(&c.as_str()) {
                 return Err(AppError::invalid_request(
                     "`contextViewType` is only valid for team subscriptions.",
@@ -772,6 +784,19 @@ impl App {
                 }
                 Some(None) => {}
             },
+            ObjectKind::User => {
+                // Nur User, die der Aufrufer sehen darf (sonst not_found, keine Existenzauskunft).
+                let target =
+                    resolve::user::resolve_in(&mut *tx, &snap, ctx, &input.target.to_string())
+                        .await
+                        .map_err(|_| missing())?;
+                if target.id == user {
+                    return Err(AppError::invalid_request(
+                        "You cannot subscribe to yourself.",
+                    ));
+                }
+                input.target = target.id.0;
+            }
             ObjectKind::Initiative => {
                 snap.require_workspace(ctx, Action::ViewInitiatives)?;
                 if !tx.notifications().initiative_exists(input.target).await? {

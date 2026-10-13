@@ -246,6 +246,42 @@ fn prefs_from(r: PrefsRow) -> UserNotificationPrefs {
     }
 }
 
+const REMINDER_COLS: &str = "id, user_id, target_type, COALESCE(issue_id, project_id, initiative_id, document_id), \
+     remind_at, fired_at";
+const REMINDER_TARGET: &str = "COALESCE(issue_id, project_id, initiative_id, document_id)";
+
+type ReminderRow = (
+    Uuid,
+    Uuid,
+    String,
+    Uuid,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+);
+
+fn reminder_of(r: ReminderRow) -> Reminder {
+    Reminder {
+        id: r.0,
+        user_id: UserId(r.1),
+        target_type: r.2,
+        target_id: r.3,
+        remind_at: r.4,
+        fired_at: r.5,
+    }
+}
+
+fn reminder_cols(
+    target_type: &str,
+    id: Uuid,
+) -> (Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>) {
+    match target_type {
+        "issue" => (Some(id), None, None, None),
+        "project" => (None, Some(id), None, None),
+        "initiative" => (None, None, Some(id), None),
+        _ => (None, None, None, Some(id)),
+    }
+}
+
 const PREFS_COLS: &str = "id, email, timezone, email_format, due_date_reminders, \
     notification_priority_categories, notification_settings";
 
@@ -265,7 +301,8 @@ type SubRow = (
 );
 
 const SUB_COLS: &str = "id, subscriber_id, target_type, team_id, project_id, initiative_id, cycle_id, \
-    label_id, context_view_type, notification_subscription_types, include_sub_initiative_updates, active";
+    COALESCE(label_id, user_id), COALESCE(context_view_type, user_context_view_type), \
+    notification_subscription_types, include_sub_initiative_updates, active";
 
 fn kind_of(s: &str) -> Option<ObjectKind> {
     Some(match s {
@@ -274,6 +311,7 @@ fn kind_of(s: &str) -> Option<ObjectKind> {
         "initiative" => ObjectKind::Initiative,
         "cycle" => ObjectKind::Cycle,
         "label" => ObjectKind::Label,
+        "user" => ObjectKind::User,
         _ => return None,
     })
 }
@@ -1404,9 +1442,10 @@ impl NotificationRepo for PgTx {
         sub: &UpsertObjectSubscription,
     ) -> AppResult<ObjectSubscription> {
         let col = sub.kind.column();
+        let ctx_col = sub.kind.context_column();
         let existing: Option<Uuid> = sqlx::query_scalar(&format!(
             "SELECT id FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
-             AND target_type = $3 AND {col} = $4 AND context_view_type IS NOT DISTINCT FROM $5"
+             AND target_type = $3 AND {col} = $4 AND {ctx_col} IS NOT DISTINCT FROM $5"
         ))
         .bind(self.org.0)
         .bind(sub.subscriber_id.0)
@@ -1436,7 +1475,7 @@ impl NotificationRepo for PgTx {
             None => {
                 sqlx::query(&format!(
                     "INSERT INTO notification_subscription (id, organization_id, subscriber_id, target_type, \
-                     {col}, context_view_type, notification_subscription_types, \
+                     {col}, {ctx_col}, notification_subscription_types, \
                      include_sub_initiative_updates, active, created_at, updated_at) \
                      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)"
                 ))
@@ -1473,7 +1512,7 @@ impl NotificationRepo for PgTx {
     ) -> AppResult<Vec<ObjectSubscription>> {
         let rows: Vec<SubRow> = sqlx::query_as(&format!(
             "SELECT {SUB_COLS} FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
-             AND archived_at IS NULL AND target_type IN ('team','project','initiative','cycle','label') \
+             AND archived_at IS NULL AND target_type IN ('team','project','initiative','cycle','label','user') \
              ORDER BY created_at, id"
         ))
         .bind(self.org.0)
@@ -1590,6 +1629,130 @@ impl NotificationRepo for PgTx {
                 .await
                 .map_err(db_err)?;
         Ok(row.map(TeamId))
+    }
+
+    async fn set_reminder(
+        &mut self,
+        id: Uuid,
+        user: UserId,
+        target_type: &str,
+        target_id: Uuid,
+        remind_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Reminder> {
+        let (issue, project, initiative, document) = reminder_cols(target_type, target_id);
+        let row: ReminderRow = sqlx::query_as(&format!(
+            "INSERT INTO reminder (id, organization_id, user_id, target_type, issue_id, project_id, \
+               initiative_id, document_id, remind_at, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) \
+             ON CONFLICT (organization_id, user_id, target_type, issue_id, project_id, initiative_id, document_id) \
+             DO UPDATE SET remind_at = EXCLUDED.remind_at, fired_at = NULL, updated_at = $10, \
+               version = reminder.version + 1 \
+             RETURNING {REMINDER_COLS}"
+        ))
+        .bind(id)
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(target_type)
+        .bind(issue)
+        .bind(project)
+        .bind(initiative)
+        .bind(document)
+        .bind(remind_at)
+        .bind(now)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(reminder_of(row))
+    }
+
+    async fn clear_reminder(
+        &mut self,
+        user: UserId,
+        target_type: &str,
+        target_id: Uuid,
+    ) -> AppResult<bool> {
+        let r = sqlx::query(&format!(
+            "DELETE FROM reminder WHERE organization_id = $1 AND user_id = $2 AND target_type = $3 \
+             AND {REMINDER_TARGET} = $4"
+        ))
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(target_type)
+        .bind(target_id)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    async fn get_reminder(
+        &mut self,
+        user: UserId,
+        target_type: &str,
+        target_id: Uuid,
+    ) -> AppResult<Option<Reminder>> {
+        let row: Option<ReminderRow> = sqlx::query_as(&format!(
+            "SELECT {REMINDER_COLS} FROM reminder WHERE organization_id = $1 AND user_id = $2 \
+             AND target_type = $3 AND {REMINDER_TARGET} = $4 AND fired_at IS NULL"
+        ))
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(target_type)
+        .bind(target_id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(reminder_of))
+    }
+
+    async fn list_due_reminders(
+        &mut self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<Vec<Reminder>> {
+        let rows: Vec<ReminderRow> = sqlx::query_as(&format!(
+            "SELECT {REMINDER_COLS} FROM reminder WHERE organization_id = $1 AND fired_at IS NULL \
+             AND remind_at <= $2 ORDER BY remind_at, id LIMIT $3"
+        ))
+        .bind(self.org.0)
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(reminder_of).collect())
+    }
+
+    async fn mark_reminder_fired(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE reminder SET fired_at = $3, updated_at = $3, version = version + 1 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn reminder_target_alive(&mut self, target_type: &str, id: Uuid) -> AppResult<bool> {
+        let table = match target_type {
+            "issue" => "issue",
+            "project" => "project",
+            "initiative" => "initiative",
+            _ => return Ok(true),
+        };
+        sqlx::query_scalar(&format!(
+            "SELECT EXISTS (SELECT 1 FROM {table} WHERE organization_id = $1 AND id = $2 AND NOT trashed)"
+        ))
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
     }
 
     async fn initiative_exists(&mut self, initiative: Uuid) -> AppResult<bool> {

@@ -103,6 +103,35 @@ pub struct NotificationConnection {
     pub page_info: NotificationPageInfo,
 }
 
+/// `Reminder`: persönliche „Remind me“-Erinnerung (docs/05 §6.10).
+#[derive(SimpleObject)]
+#[graphql(name = "Reminder")]
+pub struct ReminderGql {
+    pub id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub remind_at: String,
+}
+
+impl From<lineal_app::ports::repos::notification::Reminder> for ReminderGql {
+    fn from(r: lineal_app::ports::repos::notification::Reminder) -> Self {
+        Self {
+            id: r.id.to_string(),
+            target_type: r.target_type,
+            target_id: r.target_id.to_string(),
+            remind_at: ts(r.remind_at),
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(name = "ReminderPayload")]
+pub struct ReminderPayload {
+    pub success: bool,
+    /// Die gesetzte Erinnerung; `null` nach dem Entfernen.
+    pub reminder: Option<ReminderGql>,
+}
+
 #[derive(SimpleObject)]
 #[graphql(name = "NotificationPayload")]
 pub struct NotificationPayload {
@@ -211,7 +240,7 @@ pub struct NotificationSettingsInput {
 
 #[derive(InputObject)]
 pub struct NotificationSubscriptionInput {
-    /// `team`, `project`, `initiative`, `cycle` oder `label`.
+    /// `team`, `project`, `initiative`, `cycle`, `label` oder `user` (Assigned-Ansicht, `contextViewType` `assigned`).
     pub target_type: String,
     pub target_id: String,
     pub context_view_type: Option<String>,
@@ -247,9 +276,10 @@ fn parse_kind(s: &str) -> AppResult<ObjectKind> {
         "initiative" => ObjectKind::Initiative,
         "cycle" => ObjectKind::Cycle,
         "label" => ObjectKind::Label,
+        "user" => ObjectKind::User,
         _ => {
             return Err(invalid(
-                "`targetType` must be team, project, initiative, cycle or label",
+                "`targetType` must be team, project, initiative, cycle, label or user",
             ));
         }
     })
@@ -340,6 +370,21 @@ impl NotificationQuery {
             .into())
     }
 
+    /// Eigene offene „Remind me“-Erinnerung an Issue (Kennung oder UUID), Projekt, Initiative
+    /// oder Dokument (`targetType`: issue, project, initiative, document).
+    async fn reminder(
+        &self,
+        ctx: &Context<'_>,
+        target_type: String,
+        target_id: String,
+    ) -> async_graphql::Result<Option<ReminderGql>> {
+        Ok(app(ctx)?
+            .get_reminder(request_ctx(ctx)?, &target_type, &target_id)
+            .await
+            .gql(ctx)?
+            .map(Into::into))
+    }
+
     /// Anzahl ungelesener Gruppen (Seitenleiste).
     async fn notifications_unread_count(&self, ctx: &Context<'_>) -> async_graphql::Result<i64> {
         app(ctx)?
@@ -406,6 +451,32 @@ pub struct NotificationMutation;
 
 #[Object]
 impl NotificationMutation {
+    /// „Remind me“: setzt die Erinnerung (ersetzt eine vorhandene) oder entfernt sie
+    /// (`remindAt` weglassen). Nur an sichtbaren Objekten; wirkt nur auf die eigene Erinnerung.
+    async fn reminder_set(
+        &self,
+        ctx: &Context<'_>,
+        target_type: String,
+        target_id: String,
+        remind_at: Option<String>,
+    ) -> async_graphql::Result<ReminderPayload> {
+        let at = remind_at
+            .map(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|_| crate::error::invalid_input("remindAt must be ISO-8601."))
+            })
+            .transpose()?;
+        let r = app(ctx)?
+            .set_reminder(request_ctx(ctx)?, &target_type, &target_id, at)
+            .await
+            .gql(ctx)?;
+        Ok(ReminderPayload {
+            success: true,
+            reminder: r.map(Into::into),
+        })
+    }
+
     /// Gelesen/ungelesen, Snooze/Unsnooze.
     async fn notification_update(
         &self,

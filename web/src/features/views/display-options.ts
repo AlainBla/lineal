@@ -12,7 +12,18 @@ import {
 } from "@/features/issues/model";
 
 export type Grouping = "none" | "status" | "assignee" | "project" | "priority" | "team" | "cycle";
-export type Ordering = "priority" | "title" | "updatedAt" | "createdAt" | "dueDate" | "manual";
+export type Ordering =
+  | "priority"
+  | "title"
+  | "status"
+  | "assignee"
+  | "estimate"
+  | "updatedAt"
+  | "createdAt"
+  | "dueDate"
+  | "linkCount"
+  | "timeInStatus"
+  | "manual";
 export type CompletedWindow = "all" | "pastDay" | "pastWeek" | "pastMonth" | "none";
 
 export interface DisplayOptions {
@@ -47,9 +58,14 @@ export const GROUPINGS: Grouping[] = [
 export const ORDERINGS: Ordering[] = [
   "priority",
   "title",
+  "status",
+  "assignee",
+  "estimate",
   "updatedAt",
   "createdAt",
   "dueDate",
+  "linkCount",
+  "timeInStatus",
   "manual",
 ];
 export const COMPLETED_WINDOWS: CompletedWindow[] = [
@@ -113,8 +129,24 @@ const compareTitles = (a: string, b: string): number =>
  * sind ihrer Richtung gemäß sortiert (createdAt asc = ältestes zuerst). Tie-Breaker: createdAt
  * absteigend, dann id.
  */
-export function sortIssues(issues: Issue[], o: DisplayOptions): Issue[] {
+export interface SortContext {
+  /** Anzeigename des Assignees für die Sortierung nach Assignee. */
+  assignee?: (id: string | null) => string | null;
+  /** Position des Status im Workflow (innerhalb der Kategorie). */
+  statePosition?: (stateId: string) => number | undefined;
+}
+
+export function sortIssues(issues: Issue[], o: DisplayOptions, ctx: SortContext = {}): Issue[] {
   const dir = o.orderDirection === "desc" ? -1 : 1;
+  /** Leere Werte stehen in beiden Richtungen zuletzt. */
+  const emptyLast = <T>(
+    a: T | null | undefined,
+    b: T | null | undefined,
+    cmpv: (x: T, y: T) => number,
+  ) => {
+    if (a == null || b == null) return (a == null ? 1 : 0) - (b == null ? 1 : 0);
+    return dir * cmpv(a, b);
+  };
   const cmp = (a: Issue, b: Issue): number => {
     switch (o.ordering) {
       case "title":
@@ -127,6 +159,28 @@ export function sortIssues(issues: Issue[], o: DisplayOptions): Issue[] {
         if (!a.dueDate || !b.dueDate) return (a.dueDate ? 0 : 1) - (b.dueDate ? 0 : 1);
         return dir * a.dueDate.localeCompare(b.dueDate);
       }
+      case "status": {
+        const ta = STATE_TYPE_ORDER.indexOf(asStateType(a.stateType));
+        const tb = STATE_TYPE_ORDER.indexOf(asStateType(b.stateType));
+        return (
+          dir *
+          (ta - tb ||
+            (ctx.statePosition?.(a.stateId) ?? 0) - (ctx.statePosition?.(b.stateId) ?? 0) ||
+            a.stateName.localeCompare(b.stateName))
+        );
+      }
+      case "assignee": {
+        const name = (i: Issue) =>
+          i.assigneeId ? (ctx.assignee?.(i.assigneeId) ?? i.assigneeId) : null;
+        return emptyLast(name(a), name(b), compareTitles);
+      }
+      case "estimate":
+        return emptyLast(a.estimate, b.estimate, (x, y) => x - y);
+      case "linkCount":
+        return dir * ((a.linkCount ?? 0) - (b.linkCount ?? 0));
+      case "timeInStatus":
+        // `stateEnteredAt` aufsteigend = am längsten im Status zuerst (docs/05 §2.5).
+        return dir * a.stateEnteredAt.localeCompare(b.stateEnteredAt);
       case "manual":
         return a.sortOrder - b.sortOrder;
       default: {
@@ -142,7 +196,7 @@ export function sortIssues(issues: Issue[], o: DisplayOptions): Issue[] {
 
 /** Voreingestellte Richtung je Sortierung (docs/05 §2.5): Zeitpunkte absteigend, sonst aufsteigend. */
 export const defaultDirection = (o: Ordering): DisplayOptions["orderDirection"] =>
-  o === "createdAt" || o === "updatedAt" ? "desc" : "asc";
+  o === "createdAt" || o === "updatedAt" || o === "linkCount" ? "desc" : "asc";
 
 export interface IssueGroup {
   key: string;

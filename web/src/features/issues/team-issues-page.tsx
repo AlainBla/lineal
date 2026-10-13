@@ -6,6 +6,13 @@ import { useActions } from "@/app/commands";
 import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
 import { NotFound } from "@/components/not-found";
+import {
+  applyVisibility,
+  groupIssues,
+  sortIssues,
+  type SortContext,
+} from "@/features/views/display-options";
+import { useViewIssues } from "@/features/views/queries";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
@@ -19,6 +26,8 @@ import { IssueList } from "./issue-list";
 import { buildBoardColumns, filterByView, groupByState, type TeamView } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { useSelection } from "./selection";
+import { useSelectAll } from "./use-select-all";
+import { GroupedIssueList, TeamViewControls, useTeamViewControls } from "./team-view-controls";
 import { BoardSkeleton, EmptyState, ErrorState, isNotFound, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
@@ -54,7 +63,14 @@ export function TeamIssuesPage({
   view: TeamView;
 }) {
   const meta = useTeamMeta(teamKey);
-  const issues = useTeamIssues(teamKey);
+  const controls = useTeamViewControls(meta.data?.team.id, view);
+  const baseIssues = useTeamIssues(teamKey);
+  // Mit Filter-Chips kommt die Liste vom Server (`viewIssues` im Team-Scope), sonst aus dem Team-Cache.
+  const filteredIssues = useViewIssues(
+    { filter: controls.filter, teamId: meta.data?.team.id },
+    controls.active && !!meta.data,
+  );
+  const issues = controls.active ? filteredIssues : baseIssues;
   const actions = useIssueActions();
   const [layout, setLayoutState] = useState<Layout>(() => readLayout(teamKey, view));
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -84,13 +100,56 @@ export function TeamIssuesPage({
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
   const states = useMemo(() => meta.data?.states ?? [], [meta.data]);
-  const visible = useMemo(() => filterByView(issues.data?.issues ?? [], view), [issues.data, view]);
-  const columns = useMemo(() => buildBoardColumns(states, visible, view), [states, visible, view]);
-  const groups = useMemo(() => groupByState(states, visible, view), [states, visible, view]);
+  const shown = useMemo(
+    () => applyVisibility(filterByView(issues.data?.issues ?? [], view), controls.options),
+    [issues.data, view, controls.options],
+  );
+  const visible = shown.visible;
+  const ordered = controls.options.ordering !== "manual";
+  // Sortierkontext (Assignee-Name, Status-Position) für alle Sortierungen und Gruppierungen.
+  const sortCtx = useMemo<SortContext>(
+    () => ({
+      assignee: (id) => lookup.assigneeName(id),
+      statePosition: (id) => lookup.state(id)?.position,
+    }),
+    [lookup],
+  );
+  const sortColumns = useCallback(
+    <T extends { issues: Issue[] }>(cols: T[]): T[] =>
+      ordered
+        ? cols.map((c) => ({ ...c, issues: sortIssues(c.issues, controls.options, sortCtx) }))
+        : cols,
+    [ordered, controls.options, sortCtx],
+  );
+  const columns = useMemo(
+    () => sortColumns(buildBoardColumns(states, visible, view)),
+    [states, visible, view, sortColumns],
+  );
+  const groups = useMemo(
+    () => sortColumns(groupByState(states, visible, view)),
+    [states, visible, view, sortColumns],
+  );
+  // Andere Gruppierung als nach Status: eigene Liste (ohne Mehrfachauswahl).
+  const customGrouping = layout === "list" && controls.options.grouping !== "status";
+  const customGroups = useMemo(() => {
+    if (!customGrouping) return [];
+    const cycles = new Map(
+      (meta.data?.cycles ?? []).map((c) => [c.id, c.name ?? `Cycle ${c.number}`]),
+    );
+    return groupIssues(sortIssues(visible, controls.options, sortCtx), controls.options.grouping, {
+      assignee: lookup.assigneeName,
+      project: lookup.projectName,
+      team: () => meta.data?.team.name ?? null,
+      cycle: (id) => cycles.get(id) ?? null,
+    });
+  }, [customGrouping, visible, controls.options, sortCtx, lookup, meta.data]);
 
   const grid = useMemo(
-    () => (layout === "board" ? columns : groups).map((g) => g.issues.map((i) => i.id)),
-    [layout, columns, groups],
+    () =>
+      customGrouping
+        ? customGroups.map((g) => g.issues.map((i) => i.id))
+        : (layout === "board" ? columns : groups).map((g) => g.issues.map((i) => i.id)),
+    [layout, columns, groups, customGrouping, customGroups],
   );
   // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben) verwerfen.
   const focused: Issue | null = visible.find((i) => i.id === focusedId) ?? null;
@@ -104,7 +163,8 @@ export function TeamIssuesPage({
   const openPicker = useCallback(
     (req: PickerRequest) => {
       // Fälligkeit hat keine Bulk-Aktion: immer für das fokussierte Issue.
-      if (selection.size > 0 && req.kind !== "due") setBulkRequest(req.kind);
+      if (selection.size > 0 && req.kind !== "due" && req.kind !== "parent")
+        setBulkRequest(req.kind);
       else setRequest(req);
     },
     [selection.size],
@@ -117,6 +177,7 @@ export function TeamIssuesPage({
   });
   const closePicker = useCallback(() => setRequest(null), []);
 
+  useSelectAll(selection, visible.length > 0);
   useActions([
     {
       id: "issue.select",
@@ -199,6 +260,16 @@ export function TeamIssuesPage({
         onDrop={({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)}
       />
     );
+  } else if (customGrouping) {
+    body = (
+      <GroupedIssueList
+        groups={customGroups}
+        ws={ws}
+        lookup={lookup}
+        focusedId={focused?.id ?? null}
+        onFocus={setFocusedId}
+      />
+    );
   } else {
     body = (
       <IssueList
@@ -209,13 +280,18 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInGroup={create}
         selection={selection}
+        onDrop={
+          controls.options.ordering === "manual"
+            ? ({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)
+            : undefined
+        }
       />
     );
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
+      <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1">
         <nav aria-label="Issue views" className="flex items-center gap-1">
           {tabs.map(([v, to]) => (
             <Link
@@ -231,6 +307,7 @@ export function TeamIssuesPage({
             </Link>
           ))}
         </nav>
+        <TeamViewControls controls={controls} />
         <div className="ml-auto flex items-center gap-1">
           <div
             role="group"
@@ -265,6 +342,11 @@ export function TeamIssuesPage({
       </header>
       <div className="min-h-0 flex-1 overflow-auto">
         {body}
+        {shown.hidden > 0 && (
+          <p className="px-4 py-3 text-xs text-muted-foreground">
+            {shown.hidden} issues hidden by display options.
+          </p>
+        )}
         {issues.data?.truncated && (
           <p className="px-4 py-3 text-xs text-muted-foreground">
             Showing the first {issues.data.issues.length} issues. Narrow the view to see the rest.

@@ -20,6 +20,7 @@ export const ISSUE_FIELDS = `
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
   labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed
   slaType slaStartedAt slaBreachesAt createdAt updatedAt
+  stateEnteredAt snoozedUntilAt startedTriageAt linkCount
 `;
 
 const COMMENT_FIELDS = `
@@ -129,8 +130,11 @@ export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Iss
   return res.issue;
 }
 
-/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 4). */
-export type IssueExtras = Pick<Issue, "children" | "relations" | "history" | "subscribed">;
+/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 5). */
+export type IssueExtras = Pick<
+  Issue,
+  "children" | "relations" | "history" | "subscribed" | "attachments"
+>;
 
 const RELATED = "id identifier title";
 const EXTRAS_QUERY = `query IssueExtras($id: String!) {
@@ -143,6 +147,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
       duplicateOf { ${RELATED} } duplicates { ${RELATED} }
     }
     history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
+    attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
   }
 }`;
 
@@ -253,7 +258,8 @@ export async function batchUpdateIssues(input: IssueBatchVars): Promise<IssueBat
 export interface IssueCreateVars {
   [key: string]: unknown;
   teamId: string;
-  title: string;
+  /** Pflicht, außer ein Template liefert den Titel. */
+  title?: string;
   description?: string;
   stateId?: string;
   assigneeId?: string;
@@ -264,6 +270,9 @@ export interface IssueCreateVars {
   projectId?: string;
   cycleId?: string;
   dueDate?: string;
+  /** Template (UUID); der Server wendet es an (Merge, Platzhalter, Formular). */
+  templateId?: string;
+  formAnswers?: Array<{ fieldId: string; value: string | string[] | number }>;
 }
 
 export async function createIssue(input: IssueCreateVars): Promise<Issue> {
@@ -296,6 +305,65 @@ export async function createComment(input: {
   );
   if (!res.commentCreate.success || !res.commentCreate.comment) throw new Error("Comment failed");
   return res.commentCreate.comment;
+}
+
+export async function updateComment(id: string, body: string): Promise<Comment> {
+  const res = await gqlRequest<
+    { commentUpdate: { success: boolean; comment: Comment | null } },
+    { id: string; input: { body: string } }
+  >(
+    `mutation CommentUpdate($id: String!, $input: CommentUpdateInput!) {
+      commentUpdate(id: $id, input: $input) { success comment { ${COMMENT_FIELDS} } }
+    }`,
+    { id, input: { body } },
+  );
+  if (!res.commentUpdate.success || !res.commentUpdate.comment) throw new Error("Update failed");
+  return res.commentUpdate.comment;
+}
+
+export async function deleteComment(id: string): Promise<void> {
+  await gqlRequest<{ commentDelete: { success: boolean } }, { id: string }>(
+    `mutation CommentDelete($id: String!) { commentDelete(id: $id) { success } }`,
+    { id },
+  );
+}
+
+/** Thread auflösen (`resolve = true`) oder wiedereröffnen. */
+export async function setCommentResolved(id: string, resolve: boolean): Promise<Comment> {
+  const op = resolve ? "commentResolve" : "commentUnresolve";
+  const res = await gqlRequest<
+    Record<string, { success: boolean; comment: Comment | null }>,
+    { id: string }
+  >(
+    `mutation CommentResolution($id: String!) {
+      ${op}(id: $id) { success comment { ${COMMENT_FIELDS} } }
+    }`,
+    { id },
+  );
+  const comment = res[op]?.comment;
+  if (!comment) throw new Error("Update failed");
+  return comment;
+}
+
+/** Hängt eine hochgeladene Datei (`assetUrl` aus `fileUpload`) als Anhang an das Issue. */
+export async function createAttachment(input: {
+  issueId: string;
+  url: string;
+  title?: string;
+}): Promise<void> {
+  await gqlRequest<{ attachmentCreate: { success: boolean } }, { input: typeof input }>(
+    `mutation AttachmentCreate($input: AttachmentCreateInput!) {
+      attachmentCreate(input: $input) { success }
+    }`,
+    { input },
+  );
+}
+
+export async function deleteAttachment(id: string): Promise<void> {
+  await gqlRequest<{ attachmentDelete: { success: boolean } }, { id: string }>(
+    `mutation AttachmentDelete($id: String!) { attachmentDelete(id: $id) { success } }`,
+    { id },
+  );
 }
 
 export async function createReaction(

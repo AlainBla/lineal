@@ -149,10 +149,10 @@ describe("shell", () => {
 
   it("shows a placeholder page for routes built by later work packages", async () => {
     mockFetch(true);
-    const router = await renderApp("/acme/drafts");
-    expect(await screen.findByRole("heading", { name: "Drafts" })).toBeInTheDocument();
+    const router = await renderApp("/acme/team/ENG/archive");
+    expect(await screen.findByRole("heading", { name: /Archive/ })).toBeInTheDocument();
     expect(screen.getByText(/not built yet/i)).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/acme/drafts");
+    expect(router.state.location.pathname).toBe("/acme/team/ENG/archive");
   });
 
   it("unbekannte URLs zeigen eine 404-Seite ohne Try again (B4.21)", async () => {

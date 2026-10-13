@@ -605,6 +605,18 @@ impl App {
         tx.webhooks()
             .set_invitation_status(inv.id, "accepted", Some(user_id), now)
             .await?;
+        // System-Benachrichtigung "Einladung angenommen" an den Einladenden (F.17, docs/05 §6.2).
+        super::notification::fanout::insert_direct(
+            &mut *tx,
+            self.ids.as_ref(),
+            now,
+            inv.inviter_id,
+            "invitationAccepted",
+            Some(user_id),
+            None,
+            format!("invitation-accepted:{}", inv.id),
+        )
+        .await?;
         let accept_ctx = user_ctx(
             inv.org_id,
             user_id,

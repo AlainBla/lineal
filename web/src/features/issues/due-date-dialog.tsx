@@ -26,6 +26,8 @@ export function DueDateDialog({
           className="flex flex-col gap-3 p-4"
           onSubmit={(e) => {
             e.preventDefault();
+            // Portal-Ereignisse bubblen in React bis zum umgebenden Formular (Create-Modal).
+            e.stopPropagation();
             onSave(value || null);
             onClose();
           }}

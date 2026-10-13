@@ -44,11 +44,14 @@ export function IssueView({
   view,
   teamId,
   title,
+  scope,
 }: {
   ws: string;
   view?: CustomView;
   teamId?: string;
   title: string;
+  /** Fester Bereichsfilter (z. B. ein Projekt), der mit den Chips per UND verknüpft wird. */
+  scope?: Filter;
 }) {
   // Gespeicherte Views: filterData → Chips (+ „erweiterter Filter“ für Nicht-Darstellbares).
   const initial = useMemo(() => filterToChips(view?.filterData), [view?.filterData]);
@@ -102,9 +105,13 @@ export function IssueView({
     if (view.projectId) scope.push({ project: { id: { in: [view.projectId] } } });
     return combineFilter(filter, scope);
   }, [view, touched, filter]);
+  const withScope = useMemo(
+    () => (scope ? combineFilter(scoped, [scope]) : scoped),
+    [scoped, scope],
+  );
   const q = useViewIssues({
     customViewId: view && !touched ? view.id : undefined,
-    filter: view && !touched ? undefined : scoped,
+    filter: view && !touched && !scope ? undefined : withScope,
     teamId,
     includeSubTeams: !!teamId,
   });
@@ -114,7 +121,10 @@ export function IssueView({
 
   const { groups, hidden, flat } = useMemo(() => {
     const { visible, hidden } = applyVisibility(q.data?.issues ?? [], options);
-    const sorted = sortIssues(visible, options);
+    const sorted = sortIssues(visible, options, {
+      assignee: (id) => lookup.assigneeName(id),
+      statePosition: (id) => lookup.state(id)?.position,
+    });
     const teamName = new Map((teams.data ?? []).map((t) => [t.id, t.name]));
     const cycleName = new Map(
       metas.flatMap((m) =>

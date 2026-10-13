@@ -927,6 +927,23 @@ type Issue {
 	createdAt: String!
 	updatedAt: String!
 	"""
+	Seit wann der Status gilt („Time in status“).
+	"""
+	stateEnteredAt: String!
+	"""
+	Triage: bis wann gesnoozt (`null` = nicht gesnoozt).
+	"""
+	snoozedUntilAt: String
+	"""
+	Triage: Eintritt in die Triage.
+	"""
+	startedTriageAt: String
+	triagedAt: String
+	"""
+	Anzahl der Anhänge/Links („Link count“).
+	"""
+	linkCount: Int!
+	"""
 	Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
 	"""
 	children(first: Int): [Issue!]!
@@ -934,6 +951,10 @@ type Issue {
 	Relationen dieses Issues.
 	"""
 	relations: IssueRelations!
+	"""
+	Anhänge und Links des Issues (Uploads mit frisch signierter Download-URL).
+	"""
+	attachments: [Attachment!]!
 	"""
 	Ob der Aufrufer dieses Issue abonniert hat.
 	"""
@@ -1413,6 +1434,11 @@ type Mutation {
 	"""
 	_searchMutationReady: Boolean!
 	"""
+	„Remind me“: setzt die Erinnerung (ersetzt eine vorhandene) oder entfernt sie
+	(`remindAt` weglassen). Nur an sichtbaren Objekten; wirkt nur auf die eigene Erinnerung.
+	"""
+	reminderSet(targetType: String!, targetId: String!, remindAt: String): ReminderPayload!
+	"""
 	Gelesen/ungelesen, Snooze/Unsnooze.
 	"""
 	notificationUpdate(id: String!, input: NotificationUpdateInput!): NotificationPayload!
@@ -1730,7 +1756,7 @@ type NotificationSubscription {
 
 input NotificationSubscriptionInput {
 	"""
-	`team`, `project`, `initiative`, `cycle` oder `label`.
+	`team`, `project`, `initiative`, `cycle`, `label` oder `user` (Assigned-Ansicht, `contextViewType` `assigned`).
 	"""
 	targetType: String!
 	targetId: String!
@@ -2065,6 +2091,12 @@ type Query {
 	"""
 	attachment(id: String!): Attachment!
 	"""
+	Bildet `assetUrl`s (Markdown-Bilder in Beschreibungen/Kommentaren) auf kurzlebig signierte
+	Download-URLs ab. Nur lesbare Dateien des eigenen Workspaces; unbekannte oder nicht
+	lesbare URLs fehlen im Ergebnis (höchstens 100 URLs je Aufruf).
+	"""
+	resolveAssets(urls: [String!]!): [ResolvedAsset!]!
+	"""
 	Cycles eines Teams (Key, Name oder UUID), aufsteigend nach Nummer; `type`:
 	`current` | `previous` | `next`. Ohne aktivierte Cycles leer.
 	"""
@@ -2150,6 +2182,11 @@ type Query {
 	Eine eigene Notification.
 	"""
 	notification(id: String!): Notification!
+	"""
+	Eigene offene „Remind me“-Erinnerung an Issue (Kennung oder UUID), Projekt, Initiative
+	oder Dokument (`targetType`: issue, project, initiative, document).
+	"""
+	reminder(targetType: String!, targetId: String!): Reminder
 	"""
 	Anzahl ungelesener Gruppen (Seitenleiste).
 	"""
@@ -2375,6 +2412,36 @@ type RelatedIssue {
 	id: String!
 	identifier: String!
 	title: String!
+}
+
+"""
+`Reminder`: persönliche „Remind me“-Erinnerung (docs/05 §6.10).
+"""
+type Reminder {
+	id: String!
+	targetType: String!
+	targetId: String!
+	remindAt: String!
+}
+
+type ReminderPayload {
+	success: Boolean!
+	"""
+	Die gesetzte Erinnerung; `null` nach dem Entfernen.
+	"""
+	reminder: Reminder
+}
+
+"""
+Aufgelöste `assetUrl` (Bilder in Markdown): kurzlebig signierte Download-URL.
+"""
+type ResolvedAsset {
+	assetUrl: String!
+	downloadUrl: String!
+	title: String!
+	contentType: String
+	size: Float
+	expiresAt: String!
 }
 
 """

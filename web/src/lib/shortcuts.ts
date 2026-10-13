@@ -95,12 +95,23 @@ export function parseSequence(spec: string): Combo[] {
 
 const isLetterOrDigit = (k: string) => /^[a-z0-9]$/i.test(k);
 
+const SYMBOL_CODES: Record<string, string> = {
+  Comma: ",",
+  Period: ".",
+  Quote: "'",
+  Slash: "/",
+};
+
 /** Taste layoutunabhängig: bei Modifikatoren zählt der physische Code (Shift+1 liefert sonst "!"). */
 function effectiveKey(e: KeyLike): string {
   const modified = e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
   if (modified && e.code) {
     const m = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(e.code);
     if (m) return (m[1] ?? m[2] ?? "").toLowerCase();
+    // Satzzeichen mit Ctrl/Cmd/Alt (`Ctrl .`, `Ctrl ⇧ ,`, `Ctrl ⇧ '`): Shift ändert sonst das Zeichen.
+    // Nur Shift allein bleibt beim Zeichen (`?`, `#`).
+    const sym = SYMBOL_CODES[e.code];
+    if (sym && (e.ctrlKey || e.metaKey || e.altKey)) return sym;
   }
   return e.key.toLowerCase();
 }

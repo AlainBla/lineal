@@ -236,6 +236,12 @@ function TeamEntry({
                   Views
                 </NavLink>
               </li>
+              <li>
+                <NavLink to={p.documents}>
+                  <FileText />
+                  Documents
+                </NavLink>
+              </li>
               {node.children.length > 0 && (
                 <li>
                   <ul

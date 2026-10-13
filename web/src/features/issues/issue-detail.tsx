@@ -15,7 +15,11 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
 
+import { AttachmentsSection } from "./attachments";
+import { uploadImageAsset } from "./assets";
 import { DueDateDialog } from "./due-date-dialog";
+import { DocumentsSection } from "@/features/docs/documents-section";
+
 import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
@@ -27,7 +31,7 @@ import { RelationsSection } from "./relations";
 import { RichEditor } from "./rich-editor";
 import { ErrorState, isNotFound } from "./states";
 import { SubIssuesSection } from "./sub-issues";
-import { showToast } from "./toast-store";
+import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
 
@@ -87,6 +91,10 @@ function LiveDescriptionEditor({
         ariaLabel="Description"
         placeholder="Add description…"
         users={mentionUsers}
+        uploadImage={uploadImageAsset}
+        onUploadError={(e) =>
+          showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" })
+        }
         collab={{ provider, canWrite: session.canWrite }}
       />
       <div className="flex items-center justify-end gap-2 text-xs text-subtle-foreground">
@@ -155,6 +163,10 @@ function Stage1DescriptionEditor({
         ariaLabel="Description"
         placeholder="Add description…"
         users={mentionUsers}
+        uploadImage={uploadImageAsset}
+        onUploadError={(e) =>
+          showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" })
+        }
         onChange={(md) => {
           pending.current = md;
           setStatus("dirty");
@@ -258,6 +270,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
+  const navigate = useNavigate();
   const parent = useIssue(issue.parentId ?? "");
   // Geteiltes Issue ohne Teamzugriff (Gast): nur lesen; andere Ladefehler (429, Netz): Retry (B4.16/B4.27).
   const metaCode = meta.error instanceof GraphQLRequestError ? meta.error.code : undefined;
@@ -313,6 +326,25 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
       keys: "mod+shift+o",
       context: "issue",
       perform: () => setAddingSub(true),
+    },
+    {
+      id: "issue.focus-description",
+      title: "Focus description",
+      section: "Issues",
+      keys: "mod+shift+i",
+      context: "issue",
+      enabled: !readOnly,
+      perform: () => document.querySelector<HTMLElement>('[aria-label="Description"]')?.focus(),
+    },
+    {
+      id: "issue.open-parent",
+      title: "Open parent issue",
+      section: "Issues",
+      keys: "mod+shift+arrowup",
+      context: "issue",
+      enabled: !!parent.data,
+      perform: () =>
+        parent.data && void navigate({ to: issuePath(ws, parent.data.identifier) as "/" }),
     },
     {
       id: "issue.comment",
@@ -394,6 +426,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               actions={actions}
               readOnly={readOnly}
             />
+            <AttachmentsSection key={`att-${issue.id}`} issue={issue} readOnly={readOnly} />
             <SubIssuesSection
               issue={issue}
               ws={ws}
@@ -407,6 +440,9 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               dialog={relationDialog}
               onDialog={setRelationDialog}
             />
+            <div className="rounded-lg border border-border">
+              <DocumentsSection ws={ws} scope={{ issueId: issue.id }} teamId={issue.teamId} />
+            </div>
             <ActivitySection issue={issue} lookup={lookup} />
           </div>
         </article>
@@ -424,6 +460,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             readOnly={readOnly}
             metaError={metaError}
             onRetryMeta={() => void meta.refetch()}
+            parent={parent.data ?? null}
           />
           {!issue.dueDate && !readOnly && !metaError && (
             <Button
