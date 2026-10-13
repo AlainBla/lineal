@@ -25,12 +25,16 @@ pub enum Fault {
     RateLimited(u64),
     /// HTTP 502.
     ServerError,
+    /// HTTP 503 mit `Retry-After` in Sekunden.
+    RetryAfter(u64),
 }
 
 pub struct MockLinear {
     source: Arc<FakeSource>,
     pub faults: Mutex<VecDeque<Fault>>,
     pub delay: Mutex<Duration>,
+    /// So viele der nächsten Antworten enthalten neben den Daten auch `errors` (Teilfehler).
+    pub partial_errors: Mutex<usize>,
     /// (Wurzelfeld, Autorisierungs-Header) je Anfrage.
     pub calls: Mutex<Vec<(String, Option<String>)>>,
 }
@@ -42,6 +46,7 @@ impl MockLinear {
             source,
             faults: Mutex::default(),
             delay: Mutex::default(),
+            partial_errors: Mutex::default(),
             calls: Mutex::default(),
         });
         let app = Router::new()
@@ -125,10 +130,26 @@ async fn handle(State(m): State<Arc<MockLinear>>, headers: axum::http::HeaderMap
             return r;
         }
         Some(Fault::ServerError) => return StatusCode::BAD_GATEWAY.into_response(),
+        Some(Fault::RetryAfter(secs)) => {
+            let mut r = StatusCode::SERVICE_UNAVAILABLE.into_response();
+            r.headers_mut().insert(
+                "retry-after",
+                HeaderValue::from_str(&secs.to_string()).unwrap(),
+            );
+            return r;
+        }
         None => {}
     }
     let data = answer(&m, &query, &field, &body["variables"]).await;
-    let mut r = axum::Json(json!({ "data": data })).into_response();
+    let mut payload = json!({ "data": data });
+    {
+        let mut partial = m.partial_errors.lock().unwrap();
+        if *partial > 0 && field != "viewer" {
+            *partial -= 1;
+            payload["errors"] = json!([{ "message": "boom", "extensions": { "code": "INTERNAL_SERVER_ERROR" } }]);
+        }
+    }
+    let mut r = axum::Json(payload).into_response();
     r.headers_mut().insert(
         "x-ratelimit-requests-remaining",
         HeaderValue::from_static("1000"),

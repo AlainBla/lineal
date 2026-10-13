@@ -96,3 +96,47 @@ async fn import_survives_rate_limits_and_server_errors(pool: PgPool) {
     assert!(mock.faults.lock().unwrap().is_empty(), "all faults were hit");
     assert_eq!(e.count("SELECT count(*) FROM issue").await, 200);
 }
+
+/// B7.06: Mehr als drei Wiederholungen bei 5xx, `Retry-After` wird beachtet, Teilfehler (Daten
+/// plus `errors`) landen als Warnung im Bericht statt still verloren zu gehen.
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn retries_retry_after_and_partial_errors(pool: PgPool) {
+    let data = Arc::new(fake());
+    let (mock, endpoint) = MockLinear::start(data).await;
+    let http = linear_source(&endpoint);
+    let e = env(pool).await;
+    let planned = e.scan(&http).await;
+    e.start(planned.id, ImportStartInput::default()).await;
+    {
+        let mut f = mock.faults.lock().unwrap();
+        // Vier Serverfehler in Folge (früher nach dreien aufgegeben), dann Retry-After.
+        for _ in 0..4 {
+            f.push_back(Fault::ServerError);
+        }
+        f.push_back(Fault::RetryAfter(1));
+    }
+    *mock.partial_errors.lock().unwrap() = 2;
+    let started = std::time::Instant::now();
+    let (run, out) = {
+        let out = e
+            .engine(&http, Default::default())
+            .run(e.org, planned.id)
+            .await
+            .unwrap();
+        (planned.id, out)
+    };
+    assert_eq!(out, RunOutcome::Completed);
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "Retry-After was honoured"
+    );
+    let partial: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM import_issue WHERE import_run_id = $1 AND severity = 'warning' \
+         AND message LIKE '%error(s) alongside data%'",
+    )
+    .bind(run)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(partial >= 1, "partial errors are reported");
+}

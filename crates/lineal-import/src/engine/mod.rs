@@ -922,18 +922,21 @@ impl Session<'_, '_> {
 
     /// Eine Seite lesen (außerhalb jeder Transaktion; Dry-Run hält seine eine Transaktion offen).
     pub(crate) async fn fetch(
-        &self,
+        &mut self,
         entity: SourceEntity,
         cursor: Option<String>,
     ) -> HResult<SourcePage> {
-        self.guarded(self.eng.source.page(&PageQuery {
-            entity,
-            cursor,
-            updated_after: self.opts.updated_after,
-            limit: self.eng.config.page_size.clamp(1, 100),
-            scope: self.scope(),
-        }))
-        .await
+        let page = self
+            .guarded(self.eng.source.page(&PageQuery {
+                entity,
+                cursor,
+                updated_after: self.opts.updated_after,
+                limit: self.eng.config.page_size.clamp(1, 100),
+                scope: self.scope(),
+            }))
+            .await;
+        self.source_warnings();
+        page
     }
 
     /// Einschränkung der Abfragen auf die gewählten Teams/Projekte (leer = alles).
@@ -947,6 +950,13 @@ impl Session<'_, '_> {
         let mut projects: Vec<String> = self.opts.projects.iter().cloned().collect();
         projects.sort();
         crate::port::Scope { teams, projects }
+    }
+
+    /// Warnungen der Quelle (z. B. Teilfehler) in den Bericht übernehmen.
+    pub(crate) fn source_warnings(&mut self) {
+        for w in self.eng.source.take_warnings() {
+            self.note("warning", "Source", None, w);
+        }
     }
 
     /// Alle Objekte einer (kleinen) Entität.

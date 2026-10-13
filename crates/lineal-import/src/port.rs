@@ -187,6 +187,12 @@ pub trait ImportSource: Send + Sync {
         Vec::new()
     }
 
+    /// Warnungen, die seit dem letzten Aufruf bei Abfragen aufgetreten sind (z. B. Teilfehler der
+    /// Quelle bei gleichzeitig gelieferten Daten); werden geleert. Für den Bericht.
+    fn take_warnings(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Verbindung prüfen und Workspace lesen.
     async fn workspace(&self) -> SourceResult<SourceWorkspace>;
 

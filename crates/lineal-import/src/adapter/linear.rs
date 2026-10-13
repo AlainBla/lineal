@@ -439,6 +439,8 @@ pub struct LinearSource {
     auth: String,
     /// Frühester Zeitpunkt der nächsten Anfrage (Rate-Limit-Steuerung).
     not_before: Mutex<Option<Instant>>,
+    /// Teilfehler der Quelle (Antwort mit `errors` und `data`) für den Bericht.
+    warnings: Mutex<Vec<String>>,
 }
 
 impl std::fmt::Debug for LinearSource {
@@ -479,6 +481,7 @@ impl LinearSource {
             auth: authorization_value(token),
             config,
             not_before: Mutex::new(None),
+            warnings: Mutex::new(Vec::new()),
         })
     }
 
@@ -523,7 +526,7 @@ impl LinearSource {
                     );
                     self.defer(wait);
                 }
-                Err(SourceError::Transport(m)) if attempt < self.config.max_retries.min(3) => {
+                Err(SourceError::Transport(m)) if attempt < self.config.max_retries => {
                     attempt += 1;
                     let wait = self.config.backoff_base * 2u32.saturating_pow(attempt - 1);
                     tracing::warn!(attempt, error = %m, "import source transport error, retrying");
@@ -584,10 +587,19 @@ impl LinearSource {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(SourceError::Auth);
         }
+        // `Retry-After` (Sekunden) hat Vorrang vor den Rate-Limit-Headern.
+        let retry_after = headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|s| Duration::from_secs(s).min(self.config.max_wait));
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err(SourceError::RateLimited(limited_wait()));
+            return Err(SourceError::RateLimited(retry_after.or_else(limited_wait)));
         }
         if status.is_server_error() {
+            if let Some(w) = retry_after {
+                return Err(SourceError::RateLimited(Some(w)));
+            }
             return Err(SourceError::Transport(format!("HTTP {}", status.as_u16())));
         }
         let payload: Value = resp
@@ -610,6 +622,30 @@ impl LinearSource {
                 c.contains("AUTHENTICATION") || c.contains("FORBIDDEN")
             }) {
                 return Err(SourceError::Auth);
+            }
+            if payload.get("data").is_some_and(|d| !d.is_null()) {
+                // Teilfehler: Daten werden übernommen, die Meldung kommt in den Bericht.
+                let codes: Vec<String> = errors
+                    .iter()
+                    .map(|e| {
+                        code(e)
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .take(40)
+                            .collect()
+                    })
+                    .collect();
+                let mut w = self
+                    .warnings
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if w.len() < 50 {
+                    w.push(format!(
+                        "the source reported {} error(s) alongside data ({}); the affected objects may be incomplete",
+                        errors.len(),
+                        codes.join(", ")
+                    ));
+                }
             }
             if payload.get("data").is_none_or(Value::is_null) {
                 let c = errors.first().map(code).unwrap_or_default();
@@ -637,6 +673,15 @@ impl LinearSource {
 impl ImportSource for LinearSource {
     fn kind(&self) -> &'static str {
         "linear"
+    }
+
+    fn take_warnings(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .warnings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     async fn workspace(&self) -> SourceResult<SourceWorkspace> {
