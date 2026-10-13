@@ -1397,6 +1397,11 @@ type Mutation {
 	"""
 	_searchMutationReady: Boolean!
 	"""
+	„Remind me“: setzt die Erinnerung (ersetzt eine vorhandene) oder entfernt sie
+	(`remindAt` weglassen). Nur an sichtbaren Objekten; wirkt nur auf die eigene Erinnerung.
+	"""
+	reminderSet(targetType: String!, targetId: String!, remindAt: String): ReminderPayload!
+	"""
 	Gelesen/ungelesen, Snooze/Unsnooze.
 	"""
 	notificationUpdate(id: String!, input: NotificationUpdateInput!): NotificationPayload!
@@ -2135,6 +2140,11 @@ type Query {
 	"""
 	notification(id: String!): Notification!
 	"""
+	Eigene offene „Remind me“-Erinnerung an Issue (Kennung oder UUID), Projekt, Initiative
+	oder Dokument (`targetType`: issue, project, initiative, document).
+	"""
+	reminder(targetType: String!, targetId: String!): Reminder
+	"""
 	Anzahl ungelesener Gruppen (Seitenleiste).
 	"""
 	notificationsUnreadCount: Int!
@@ -2359,6 +2369,24 @@ type RelatedIssue {
 	id: String!
 	identifier: String!
 	title: String!
+}
+
+"""
+`Reminder`: persönliche „Remind me“-Erinnerung (docs/05 §6.10).
+"""
+type Reminder {
+	id: String!
+	targetType: String!
+	targetId: String!
+	remindAt: String!
+}
+
+type ReminderPayload {
+	success: Boolean!
+	"""
+	Die gesetzte Erinnerung; `null` nach dem Entfernen.
+	"""
+	reminder: Reminder
 }
 
 """

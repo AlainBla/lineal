@@ -6,6 +6,7 @@
 pub mod fanout;
 pub mod jobs;
 pub mod kinds;
+pub mod reminder;
 pub mod views;
 
 use crate::app::App;
@@ -469,7 +470,7 @@ impl App {
 
     // --- Issue-Abos ---
 
-    async fn issue_for_subscription(
+    pub(super) async fn issue_for_subscription(
         &self,
         tx: &mut dyn Tx,
         snap: &PolicySnapshot,
@@ -609,7 +610,7 @@ impl App {
 
     /// Lädt das Dokument für ein Abo und prüft die Sichtbarkeit (Gäste nur bei Teambezug,
     /// sonst `not_found`).
-    async fn document_for_subscription(
+    pub(super) async fn document_for_subscription(
         &self,
         tx: &mut dyn Tx,
         snap: &PolicySnapshot,

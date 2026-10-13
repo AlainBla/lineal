@@ -219,6 +219,59 @@ impl<'a> Fan<'a> {
         self.cands.clear();
     }
 
+    /// Bereitet eine „Remind me“-Benachrichtigung zu `target_type`/`target_id` vor. `false`,
+    /// wenn das Objekt nicht (mehr) existiert; die Sichtbarkeit je Empfänger prüft `deliver`.
+    pub async fn reset_for_reminder(&mut self, target_type: &str, id: Uuid) -> AppResult<bool> {
+        self.refs = Refs::default();
+        self.cands.clear();
+        self.workspace_only = false;
+        match target_type {
+            "issue" => match self.tx.notifications().issue_facts(IssueId(id)).await? {
+                Some(f)
+                    if self
+                        .tx
+                        .notifications()
+                        .reminder_target_alive("issue", id)
+                        .await? =>
+                {
+                    self.reset_for_issue_reminder(f.id, f.team_id)
+                }
+                _ => return Ok(false),
+            },
+            "project" => {
+                if !self
+                    .tx
+                    .notifications()
+                    .reminder_target_alive("project", id)
+                    .await?
+                {
+                    return Ok(false);
+                }
+                self.target_project(ProjectId(id)).await?;
+            }
+            "initiative" => {
+                if !self
+                    .tx
+                    .notifications()
+                    .reminder_target_alive("initiative", id)
+                    .await?
+                {
+                    return Ok(false);
+                }
+                self.target_initiative(id);
+            }
+            "document" => match self.tx.notifications().document_facts(id).await? {
+                Some(f) if !f.trashed => {
+                    self.reset_for_document(id, f.teams);
+                    self.workspace_only = f.workspace_only;
+                }
+                _ => return Ok(false),
+            },
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// Bereitet eine Benachrichtigung zu einem Dokument vor (Erwähnungen, WP34); sichtbar für
     /// Empfänger, die mindestens eines der Teams des Elternobjekts sehen (leer = alle aktiven).
     pub fn reset_for_document(&mut self, document: Uuid, teams: Vec<TeamId>) {
