@@ -1055,6 +1055,8 @@ impl Drop for TempDir {
     }
 }
 
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+
 fn blob_app(dir: &TempDir) -> Arc<App> {
     let mut app = Arc::try_unwrap(app_with_keys()).ok().unwrap();
     app.config.blob_dir = dir.0.clone();
@@ -1095,11 +1097,7 @@ async fn upload_then_download_roundtrip() {
         .signed_put_url("acme/eng/diagram.png", "image/png", PUT_TTL)
         .await
         .unwrap();
-    let r = send(
-        &router,
-        put(&path_of(&put_url), "image/png", vec![1, 2, 3, 4]),
-    )
-    .await;
+    let r = send(&router, put(&path_of(&put_url), "image/png", PNG.to_vec())).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
 
     let get_url = store
@@ -1123,7 +1121,7 @@ async fn upload_then_download_roundtrip() {
     );
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(&bytes[..], &[1, 2, 3, 4]);
+    assert_eq!(&bytes[..], PNG);
 
     // unbekannter Schlüssel -> 404
     let other = store
@@ -1228,6 +1226,60 @@ async fn upload_checks_content_type_and_size() {
     let r = send(&router, put(&path_of(&url), "text/html", vec![0])).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json()["error"], "invalid_request");
+}
+
+#[tokio::test]
+async fn upload_over_the_reserved_size_is_rejected() {
+    // B3.07: die in fileUpload reservierte Größe wird beim PUT erzwungen.
+    let dir = TempDir::new();
+    let app = blob_app(&dir);
+    let router = api(app.clone());
+    let store = store_at(&app, app.clock.now());
+    let url = store
+        .signed_put_url_sized("k2.png", "image/png", 12, PUT_TTL)
+        .await
+        .unwrap();
+    let mut big = PNG.to_vec();
+    big.extend(vec![0u8; 100]);
+    let r = send(&router, put(&path_of(&url), "image/png", big)).await;
+    assert!(r.status.is_client_error(), "{}", r.body);
+    assert_eq!(r.json()["error"], "limit_exceeded");
+    // Genau in der Größe: ok.
+    let r = send(&router, put(&path_of(&url), "image/png", PNG.to_vec())).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+}
+
+#[tokio::test]
+async fn upload_content_must_match_the_declared_image_type() {
+    // B3.08: Magic-Byte-Prüfung.
+    let dir = TempDir::new();
+    let app = blob_app(&dir);
+    let router = api(app.clone());
+    let store = store_at(&app, app.clock.now());
+    let url = store
+        .signed_put_url("fake.png", "image/png", PUT_TTL)
+        .await
+        .unwrap();
+    let r = send(
+        &router,
+        put(&path_of(&url), "image/png", b"not an image".to_vec()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    assert_eq!(r.json()["error"], "invalid_request");
+    // Abgelehnte Datei wurde nicht abgelegt.
+    assert!(store.head("fake.png").await.unwrap().is_none());
+    // Text bleibt frei.
+    let url = store
+        .signed_put_url("a.txt", "text/plain", PUT_TTL)
+        .await
+        .unwrap();
+    let r = send(
+        &router,
+        put(&path_of(&url), "text/plain", b"hello".to_vec()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
 }
 
 // ---------------------------------------------------------------- Brute-Force

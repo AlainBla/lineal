@@ -48,6 +48,18 @@ pub trait BlobStore: Send + Sync {
         content_type: &str,
         ttl: Duration,
     ) -> AppResult<String>;
+    /// Wie [`Self::signed_put_url`], mit der reservierten Größe: der Upload darf sie nicht
+    /// überschreiten. Der Standard ignoriert die Größe (Stores ohne Durchsetzung, Fakes).
+    async fn signed_put_url_sized(
+        &self,
+        key: &str,
+        content_type: &str,
+        max_size: u64,
+        ttl: Duration,
+    ) -> AppResult<String> {
+        let _ = max_size;
+        self.signed_put_url(key, content_type, ttl).await
+    }
     /// Signierte Download-URL (GET).
     async fn signed_get_url(&self, key: &str, ttl: Duration) -> AppResult<String>;
 }
