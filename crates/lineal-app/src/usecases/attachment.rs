@@ -584,6 +584,33 @@ impl App {
         Ok(view)
     }
 
+    /// Inhalt eines hochgeladenen Anhangs (nach Zugriffsprüfung wie `get_attachment`) samt
+    /// Content-Type; `None` bei Links, zu großen oder nicht lesbaren Dateien (B8.12).
+    pub async fn read_attachment_content(
+        &self,
+        ctx: &RequestCtx,
+        id: &str,
+        max_bytes: u64,
+    ) -> AppResult<Option<(Vec<u8>, String)>> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let (attachment, _issue) = self
+            .load_attachment(&mut *tx, &snap, ctx, id, Action::ViewTeam)
+            .await?;
+        drop(tx);
+        let (Some(key), Some("upload")) =
+            (&attachment.storage_key, attachment.source_type.as_deref())
+        else {
+            return Ok(None);
+        };
+        let content_type = attachment.content_type.clone().unwrap_or_default();
+        Ok(self
+            .blobs
+            .read(key, max_bytes)
+            .await?
+            .map(|bytes| (bytes, content_type)))
+    }
+
     /// Bildet `assetUrl`s des eigenen Workspaces auf signierte Download-URLs ab. Nur lesbare Dateien:
     /// Issue-Anhänge nach Zugriffsprüfung auf das Issue sowie Uploads ohne Ziel-Issue (z. B. Bilder
     /// in Markdown). Fremde, unbekannte oder nicht lesbare URLs fehlen im Ergebnis.

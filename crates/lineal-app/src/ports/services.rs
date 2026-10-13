@@ -34,6 +34,13 @@ pub trait BlobStore: Send + Sync {
         Err(AppError::internal("blob head not supported by this store"))
     }
 
+    /// Liest den Inhalt eines Objekts (höchstens `max_bytes`); `None`, wenn es fehlt, größer ist
+    /// oder der Store das Lesen nicht unterstützt (MCP `get_attachment`, B8.12).
+    async fn read(&self, key: &str, max_bytes: u64) -> AppResult<Option<Vec<u8>>> {
+        let _ = (key, max_bytes);
+        Ok(None)
+    }
+
     /// Löscht das Objekt endgültig. Ein fehlendes Objekt ist kein Fehler (idempotent).
     /// Der Standard ist ein No-op für Stores ohne Löschfunktion (Fakes in Tests).
     async fn delete(&self, key: &str) -> AppResult<()> {
