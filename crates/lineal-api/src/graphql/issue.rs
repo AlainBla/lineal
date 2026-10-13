@@ -330,8 +330,8 @@ pub struct IssueRelationCreateInput {
 }
 
 fn date(s: &str) -> AppResult<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD"))
+    lineal_domain::rules::date::parse_iso_date("dueDate", s)
+        .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD (year 1900-2200)"))
 }
 
 fn tri<T>(m: MaybeUndefined<T>) -> Option<Option<T>> {

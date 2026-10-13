@@ -176,7 +176,7 @@ fn parse_date_value(s: &str, allow_datetime: bool) -> Result<DateValue, String> 
         }
     }
     if s.len() == 10 {
-        if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        if let Ok(d) = crate::rules::date::parse_iso_date("date", s) {
             return Ok(DateValue::Date(d));
         }
     }

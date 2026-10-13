@@ -7,7 +7,6 @@ use super::org::gql_err;
 use crate::context::{app, request_ctx};
 use async_graphql::types::Json;
 use async_graphql::{Context, InputObject, Object, SimpleObject};
-use chrono::NaiveDate;
 use lineal_app::AppError;
 use lineal_app::ports::repos::label::LabelKind;
 use lineal_app::ports::repos::triage::{RecurringIssue, SlaRule};
@@ -362,7 +361,7 @@ impl TeamExtraMutation {
             .start_date
             .as_deref()
             .map(|d| {
-                NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                lineal_domain::rules::date::parse_iso_date("startDate", d)
                     .map_err(|_| gql_err(AppError::invalid_request("startDate must be YYYY-MM-DD")))
             })
             .transpose()?;

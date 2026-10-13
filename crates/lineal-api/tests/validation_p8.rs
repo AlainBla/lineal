@@ -176,3 +176,33 @@ async fn first_out_of_range_is_invalid_request(pool: sqlx::PgPool) {
     .await;
     assert!(r.errors.is_empty(), "{:?}", r.errors);
 }
+
+/// B8.14: Datumseingaben strikt `YYYY-MM-DD` mit plausiblem Jahr.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn dates_are_strict_and_plausible(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    for bad in [
+        "2026-2-3",
+        "+2026-02-03",
+        "26-02-03",
+        "0001-01-01",
+        "9999-12-31",
+    ] {
+        let r = run(
+            &schema,
+            ctx_for(SeedUser::Alice),
+            "mutation($i: ProjectInput!) { projectCreate(input: $i) { success } }",
+            json!({"i": {"name": "P", "setTeams": ["ENG"], "startDate": bad}}),
+        )
+        .await;
+        assert_eq!(code(&r), "invalid_request", "project {bad}: {:?}", r.errors);
+        let r = run(
+            &schema,
+            ctx_for(SeedUser::Alice),
+            ISSUE_CREATE,
+            json!({"i": {"teamId": "ENG", "title": "t", "dueDate": bad}}),
+        )
+        .await;
+        assert_eq!(code(&r), "invalid_request", "issue {bad}: {:?}", r.errors);
+    }
+}
