@@ -1087,6 +1087,63 @@ async fn comment_anchors_survive_edits_and_detach_when_text_is_removed(pool: PgP
     assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
 }
 
+/// B2.05/B2.06: ungültige Anker oder ein im Dokument fehlender quotedText legen keinen
+/// Kommentar an; gültige Anker werden zusammen mit dem Kommentar gespeichert.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn inline_comment_is_validated_before_anything_is_stored(pool: PgPool) {
+    use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
+    let e = env(pool).await;
+    let doc = e
+        .doc(SeedUser::Alice, "ENG", "Spec", "Hallo schöne Welt")
+        .await;
+    let input = |quoted: &str| CreateCommentInput {
+        parent: Some(ParentSpec::Document(doc.to_string())),
+        reply_to: None,
+        body: "Frage".into(),
+        quoted_text: Some(quoted.into()),
+    };
+    let count = |e: &Env| {
+        let pool = e.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM comment")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let before = count(&e).await;
+    // Ungültiger Anker: Fehler und kein Geisterkommentar.
+    let err = e
+        .app
+        .create_comment_anchored(
+            &user(SeedUser::Bob),
+            input("schöne"),
+            Some(("AAAA".into(), "AAAA".into())),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+    assert_eq!(count(&e).await, before, "kein Kommentar bei ungültigem Anker");
+    // quotedText kommt im Dokument nicht vor.
+    let err = e
+        .app
+        .create_comment(&user(SeedUser::Bob), input("gibtsnicht"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, lineal_app::ErrorKind::InvalidRequest);
+    assert_eq!(count(&e).await, before);
+    // Gültig: mit Anker in einer Transaktion.
+    let ydoc = crdt::doc_from_markdown("Hallo schöne Welt");
+    let (a, b) = crdt::anchors_for_quote(&ydoc, "schöne").unwrap();
+    let ok = e
+        .app
+        .create_comment_anchored(&user(SeedUser::Bob), input("schöne"), Some((a.clone(), b)))
+        .await
+        .unwrap();
+    assert_eq!(ok.view.comment.anchor_start.as_deref(), Some(a.as_str()));
+    assert_eq!(count(&e).await, before + 1);
+}
+
 async fn desc_client(e: &Env, who: &str, kind: &str, id: Uuid) -> Client {
     let ws = e
         .try_connect(Some(who), &format!("/collab/{kind}/{id}"), &[])

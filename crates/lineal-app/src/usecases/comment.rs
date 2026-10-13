@@ -441,6 +441,18 @@ async fn build_views(tx: &mut dyn Tx, comments: Vec<Comment>) -> AppResult<Vec<C
     Ok(views)
 }
 
+/// Kommt der zitierte Text im aktuellen Klartext des Dokuments vor?
+async fn quoted_text_occurs(tx: &mut dyn Tx, id: DocumentId, quoted: &str) -> AppResult<bool> {
+    let Some((ydoc, markdown)) = load_anchor_doc(tx, id).await? else {
+        return Ok(false);
+    };
+    if markdown.contains(quoted) {
+        return Ok(true);
+    }
+    let ydoc = ydoc.unwrap_or_else(|| crate::collab::crdt::doc_from_markdown(&markdown));
+    Ok(crate::collab::crdt::anchors_for_quote(&ydoc, quoted).is_some())
+}
+
 /// Dokument-Markdown und (falls vorhanden) CRDT-Zustand für die Auflösung von Inline-Ankern.
 async fn load_anchor_doc(
     tx: &mut dyn Tx,
@@ -568,6 +580,17 @@ impl App {
         ctx: &RequestCtx,
         input: CreateCommentInput,
     ) -> AppResult<CommentMutation> {
+        self.create_comment_anchored(ctx, input, None).await
+    }
+
+    /// Wie [`App::create_comment`], zusätzlich mit Positionsanker (Start, Ende; Base64) eines
+    /// Inline-Kommentars; Anker und Kommentar werden in derselben Transaktion geprüft und gespeichert.
+    pub async fn create_comment_anchored(
+        &self,
+        ctx: &RequestCtx,
+        input: CreateCommentInput,
+        anchor: Option<(String, String)>,
+    ) -> AppResult<CommentMutation> {
         let body = clean_body(&input.body)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
@@ -641,10 +664,38 @@ impl App {
             }
         };
 
+        // Inline-Kommentare (docs/06 §1.8): Anker prüfen und zitierten Text im Dokument suchen,
+        // bevor etwas gespeichert wird (kein Geisterkommentar bei ungültiger Eingabe).
+        if let Some((start, end)) = &anchor {
+            if !crate::collab::crdt::anchor_is_valid(start)
+                || !crate::collab::crdt::anchor_is_valid(end)
+            {
+                return Err(AppError::invalid_request(
+                    "anchorStart/anchorEnd must be valid relative positions",
+                )
+                .with_details(json!({ "field": "anchorStart" })));
+            }
+            if quoted_text.is_none() || root.is_some() || !matches!(parent, ParentRef::Document(_))
+            {
+                return Err(AppError::invalid_request(
+                    "Only inline comments on documents can have anchors",
+                )
+                .with_details(json!({ "field": "anchorStart" })));
+            }
+        }
+        if let (ParentRef::Document(doc_id), Some(q)) = (parent, &quoted_text)
+            && !quoted_text_occurs(&mut *tx, doc_id, q).await?
+        {
+            return Err(AppError::invalid_request(
+                "quotedText does not occur in the document",
+            )
+            .with_details(json!({ "field": "quotedText" })));
+        }
+
         let mentioned = mentioned_users(&mut *tx, &snap, &scope, &body).await?;
         let now = self.clock.now();
         let author = actor_user(ctx);
-        let comment = tx
+        let mut comment = tx
             .comments()
             .insert(&NewComment {
                 id: CommentId(self.ids.new_uuid()),
@@ -656,6 +707,14 @@ impl App {
                 now,
             })
             .await?;
+        if let Some((start, end)) = &anchor {
+            tx.comments().set_anchor(comment.id, start, end).await?;
+            comment = tx
+                .comments()
+                .get(comment.id)
+                .await?
+                .ok_or_else(|| AppError::internal("comment missing"))?;
+        }
 
         // Autor abonniert das Issue (Top-Level) bzw. den Thread (Antwort).
         if let (Some(uid), ParentRef::Issue(issue)) = (author, parent) {
