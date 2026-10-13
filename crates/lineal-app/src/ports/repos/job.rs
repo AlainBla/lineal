@@ -45,6 +45,18 @@ pub struct Job {
 
 #[async_trait]
 pub trait JobRepo: Send {
+    /// Aufbewahrung: löscht erledigte Jobs mit `completed_at < done_before` und fehlgeschlagene
+    /// mit `last attempt < failed_before` (höchstens `limit` Zeilen je Aufruf). Liefert die Anzahl.
+    async fn purge_finished(
+        &mut self,
+        done_before: DateTime<Utc>,
+        failed_before: DateTime<Utc>,
+        limit: i64,
+    ) -> AppResult<u64> {
+        let _ = (done_before, failed_before, limit);
+        Ok(0)
+    }
+
     /// Legt einen Job an; `None`, wenn `unique_key` bereits existiert.
     async fn enqueue(&mut self, job: NewJob) -> AppResult<Option<JobId>>;
     /// Beansprucht bis zu `limit` fällige Jobs (`SKIP LOCKED`), setzt sie auf `running`

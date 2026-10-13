@@ -2,9 +2,9 @@
 
 use crate::db_err;
 use async_trait::async_trait;
-use lineal_app::AppResult;
 use lineal_app::ports::repos::*;
 use lineal_app::ports::{Store, Tx};
+use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::OrgId;
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
@@ -26,7 +26,20 @@ impl PgStore {
     }
 
     async fn begin_tx(&self, org: OrgId) -> AppResult<Box<dyn Tx>> {
-        let tx = self.pool.begin().await.map_err(db_err)?;
+        // `Transaction::begin` (sqlx 0.8) ist nicht abbruchsicher: wird die Future nach dem Senden
+        // von `BEGIN`, aber vor der Antwort verworfen (Client trennt, Timeout), geht die Verbindung
+        // "idle in transaction" in den Pool zurück (Notice "there is already a transaction in
+        // progress" beim nächsten Nutzer, Schreibzugriffe landen in einer nie committeten
+        // Transaktion; B1.12). Deshalb läuft das Öffnen in einer eigenen Task, die der Aufrufer
+        // nicht abbrechen kann; wird er abgebrochen, rollt die Task die Transaktion beim Drop zurück.
+        let pool = self.pool.clone();
+        let tx = tokio::spawn(async move { pool.begin().await })
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "begin task failed");
+                AppError::internal("database error")
+            })?
+            .map_err(db_err)?;
         Ok(Box::new(PgTx {
             tx,
             org,
@@ -149,6 +162,15 @@ impl Tx for PgTx {
     }
 
     async fn commit(self: Box<Self>) -> AppResult<()> {
-        self.tx.commit().await.map_err(db_err)
+        // Ebenfalls in eigener Task: ein Abbruch des Aufrufers (Request-Abbruch) darf `COMMIT`
+        // weder halb senden noch eine bereits begonnene Zusage zurücknehmen.
+        let tx = self.tx;
+        tokio::spawn(async move { tx.commit().await })
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "commit task failed");
+                AppError::internal("database error")
+            })?
+            .map_err(db_err)
     }
 }

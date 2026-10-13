@@ -12,6 +12,7 @@ use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot, require_workspace};
+use crate::ports::Tx;
 use crate::ports::repos::import::{ImportRun, ImportRunUpdate, NewImportRun};
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -298,6 +299,9 @@ impl App {
         if selected.is_empty() {
             return Err(invalid("teams", "no team to import"));
         }
+        if !input.dry_run {
+            ensure_no_overlapping_run(&mut *tx, &run, &selected).await?;
+        }
         let scan_projects: std::collections::BTreeSet<&str> = run.stats["scan"]["teams"]
             .as_array()
             .into_iter()
@@ -488,6 +492,15 @@ impl App {
                 run.status
             )));
         }
+        if to == "running" && run.options["dryRun"].as_bool() != Some(true) {
+            let teams: Vec<String> = run.options["teams"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect();
+            ensure_no_overlapping_run(&mut *tx, &run, &teams).await?;
+        }
         let now = self.clock.now();
         tx.imports()
             .update_import_run(
@@ -510,6 +523,9 @@ impl App {
                 .await?;
             let ids: Vec<Uuid> = teams.iter().map(|m| m.target_id).collect();
             tx.imports().set_team_import_lock(&ids, None).await?;
+            // Ein abgebrochener Lauf hinterlässt benutzbare Teams: Zähler auf die vorhandenen
+            // Nummern nachführen (sonst scheitert die Issue-Anlage mit "number already in use").
+            tx.imports().finalize_import_counters(&ids).await?;
         }
         let run = tx
             .imports()
@@ -679,6 +695,38 @@ impl App {
             None => Ok(None),
         }
     }
+}
+
+/// Zwei gleichzeitige Läufe ins selbe Team würden sich gegenseitig mit Konflikten überschütten
+/// (doppelte Nummern, Mapping-Überschneidungen): ein zweiter echter Lauf wird abgelehnt, solange
+/// ein anderer Lauf für ein überlappendes Team `running` ist. Eine leere Teamliste heißt "alle".
+async fn ensure_no_overlapping_run(
+    tx: &mut dyn Tx,
+    run: &ImportRun,
+    teams: &[String],
+) -> AppResult<()> {
+    let mine: std::collections::BTreeSet<String> = teams.iter().map(|t| t.to_uppercase()).collect();
+    for other in tx.imports().list_import_runs(200).await? {
+        if other.id == run.id
+            || other.status != "running"
+            || other.options["dryRun"].as_bool() == Some(true)
+        {
+            continue;
+        }
+        let theirs: std::collections::BTreeSet<String> = other.options["teams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.as_str().map(str::to_uppercase))
+            .collect();
+        if mine.is_empty() || theirs.is_empty() || !mine.is_disjoint(&theirs) {
+            return Err(AppError::conflict(
+                "another import run is already running for the same team(s); wait for it to finish or cancel it first",
+            )
+            .with_details(json!({ "runId": other.id })));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

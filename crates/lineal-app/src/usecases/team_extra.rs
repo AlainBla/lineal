@@ -9,7 +9,7 @@
 
 use crate::app::App;
 use crate::context::RequestCtx;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorKind};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
@@ -772,7 +772,8 @@ impl App {
             let ctx = RequestCtx::system(org, "job-recurring-issues");
             for _ in 0..MAX_RUNS_PER_ORG {
                 match self.run_one_recurring(&ctx, now).await {
-                    Ok(Some(_)) => created += 1,
+                    // `Uuid::nil()` = Lauf übersprungen/Regel pausiert (nichts erzeugt).
+                    Ok(Some(id)) => created += u64::from(!id.is_nil()),
                     Ok(None) => break,
                     Err(e) => {
                         tracing::warn!(org = %org, error = %e, "recurring issue run failed");
@@ -823,9 +824,17 @@ impl App {
                 // Fehler an der Regel vermerken, Lauf überspringen (eigene Transaktion).
                 drop(tx);
                 let mut tx = self.store.begin(ctx.org_id).await?;
-                tx.triage()
-                    .skip_recurring_run(rec.id, next, &e.to_string(), now)
-                    .await?;
+                if e.kind == ErrorKind::NotFound {
+                    // Template oder Team existiert nicht mehr: die Regel kann nie wieder laufen.
+                    // Pausieren statt bei jedem Lauf still zu scheitern (Fehler bleibt sichtbar).
+                    tx.triage()
+                        .pause_recurring_run(rec.id, &e.to_string(), now)
+                        .await?;
+                } else {
+                    tx.triage()
+                        .skip_recurring_run(rec.id, next, &e.to_string(), now)
+                        .await?;
+                }
                 tx.commit().await?;
                 tracing::warn!(recurring = %rec.id, error = %e, "recurring issue skipped");
                 Ok(Some(Uuid::nil()))

@@ -29,4 +29,11 @@ pub trait PeriodicJob: Send + Sync {
     fn name(&self) -> &'static str;
     fn schedule(&self) -> Schedule;
     async fn run(&self, app: &App, now: DateTime<Utc>) -> AppResult<()>;
+
+    /// Langläufer (z. B. Import): läuft in einer eigenen Task, damit Outbox-Konsumenten und die
+    /// übrigen periodischen Jobs weiterlaufen. Je Prozess läuft höchstens eine Instanz; weitere
+    /// Slots werden übersprungen, solange sie läuft.
+    fn detached(&self) -> bool {
+        false
+    }
 }
