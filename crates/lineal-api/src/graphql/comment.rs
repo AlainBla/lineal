@@ -248,6 +248,18 @@ impl From<AttachmentView> for AttachmentGql {
     }
 }
 
+/// Aufgelöste `assetUrl` (Bilder in Markdown): kurzlebig signierte Download-URL.
+#[derive(SimpleObject)]
+#[graphql(name = "ResolvedAsset")]
+pub struct ResolvedAssetGql {
+    pub asset_url: String,
+    pub download_url: String,
+    pub title: String,
+    pub content_type: Option<String>,
+    pub size: Option<f64>,
+    pub expires_at: String,
+}
+
 #[derive(InputObject)]
 #[graphql(name = "AttachmentCreateInput")]
 pub struct AttachmentCreateInput {
@@ -426,6 +438,36 @@ impl CommentQuery {
             .await
             .map_err(gql_err)?;
         Ok(v.into())
+    }
+
+    /// Bildet `assetUrl`s (Markdown-Bilder in Beschreibungen/Kommentaren) auf kurzlebig signierte
+    /// Download-URLs ab. Nur lesbare Dateien des eigenen Workspaces; unbekannte oder nicht
+    /// lesbare URLs fehlen im Ergebnis (höchstens 100 URLs je Aufruf).
+    async fn resolve_assets(
+        &self,
+        ctx: &Context<'_>,
+        urls: Vec<String>,
+    ) -> async_graphql::Result<Vec<ResolvedAssetGql>> {
+        if urls.len() > 100 {
+            return Err(gql_err(AppError::invalid_request(
+                "At most 100 urls can be resolved at once.",
+            )));
+        }
+        let assets = app(ctx)?
+            .resolve_assets(request_ctx(ctx)?, &urls)
+            .await
+            .map_err(gql_err)?;
+        Ok(assets
+            .into_iter()
+            .map(|a| ResolvedAssetGql {
+                asset_url: a.asset_url,
+                download_url: a.download_url,
+                title: a.title,
+                content_type: a.content_type,
+                size: a.size.map(|s| s as f64),
+                expires_at: ts(a.expires_at),
+            })
+            .collect())
     }
 }
 
