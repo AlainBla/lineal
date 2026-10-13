@@ -72,6 +72,51 @@ describe("Team-Issues", () => {
     expect(localStorage.getItem("lineal-issues-layout:ENG:all")).toBe("board");
   });
 
+  it("sortiert die Liste standardmäßig nach Priorität; Ordering wechselt, merkt sich die Wahl und aktiviert Manual-DnD (F.13)", async () => {
+    const same = [
+      makeIssue({ id: "p0", identifier: "ENG-1", title: "Ohne", stateId: "s-todo", priority: 0 }),
+      makeIssue({ id: "p3", identifier: "ENG-2", title: "Mittel", stateId: "s-todo", priority: 3 }),
+      makeIssue({
+        id: "p1",
+        identifier: "ENG-3",
+        title: "Dringend",
+        stateId: "s-todo",
+        priority: 1,
+      }),
+    ];
+    mockGraphql({
+      TeamMeta: meta,
+      TeamIssues: () => ({ issues: { nodes: same, hasNextPage: false, endCursor: null } }),
+    });
+    await renderWithApp(<TeamIssuesPage ws="acme" teamKey="ENG" view="all" />);
+    const list = await screen.findByRole("list", { name: "Issues" });
+    const titles = () =>
+      within(list)
+        .getAllByRole("link")
+        .map((a) => a.textContent ?? "");
+    await waitFor(() => expect(titles()[0]).toContain("Dringend"));
+    expect(titles().map((t) => /Dringend|Mittel|Ohne/.exec(t)?.[0])).toEqual([
+      "Dringend",
+      "Mittel",
+      "Ohne",
+    ]);
+    expect(list.querySelector("[data-sortable-id]")).toBeNull();
+
+    await userEvent.selectOptions(screen.getByLabelText("Ordering"), "title");
+    expect(titles().map((t) => /Dringend|Mittel|Ohne/.exec(t)?.[0])).toEqual([
+      "Dringend",
+      "Mittel",
+      "Ohne",
+    ]);
+    await userEvent.selectOptions(screen.getByLabelText("Ordering"), "manual");
+    expect(JSON.parse(localStorage.getItem("lineal-issues-ordering:ENG") ?? "{}").ordering).toBe(
+      "manual",
+    );
+    expect(
+      screen.getByRole("list", { name: "Issues" }).querySelectorAll("[data-sortable-id]"),
+    ).toHaveLength(3);
+  });
+
   it("J fokussiert die erste Zeile, S öffnet den Status-Picker für das fokussierte Issue", async () => {
     const gql = mockGraphql({
       TeamMeta: meta,

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Columns3, List, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, List, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useActions } from "@/app/commands";
@@ -16,6 +16,14 @@ import { useIssueActions } from "./issue-actions";
 import { useIssueLookup } from "./issue-lookup";
 import { IssueBoard } from "./issue-board";
 import { IssueList } from "./issue-list";
+import {
+  DEFAULT_DISPLAY,
+  defaultDirection,
+  ORDERINGS,
+  sortIssues,
+  type DisplayOptions,
+  type Ordering,
+} from "@/features/views/display-options";
 import { buildBoardColumns, filterByView, groupByState, type TeamView } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { useSelection } from "./selection";
@@ -43,6 +51,42 @@ function readLayout(team: string, view: TeamView): Layout {
   return view === "active" ? "board" : "list"; // docs/05 §3.1
 }
 
+const ORDERING_LABEL: Record<Ordering, string> = {
+  priority: "Priority",
+  title: "Title",
+  status: "Status",
+  assignee: "Assignee",
+  estimate: "Estimate",
+  updatedAt: "Last updated",
+  createdAt: "Created",
+  dueDate: "Due date",
+  linkCount: "Link count",
+  timeInStatus: "Time in status",
+  manual: "Manual",
+};
+
+const orderingKey = (team: string) => `lineal-issues-ordering:${team}`;
+
+/** Gespeicherte Sortierung des Teams; Standard ist die Priorität (docs/05 §2.5, F.13). */
+function readOrdering(team: string): Pick<DisplayOptions, "ordering" | "orderDirection"> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(orderingKey(team)) ?? "null") as {
+      ordering?: string;
+      orderDirection?: string;
+    } | null;
+    const ordering = ORDERINGS.find((o) => o === raw?.ordering);
+    if (ordering) {
+      return {
+        ordering,
+        orderDirection: raw?.orderDirection === "desc" ? "desc" : "asc",
+      };
+    }
+  } catch {
+    /* Standard verwenden */
+  }
+  return { ordering: "priority", orderDirection: "asc" };
+}
+
 /** Team-Issues: Tabs Active/Backlog/All, Liste oder Board (docs/08 §2.1). */
 export function TeamIssuesPage({
   ws,
@@ -57,6 +101,7 @@ export function TeamIssuesPage({
   const issues = useTeamIssues(teamKey);
   const actions = useIssueActions();
   const [layout, setLayoutState] = useState<Layout>(() => readLayout(teamKey, view));
+  const [order, setOrderState] = useState(() => readOrdering(teamKey));
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [request, setRequest] = useState<PickerRequest | null>(null);
   const [bulkRequest, setBulkRequest] = useState<BulkKind | null>(null);
@@ -81,12 +126,37 @@ export function TeamIssuesPage({
     [teamKey, view],
   );
 
+  const setOrder = useCallback(
+    (patch: Partial<Pick<DisplayOptions, "ordering" | "orderDirection">>) => {
+      setOrderState((prev) => {
+        const next = { ...prev, ...patch };
+        try {
+          localStorage.setItem(orderingKey(teamKey), JSON.stringify(next));
+        } catch {
+          /* ignorieren */
+        }
+        return next;
+      });
+    },
+    [teamKey],
+  );
+
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
   const states = useMemo(() => meta.data?.states ?? [], [meta.data]);
   const visible = useMemo(() => filterByView(issues.data?.issues ?? [], view), [issues.data, view]);
   const columns = useMemo(() => buildBoardColumns(states, visible, view), [states, visible, view]);
-  const groups = useMemo(() => groupByState(states, visible, view), [states, visible, view]);
+  // Standardsortierung Priorität; „Manual“ (sortOrder) erlaubt Drag & Drop in der Liste.
+  const groups = useMemo(() => {
+    const base = groupByState(states, visible, view);
+    if (order.ordering === "manual") return base;
+    const options: DisplayOptions = { ...DEFAULT_DISPLAY, ...order };
+    const ctx = {
+      assignee: (id: string | null) => lookup.assigneeName(id),
+      statePosition: (id: string) => lookup.state(id)?.position,
+    };
+    return base.map((g) => ({ ...g, issues: sortIssues(g.issues, options, ctx) }));
+  }, [states, visible, view, order, lookup]);
 
   const grid = useMemo(
     () => (layout === "board" ? columns : groups).map((g) => g.issues.map((i) => i.id)),
@@ -104,7 +174,8 @@ export function TeamIssuesPage({
   const openPicker = useCallback(
     (req: PickerRequest) => {
       // Fälligkeit hat keine Bulk-Aktion: immer für das fokussierte Issue.
-      if (selection.size > 0 && req.kind !== "due") setBulkRequest(req.kind);
+      if (selection.size > 0 && req.kind !== "due" && req.kind !== "parent")
+        setBulkRequest(req.kind);
       else setRequest(req);
     },
     [selection.size],
@@ -209,6 +280,11 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInGroup={create}
         selection={selection}
+        onDrop={
+          order.ordering === "manual"
+            ? ({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)
+            : undefined
+        }
       />
     );
   }
@@ -232,6 +308,36 @@ export function TeamIssuesPage({
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-1">
+          {layout === "list" && (
+            <>
+              <select
+                aria-label="Ordering"
+                className="h-7 rounded-md border border-border bg-transparent px-1.5 text-xs text-muted-foreground"
+                value={order.ordering}
+                onChange={(e) => {
+                  const ordering = e.target.value as Ordering;
+                  setOrder({ ordering, orderDirection: defaultDirection(ordering) });
+                }}
+              >
+                {ORDERINGS.map((o) => (
+                  <option key={o} value={o}>
+                    {ORDERING_LABEL[o]}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={order.orderDirection === "asc" ? "Ascending order" : "Descending order"}
+                disabled={order.ordering === "manual"}
+                onClick={() =>
+                  setOrder({ orderDirection: order.orderDirection === "asc" ? "desc" : "asc" })
+                }
+              >
+                {order.orderDirection === "asc" ? <ArrowUp /> : <ArrowDown />}
+              </Button>
+            </>
+          )}
           <div
             role="group"
             aria-label="Layout"
