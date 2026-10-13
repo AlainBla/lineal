@@ -464,6 +464,38 @@ pub async fn resolve_milestone(
     }
 }
 
+/// Meilenstein ohne bekanntes Projekt: nur in Projekten, die für den Akteur sichtbar sind und an
+/// denen das Team des Issues teilnimmt; Treffer in mehreren Projekten sind mehrdeutig.
+async fn resolve_milestone_any(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    team: TeamId,
+    reference: &str,
+) -> AppResult<MilestoneLookup> {
+    let visible = snap.visible_team_ids();
+    let mut found = Vec::new();
+    for m in tx.issues().find_milestones_any(reference).await? {
+        if let Some(p) = tx.issues().get_project(m.project_id).await?
+            && p.team_ids.iter().any(|t| visible.contains(t))
+            && p.team_ids.contains(&team)
+        {
+            found.push(m);
+        }
+    }
+    match found.len() {
+        0 => Err(not_found("ProjectMilestone", reference)),
+        1 => Ok(found.remove(0)),
+        _ => Err(ambiguous(
+            "ProjectMilestone",
+            reference,
+            found
+                .iter()
+                .map(|m| json!({ "id": m.id.to_string(), "name": m.name, "project": m.project_id.to_string() }))
+                .collect(),
+        )),
+    }
+}
+
 /// Cycle für ein Issue: wie [`resolve_cycle`], erlaubt aber den zuletzt abgeschlossenen Cycle für
 /// erledigte/abgebrochene Issues (nachträgliche Zurechnung, docs/04 §1.6).
 async fn resolve_cycle_for_issue(
@@ -533,13 +565,19 @@ pub async fn apply_planning(
     match &change.milestone {
         Some(None) => issue.project_milestone_id = None,
         Some(Some(r)) => {
-            let Some(project) = issue.project_id else {
-                return Err(AppError::invalid_request("a milestone requires a project")
-                    .with_details(
-                        json!({ "field": "milestone", "reason": "milestone_requires_project" }),
-                    ));
+            let m = match issue.project_id {
+                Some(project) => resolve_milestone(tx, project, r).await?,
+                None => {
+                    // Ohne Projekt übernimmt das Issue das Projekt des Meilensteins (docs/04 §3.2);
+                    // gesucht wird nur in sichtbaren Projekten, an denen das Team teilnimmt.
+                    let m = resolve_milestone_any(tx, snap, team.id, r).await?;
+                    snap.require_team(ctx, crate::policy::Action::ManageProject, team.id)?;
+                    issue.project_id = Some(m.project_id);
+                    issue.added_to_project_at = Some(now);
+                    m
+                }
             };
-            issue.project_milestone_id = Some(resolve_milestone(tx, project, r).await?.id);
+            issue.project_milestone_id = Some(m.id);
         }
         None => {}
     }

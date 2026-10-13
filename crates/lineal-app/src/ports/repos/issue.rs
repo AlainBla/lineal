@@ -429,6 +429,11 @@ pub trait IssueRepo: Send {
         unimplemented_repo()
     }
 
+    /// Meilensteine aller aktiven Projekte der Organisation: UUID oder exakter Name (B5.24).
+    async fn find_milestones_any(&mut self, _reference: &str) -> AppResult<Vec<MilestoneLookup>> {
+        unimplemented_repo()
+    }
+
     // --- Sharing ---
     async fn insert_share(&mut self, _share: &IssueShare) -> AppResult<bool> {
         unimplemented_repo()
