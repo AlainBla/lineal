@@ -552,6 +552,24 @@ async fn revoke_endpoint_and_scope_clamping(pool: PgPool) {
     assert!(text.contains("unsupported_grant_type"));
 }
 
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn revoking_the_access_token_also_kills_the_refresh_token(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    let code = obtain_code(&fx, &client, &fx.alice_cookie, "read").await;
+    let (_, v) = exchange(&fx, &client, &code, VERIFIER).await;
+    let access = v["access_token"].as_str().unwrap().to_string();
+    let refresh_tok = v["refresh_token"].as_str().unwrap().to_string();
+    let (s, _, _) = send(&fx.api, form("/oauth/revoke", &format!("token={access}"))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = refresh(&fx, &client, &refresh_tok).await;
+    assert_eq!(
+        (s, v["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_grant")),
+        "{v}"
+    );
+}
+
 #[test]
 fn pkce_and_scope_helpers() {
     // RFC 7636 Anhang B.
