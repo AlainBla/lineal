@@ -94,11 +94,24 @@ describe("ShortcutRegistry", () => {
     const run = vi.fn();
     reg.register({ id: "inbox", keys: "g i", description: "Inbox", run });
     reg.handleKeyDown(key("g"));
-    expect(reg.handleKeyDown(key("z"))).toBe(false);
+    expect(reg.handleKeyDown(key("z"))).toBe(true);
     expect(reg.handleKeyDown(key("i"))).toBe(false);
     reg.handleKeyDown(key("g"));
     reg.handleKeyDown(key("i"));
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("verworfene Sequenz: die zweite Taste feuert kein Einzelkürzel (B4.10)", () => {
+    const open = vi.fn();
+    const priority = vi.fn();
+    reg.register({ id: "o-c", keys: "o c", description: "Open", run: open });
+    reg.register({ id: "p", keys: "p", description: "Priority", run: priority });
+    reg.handleKeyDown(key("o"));
+    expect(reg.handleKeyDown(key("p"))).toBe(true);
+    expect(priority).not.toHaveBeenCalled();
+    // danach funktioniert p wieder normal
+    reg.handleKeyDown(key("p"));
+    expect(priority).toHaveBeenCalledTimes(1);
   });
 
   it("supports shifted second steps (`g shift+w`)", () => {

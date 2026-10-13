@@ -253,9 +253,12 @@ export class ShortcutRegistry {
 
     let { exact, prefix } = tryMatch(step);
     if (step.length > 0 && exact.length === 0 && !prefix) {
-      // Sequenz abgebrochen: Taste als Neustart interpretieren.
+      // Sequenz abgebrochen (docs/08 §3.3): die Folge wird verworfen, die zweite Taste löst keine
+      // Aktion aus. Esc bleibt unberührt, damit es weiter Dialoge schließen kann.
       this.clearPending();
-      ({ exact, prefix } = tryMatch([]));
+      if (e.key === "Escape") return false;
+      e.preventDefault?.();
+      return true;
     }
 
     const pressed = comboFromEvent(e);
