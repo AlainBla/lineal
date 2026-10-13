@@ -27,8 +27,19 @@ const MSG_QUERY_AWARENESS = 3;
 export const CLOSE_UNAUTHORIZED = 4401;
 export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_GONE = 4404;
+/** Update, Dokumentzustand oder Struktur zu groß (Server schließt mit 1009). */
+export const CLOSE_TOO_BIG = 1009;
+/** Größte Updategröße, die der Server annimmt (`max_update_bytes`, 512 KiB). */
+export const MAX_UPDATE_BYTES = 512 * 1024;
 
-export type CollabStatus = "connecting" | "connected" | "disconnected" | "fallback" | "closed";
+export type CollabStatus =
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "fallback"
+  | "closed"
+  /** Eine Änderung ist für den Server zu groß: sie wird nicht gesendet, der Editor ist gesperrt. */
+  | "rejected";
 
 export interface CollabIdentity {
   name: string;
@@ -44,6 +55,8 @@ export interface CollabOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   pingMs?: number;
+  /** Größtes sendbares Update in Bytes (Standard: Serverlimit). */
+  maxUpdateBytes?: number;
   /** So lange muss eine Verbindung halten, bevor der Backoff zurückgesetzt wird. */
   stableMs?: number;
   random?: () => number;
@@ -86,6 +99,7 @@ export class CollabProvider {
       maxDelayMs: options.maxDelayMs ?? 30_000,
       pingMs: options.pingMs ?? 25_000,
       stableMs: options.stableMs ?? 10_000,
+      maxUpdateBytes: options.maxUpdateBytes ?? MAX_UPDATE_BYTES,
       random: options.random ?? Math.random,
     };
     this.doc.on("update", this.onDocUpdate);
@@ -164,7 +178,14 @@ export class CollabProvider {
 
   private readonly onDocUpdate = (update: Uint8Array, origin: unknown): void => {
     // Nur eigene Änderungen senden (nicht vom Server angewendete) und nur mit Schreibrecht.
-    if (origin === this || !this.open || !this.canWrite) return;
+    if (origin === this || this.status === "rejected") return;
+    if (update.byteLength > this.opts.maxUpdateBytes) {
+      // Der Server würde die Verbindung schließen, und jeder Reconnect schickte dieselbe Änderung
+      // erneut ("Offline – wird synchronisiert", obwohl sie nie ankommt): ehrlich ablehnen.
+      this.reject(CLOSE_TOO_BIG);
+      return;
+    }
+    if (!this.open || !this.canWrite) return;
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_SYNC);
     syncProtocol.writeUpdate(enc, update);
@@ -300,12 +321,34 @@ export class CollabProvider {
     this.pingTimer = null;
   }
 
+  /** Beendet die Synchronisation endgültig: Änderung zu groß, nichts wird gesendet. */
+  private reject(code: number): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.clearStable();
+    this.stopPing();
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
+    this.helloSeen = false;
+    this.synced = false;
+    this.canWrite = false;
+    this.closeCode = code;
+    this.setStatus("rejected");
+    this.emit();
+  }
+
   private clearStable(): void {
     if (this.stableTimer) clearTimeout(this.stableTimer);
     this.stableTimer = null;
   }
 
   private onClosed(code: number): void {
+    if (this.status === "rejected") return;
+    if (code === CLOSE_TOO_BIG) {
+      this.reject(code);
+      return;
+    }
     this.clearStable();
     this.ws = null;
     this.helloSeen = false;

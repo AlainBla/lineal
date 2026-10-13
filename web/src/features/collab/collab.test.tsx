@@ -217,6 +217,34 @@ describe("CollabProvider", () => {
     p.destroy();
   });
 
+  it("lehnt zu große Änderungen ehrlich ab, statt Offline zu melden und endlos zu verbinden", () => {
+    const p = make({ baseDelayMs: 10, maxUpdateBytes: 1000 });
+    const a = FakeSocket.instances[0]!;
+    a.open();
+    a.text(hello());
+    const before = a.binaries().length;
+    p.doc.getText("t").insert(0, "x".repeat(5000));
+    expect(p.status).toBe("rejected");
+    expect(p.canWrite).toBe(false);
+    expect(p.closeCode).toBe(1009);
+    expect(a.binaries().length).toBe(before);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    p.destroy();
+  });
+
+  it("verbindet nach Serverschluss 1009 nicht erneut", () => {
+    const p = make({ baseDelayMs: 10 });
+    const a = FakeSocket.instances[0]!;
+    a.open();
+    a.text(hello());
+    a.drop(1009);
+    expect(p.status).toBe("rejected");
+    vi.advanceTimersByTime(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    p.destroy();
+  });
+
   it("fällt auf Stufe 1 zurück, wenn der Endpunkt nie erreichbar ist", () => {
     const p = make({ baseDelayMs: 10, maxInitialFailures: 3 });
     FakeSocket.instances[0]!.drop(1006);
