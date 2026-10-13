@@ -372,6 +372,46 @@ async fn check_member_allowed(
     }
 }
 
+/// Fügt Mitglieder hinzu (Gäste nur mit Zugriff auf ein Projekt-Team, docs/04 §2.2).
+async fn add_project_members(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    project: ProjectId,
+    refs: &[String],
+    teams: &[TeamId],
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    for r in refs {
+        let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
+        check_member_allowed(tx, snap, &u, teams).await?;
+        tx.projects().add_member(project, u.id, now).await?;
+    }
+    Ok(())
+}
+
+/// Entfernt Mitglieder; der Lead bleibt Mitglied.
+async fn remove_project_members(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    project: ProjectId,
+    refs: &[String],
+    lead: Option<UserId>,
+) -> AppResult<()> {
+    for r in refs {
+        let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
+        if lead == Some(u.id) {
+            return Err(AppError::invalid_request(
+                "The project lead stays a member; change the lead first.",
+            )
+            .with_details(json!({ "field": "removeMembers", "user": u.id.to_string() })));
+        }
+        tx.projects().remove_member(project, u.id).await?;
+    }
+    Ok(())
+}
+
 fn status_type_changes(
     old: ProjectStatusType,
     new: ProjectStatusType,
@@ -804,11 +844,18 @@ impl App {
             tx.projects().add_member(id, l.id, now).await?;
             tx.projects().subscribe(id, l.id, now).await?;
         }
-        for r in &input.add_members {
-            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
-            check_member_allowed(tx, snap, &u, &ids).await?;
-            tx.projects().add_member(id, u.id, now).await?;
-        }
+        // Eigene (geboxte) Futures: die großen Zustandsautomaten von Anlegen/Ändern bleiben klein
+        // (Debug-Builds laufen sonst in Tests mit 2 MiB Stack über).
+        Box::pin(add_project_members(
+            tx,
+            snap,
+            ctx,
+            id,
+            &input.add_members,
+            &ids,
+            now,
+        ))
+        .await?;
         if !labels.is_empty() {
             tx.projects().set_labels(id, &labels, now).await?;
         }
@@ -1178,21 +1225,26 @@ impl App {
             Some(Some(_)) => new_lead_user,
             None => project.lead_id,
         };
-        for r in &input.add_members {
-            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
-            check_member_allowed(tx, snap, &u, &final_teams).await?;
-            tx.projects().add_member(project.id, u.id, now).await?;
-            changed = true;
-        }
-        for r in &input.remove_members {
-            let u = resolve::user::resolve_in(tx, snap, ctx, r).await?;
-            if lead_now == Some(u.id) {
-                return Err(AppError::invalid_request(
-                    "The project lead stays a member; change the lead first.",
-                )
-                .with_details(json!({ "field": "removeMembers", "user": u.id.to_string() })));
-            }
-            tx.projects().remove_member(project.id, u.id).await?;
+        if !input.add_members.is_empty() || !input.remove_members.is_empty() {
+            Box::pin(add_project_members(
+                tx,
+                snap,
+                ctx,
+                project.id,
+                &input.add_members,
+                &final_teams,
+                now,
+            ))
+            .await?;
+            Box::pin(remove_project_members(
+                tx,
+                snap,
+                ctx,
+                project.id,
+                &input.remove_members,
+                lead_now,
+            ))
+            .await?;
             changed = true;
         }
         for (url, title) in &input.links {

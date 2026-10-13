@@ -463,24 +463,32 @@ impl IssueQuery {
         team: Option<String>,
         first: Option<i32>,
     ) -> async_graphql::Result<Vec<IssueGql>> {
-        let page = app(ctx)?
-            .list_issues(
-                request_ctx(ctx)?,
-                ListIssuesInput {
-                    team,
-                    trashed: true,
-                    order_by: OrderBy::UpdatedAt,
-                    limit: i64::from(crate::error::GqlResultExt::gql(
-                        crate::pagination::first_arg(first, 100, 250),
-                        ctx,
-                    )?),
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(gql_err)?;
-        Ok(page.items.into_iter().map(Into::into).collect())
+        Box::pin(list_trashed_issues(ctx, team, first)).await
     }
+}
+
+async fn list_trashed_issues(
+    ctx: &Context<'_>,
+    team: Option<String>,
+    first: Option<i32>,
+) -> async_graphql::Result<Vec<IssueGql>> {
+    let page = app(ctx)?
+        .list_issues(
+            request_ctx(ctx)?,
+            ListIssuesInput {
+                team,
+                trashed: true,
+                order_by: OrderBy::UpdatedAt,
+                limit: i64::from(crate::error::GqlResultExt::gql(
+                    crate::pagination::first_arg(first, 100, 250),
+                    ctx,
+                )?),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(gql_err)?;
+    Ok(page.items.into_iter().map(Into::into).collect())
 }
 
 #[derive(Default)]

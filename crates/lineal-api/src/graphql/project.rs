@@ -489,6 +489,31 @@ async fn list_page(
     Ok((views.into_iter().map(Into::into).collect(), end))
 }
 
+async fn list_trashed_projects(
+    ctx: &Context<'_>,
+    first: Option<i32>,
+) -> async_graphql::Result<Vec<ProjectGql>> {
+    let (_, views) = app(ctx)?
+        .list_projects(
+            request_ctx(ctx)?,
+            ListProjectsInput {
+                trashed: true,
+                page: PageRequest {
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
+                    cursor: None,
+                    order_by: OrderBy::UpdatedAt,
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(gql_err)?;
+    Ok(views.into_iter().map(Into::into).collect())
+}
+
 #[Object]
 impl ProjectQuery {
     /// Sichtbare Projekte (mindestens ein zugängliches Team); `first` bis 250, `after` ab Cursor
@@ -573,25 +598,9 @@ impl ProjectQuery {
         ctx: &Context<'_>,
         first: Option<i32>,
     ) -> async_graphql::Result<Vec<ProjectGql>> {
-        let (_, views) = app(ctx)?
-            .list_projects(
-                request_ctx(ctx)?,
-                ListProjectsInput {
-                    trashed: true,
-                    page: PageRequest {
-                        limit: i64::from(crate::error::GqlResultExt::gql(
-                            crate::pagination::first_arg(first, 50, 250),
-                            ctx,
-                        )?),
-                        cursor: None,
-                        order_by: OrderBy::UpdatedAt,
-                    },
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(gql_err)?;
-        Ok(views.into_iter().map(Into::into).collect())
+        // Geboxt: der große `list_projects`-Future soll den Zustandsautomaten der Query-Wurzel
+        // nicht aufblähen (Stack in Debug-Builds).
+        Box::pin(list_trashed_projects(ctx, first)).await
     }
 
     /// Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.
@@ -682,7 +691,10 @@ impl ProjectMutation {
                 .await
                 .map_err(gql_err)?;
         }
-        let v = a.save_project(rctx, save).await.map_err(gql_err)?;
+        // Geboxt: Mutations-Futures liegen verschachtelt auf dem Stack (MergedObject).
+        let v = Box::pin(a.save_project(rctx, save))
+            .await
+            .map_err(gql_err)?;
         Ok(ProjectPayload {
             success: true,
             project: Some(v.into()),
@@ -695,10 +707,10 @@ impl ProjectMutation {
         id: String,
         input: ProjectInput,
     ) -> async_graphql::Result<ProjectPayload> {
-        let v = app(ctx)?
-            .save_project(request_ctx(ctx)?, project_input(Some(id), input)?)
-            .await
-            .map_err(gql_err)?;
+        let v =
+            Box::pin(app(ctx)?.save_project(request_ctx(ctx)?, project_input(Some(id), input)?))
+                .await
+                .map_err(gql_err)?;
         Ok(ProjectPayload {
             success: true,
             project: Some(v.into()),

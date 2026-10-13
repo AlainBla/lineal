@@ -275,6 +275,30 @@ fn to_input(id: Option<String>, i: InitiativeInput) -> async_graphql::Result<Sav
 #[derive(Default)]
 pub struct InitiativeQuery;
 
+async fn list_trashed_initiatives(
+    ctx: &Context<'_>,
+    first: Option<i32>,
+) -> async_graphql::Result<Vec<InitiativeGql>> {
+    let (_, views) = app(ctx)?
+        .list_initiatives(
+            request_ctx(ctx)?,
+            ListInitiativesInput {
+                trashed: true,
+                page: PageRequest {
+                    limit: i64::from(crate::error::GqlResultExt::gql(
+                        crate::pagination::first_arg(first, 50, 250),
+                        ctx,
+                    )?),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(gql_err)?;
+    Ok(views.into_iter().map(Into::into).collect())
+}
+
 #[Object]
 impl InitiativeQuery {
     #[allow(clippy::too_many_arguments)]
@@ -323,24 +347,7 @@ impl InitiativeQuery {
         ctx: &Context<'_>,
         first: Option<i32>,
     ) -> async_graphql::Result<Vec<InitiativeGql>> {
-        let (_, views) = app(ctx)?
-            .list_initiatives(
-                request_ctx(ctx)?,
-                ListInitiativesInput {
-                    trashed: true,
-                    page: PageRequest {
-                        limit: i64::from(crate::error::GqlResultExt::gql(
-                            crate::pagination::first_arg(first, 50, 250),
-                            ctx,
-                        )?),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(gql_err)?;
-        Ok(views.into_iter().map(Into::into).collect())
+        Box::pin(list_trashed_initiatives(ctx, first)).await
     }
 
     /// Eine Initiative per UUID, Kennung (`I-4`), Slug oder Name.
