@@ -837,18 +837,20 @@ async fn collab_connection(
             let _ = tx.try_send(Out::Frame(aw));
         }
     }
-    let end = drive_collab(
-        &mut socket,
-        &shared,
-        &room,
-        conn_id,
-        &mut rx,
-        &mut ctx,
-        &token_hash,
-        target,
-        &mut access,
-    )
-    .await;
+    let end = tokio::select! {
+        e = drive_collab(
+            &mut socket,
+            &shared,
+            &room,
+            conn_id,
+            &mut rx,
+            &mut ctx,
+            &token_hash,
+            target,
+            &mut access,
+        ) => e,
+        () = crate::shutdown_requested() => End::Code(1001, "server going away"),
+    };
     // Austritt: Awareness entfernen, ggf. sofort speichern lassen.
     {
         let mut st = room.state.lock().await;
