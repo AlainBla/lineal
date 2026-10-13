@@ -167,7 +167,7 @@ Lineal implementiert die **MCP-Authorization-Spezifikation** (OAuth 2.1). Der MC
 |---|---|
 | `GET /.well-known/oauth-protected-resource` | Metadaten der Ressource (RFC 9728): `resource: "https://lineal.example/mcp"`, `authorization_servers: ["https://lineal.example"]`, `scopes_supported: ["read","write"]`, `bearer_methods_supported: ["header"]` |
 | `GET /.well-known/oauth-authorization-server` | AS-Metadaten (RFC 8414): `authorization_endpoint`, `token_endpoint`, `registration_endpoint`, `revocation_endpoint`, `code_challenge_methods_supported: ["S256"]`, `grant_types_supported: ["authorization_code","refresh_token"]` |
-| `POST /oauth/register` | **Dynamic Client Registration** (RFC 7591): öffentliche Clients ohne Secret, `token_endpoint_auth_method: "none"`, Redirect-URIs nur `https` oder `http://localhost`/`127.0.0.1` |
+| `POST /oauth/register` | **Dynamic Client Registration** (RFC 7591): öffentliche Clients ohne Secret, `token_endpoint_auth_method: "none"`, Redirect-URIs nur per Allowlist: `https`, `http://localhost`/`127.0.0.1`/`[::1]` und private Schemata nach RFC 8252 §7.1 (Reverse-DNS wie `com.example.app:` oder bekannte Client-Schemata `cursor`, `vscode`, `vscode-insiders`, `windsurf`, `zed`, `claude`, `claude-desktop`); `mailto:`, `intent:`, `view-source:` u. a. werden abgelehnt |
 | `GET /oauth/authorize` | Login + Consent-Seite (Workspace-Auswahl, Scope-Anzeige) |
 | `POST /oauth/token` | Code gegen Tokens tauschen (PKCE-Verifier Pflicht), Refresh |
 | `POST /oauth/revoke` | Token widerrufen |
@@ -175,8 +175,10 @@ Lineal implementiert die **MCP-Authorization-Spezifikation** (OAuth 2.1). Der MC
 Regeln:
 
 - **PKCE mit `S256` ist Pflicht**, `plain` wird abgelehnt.
-- Der Parameter `resource` (RFC 8707) muss auf `https://lineal.example/mcp` zeigen; ausgegebene Access-Tokens sind auf diese Audience beschränkt.
-- Access-Token-Lebensdauer 1 h, Refresh-Token 30 Tage, rotierend.
+- Der Parameter `resource` (RFC 8707) ist optional; wenn angegeben, muss er (bei `/oauth/authorize` und `/oauth/token`) genau auf `https://lineal.example/mcp` zeigen, sonst `invalid_target`. Der Server hat nur diese eine Ressource; ausgegebene Tokens gelten für sie.
+- Access-Token-Lebensdauer 1 h, Refresh-Token 30 Tage ab Ausstellung bzw. letzter Rotation.
+- **Refresh-Rotation (RFC 9700 §4.14):** Jedes Refresh-Token ist einmalig. Wird ein bereits eingelöstes Token erneut vorgelegt (auch bei parallelen Anfragen: genau eine gewinnt), gilt das als Diebstahlverdacht: die gesamte Token-Familie (alle Access- und Refresh-Tokens des Grants) wird widerrufen, die Webhooks der Anwendung werden deaktiviert, ein Audit-Eintrag `oauth_app.refresh_reuse_revoked` und das Event `OAuthAuthorizationRevoked` entstehen. Es gibt bewusst keine Gnadenfrist (die Antwort kann nicht idempotent wiederholt werden, weil nur Hashes gespeichert sind); ein Client, der die Antwort verliert, muss neu autorisieren.
+- `/oauth/revoke` widerruft mit Access- oder Refresh-Token die ganze Familie (RFC 7009).
 - Ohne oder mit ungültigem Token antwortet `/mcp` mit HTTP `401` und `WWW-Authenticate: Bearer resource_metadata="https://lineal.example/.well-known/oauth-protected-resource"`. Damit startet ein MCP-Client den Flow selbstständig.
 - **Alternative: persönlicher API-Key** als `Authorization: Bearer lin_api_…` (bzw. `lineal_api_…`). Er trägt die Scopes, mit denen er angelegt wurde, und wirkt als der User, der ihn erzeugt hat. Für stdio-Betrieb ist das der Normalfall.
 
@@ -186,6 +188,7 @@ Regeln:
 |---|---|
 | `read` | alle `list_*`, `get_*`, `extract_images`, `search_documentation` |
 | `write` | zusätzlich alle `save_*`, `delete_*`, `retire_*`, `restore_*`, `mark_notification`, `share_issue`, `unshare_issue`, `prepare_attachment_upload`, `create_attachment_from_upload` (impliziert `read`) |
+| `admin` | nur für Owner/Admin: Workspace-Einstellungen (Rollen, Teams, Webhooks, API-Keys anderer). Wird bei anderen Rollen beim Consent still entfernt; unbekannte Scopes werden mit `invalid_scope` abgelehnt. Die Consent-Seite warnt vor `admin`. Im Token steht immer `read` zusätzlich. |
 
 **User-Kontext:** Jedes Token ist an genau **einen User in genau einem Workspace** gebunden. Daraus folgt: `"me"` in jedem User-Parameter = dieser User; Sichtbarkeit (private Teams, Gäste nur in ihren Teams) wird vom Core für diesen User geprüft ([02-teams-rechte.md](02-teams-rechte.md)); `get_workspace` liefert den Workspace des Tokens. Ein Agent kann nie mehr sehen oder ändern als der User in der Web-App.
 
