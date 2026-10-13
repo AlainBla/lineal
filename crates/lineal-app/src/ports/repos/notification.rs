@@ -780,6 +780,14 @@ pub trait NotificationRepo: Send {
     ) -> AppResult<Vec<UserId>> {
         unimplemented_repo()
     }
+    /// Abonnenten der angegebenen Labels (Typ `ntype`); für Ereignis-Zustände (B6.09).
+    async fn label_subscribers_of_labels(
+        &mut self,
+        _labels: &[Uuid],
+        _ntype: &str,
+    ) -> AppResult<Vec<UserId>> {
+        unimplemented_repo()
+    }
     /// Teams, in denen ein Label gilt (`None` = Workspace-Label) und ob es existiert.
     async fn label_team(&mut self, _label: Uuid) -> AppResult<Option<Option<TeamId>>> {
         unimplemented_repo()

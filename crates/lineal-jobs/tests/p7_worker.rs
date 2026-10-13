@@ -62,6 +62,7 @@ async fn push_event(app: &App) {
                 issue_id: IssueId::new_v7(),
                 team_id: TeamId::new_v7(),
                 mentioned_user_ids: vec![],
+                initial: None,
             },
             EventOrigin::User,
         ))

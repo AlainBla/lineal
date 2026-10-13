@@ -1546,6 +1546,29 @@ impl NotificationRepo for PgTx {
         Ok(rows.into_iter().map(UserId).collect())
     }
 
+    async fn label_subscribers_of_labels(
+        &mut self,
+        labels: &[Uuid],
+        ntype: &str,
+    ) -> AppResult<Vec<UserId>> {
+        if labels.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT ns.subscriber_id FROM notification_subscription ns \
+             WHERE ns.organization_id = $1 AND ns.target_type = 'label' AND ns.active \
+               AND ns.archived_at IS NULL AND $3 = ANY(ns.notification_subscription_types) \
+               AND ns.label_id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(labels)
+        .bind(ntype)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(UserId).collect())
+    }
+
     async fn label_team(&mut self, label: Uuid) -> AppResult<Option<Option<TeamId>>> {
         let row: Option<Option<Uuid>> = sqlx::query_scalar(
             "SELECT team_id FROM issue_label WHERE organization_id = $1 AND id = $2",

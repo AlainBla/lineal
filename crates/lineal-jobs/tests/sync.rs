@@ -102,6 +102,7 @@ async fn issue_event_becomes_graphql_shaped_action_for_its_team_only(pool: PgPoo
             issue_id: issue,
             team_id: e.d.des,
             mentioned_user_ids: vec![],
+            initial: None,
         },
     );
     e.handle(&created).await;
@@ -144,6 +145,7 @@ async fn team_move_tells_the_old_team_that_the_issue_is_gone(pool: PgPool) {
             issue_id: issue,
             team_id: e.d.eng,
             mentioned_user_ids: vec![],
+            initial: None,
         },
     ))
     .await;

@@ -17,7 +17,7 @@ use crate::ports::repos::notification::{
 use crate::ports::repos::{NewEvent, StoredEvent};
 use chrono::{DateTime, Duration, Utc};
 use lineal_domain::enums::UserRole;
-use lineal_domain::events::{DomainEvent, EventOrigin, IssuePrevious};
+use lineal_domain::events::{DomainEvent, EventOrigin, IssueInitial, IssuePrevious};
 use lineal_domain::ids::{CommentId, IssueId, NotificationId, ProjectId, TeamId, UserId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use uuid::Uuid;
@@ -286,8 +286,12 @@ impl<'a> Fan<'a> {
             DomainEvent::IssueCreated {
                 issue_id,
                 mentioned_user_ids,
+                initial,
                 ..
-            } => self.issue_created(ev, *issue_id, mentioned_user_ids).await,
+            } => {
+                self.issue_created(ev, *issue_id, mentioned_user_ids, initial.as_ref())
+                    .await
+            }
             DomainEvent::IssueUpdated {
                 issue_id,
                 changed,
@@ -385,9 +389,16 @@ impl<'a> Fan<'a> {
         ev: &StoredEvent,
         issue: IssueId,
         mentioned: &[UserId],
+        initial: Option<&IssueInitial>,
     ) -> AppResult<bool> {
         let Some(f) = self.tx.notifications().issue_facts(issue).await? else {
             return Ok(false);
+        };
+        // Ereignis-Zustand statt aktuellem: wurde das Issue direkt nach der Anlage geändert, zählt
+        // hier der Stand bei der Anlage (B6.09).
+        let (assignee, priority, state_type) = match initial {
+            Some(i) => (i.assignee_id, i.priority, i.state_type.clone()),
+            None => (f.assignee_id, f.priority, f.state_type.clone()),
         };
         self.target_issue(&f);
         self.fallback_actor(ev.origin, f.creator_id);
@@ -395,11 +406,11 @@ impl<'a> Fan<'a> {
             self.subscribe(&f, creator, None, SubscriptionReason::Creator)
                 .await?;
         }
-        if let Some(a) = f.assignee_id {
+        if let Some(a) = assignee {
             self.subscribe(&f, a, None, SubscriptionReason::Assignee)
                 .await?;
             self.add(a, "issueAssignedToYou");
-            if f.priority == 1 {
+            if priority == 1 {
                 self.add(a, "issuePriorityUrgent");
             }
         }
@@ -419,12 +430,20 @@ impl<'a> Fan<'a> {
                     .await?,
             );
         }
-        created.extend(
-            notifications
-                .label_subscribers_of_issue(f.id, "issueCreated")
-                .await?,
-        );
-        let triage = if f.state_type == "triage" {
+        created.extend(match initial {
+            Some(i) => {
+                let labels: Vec<Uuid> = i.label_ids.iter().map(|l| l.0).collect();
+                notifications
+                    .label_subscribers_of_labels(&labels, "issueCreated")
+                    .await?
+            }
+            None => {
+                notifications
+                    .label_subscribers_of_issue(f.id, "issueCreated")
+                    .await?
+            }
+        });
+        let triage = if state_type == "triage" {
             notifications
                 .object_subscribers(ObjectKind::Team, f.team_id.0, "issueAddedToTriage")
                 .await?
@@ -478,13 +497,20 @@ impl<'a> Fan<'a> {
         };
         self.target_issue(&f);
         let has = |name: &str| changed.iter().any(|c| c == name);
+        // Neue Werte aus dem Ereignis (B6.09); Altdaten ohne sie lesen den aktuellen Zustand.
+        let ev_new = previous.filter(|p| p.new_recorded);
+        let new_assignee = ev_new.map_or(f.assignee_id, |p| p.assignee_to);
+        let new_priority = ev_new.and_then(|p| p.priority_to).unwrap_or(f.priority);
+        let new_state_type = ev_new
+            .and_then(|p| p.state_type_to.clone())
+            .unwrap_or_else(|| f.state_type.clone());
         for m in mentioned {
             self.subscribe(&f, *m, None, SubscriptionReason::Mention)
                 .await?;
             self.add(*m, "issueMention");
         }
         if has("assigneeId")
-            && let Some(a) = f.assignee_id
+            && let Some(a) = new_assignee
         {
             self.subscribe(&f, a, None, SubscriptionReason::Assignee)
                 .await?;
@@ -493,12 +519,12 @@ impl<'a> Fan<'a> {
         // Der bisherige Assignee erfährt von der Abgabe (docs/05 §6.2 `issueUnassignedFromYou`).
         if has("assigneeId")
             && let Some(old) = previous.and_then(|p| p.assignee_id)
-            && Some(old) != f.assignee_id
+            && Some(old) != new_assignee
         {
             self.add(old, "issueUnassignedFromYou");
         }
         if has("priority")
-            && f.priority == 1
+            && new_priority == 1
             && let Some(a) = f.assignee_id
         {
             self.add(a, "issuePriorityUrgent");
@@ -515,7 +541,7 @@ impl<'a> Fan<'a> {
             }
         }
         if has("stateId") {
-            let closed = CLOSED.contains(&f.state_type.as_str());
+            let closed = CLOSED.contains(&new_state_type.as_str());
             let was_closed = previous
                 .and_then(|p| p.state_type.as_deref())
                 .is_some_and(|t| CLOSED.contains(&t));
@@ -565,7 +591,7 @@ impl<'a> Fan<'a> {
                             .await?,
                     );
                 }
-            } else if f.state_type == "triage" {
+            } else if new_state_type == "triage" {
                 triage = notifications
                     .object_subscribers(ObjectKind::Team, f.team_id.0, "issueAddedToTriage")
                     .await?;
@@ -573,6 +599,19 @@ impl<'a> Fan<'a> {
             self.add_all(subs, "issueStatusChanged");
             self.add_all(all, "issueStatusChangedAll");
             self.add_all(triage, "issueAddedToTriage");
+        }
+        // Label-Abo (`issueAddedToView`): nachträglich gesetztes Label (docs/05 §6.3).
+        if has("labelIds")
+            && let Some(p) = ev_new
+            && !p.labels_added.is_empty()
+        {
+            let labels: Vec<Uuid> = p.labels_added.iter().map(|l| l.0).collect();
+            let subs = self
+                .tx
+                .notifications()
+                .label_subscribers_of_labels(&labels, "issueAddedToView")
+                .await?;
+            self.add_all(subs, "issueAddedToView");
         }
         self.add_view_recipients(&f, false, changed, previous)
             .await?;

@@ -52,6 +52,7 @@ async fn worker_delivers_each_event_once_per_consumer_and_runs_periodic_once(poo
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
             mentioned_user_ids: vec![],
+            initial: None,
         };
         tx.outbox()
             .push(NewEvent::new(ev, EventOrigin::User))
@@ -126,6 +127,7 @@ async fn dead_letter_limit_survives_a_worker_restart(pool: PgPool) {
                 issue_id: IssueId::new_v7(),
                 team_id: TeamId::new_v7(),
                 mentioned_user_ids: vec![],
+                initial: None,
             },
             EventOrigin::User,
         ))

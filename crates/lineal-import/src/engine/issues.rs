@@ -321,6 +321,7 @@ impl Session<'_, '_> {
                 issue_id: IssueId(up.id),
                 team_id: TeamId(team),
                 mentioned_user_ids: vec![],
+                initial: None,
             }
         } else {
             DomainEvent::IssueUpdated {

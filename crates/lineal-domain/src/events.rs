@@ -45,6 +45,23 @@ impl std::str::FromStr for EventOrigin {
 /// (`issueUnassignedFromYou`, `issueReopened`, `issueUnblocked`, docs/05 §6.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssuePrevious {
+    /// `true`, wenn die neuen Werte unten erfasst sind (sonst Altdaten: der Handler liest den
+    /// aktuellen Zustand).
+    #[serde(default)]
+    pub new_recorded: bool,
+    /// Neuer Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = jetzt unzugewiesen).
+    /// Der Notification-Handler wertet den Ereignis-Zustand aus, nicht den aktuellen (B6.09).
+    #[serde(default)]
+    pub assignee_to: Option<UserId>,
+    /// Neuer Statustyp; gilt nur, wenn `stateId` in `changed` steht.
+    #[serde(default)]
+    pub state_type_to: Option<String>,
+    /// Neue Priorität; gilt nur, wenn `priority` in `changed` steht.
+    #[serde(default)]
+    pub priority_to: Option<i32>,
+    /// Neu gesetzte Labels (nur wenn `labelIds` in `changed` steht).
+    #[serde(default)]
+    pub labels_added: Vec<LabelId>,
     /// Bisheriger Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = war unzugewiesen).
     #[serde(default)]
     pub assignee_id: Option<UserId>,
@@ -55,19 +72,46 @@ pub struct IssuePrevious {
 }
 
 impl IssuePrevious {
-    /// Alte Werte für die in `changed` genannten Felder; `None`, wenn weder `assigneeId` noch
-    /// `stateId` betroffen ist.
-    pub fn of(
-        changed: &[String],
-        old_assignee: Option<UserId>,
-        old_state_type: &str,
-    ) -> Option<Self> {
+    /// Alte und neue Werte für die in `changed` genannten Felder; `None`, wenn weder `assigneeId`,
+    /// `stateId`, `priority` noch `labelIds` betroffen ist.
+    pub fn of(changed: &[String], old: (Option<UserId>, &str), new: IssueNow) -> Option<Self> {
         let has = |f: &str| changed.iter().any(|c| c == f);
-        (has("assigneeId") || has("stateId")).then(|| Self {
-            assignee_id: has("assigneeId").then_some(old_assignee).flatten(),
-            state_type: has("stateId").then(|| old_state_type.to_owned()),
+        (has("assigneeId") || has("stateId") || has("priority") || has("labelIds")).then(|| Self {
+            new_recorded: true,
+            assignee_id: has("assigneeId").then_some(old.0).flatten(),
+            state_type: has("stateId").then(|| old.1.to_owned()),
+            assignee_to: has("assigneeId").then_some(new.assignee_id).flatten(),
+            state_type_to: has("stateId").then(|| new.state_type.to_owned()),
+            priority_to: has("priority").then_some(new.priority),
+            labels_added: if has("labelIds") {
+                new.labels_added
+            } else {
+                Vec::new()
+            },
         })
     }
+}
+
+/// Neue Werte einer Issue-Änderung für [`IssuePrevious::of`].
+pub struct IssueNow<'a> {
+    pub assignee_id: Option<UserId>,
+    pub state_type: &'a str,
+    pub priority: i32,
+    pub labels_added: Vec<LabelId>,
+}
+
+/// Zustand des Issues bei der Anlage (`IssueCreated.initial`): Der Handler darf nicht den aktuellen
+/// Zustand lesen, wenn das Issue direkt danach geändert wurde (B6.09).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueInitial {
+    #[serde(default)]
+    pub assignee_id: Option<UserId>,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub state_type: String,
+    #[serde(default)]
+    pub label_ids: Vec<LabelId>,
 }
 
 macro_rules! domain_events {
@@ -92,7 +136,8 @@ macro_rules! domain_events {
 
 domain_events! {
     /// `mentioned_user_ids`: @-Erwähnungen in der Beschreibung (für Notifications, WP08).
-    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId> },
+    /// `initial`: Zustand bei der Anlage (Assignee, Priorität, Statustyp, Labels); `None` bei Altdaten.
+    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId>, #[serde(default)] initial: Option<IssueInitial> },
     /// `changed`: geänderte Feldnamen (camelCase, z. B. `assigneeId`, `stateId`, `description`);
     /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen in der Beschreibung.
     /// `previous`: alte Werte der Felder `assigneeId`/`stateId` (WP32, nur wenn sie in `changed` stehen;
@@ -189,6 +234,7 @@ mod tests {
             issue_id: IssueId::new_v7(),
             team_id: TeamId::new_v7(),
             mentioned_user_ids: vec![],
+            initial: None,
         };
         let v = serde_json::to_value(&ev).unwrap();
         assert_eq!(v["type"], "IssueCreated");

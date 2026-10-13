@@ -315,8 +315,13 @@ async fn persist(
     }
     let previous = lineal_domain::events::IssuePrevious::of(
         &changed,
-        old.assignee_id,
-        old.state_type.as_str(),
+        (old.assignee_id, old.state_type.as_str()),
+        lineal_domain::events::IssueNow {
+            assignee_id: saved.assignee_id,
+            state_type: saved.state_type.as_str(),
+            priority: i32::from(saved.priority.value()),
+            labels_added: Vec::new(),
+        },
     );
     emit(
         tx,

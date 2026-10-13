@@ -218,6 +218,7 @@ fn eng_issue_created(issue: IssueId, d: &SeedData, mentioned: Vec<UserId>) -> Do
         issue_id: issue,
         team_id: d.eng,
         mentioned_user_ids: mentioned,
+        initial: None,
     }
 }
 
@@ -2996,4 +2997,78 @@ async fn initiative_owner_change_after_creation_is_notified(pool: PgPool) {
         .await;
     }
     assert_eq!(e.kinds(bob).await, vec!["initiativeAddedAsOwner"]);
+}
+
+/// B6.09: Der Handler wertet den Ereignis-Zustand aus, nicht den aktuellen. Das Label wurde erst
+/// nach der Anlage gesetzt: `IssueCreated` löst kein `issueCreated` aus, das Setzen des Labels
+/// meldet `issueAddedToView` an Label-Abonnenten.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn label_subscription_uses_event_state_and_notifies_added_labels(pool: PgPool) {
+    use lineal_domain::events::{IssueInitial, IssuePrevious};
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let label = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue_label (id, organization_id, name, color) VALUES ($1,$2,'Abo-Label','#ff0000')",
+    )
+    .bind(label)
+    .bind(e.d.org.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO notification_subscription (organization_id, subscriber_id, target_type, label_id, notification_subscription_types) \
+         VALUES ($1,$2,'label',$3,ARRAY['issueCreated','issueAddedToView'])",
+    )
+    .bind(e.d.org.0)
+    .bind(bob.0)
+    .bind(label)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let issue = e.issue(e.d.eng, 1, 301, alice, None, 1).await;
+    // Das Label ist beim Handeln schon gesetzt, bei der Anlage war es das noch nicht.
+    sqlx::query(
+        "INSERT INTO issue_to_label (organization_id, issue_id, label_id) VALUES ($1,$2,$3)",
+    )
+    .bind(e.d.org.0)
+    .bind(issue.0)
+    .bind(label)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueCreated {
+            issue_id: issue,
+            team_id: e.d.eng,
+            mentioned_user_ids: vec![],
+            initial: Some(IssueInitial {
+                state_type: "unstarted".into(),
+                ..Default::default()
+            }),
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.count(bob).await,
+        0,
+        "kein issueCreated aus dem Ist-Zustand"
+    );
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::IssueUpdated {
+            previous: Some(IssuePrevious {
+                new_recorded: true,
+                labels_added: vec![LabelId(label)],
+                ..Default::default()
+            }),
+            issue_id: issue,
+            team_id: e.d.eng,
+            changed: vec!["labelIds".into()],
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["issueAddedToView"]);
 }

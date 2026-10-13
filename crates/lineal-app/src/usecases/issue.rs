@@ -40,7 +40,7 @@ use fields::{
 };
 use history::Delta;
 use lineal_domain::enums::{Priority, SlaType, StateType};
-use lineal_domain::events::{DomainEvent, IssuePrevious};
+use lineal_domain::events::{DomainEvent, IssueInitial, IssueNow, IssuePrevious};
 use lineal_domain::ids::{IssueId, LabelId, StateId, TeamId, UserId};
 use lineal_domain::rules::patch::{self, PatchFailure, PatchOp};
 use lineal_domain::rules::state::{IssueTimestamps, TransitionSource, apply_transition};
@@ -758,6 +758,12 @@ impl App {
                 issue_id: stored.id,
                 team_id: stored.team_id,
                 mentioned_user_ids: mentioned,
+                initial: Some(IssueInitial {
+                    assignee_id: stored.assignee_id,
+                    priority: i32::from(stored.priority.value()),
+                    state_type: stored.state_type.as_str().to_owned(),
+                    label_ids: plan.added.iter().map(|(l, _)| *l).collect(),
+                }),
             },
         )
         .await?;
@@ -1142,7 +1148,16 @@ impl App {
                 .await?;
         }
         if !changed.is_empty() {
-            let previous = IssuePrevious::of(&changed, old.assignee_id, old.state_type.as_str());
+            let previous = IssuePrevious::of(
+                &changed,
+                (old.assignee_id, old.state_type.as_str()),
+                IssueNow {
+                    assignee_id: saved.assignee_id,
+                    state_type: saved.state_type.as_str(),
+                    priority: i32::from(saved.priority.value()),
+                    labels_added: delta.added_labels.clone(),
+                },
+            );
             emit(
                 tx,
                 ctx,
