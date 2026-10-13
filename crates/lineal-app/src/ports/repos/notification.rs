@@ -346,6 +346,8 @@ pub enum ObjectKind {
     Initiative,
     Cycle,
     Label,
+    /// Assigned-Ansicht eines Users (`userContextViewType = assigned`).
+    User,
 }
 
 impl ObjectKind {
@@ -356,6 +358,15 @@ impl ObjectKind {
             Self::Initiative => "initiative",
             Self::Cycle => "cycle",
             Self::Label => "label",
+            Self::User => "user",
+        }
+    }
+
+    /// Spalte des Kontexts (`user` hat eine eigene Spalte).
+    pub const fn context_column(&self) -> &'static str {
+        match self {
+            Self::User => "user_context_view_type",
+            _ => "context_view_type",
         }
     }
 
@@ -367,6 +378,7 @@ impl ObjectKind {
             Self::Initiative => "initiative_id",
             Self::Cycle => "cycle_id",
             Self::Label => "label_id",
+            Self::User => "user_id",
         }
     }
 }

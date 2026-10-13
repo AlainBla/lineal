@@ -240,7 +240,7 @@ pub struct NotificationSettingsInput {
 
 #[derive(InputObject)]
 pub struct NotificationSubscriptionInput {
-    /// `team`, `project`, `initiative`, `cycle` oder `label`.
+    /// `team`, `project`, `initiative`, `cycle`, `label` oder `user` (Assigned-Ansicht, `contextViewType` `assigned`).
     pub target_type: String,
     pub target_id: String,
     pub context_view_type: Option<String>,
@@ -276,9 +276,10 @@ fn parse_kind(s: &str) -> AppResult<ObjectKind> {
         "initiative" => ObjectKind::Initiative,
         "cycle" => ObjectKind::Cycle,
         "label" => ObjectKind::Label,
+        "user" => ObjectKind::User,
         _ => {
             return Err(invalid(
-                "`targetType` must be team, project, initiative, cycle or label",
+                "`targetType` must be team, project, initiative, cycle, label or user",
             ));
         }
     })

@@ -301,7 +301,8 @@ type SubRow = (
 );
 
 const SUB_COLS: &str = "id, subscriber_id, target_type, team_id, project_id, initiative_id, cycle_id, \
-    label_id, context_view_type, notification_subscription_types, include_sub_initiative_updates, active";
+    COALESCE(label_id, user_id), COALESCE(context_view_type, user_context_view_type), \
+    notification_subscription_types, include_sub_initiative_updates, active";
 
 fn kind_of(s: &str) -> Option<ObjectKind> {
     Some(match s {
@@ -310,6 +311,7 @@ fn kind_of(s: &str) -> Option<ObjectKind> {
         "initiative" => ObjectKind::Initiative,
         "cycle" => ObjectKind::Cycle,
         "label" => ObjectKind::Label,
+        "user" => ObjectKind::User,
         _ => return None,
     })
 }
@@ -1440,9 +1442,10 @@ impl NotificationRepo for PgTx {
         sub: &UpsertObjectSubscription,
     ) -> AppResult<ObjectSubscription> {
         let col = sub.kind.column();
+        let ctx_col = sub.kind.context_column();
         let existing: Option<Uuid> = sqlx::query_scalar(&format!(
             "SELECT id FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
-             AND target_type = $3 AND {col} = $4 AND context_view_type IS NOT DISTINCT FROM $5"
+             AND target_type = $3 AND {col} = $4 AND {ctx_col} IS NOT DISTINCT FROM $5"
         ))
         .bind(self.org.0)
         .bind(sub.subscriber_id.0)
@@ -1472,7 +1475,7 @@ impl NotificationRepo for PgTx {
             None => {
                 sqlx::query(&format!(
                     "INSERT INTO notification_subscription (id, organization_id, subscriber_id, target_type, \
-                     {col}, context_view_type, notification_subscription_types, \
+                     {col}, {ctx_col}, notification_subscription_types, \
                      include_sub_initiative_updates, active, created_at, updated_at) \
                      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)"
                 ))
@@ -1509,7 +1512,7 @@ impl NotificationRepo for PgTx {
     ) -> AppResult<Vec<ObjectSubscription>> {
         let rows: Vec<SubRow> = sqlx::query_as(&format!(
             "SELECT {SUB_COLS} FROM notification_subscription WHERE organization_id = $1 AND subscriber_id = $2 \
-             AND archived_at IS NULL AND target_type IN ('team','project','initiative','cycle','label') \
+             AND archived_at IS NULL AND target_type IN ('team','project','initiative','cycle','label','user') \
              ORDER BY created_at, id"
         ))
         .bind(self.org.0)

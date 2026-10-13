@@ -451,6 +451,14 @@ impl<'a> Fan<'a> {
                 .await?;
             self.add(*m, "issueMention");
         }
+        if let Some(a) = f.assignee_id {
+            let watchers = self
+                .tx
+                .notifications()
+                .object_subscribers(ObjectKind::User, a.0, "issueAddedToView")
+                .await?;
+            self.add_all(watchers, "issueAddedToView");
+        }
         let notifications = self.tx.notifications();
         let mut created = notifications
             .object_subscribers(ObjectKind::Team, f.team_id.0, "issueCreated")
@@ -540,6 +548,17 @@ impl<'a> Fan<'a> {
         {
             self.add(old, "issueUnassignedFromYou");
         }
+        // Abonnenten der Assigned-Ansicht des neuen Assignees (docs/05 §6.3, `user`/`assigned`).
+        if has("assigneeId")
+            && let Some(a) = f.assignee_id
+        {
+            let watchers = self
+                .tx
+                .notifications()
+                .object_subscribers(ObjectKind::User, a.0, "issueAddedToView")
+                .await?;
+            self.add_all(watchers, "issueAddedToView");
+        }
         if has("priority")
             && f.priority == 1
             && let Some(a) = f.assignee_id
@@ -612,6 +631,14 @@ impl<'a> Fan<'a> {
                 triage = notifications
                     .object_subscribers(ObjectKind::Team, f.team_id.0, "issueAddedToTriage")
                     .await?;
+            }
+            if closed && let Some(a) = f.assignee_id {
+                subs.extend(
+                    self.tx
+                        .notifications()
+                        .object_subscribers(ObjectKind::User, a.0, "issueStatusChanged")
+                        .await?,
+                );
             }
             self.add_all(subs, "issueStatusChanged");
             self.add_all(all, "issueStatusChangedAll");
@@ -1373,4 +1400,58 @@ impl App {
         tx.commit().await?;
         Ok(created)
     }
+}
+
+/// Schreibt eine einzelne Notification direkt (ohne Fan-out), z. B. „Einladung angenommen“ an
+/// den Einladenden oder „Issue mit dir geteilt“ an den Empfänger der Freigabe. Idempotent über
+/// `dedup_key`. Der Aufrufer stellt sicher, dass `user` das Objekt sehen darf.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn insert_direct(
+    tx: &mut dyn Tx,
+    ids: &dyn crate::ports::IdGen,
+    now: DateTime<Utc>,
+    user: UserId,
+    kind: &str,
+    actor: Option<UserId>,
+    issue: Option<(IssueId, TeamId)>,
+    dedup_key: String,
+) -> AppResult<bool> {
+    if Some(user) == actor {
+        return Ok(false);
+    }
+    let n = NewNotification {
+        id: NotificationId(ids.new_uuid()),
+        user_id: user,
+        kind: kind.to_owned(),
+        category: category_of(kind).to_owned(),
+        target_type: if issue.is_some() { "issue" } else { "system" }.to_owned(),
+        actor_id: actor,
+        issue_id: issue.map(|i| i.0),
+        team_id: issue.map(|i| i.1),
+        project_id: None,
+        project_update_id: None,
+        project_milestone_id: None,
+        initiative_id: None,
+        initiative_update_id: None,
+        document_id: None,
+        comment_id: None,
+        parent_comment_id: None,
+        reaction_emoji: None,
+        is_priority: is_always_priority(kind),
+        dedup_key,
+        now,
+    };
+    if !tx.notifications().insert_notification(&n).await? {
+        return Ok(false);
+    }
+    tx.outbox()
+        .push(NewEvent::new(
+            DomainEvent::NotificationCreated {
+                notification_id: n.id,
+                user_id: user,
+            },
+            EventOrigin::System,
+        ))
+        .await?;
+    Ok(true)
 }
