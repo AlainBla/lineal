@@ -110,34 +110,36 @@ pub(crate) async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) 
     Ok(())
 }
 
-/// Schreibrecht für ein bestehendes Projekt: `ManageProject` für alle zugänglichen, nicht
-/// stillgelegten Teams; sind alle zugänglichen Teams stillgelegt, ist das Projekt read-only.
+/// Schreibrecht für ein bestehendes Projekt (docs/04 §2.2): Zugriff auf mindestens ein
+/// Projekt-Team genügt. Geprüft wird `action` für alle zugänglichen, nicht stillgelegten Teams;
+/// nicht zugängliche (private) Teams bleiben unsichtbar und blockieren nicht. Hat der Aufrufer auf
+/// kein Team Zugriff, ist das Projekt `not_found`; sind alle zugänglichen Teams stillgelegt, ist
+/// das Projekt read-only.
 pub(crate) fn require_manage(
     snap: &PolicySnapshot,
     ctx: &RequestCtx,
     action: Action,
     project_teams: &[TeamId],
 ) -> AppResult<()> {
-    if project_teams.is_empty() {
+    let visible = snap.visible_team_ids();
+    let accessible: Vec<TeamId> = project_teams
+        .iter()
+        .copied()
+        .filter(|t| visible.contains(t))
+        .collect();
+    if accessible.is_empty() {
         return Err(crate::policy::team_not_found());
     }
-    // Jede Änderung braucht das Recht für ALLE Teams des Projekts (`not_found` vor `forbidden`).
-    // Stillgelegte Teams blockieren nur, wenn alle Teams stillgelegt sind (Projekt read-only).
-    let active: Vec<TeamId> = project_teams
+    let active: Vec<TeamId> = accessible
         .iter()
         .copied()
         .filter(|t| snap.tree.get(*t).is_some_and(|t| t.retired_at.is_none()))
         .collect();
     let to_check: &[TeamId] = if active.is_empty() {
-        project_teams
+        &accessible
     } else {
         &active
     };
-    // Unzugängliche Teams (auch stillgelegte) liefern zuerst `not_found`.
-    let visible = snap.visible_team_ids();
-    if project_teams.iter().any(|t| !visible.contains(t)) {
-        return Err(crate::policy::team_not_found());
-    }
     snap.require_teams(ctx, action, to_check)?;
     Ok(())
 }
@@ -834,6 +836,9 @@ impl App {
                 for r in set {
                     target.push(resolve_team_id(tx, snap, r).await?);
                 }
+                // Für den Aufrufer unsichtbare Teams des Projekts bleiben erhalten.
+                let visible = snap.visible_team_ids();
+                target.extend(final_teams.iter().copied().filter(|t| !visible.contains(t)));
                 let target = dedupe(target);
                 for t in &target {
                     if !final_teams.contains(t) {

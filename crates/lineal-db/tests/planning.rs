@@ -528,21 +528,18 @@ async fn project_lifecycle_status_dates_lead_team_and_labels(pool: PgPool) {
             .bind(org).bind(name).bind(g).execute(&pool).await.unwrap();
         let _ = n;
     }
-    // Alice darf das Projekt nach dem DES-Beitritt nicht mehr ändern (Recht für ALLE Teams: not_found).
-    assert_eq!(
-        kind(
-            app.save_project(
-                &alice,
-                SaveProjectInput {
-                    id: Some(id.to_string()),
-                    labels: Some(vec!["Kategorie/Revenue".into()]),
-                    ..Default::default()
-                }
-            )
-            .await
-        ),
-        ErrorKind::NotFound
-    );
+    // Alice hat Zugriff auf ENG und darf das Projekt trotz des für sie unsichtbaren DES-Teams
+    // ändern (docs/04 §2.2, B5.04); DES bleibt unsichtbar.
+    app.save_project(
+        &alice,
+        SaveProjectInput {
+            id: Some(id.to_string()),
+            priority: Some(2),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let v = app
         .save_project(
             &bob,
@@ -1893,7 +1890,8 @@ async fn changes_need_rights_on_all_current_and_added_teams(pool: PgPool) {
         let ctx = ctx.clone();
         async move { app.save_project(&ctx, input).await }
     };
-    // Alice sieht die Hülle, darf aber ohne Recht auf DES nichts ändern (not_found vor forbidden).
+    // Alice sieht die Hülle und darf mit Zugriff auf ENG ändern; DES bleibt für sie unsichtbar
+    // (docs/04 §2.2: Zugriff auf mindestens ein Projekt-Team genügt).
     assert!(
         app.get_project(&alice, &shared.identifier, ViewOpts::default())
             .await
@@ -1911,33 +1909,30 @@ async fn changes_need_rights_on_all_current_and_added_teams(pool: PgPool) {
             state: Some("started".into()),
             ..Default::default()
         },
+        // setTeams ohne das unsichtbare DES behält DES bei.
         SaveProjectInput {
             id: id.clone(),
-            remove_teams: vec!["DES".into()],
-            ..Default::default()
-        },
-        SaveProjectInput {
-            id: id.clone(),
-            add_initiatives: vec!["I-1".into()],
+            set_teams: Some(vec!["ENG".into()]),
             ..Default::default()
         },
     ] {
-        assert_eq!(kind(edit(&alice, input).await), ErrorKind::NotFound);
+        edit(&alice, input).await.unwrap();
     }
+    let teams: Vec<Uuid> =
+        sqlx::query_scalar("SELECT team_id FROM project_team WHERE project_id = $1")
+            .bind(shared.project.id.0)
+            .fetch_all(&_pool)
+            .await
+            .unwrap();
+    assert_eq!(teams.len(), 2, "DES bleibt am Projekt");
+    // DES kann Alice weder entfernen noch referenzieren.
     assert_eq!(
         kind(
-            app.post_project_update(&alice, &shared.identifier, "x", None, false)
-                .await
-        ),
-        ErrorKind::NotFound
-    );
-    assert_eq!(
-        kind(
-            app.save_milestone(
+            edit(
                 &alice,
-                SaveMilestoneInput {
-                    project: shared.identifier.clone(),
-                    name: Some("M".into()),
+                SaveProjectInput {
+                    id: id.clone(),
+                    remove_teams: vec!["DES".into()],
                     ..Default::default()
                 }
             )
@@ -1945,6 +1940,19 @@ async fn changes_need_rights_on_all_current_and_added_teams(pool: PgPool) {
         ),
         ErrorKind::NotFound
     );
+    app.post_project_update(&alice, &shared.identifier, "x", None, false)
+        .await
+        .unwrap();
+    app.save_milestone(
+        &alice,
+        SaveMilestoneInput {
+            project: shared.identifier.clone(),
+            name: Some("M".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     // Ein Team-Mitglied ohne Zugriff auf das private Team kann es nicht hinzufügen.
     let eng_only = app
         .save_project(&alice, teams_input(&["ENG"]))
