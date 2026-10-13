@@ -19,10 +19,10 @@ chrono.workspace = true
 chrono-tz.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
 lineal-testkit.workspace = true
 serde_json.workspace = true
