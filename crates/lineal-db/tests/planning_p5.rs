@@ -475,3 +475,75 @@ async fn b5_09_lock_to_active_and_auto_assign_apply_on_create(pool: PgPool) {
         .unwrap();
     assert_eq!(backlog.issue.cycle_id, None);
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_08_b5_10_initiative_projects_are_recursive_and_rollup_respects_staleness(pool: PgPool) {
+    let (app, _data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let parent = app
+        .save_initiative(
+            &alice,
+            SaveInitiativeInput {
+                name: Some("Eltern".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let child = app
+        .save_initiative(
+            &alice,
+            SaveInitiativeInput {
+                name: Some("Kind".into()),
+                parent_initiatives: vec![parent.identifier.clone()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let project = app
+        .save_project(
+            &alice,
+            SaveProjectInput {
+                state: Some("started".into()),
+                ..teams_input(&["ENG"])
+            },
+        )
+        .await
+        .unwrap();
+    app.set_initiative_project(&alice, &child.identifier, &project.identifier, true)
+        .await
+        .unwrap();
+    app.post_project_update(
+        &alice,
+        &project.identifier,
+        "ok",
+        Some(Health::OnTrack),
+        false,
+    )
+    .await
+    .unwrap();
+    let v = app
+        .get_initiative(&alice, &parent.identifier)
+        .await
+        .unwrap();
+    assert_eq!(
+        v.projects.len(),
+        1,
+        "Projekte der Sub-Initiative zählen mit"
+    );
+    assert_eq!(v.health_rollup.on_track, 1);
+    // Update 20 Tage alt (Erinnerungszyklus 7 Tage + 3): veraltet -> zählt als none.
+    sqlx::query("UPDATE project SET health_updated_at = $2 WHERE id = $1")
+        .bind(project.project.id.0)
+        .bind(utc(2026, 9, 20, 0, 0))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v = app
+        .get_initiative(&alice, &parent.identifier)
+        .await
+        .unwrap();
+    assert_eq!(v.health_rollup.on_track, 0);
+    assert_eq!(v.health_rollup.none, 1);
+}

@@ -255,7 +255,7 @@ impl App {
         if initiatives.is_empty() {
             return Ok(Vec::new());
         }
-        let _ = now;
+        let reminder = tx.projects().reminder_settings().await?;
         let all = tx.initiatives().list_all().await?;
         let edges = tx.initiatives().list_edges().await?;
         let statuses = tx.projects().list_statuses().await?;
@@ -314,7 +314,7 @@ impl App {
                 let Some(status) = statuses.iter().find(|s| s.id == p.status_id) else {
                     continue;
                 };
-                if direct.contains(pid) {
+                {
                     let key = snap
                         .tree
                         .get(p.lead_team_id)
@@ -327,7 +327,20 @@ impl App {
                     });
                 }
                 if status.status_type == ProjectStatusType::Started {
-                    health_inputs.push(p.health);
+                    // Veraltete Updates zählen nicht als Health (docs/04 §4.5).
+                    let days = super::project::update::reminder_cycle_days(
+                        &p.update_reminder_mode,
+                        p.update_reminder_frequency_in_weeks,
+                        reminder.as_ref().and_then(|s| s.project_frequency_in_weeks),
+                    );
+                    let st = pure::staleness(
+                        !status.indefinite,
+                        days,
+                        p.health.zip(p.health_updated_at).map(|(h, at)| (at, h)),
+                        now,
+                    );
+                    let stale = matches!(st, pure::Staleness::Missing | pure::Staleness::Grey);
+                    health_inputs.push(if stale { None } else { p.health });
                 }
             }
             let owner = match i.owner_id {
