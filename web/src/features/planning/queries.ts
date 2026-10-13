@@ -30,13 +30,13 @@ export const planningKeys = {
 const REF = `id name key`;
 const PROJECT_FIELDS = `id identifier slugId name summary description icon color priority
   status { id name type color } health progress scope completedScope issueCount completedIssueCount
-  startDate targetDate startedAt completedAt archivedAt
+  startDate startDateResolution targetDate targetDateResolution startedAt completedAt archivedAt
   leadTeam { ${REF} } teams { ${REF} } lead { ${REF} } members { ${REF} } labels { ${REF} } initiatives { ${REF} }
   milestones { id name description targetDate sortOrder status progress issueCount completedIssueCount }
   openIssueCount createdAt updatedAt`;
 
 const INITIATIVE_FIELDS = `id identifier slugId name summary description color icon status statusType priority health
-  targetDate startedAt completedAt owner { ${REF} } leadTeam { ${REF} } visibility
+  targetDate targetDateResolution startedAt completedAt owner { ${REF} } leadTeam { ${REF} } visibility
   parentInitiatives { ${REF} } subInitiatives { ${REF} } labels { ${REF} }
   projects { id identifier name status statusType health }
   healthRollup { color onTrack atRisk offTrack none } archivedAt createdAt updatedAt`;
@@ -53,20 +53,66 @@ export interface ProjectsFilter {
   query?: string;
 }
 
+/** Seitengröße beim Nachladen aller Projekte (Cursor-Paginierung, B5.11). */
+const PROJECT_PAGE_SIZE = 100;
+
 export function useProjects(f: ProjectsFilter = {}) {
   return useQuery({
     queryKey: planningKeys.projects(JSON.stringify(f)),
+    queryFn: async ({ signal }) => {
+      const all: Project[] = [];
+      let after: string | null = null;
+      // Alle Seiten laden; die Obergrenze verhindert Endlosschleifen bei fehlerhaften Cursorn.
+      for (let page = 0; page < 200; page++) {
+        const res: { projectsPage: ProjectsPage } = await gqlRequest<
+          { projectsPage: ProjectsPage },
+          Record<string, unknown>
+        >(
+          `query PlanningProjects($team: String, $includeSubTeams: Boolean, $query: String, $first: Int, $after: String) {
+            projectsPage(team: $team, includeSubTeams: $includeSubTeams, query: $query, first: $first, after: $after) {
+              nodes { ${PROJECT_FIELDS} }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          {
+            team: f.team,
+            includeSubTeams: f.includeSubTeams,
+            query: f.query,
+            first: PROJECT_PAGE_SIZE,
+            after,
+          },
+          { signal },
+        );
+        all.push(...res.projectsPage.nodes);
+        if (!res.projectsPage.pageInfo.hasNextPage || !res.projectsPage.pageInfo.endCursor) break;
+        after = res.projectsPage.pageInfo.endCursor;
+      }
+      return all;
+    },
+  });
+}
+
+interface ProjectsPage {
+  nodes: Project[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+
+/** Erster Monat des Geschäftsjahres (0 = Januar) für Quartals-/Halbjahres-Auflösung. */
+export function useFiscalMonth(): number {
+  const q = useQuery({
+    queryKey: ["planning", "fiscal-month"],
+    staleTime: 5 * 60_000,
+    retry: false,
     queryFn: async ({ signal }) =>
       (
-        await gqlRequest<{ projects: Project[] }, Record<string, unknown>>(
-          `query PlanningProjects($team: String, $includeSubTeams: Boolean, $query: String) {
-            projects(team: $team, includeSubTeams: $includeSubTeams, query: $query, first: 200) { ${PROJECT_FIELDS} }
-          }`,
-          { team: f.team, includeSubTeams: f.includeSubTeams, query: f.query },
+        await gqlRequest<{ workspace: { fiscalYearStartMonth: number } }>(
+          `query PlanningFiscalMonth { workspace { fiscalYearStartMonth } }`,
+          undefined,
           { signal },
         )
-      ).projects,
+      ).workspace.fiscalYearStartMonth,
   });
+  return q.data ?? 0;
 }
 
 export function useProject(ref: string) {

@@ -3,7 +3,8 @@ import { useEffect, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
-import { HEALTH_LABEL, type Health } from "./queries";
+import { HEALTH_LABEL, type Health, useFiscalMonth } from "./queries";
+import { asResolution, formatSpanDate } from "./roadmap-model";
 
 const HEALTH_CLASS: Record<string, string> = {
   onTrack: "bg-emerald-500/15 text-emerald-500",
@@ -89,7 +90,36 @@ export function PageHeader({
   );
 }
 
-export const shortDate = (iso: string | null) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-    : "–";
+/**
+ * Kalenderdatum (`YYYY-MM-DD` bzw. Zeitstempel mit Datumsteil) ohne Zeitzonenversatz: das Datum
+ * wird als UTC gelesen und als UTC formatiert (B5.12). Mit Auflösung: „Q4 2026“ usw.
+ */
+export const shortDate = (iso: string | null | undefined, res?: string | null, fiscal = 0) => {
+  if (!iso) return "–";
+  const resolution = asResolution(res);
+  if (resolution) return formatSpanDate(iso, resolution, fiscal);
+  return new Date(`${iso.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+};
+
+/** Kalenderdatum mit Auflösung; liest das Fiskaljahr des Workspaces. */
+export function DateText({
+  iso,
+  resolution,
+}: {
+  iso: string | null | undefined;
+  resolution?: string | null;
+}) {
+  const fiscal = useFiscalMonth();
+  return <>{shortDate(iso, resolution, fiscal)}</>;
+}
+
+/** Kalendertag eines Zeitpunkts in der Zeitzone `tz` (z. B. Team-Zeitzone). */
+export const dayInZone = (iso: string, tz: string, offsetDays = 0) => {
+  const t = new Date(new Date(iso).getTime() + offsetDays * 86_400_000);
+  return t.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: tz });
+};

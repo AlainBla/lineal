@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Project } from "@/gql/graphql";
 
 import { useProjects } from "./queries";
-import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
+import { DateText, HealthBadge, PageHeader, ProgressBar } from "./ui";
 
 export type ProjectsTab = "all" | "active" | "backlog";
 export const isProjectsTab = (v: string): v is ProjectsTab =>
@@ -81,7 +81,9 @@ export function ProjectsPage({
               <td className="px-3 py-1.5 text-muted-foreground">
                 {p.teams.map((t) => t.key ?? t.name).join(", ")}
               </td>
-              <td className="px-3 py-1.5 text-muted-foreground">{shortDate(p.targetDate)}</td>
+              <td className="px-3 py-1.5 text-muted-foreground">
+                <DateText iso={p.targetDate} resolution={p.targetDateResolution} />
+              </td>
               <td className="px-3 py-1.5">
                 <ProgressBar value={p.progress} label={`Progress of ${p.name}`} />
               </td>

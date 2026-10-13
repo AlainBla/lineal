@@ -16,7 +16,7 @@ import {
   type Health,
 } from "./queries";
 import { RoadmapPage } from "./roadmap-page";
-import { HealthBadge, PageHeader, shortDate } from "./ui";
+import { DateText, HealthBadge, PageHeader } from "./ui";
 
 export type InitiativeTab =
   "overview" | "projects" | "updates" | "documents" | "sub-initiatives" | "roadmap";
@@ -56,7 +56,9 @@ function Overview({ i }: { i: Initiative }) {
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Target</dt>
-          <dd>{shortDate(i.targetDate)}</dd>
+          <dd>
+            <DateText iso={i.targetDate} resolution={i.targetDateResolution} />
+          </dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Lead team</dt>

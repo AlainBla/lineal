@@ -233,20 +233,49 @@ describe("Zeitachse und Gruppen", () => {
   });
 });
 
+describe("B5.05/B5.07 Fiskaljahr und Auflösung", () => {
+  it("Quartal richtet sich nach dem Fiskaljahr", () => {
+    const s: Span = {
+      startDate: "2026-11-20",
+      targetDate: "2026-11-20",
+      startRes: "quarter",
+      targetRes: "quarter",
+    };
+    expect(normalizeDate("2026-11-20", "quarter", "target")).toBe("2026-12-31");
+    expect(normalizeDate("2026-11-20", "quarter", "target", 1)).toBe("2027-01-31");
+    expect(normalizeDate("2027-01-05", "quarter", "start", 1)).toBe("2026-11-01");
+    expect(normalizeDate("2027-01-05", "year", "start", 1)).toBe("2026-02-01");
+    expect(formatSpanDate("2027-01-31", "quarter", 1)).toBe("Q4 2027");
+    expect(formatSpanDate("2026-12-31", "quarter")).toBe("Q4 2026");
+    // Verschieben in ganzen Fiskalquartalen.
+    const moved = dragSpan(
+      { ...s, startDate: "2026-11-01", targetDate: "2027-01-31" },
+      "move",
+      92,
+      1,
+    );
+    expect(moved?.startDate).toBe("2027-02-01");
+    expect(moved?.targetDate).toBe("2027-04-30");
+  });
+});
+
 describe("RoadmapPage", () => {
   const setup = (calls: Array<Record<string, unknown>> = [], fail = false) =>
     mockGraphql({
       PlanningProjects: () => ({
-        projects: [
-          project(),
-          project({
-            id: "p-2",
-            identifier: "P-ENG-2",
-            name: "No dates",
-            startDate: null,
-            targetDate: null,
-          }),
-        ],
+        projectsPage: {
+          nodes: [
+            project(),
+            project({
+              id: "p-2",
+              identifier: "P-ENG-2",
+              name: "No dates",
+              startDate: null,
+              targetDate: null,
+            }),
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
       }),
       PlanningInitiatives: () => ({ initiatives: [] }),
       PlanningProjectUpdate: (v: Record<string, unknown>) => {

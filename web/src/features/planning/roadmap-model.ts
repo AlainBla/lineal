@@ -43,37 +43,57 @@ const utcDay = (y: number, m: number, d: number) => Date.UTC(y, m, d) / DAY;
 /** Monate je Auflösung. */
 const MONTHS: Record<Resolution, number> = { month: 1, quarter: 3, halfYear: 6, year: 12 };
 
-/** Erster Tag der Periode, die `day` enthält. */
-function periodStart(day: number, res: Resolution): number {
+/**
+ * Erster Monat (Jahr, Monat 0-11) der Periode, die `day` enthält. Quartale, Halbjahre und Jahre
+ * beginnen im Fiskalmonat `fiscal` (0 = Januar, `Organization.fiscalYearStartMonth`).
+ */
+function periodOrigin(day: number, res: Resolution, fiscal: number): { y: number; m: number } {
   const { y, m } = ymd(day);
   const n = MONTHS[res];
-  return utcDay(y, m - (m % n), 1);
+  const rel = (m - fiscal + 12) % 12;
+  const start = (fiscal + Math.floor(rel / n) * n) % 12;
+  return { y: start > m ? y - 1 : y, m: start };
+}
+/** Erster Tag der Periode, die `day` enthält. */
+function periodStart(day: number, res: Resolution, fiscal = 0): number {
+  const { y, m } = periodOrigin(day, res, fiscal);
+  return utcDay(y, m, 1);
 }
 /** Letzter Tag der Periode, die `day` enthält. */
-function periodEnd(day: number, res: Resolution): number {
-  const { y, m } = ymd(day);
-  const n = MONTHS[res];
-  return utcDay(y, m - (m % n) + n, 1) - 1;
+function periodEnd(day: number, res: Resolution, fiscal = 0): number {
+  const { y, m } = periodOrigin(day, res, fiscal);
+  return utcDay(y, m + MONTHS[res], 1) - 1;
 }
 
 /** Normalisiert ein Datum auf die Auflösung (Start = Periodenbeginn, Ziel = Periodenende, docs/04 §2.5). */
-export function normalizeDate(iso: string, res: Resolution | null, role: "start" | "target") {
+export function normalizeDate(
+  iso: string,
+  res: Resolution | null,
+  role: "start" | "target",
+  fiscal = 0,
+) {
   if (!res) return iso.slice(0, 10);
   const d = toDay(iso);
-  return fromDay(role === "start" ? periodStart(d, res) : periodEnd(d, res));
+  return fromDay(role === "start" ? periodStart(d, res, fiscal) : periodEnd(d, res, fiscal));
 }
 
 /** Verschiebt ein Datum um `delta` Tage bzw., bei Auflösung, um ganze Perioden. */
-function shiftDate(iso: string, res: Resolution | null, role: "start" | "target", delta: number) {
+function shiftDate(
+  iso: string,
+  res: Resolution | null,
+  role: "start" | "target",
+  delta: number,
+  fiscal: number,
+) {
   const day = toDay(iso);
   if (!res) return fromDay(day + delta);
   const n = MONTHS[res];
   // 30,44 Tage je Monat; Rundung auf ganze Perioden (mindestens eine Periode bei klarer Bewegung).
   const periods = Math.round(delta / (30.44 * n));
-  if (periods === 0) return normalizeDate(iso, res, role);
-  const { y, m } = ymd(periodStart(day, res));
+  if (periods === 0) return normalizeDate(iso, res, role, fiscal);
+  const { y, m } = ymd(periodStart(day, res, fiscal));
   const first = utcDay(y, m + periods * n, 1);
-  return fromDay(role === "start" ? first : periodEnd(first, res));
+  return fromDay(role === "start" ? first : periodEnd(first, res, fiscal));
 }
 
 export interface Span {
@@ -89,14 +109,14 @@ export type DragMode = "move" | "start" | "end";
  * Neue Daten nach Ziehen um `deltaDays`: `move` verschiebt beide Enden, `start`/`end` nur eines.
  * `null`, wenn sich nichts ändert oder das Ergebnis ungültig wäre (Start nach Ziel).
  */
-export function dragSpan(span: Span, mode: DragMode, deltaDays: number): Span | null {
+export function dragSpan(span: Span, mode: DragMode, deltaDays: number, fiscal = 0): Span | null {
   const { startDate, targetDate, startRes, targetRes } = span;
   const next: Span = { ...span };
   if ((mode === "move" || mode === "start") && startDate) {
-    next.startDate = shiftDate(startDate, startRes, "start", deltaDays);
+    next.startDate = shiftDate(startDate, startRes, "start", deltaDays, fiscal);
   }
   if ((mode === "move" || mode === "end") && targetDate) {
-    next.targetDate = shiftDate(targetDate, targetRes, "target", deltaDays);
+    next.targetDate = shiftDate(targetDate, targetRes, "target", deltaDays, fiscal);
   }
   if (next.startDate === startDate && next.targetDate === targetDate) return null;
   if (next.startDate && next.targetDate && toDay(next.startDate) > toDay(next.targetDate)) {
@@ -252,19 +272,21 @@ export function barBox(item: RoadmapItem, ruler: Ruler, zoom: Zoom) {
 export const dayX = (iso: string, ruler: Ruler, zoom: Zoom) =>
   (toDay(iso) - ruler.origin) * PX_PER_DAY[zoom];
 
-/** Anzeige eines Datums mit Auflösung (docs/04 §2.5: „Q4 2026“, „H2 2026“). */
-export function formatSpanDate(iso: string | null, res: Resolution | null): string {
+/** Anzeige eines Datums mit Auflösung (docs/04 §2.5: „Q4 2026“, „H2 2026“; Fiskaljahr = Endjahr). */
+export function formatSpanDate(iso: string | null, res: Resolution | null, fiscal = 0): string {
   if (!iso) return "–";
   const { y, m, d } = ymd(toDay(iso));
+  const rel = (m - fiscal + 12) % 12;
+  const fy = fiscal > 0 && m >= fiscal ? y + 1 : y;
   switch (res) {
     case "month":
       return `${MONTH_NAMES[m]} ${y}`;
     case "quarter":
-      return `Q${Math.floor(m / 3) + 1} ${y}`;
+      return `Q${Math.floor(rel / 3) + 1} ${fy}`;
     case "halfYear":
-      return `H${m < 6 ? 1 : 2} ${y}`;
+      return `H${Math.floor(rel / 6) + 1} ${fy}`;
     case "year":
-      return String(y);
+      return String(fy);
     default:
       return `${MONTH_NAMES[m]} ${d}, ${y}`;
   }

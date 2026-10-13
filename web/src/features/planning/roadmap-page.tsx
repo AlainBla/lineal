@@ -32,6 +32,7 @@ import {
 import {
   useInitiative,
   useInitiatives,
+  useFiscalMonth,
   useProjects,
   useUpdateInitiative,
   useUpdateProject,
@@ -66,8 +67,8 @@ export function spanInput(item: RoadmapItem, next: Span): Record<string, unknown
   return input;
 }
 
-function describe(span: Span) {
-  return `${formatSpanDate(span.startDate, span.startRes)} – ${formatSpanDate(span.targetDate, span.targetRes)}`;
+function describe(span: Span, fiscal: number) {
+  return `${formatSpanDate(span.startDate, span.startRes, fiscal)} – ${formatSpanDate(span.targetDate, span.targetRes, fiscal)}`;
 }
 
 function Bar({
@@ -77,6 +78,7 @@ function Bar({
   width,
   dx,
   px,
+  fiscal,
   onStartDrag,
   onKey,
 }: {
@@ -86,6 +88,7 @@ function Bar({
   width: number;
   dx: Drag | null;
   px: number;
+  fiscal: number;
   onStartDrag: (item: RoadmapItem, e: React.PointerEvent, mode: DragMode) => void;
   onKey: (item: RoadmapItem, e: React.KeyboardEvent) => void;
 }) {
@@ -107,8 +110,8 @@ function Bar({
       role="button"
       tabIndex={0}
       data-roadmap-bar={item.id}
-      aria-label={`${item.name}, ${describe(span)}. Drag to change the dates, arrow keys move them.`}
-      title={`${item.name} · ${describe(span)}`}
+      aria-label={`${item.name}, ${describe(span, fiscal)}. Drag to change the dates, arrow keys move them.`}
+      title={`${item.name} · ${describe(span, fiscal)}`}
       onPointerDown={(e) => onStartDrag(item, e, "move")}
       onKeyDown={(e) => onKey(item, e)}
       className={cn(
@@ -161,6 +164,7 @@ export function RoadmapView({
   const qc = useQueryClient();
   const updateProject = useUpdateProject();
   const updateInitiative = useUpdateInitiative();
+  const fiscal = useFiscalMonth();
   const [zoom, setZoom] = useState<Zoom>("month");
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -209,7 +213,7 @@ export function RoadmapView({
       return;
     }
     const eff: DragMode = !item.startEditable ? "end" : d.mode;
-    const next = dragSpan(item.span, eff, Math.round(d.dx / px));
+    const next = dragSpan(item.span, eff, Math.round(d.dx / px), fiscal);
     if (next) commit(item, next);
   };
 
@@ -249,7 +253,12 @@ export function RoadmapView({
     // Eine Auflösung wandert in ganzen Perioden: ein Tag Rundung reicht für „eine Periode“ nicht.
     const unit = item.span.targetRes || item.span.startRes ? 31 : 1;
     const delta = e.key === "ArrowLeft" ? -unit : unit;
-    const next = dragSpan(item.span, e.shiftKey || !item.startEditable ? "end" : "move", delta);
+    const next = dragSpan(
+      item.span,
+      e.shiftKey || !item.startEditable ? "end" : "move",
+      delta,
+      fiscal,
+    );
     if (next) commit(item, next);
   };
 
@@ -303,6 +312,7 @@ export function RoadmapView({
               width={box.width}
               dx={drag}
               px={px}
+              fiscal={fiscal}
               onStartDrag={startDrag}
               onKey={onKey}
             />
@@ -467,7 +477,9 @@ export function RoadmapPage({
     let list = projects.data ?? [];
     if (scope.kind === "initiative") {
       const id = parent.data?.id;
-      list = id ? list.filter((p) => p.initiatives.some((i) => i.id === id)) : [];
+      // Rekursiv: auch Projekte der Sub-Initiativen (docs/04 §4.4).
+      const ids = new Set((parent.data?.projects ?? []).map((p) => p.id));
+      list = id ? list.filter((p) => ids.has(p.id)) : [];
     }
     return projectItems(list, ws);
   }, [effKind, initiatives.data, projects.data, parent.data, scope.kind, ws]);

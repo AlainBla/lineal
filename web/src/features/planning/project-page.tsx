@@ -22,7 +22,7 @@ import {
   useScopedIssues,
   type Health,
 } from "./queries";
-import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
+import { DateText, HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
 export const PROJECT_TABS: ProjectTab[] = ["overview", "issues", "updates", "milestones"];
@@ -271,8 +271,12 @@ export function ProjectPage({
               <Prop label="Status">{p.status.name}</Prop>
               <Prop label="Lead">{p.lead?.name ?? "No lead"}</Prop>
               <Prop label="Teams">{p.teams.map((t) => t.key ?? t.name).join(", ") || "–"}</Prop>
-              <Prop label="Start">{shortDate(p.startDate)}</Prop>
-              <Prop label="Target">{shortDate(p.targetDate)}</Prop>
+              <Prop label="Start">
+                <DateText iso={p.startDate} resolution={p.startDateResolution} />
+              </Prop>
+              <Prop label="Target">
+                <DateText iso={p.targetDate} resolution={p.targetDateResolution} />
+              </Prop>
               <Prop label="Progress">
                 <ProgressBar value={p.progress} />
               </Prop>

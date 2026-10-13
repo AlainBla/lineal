@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Initiative } from "@/gql/graphql";
 
 import { useInitiatives } from "./queries";
-import { HealthBadge, PageHeader, shortDate } from "./ui";
+import { DateText, HealthBadge, PageHeader } from "./ui";
 
 export interface InitiativeNode {
   initiative: Initiative;
@@ -92,7 +92,9 @@ export function InitiativesPage({ ws, tab }: { ws: string; tab: InitiativesTab }
                   </Link>
                 </td>
                 <td className="px-3 py-1.5 text-muted-foreground">{i.owner?.name ?? "–"}</td>
-                <td className="px-3 py-1.5 text-muted-foreground">{shortDate(i.targetDate)}</td>
+                <td className="px-3 py-1.5 text-muted-foreground">
+                  <DateText iso={i.targetDate} resolution={i.targetDateResolution} />
+                </td>
                 <td className="px-3 py-1.5 text-muted-foreground tabular-nums">
                   {done} / {i.projects.length}
                 </td>

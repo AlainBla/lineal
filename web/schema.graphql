@@ -1844,6 +1844,11 @@ type Project {
 	updatedAt: String!
 }
 
+type ProjectConnection {
+	nodes: [Project!]!
+	pageInfo: PageInfo!
+}
+
 type ProjectHealthSummary {
 	onTrack: Int!
 	atRisk: Int!
@@ -2049,9 +2054,14 @@ type Query {
 	"""
 	cycle(id: String!): Cycle!
 	"""
-	Sichtbare Projekte (mindestens ein zugängliches Team).
+	Sichtbare Projekte (mindestens ein zugängliches Team); `first` bis 250, `after` ab Cursor
+	(siehe `projectsPage` für `hasNextPage`).
 	"""
-	projects(team: String, includeSubTeams: Boolean, initiative: String, member: String, state: String, label: String, query: String, includeArchived: Boolean, first: Int): [Project!]!
+	projects(team: String, includeSubTeams: Boolean, initiative: String, member: String, state: String, label: String, query: String, includeArchived: Boolean, first: Int, after: String): [Project!]!
+	"""
+	Wie `projects`, mit Cursor-Paginierung (`pageInfo.hasNextPage`/`endCursor`).
+	"""
+	projectsPage(team: String, includeSubTeams: Boolean, initiative: String, member: String, state: String, label: String, query: String, includeArchived: Boolean, first: Int, after: String): ProjectConnection!
 	"""
 	Ein Projekt per UUID, Kennung (`P-ENG-7`), Slug oder Name.
 	"""
