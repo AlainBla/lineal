@@ -14,6 +14,7 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import {
   clearCreateDraft,
   clearCreatePreset,
+  draftScope,
   getCreateDraft,
   hasCreateDraft,
   saveCreateDraft,
@@ -82,7 +83,8 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
   const users = useKnownUsers();
   const create = useCreateIssue();
   const [chosenTeamId, setChosenTeamId] = useState<string | null>(null);
-  const [initialDraft] = useState(getCreateDraft);
+  const scope = session ? draftScope(session.user.id, session.workspace.id) : null;
+  const [initialDraft] = useState(() => (scope ? getCreateDraft(scope) : null));
   const [title, setTitle] = useState(initialDraft?.title ?? "");
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [nonce, setNonce] = useState(0);
@@ -131,8 +133,8 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
 
   // Entwurf mitschreiben: übersteht Session-Ablauf (Login-Rücksprung) und Reload.
   useEffect(() => {
-    saveCreateDraft({ title, description });
-  }, [title, description]);
+    if (scope) saveCreateDraft(scope, { title, description });
+  }, [scope, title, description]);
 
   const titleMissing = title.trim() === "";
   const canSubmit = !!team && !titleMissing && !create.isPending;
@@ -174,7 +176,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
       },
       {
         onSuccess: (issue) => {
-          clearCreateDraft();
+          if (scope) clearCreateDraft(scope);
           showToast({
             message: `${issue.identifier} created`,
             href: `/${session?.workspace.urlKey ?? ""}/issue/${issue.identifier}`,
@@ -410,6 +412,8 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
 export function CreateIssueModal() {
   const { createIssueOpen } = useUiState();
   const preset = useCreatePreset();
+  const session = useSession();
+  const scope = session ? draftScope(session.user.id, session.workspace.id) : null;
   const [confirming, setConfirming] = useState(false);
   useShortcutContext("modal", createIssueOpen);
 
@@ -420,7 +424,7 @@ export function CreateIssueModal() {
   };
   // Esc, Backdrop-Klick und X: bei ungespeichertem Inhalt erst nachfragen (B4.26).
   const requestClose = () => {
-    if (hasCreateDraft()) setConfirming(true);
+    if (scope && hasCreateDraft(scope)) setConfirming(true);
     else close();
   };
 
@@ -447,7 +451,7 @@ export function CreateIssueModal() {
               variant="destructive"
               size="sm"
               onClick={() => {
-                clearCreateDraft();
+                if (scope) clearCreateDraft(scope);
                 close();
               }}
             >

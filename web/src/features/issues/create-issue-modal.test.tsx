@@ -8,14 +8,17 @@ import { shortcuts } from "@/lib/shortcuts";
 
 import { CreateIssueModal } from "./create-issue-modal";
 import {
-  clearCreateDraft,
+  clearAllCreateDrafts,
+  draftScope,
+  purgeForeignDrafts,
+  saveCreateDraft,
   clearCreatePreset,
   consumeCreateReopen,
   getCreateDraft,
   markCreateReopen,
   openCreateIssue,
 } from "./create-store";
-import { makeIssue, mockGraphql, renderWithApp, TEAM_META } from "./test-fixtures";
+import { makeIssue, mockGraphql, renderWithApp, SESSION, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
 
@@ -94,6 +97,8 @@ function handlers(onCreate?: (input: Record<string, unknown>) => void) {
   };
 }
 
+const SCOPE = draftScope(SESSION.user.id, SESSION.workspace.id);
+
 beforeEach(() => {
   setUiState({ createIssueOpen: false });
 });
@@ -101,7 +106,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   shortcuts.reset();
   clearCreatePreset();
-  clearCreateDraft();
+  clearAllCreateDrafts();
   clearToasts();
 });
 
@@ -239,7 +244,7 @@ describe("Create-Issue-Modal", () => {
     await userEvent.keyboard("{Escape}");
     await userEvent.click(await screen.findByRole("button", { name: "Discard" }));
     await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
-    expect(getCreateDraft()).toBeNull();
+    expect(getCreateDraft(SCOPE)).toBeNull();
   });
 
   it("Esc ohne Inhalt schließt sofort", async () => {
@@ -253,12 +258,38 @@ describe("Create-Issue-Modal", () => {
     mockGraphql(handlers());
     const title = await openModal();
     await userEvent.type(title, "Wichtiger Text");
-    await waitFor(() => expect(getCreateDraft()?.title).toBe("Wichtiger Text"));
-    markCreateReopen();
+    await waitFor(() => expect(getCreateDraft(SCOPE)?.title).toBe("Wichtiger Text"));
+    markCreateReopen(SCOPE);
     act(() => setUiState({ createIssueOpen: false })); // Shell unmountet beim Redirect
-    expect(consumeCreateReopen()).toBe(true);
-    expect(consumeCreateReopen()).toBe(false);
+    expect(consumeCreateReopen(SCOPE)).toBe(true);
+    expect(consumeCreateReopen(SCOPE)).toBe(false);
     act(() => setUiState({ createIssueOpen: true }));
     expect(await screen.findByLabelText("Issue title")).toHaveValue("Wichtiger Text");
+  });
+
+  it("Entwürfe sind an Nutzer und Workspace gebunden, Logout löscht alle (Security)", () => {
+    const alice = draftScope("user-alice", "org-1");
+    const bob = draftScope("user-bob", "org-1");
+    const otherWs = draftScope("user-alice", "org-2");
+    saveCreateDraft(alice, { title: "Geheim", description: "privat" });
+    // anderer Nutzer, anderer Workspace: kein fremder Entwurf
+    expect(getCreateDraft(bob)).toBeNull();
+    expect(getCreateDraft(otherWs)).toBeNull();
+    markCreateReopen(alice);
+    expect(consumeCreateReopen(bob)).toBe(false);
+    // Login von Bob: Entwürfe anderer Scopes werden verworfen
+    purgeForeignDrafts(bob);
+    expect(getCreateDraft(alice)).toBeNull();
+    // derselbe Nutzer nach Session-Ablauf: Entwurf bleibt, Wiederöffnen genau einmal
+    saveCreateDraft(alice, { title: "Weiter", description: "" });
+    markCreateReopen(alice);
+    purgeForeignDrafts(alice);
+    expect(consumeCreateReopen(alice)).toBe(true);
+    expect(getCreateDraft(alice)?.title).toBe("Weiter");
+    // Logout: alles weg, auch für denselben Nutzer
+    clearAllCreateDrafts();
+    expect(getCreateDraft(alice)).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+    expect(localStorage.getItem("lineal-create-draft:" + alice)).toBeNull();
   });
 });

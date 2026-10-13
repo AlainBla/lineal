@@ -46,17 +46,25 @@ export function useCreatePreset(): CreatePreset | null {
 }
 
 /**
- * Entwurf des Create-Modals (Titel/Beschreibung). Er überlebt das Schließen durch Session-Ablauf
- * (Rücksprung zum Login) und wird nach erneuter Anmeldung wieder geöffnet; erfolgreiches Anlegen
- * oder bewusstes Verwerfen löscht ihn.
+ * Entwurf des Create-Modals (Titel/Beschreibung). Er ist strikt an Nutzer und Workspace gebunden
+ * (`scope`), liegt nur in `sessionStorage` (nie localStorage, endet mit dem Tab) und überlebt
+ * Session-Ablauf (Rücksprung zum Login), damit derselbe Nutzer nach dem erneuten Login
+ * weiterschreiben kann. Beim Abmelden werden alle Entwürfe gelöscht; beim Anmelden verwirft
+ * `purgeForeignDrafts` Entwürfe anderer Nutzer/Workspaces. Erfolgreiches Anlegen oder bewusstes
+ * Verwerfen löscht den Entwurf.
  */
 export interface CreateDraft {
   title: string;
   description: string;
 }
 
-const DRAFT_KEY = "lineal-create-draft";
-const REOPEN_KEY = "lineal-create-reopen";
+/** Schlüssel aus Nutzer-ID und Workspace; `null`, solange keine Session bekannt ist. */
+export type DraftScope = string;
+export const draftScope = (userId: string, workspaceId: string): DraftScope =>
+  `${userId}:${workspaceId}`;
+
+const DRAFT_PREFIX = "lineal-create-draft:";
+const REOPEN_PREFIX = "lineal-create-reopen:";
 
 function storage(): Storage | null {
   try {
@@ -66,8 +74,8 @@ function storage(): Storage | null {
   }
 }
 
-export function getCreateDraft(): CreateDraft | null {
-  const raw = storage()?.getItem(DRAFT_KEY);
+export function getCreateDraft(scope: DraftScope): CreateDraft | null {
+  const raw = storage()?.getItem(DRAFT_PREFIX + scope);
   if (!raw) return null;
   try {
     const d = JSON.parse(raw) as Partial<CreateDraft>;
@@ -77,29 +85,49 @@ export function getCreateDraft(): CreateDraft | null {
   }
 }
 
-export function hasCreateDraft(): boolean {
-  const d = getCreateDraft();
+export function hasCreateDraft(scope: DraftScope): boolean {
+  const d = getCreateDraft(scope);
   return !!d && (d.title.trim() !== "" || d.description.trim() !== "");
 }
 
-export function saveCreateDraft(d: CreateDraft): void {
-  if (d.title === "" && d.description === "") clearCreateDraft();
-  else storage()?.setItem(DRAFT_KEY, JSON.stringify(d));
+export function saveCreateDraft(scope: DraftScope, d: CreateDraft): void {
+  if (d.title === "" && d.description === "") clearCreateDraft(scope);
+  else storage()?.setItem(DRAFT_PREFIX + scope, JSON.stringify(d));
 }
 
-export function clearCreateDraft(): void {
-  storage()?.removeItem(DRAFT_KEY);
+export function clearCreateDraft(scope: DraftScope): void {
+  storage()?.removeItem(DRAFT_PREFIX + scope);
+  storage()?.removeItem(REOPEN_PREFIX + scope);
 }
 
-/** Session abgelaufen: nach dem erneuten Login das Modal mit dem Entwurf öffnen. */
-export function markCreateReopen(): void {
-  if (hasCreateDraft()) storage()?.setItem(REOPEN_KEY, "1");
-}
-
-/** `true` genau einmal nach `markCreateReopen`. */
-export function consumeCreateReopen(): boolean {
+/** Abmelden: alle Entwürfe und Wiederöffnen-Marken entfernen. */
+export function clearAllCreateDrafts(): void {
   const s = storage();
-  if (!s || s.getItem(REOPEN_KEY) !== "1") return false;
-  s.removeItem(REOPEN_KEY);
-  return hasCreateDraft();
+  if (!s) return;
+  for (const k of Object.keys(s)) {
+    if (k.startsWith(DRAFT_PREFIX) || k.startsWith(REOPEN_PREFIX)) s.removeItem(k);
+  }
+}
+
+/** Anmelden: Entwürfe anderer Nutzer/Workspaces löschen, nur der eigene Scope bleibt. */
+export function purgeForeignDrafts(scope: DraftScope): void {
+  const s = storage();
+  if (!s) return;
+  for (const k of Object.keys(s)) {
+    const own = k === DRAFT_PREFIX + scope || k === REOPEN_PREFIX + scope;
+    if (!own && (k.startsWith(DRAFT_PREFIX) || k.startsWith(REOPEN_PREFIX))) s.removeItem(k);
+  }
+}
+
+/** Session abgelaufen: nach dem erneuten Login desselben Nutzers das Modal wieder öffnen. */
+export function markCreateReopen(scope: DraftScope): void {
+  if (hasCreateDraft(scope)) storage()?.setItem(REOPEN_PREFIX + scope, "1");
+}
+
+/** `true` genau einmal nach `markCreateReopen`, nur für denselben Scope. */
+export function consumeCreateReopen(scope: DraftScope): boolean {
+  const s = storage();
+  if (!s || s.getItem(REOPEN_PREFIX + scope) !== "1") return false;
+  s.removeItem(REOPEN_PREFIX + scope);
+  return hasCreateDraft(scope);
 }

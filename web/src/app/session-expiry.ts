@@ -7,8 +7,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
-import { SESSION_QUERY_KEY } from "@/app/auth";
-import { markCreateReopen } from "@/features/issues/create-store";
+import { SESSION_QUERY_KEY, type Session } from "@/app/auth";
+import { draftScope, markCreateReopen } from "@/features/issues/create-store";
 import { setUnauthenticatedHandler } from "@/lib/graphql";
 
 export function useSessionExpiry(): void {
@@ -20,7 +20,8 @@ export function useSessionExpiry(): void {
       const { pathname, search, hash } = window.location;
       if (busy || pathname === "/login") return;
       busy = true;
-      markCreateReopen();
+      const session = client.getQueryData<Session | null>(SESSION_QUERY_KEY);
+      if (session) markCreateReopen(draftScope(session.user.id, session.workspace.id));
       client.setQueryData(SESSION_QUERY_KEY, null);
       void navigate({
         to: "/login",

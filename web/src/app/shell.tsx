@@ -8,6 +8,7 @@ import { useGlobalActions } from "@/app/global-actions";
 import { ShortcutHelp } from "@/app/shortcut-help";
 import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
+import { clearAllCreateDrafts } from "@/features/issues/create-store";
 import { IssuesHost } from "@/features/issues/host";
 import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
@@ -20,6 +21,7 @@ export function Shell({ session, children }: { session: Session; children: React
 
   const onLogout = () => {
     void logout().then(() => {
+      clearAllCreateDrafts();
       client.clear();
       void navigate({ to: "/login", search: { redirect: undefined } });
     });
