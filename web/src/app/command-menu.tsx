@@ -1,5 +1,5 @@
 import { useRouter } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { groupBySection, useCommands, type Command } from "@/app/commands";
 import {
@@ -49,10 +49,6 @@ export function CommandMenu({
   const groups = useMemo(() => groupBySection(cmds), [cmds]);
   const [query, setQuery] = useState(initialQuery);
   useShortcutContext("modal", open);
-  // Beim Öffnen mit der Vorgabe starten (Open issue… setzt `i `).
-  useEffect(() => {
-    if (open) setQuery(initialQuery);
-  }, [open, initialQuery]);
   const parsed: ParsedQuery = parseCommandQuery(query);
   const prefixInfo = parsed.prefix ? PREFIXES[parsed.prefix] : null;
   const change = (q: string) => {
