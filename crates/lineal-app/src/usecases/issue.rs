@@ -630,6 +630,15 @@ impl App {
             now,
         )
         .await?;
+        // Auto-Zuordnung beim Anlegen (docs/04 §1.6, Hook mit oldType = null).
+        if issue.cycle_id.is_none()
+            && let Some(c) =
+                crate::usecases::cycle::auto_cycle_for_state(tx, &team, issue.state_type, now)
+                    .await?
+        {
+            issue.cycle_id = Some(c.id);
+            issue.added_to_cycle_at = Some(now);
+        }
         let plan: LabelPlan = if input.labels.is_some() || !input.add_labels.is_empty() {
             plan_labels(
                 tx,

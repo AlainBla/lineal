@@ -10,9 +10,10 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::ports::{Clock, IdGen, Store};
-use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput};
+use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput, ExistingActiveIssues};
 use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
 use lineal_app::usecases::initiative::{ListInitiativesInput, SaveInitiativeInput};
+use lineal_app::usecases::issue::CreateIssueInput;
 use lineal_app::usecases::project::milestone::SaveMilestoneInput;
 use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpts};
 use lineal_app::usecases::team::{CreateTeamInput, UpdateTeamInput};
@@ -433,4 +434,44 @@ async fn b5_04_all_project_write_paths_share_one_rights_rule(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(n, 2);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn b5_09_lock_to_active_and_auto_assign_apply_on_create(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    app.configure_team_cycles(
+        &alice,
+        "ENG",
+        CycleSettingsInput {
+            lock_to_active: Some(true),
+            existing_active_issues: Some(ExistingActiveIssues::AddToCycle),
+            auto_assign_completed: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mk = |state: &str| CreateIssueInput {
+        team: "ENG".into(),
+        title: Some("Neu".into()),
+        state: Some(state.into()),
+        ..Default::default()
+    };
+    let todo = app.create_issue(&alice, mk("Todo")).await.unwrap();
+    assert_eq!(todo.issue.cycle_id, Some(seed_cycle_id(2)));
+    let done = app.create_issue(&alice, mk("Done")).await.unwrap();
+    assert_eq!(done.issue.cycle_id, Some(seed_cycle_id(2)));
+    let backlog = app
+        .create_issue(
+            &alice,
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("B".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(backlog.issue.cycle_id, None);
 }
