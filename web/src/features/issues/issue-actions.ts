@@ -15,6 +15,7 @@ export interface IssueActions {
   setLabels: (issue: Issue, labelIds: string[]) => void;
   setEstimate: (issue: Issue, estimate: number | null) => void;
   setProject: (issue: Issue, projectId: string | null) => void;
+  setMilestone: (issue: Issue, milestoneId: string | null) => void;
   setCycle: (issue: Issue, cycleId: string | null) => void;
   setDueDate: (issue: Issue, dueDate: string | null) => void;
   setTitle: (issue: Issue, title: string) => void;
@@ -53,7 +54,15 @@ export function useIssueActions(): IssueActions {
       },
       setLabels: (i, labelIds) => send({ id: i.id, input: { labelIds }, patch: { labelIds } }),
       setEstimate: (i, estimate) => send({ id: i.id, input: { estimate }, patch: { estimate } }),
-      setProject: (i, projectId) => send({ id: i.id, input: { projectId }, patch: { projectId } }),
+      // Ein Projektwechsel löst den Meilenstein (docs/04 §3.4); der Server liefert den Rest.
+      setProject: (i, projectId) =>
+        send({
+          id: i.id,
+          input: { projectId },
+          patch: { projectId, projectMilestoneId: null },
+        }),
+      setMilestone: (i, projectMilestoneId) =>
+        send({ id: i.id, input: { projectMilestoneId }, patch: { projectMilestoneId } }),
       setCycle: (i, cycleId) => send({ id: i.id, input: { cycleId }, patch: { cycleId } }),
       setDueDate: (i, dueDate) => send({ id: i.id, input: { dueDate }, patch: { dueDate } }),
       setTitle: (i, title) => send({ id: i.id, input: { title }, patch: { title } }),

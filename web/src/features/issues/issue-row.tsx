@@ -77,6 +77,7 @@ export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: Row
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   const project = lookup.projectName(issue.projectId);
+  const milestone = lookup.milestoneName(issue.projectMilestoneId);
   const estimate = estimateLabel(lookup.estimationType(issue.teamId), issue.estimate);
   return (
     <Link
@@ -107,6 +108,7 @@ export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: Row
       {project && (
         <span className="hidden max-w-32 truncate text-xs text-muted-foreground lg:inline">
           {project}
+          {milestone && <span title="Milestone"> · {milestone}</span>}
         </span>
       )}
       {estimate && <span className="text-xs text-muted-foreground">{estimate}</span>}

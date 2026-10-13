@@ -247,6 +247,7 @@ export type IssuePatch = Partial<
     | "estimate"
     | "labelIds"
     | "projectId"
+    | "projectMilestoneId"
     | "cycleId"
     | "dueDate"
     | "parentId"

@@ -170,6 +170,7 @@ describe("Issue-Detail", () => {
       "Due date",
       "Labels",
       "Project",
+      "Milestone",
     ]);
     const row = (name: string) => sidebar.querySelector(`[data-property="${name}"]`)!;
     expect(within(row("Status") as HTMLElement).getByText("In Progress")).toBeInTheDocument();
@@ -242,6 +243,21 @@ describe("Issue-Detail", () => {
     // Reihenfolge: Import (1.10.) < Kommentar (2.10.) < Statuswechsel (3.10.)
     expect(early.compareDocumentPosition(comment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(comment.compareDocumentPosition(late) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("F.07: Shift+M öffnet den Meilenstein-Picker des Projekts, Auswahl sendet projectMilestoneId", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    await screen.findByText("Set milestone");
+    await userEvent.keyboard("{Shift>}M{/Shift}");
+    const input = await screen.findByPlaceholderText("Set milestone…");
+    await userEvent.type(input, "Beta{Enter}");
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toEqual({
+      id: "i1",
+      input: { projectMilestoneId: "m-beta" },
+    });
   });
 
   it("Taste S öffnet den Status-Picker, Auswahl sendet issueUpdate", async () => {

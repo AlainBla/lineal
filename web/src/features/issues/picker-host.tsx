@@ -12,6 +12,7 @@ import {
   cycleOptions,
   estimatePickerOptions,
   labelOptions,
+  milestoneOptions,
   NONE,
   priorityOptions,
   projectOptions,
@@ -23,7 +24,16 @@ import { errorMessage, showToast } from "./toast-store";
 import { useAssignableUsers } from "./users";
 
 export type PickerKind =
-  "status" | "assignee" | "priority" | "labels" | "estimate" | "project" | "cycle" | "team" | "due";
+  | "status"
+  | "assignee"
+  | "priority"
+  | "labels"
+  | "estimate"
+  | "project"
+  | "milestone"
+  | "cycle"
+  | "team"
+  | "due";
 
 export interface PickerRequest {
   kind: PickerKind;
@@ -37,6 +47,7 @@ const TITLES: Record<Exclude<PickerKind, "team" | "due">, string> = {
   labels: "Change labels…",
   estimate: "Set estimate…",
   project: "Add to project…",
+  milestone: "Set milestone…",
   cycle: "Add to cycle…",
 };
 
@@ -71,7 +82,9 @@ export function IssuePickerHost({
       ? "Estimates are not enabled for this team."
       : kind === "cycle" && meta.data && !cyclesEnabled
         ? "Cycles are not enabled for this team."
-        : null;
+        : kind === "milestone" && !issue?.projectId
+          ? "Add the issue to a project first."
+          : null;
   // Teamdaten nicht ladbar: Fehler statt „No results.“ (B4.27).
   const metaFailed =
     meta.isError &&
@@ -175,6 +188,15 @@ export function IssuePickerHost({
           options={projectOptions(meta.data?.projects ?? [])}
           selected={issue.projectId ?? NONE}
           onSelect={(id) => actions.setProject(issue, id === NONE ? null : id)}
+        />
+      );
+    case "milestone":
+      return (
+        <PropertyPicker
+          {...common}
+          options={milestoneOptions(meta.data?.projects ?? [], issue.projectId ?? null)}
+          selected={issue.projectMilestoneId ?? NONE}
+          onSelect={(id) => actions.setMilestone(issue, id === NONE ? null : id)}
         />
       );
     case "cycle":

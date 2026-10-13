@@ -27,6 +27,8 @@ pub struct BatchPatch {
     pub add_labels: Vec<String>,
     pub remove_labels: Vec<String>,
     pub project: Option<Option<String>>,
+    /// Projekt-Meilenstein (muss zum Projekt der Issues gehören; `Some(None)` löst ihn).
+    pub milestone: Option<Option<String>>,
     pub cycle: Option<Option<String>>,
     pub estimate: Option<Option<f64>>,
     /// Zielteam (Bulk-Move, docs/02 §7.4).
@@ -46,6 +48,7 @@ impl BatchPatch {
             || !self.add_labels.is_empty()
             || !self.remove_labels.is_empty()
             || self.project.is_some()
+            || self.milestone.is_some()
             || self.cycle.is_some()
             || self.estimate.is_some()
             || self.team.is_some()
@@ -171,6 +174,7 @@ impl App {
                         add_labels: p.add_labels.clone(),
                         remove_labels: p.remove_labels.clone(),
                         project: p.project.clone(),
+                        milestone: p.milestone.clone(),
                         cycle: p.cycle.clone(),
                         move_sub_issues: p.move_sub_issues,
                         source: HistorySource::User,

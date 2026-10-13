@@ -294,6 +294,8 @@ pub struct IssueBatchUpdateInput {
     pub added_label_ids: Option<Vec<String>>,
     pub removed_label_ids: Option<Vec<String>>,
     pub project_id: MaybeUndefined<String>,
+    /// Meilenstein des (gemeinsamen) Projekts; `null` löst ihn.
+    pub project_milestone_id: MaybeUndefined<String>,
     pub cycle_id: MaybeUndefined<String>,
     pub estimate: MaybeUndefined<f64>,
     /// Zielteam (Bulk-Move).
@@ -615,6 +617,7 @@ impl IssueMutation {
                         add_labels: input.added_label_ids.unwrap_or_default(),
                         remove_labels: input.removed_label_ids.unwrap_or_default(),
                         project: tri(input.project_id),
+                        milestone: tri(input.project_milestone_id),
                         cycle: tri(input.cycle_id),
                         estimate: tri(input.estimate),
                         team: input.team_id,

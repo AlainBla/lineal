@@ -174,6 +174,22 @@ describe("Create-Issue-Modal", () => {
     await waitFor(() => expect(getUiState().createIssueOpen).toBe(false));
   });
 
+  it("F.07: Meilenstein-Chip erscheint mit Projekt, Auswahl geht als projectMilestoneId mit", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    mockGraphql(handlers((i) => created.push(i)));
+    const title = await openModal();
+    await screen.findByRole("button", { name: "Status: Backlog" });
+    expect(screen.queryByRole("button", { name: "Milestone" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Project" }));
+    await userEvent.type(await screen.findByPlaceholderText("Add to project…"), "Checkout{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: "Milestone" }));
+    await userEvent.type(await screen.findByPlaceholderText("Set milestone…"), "Beta{Enter}");
+    await userEvent.type(title, "Mit Meilenstein");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ projectId: "p-1", projectMilestoneId: "m-beta" });
+  });
+
   it("Create more: Modal bleibt offen, Titel/Beschreibung werden geleert, Properties bleiben", async () => {
     const created: Array<Record<string, unknown>> = [];
     mockGraphql(handlers((i) => created.push(i)));

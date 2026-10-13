@@ -10,6 +10,7 @@ import type {
   IssueLabel,
   PageInfo,
   Project,
+  ProjectMilestone,
   Team,
   WorkflowState,
 } from "@/gql/graphql";
@@ -88,7 +89,12 @@ export interface TeamMeta {
   states: WorkflowState[];
   labels: IssueLabel[];
   cycles: Cycle[];
-  projects: Array<Pick<Project, "id" | "identifier" | "name" | "color">>;
+  projects: Array<
+    Pick<Project, "id" | "identifier" | "name" | "color"> & {
+      /** Meilensteine des Projekts (F.07); fehlt in älteren Mocks. */
+      milestones?: Array<Pick<ProjectMilestone, "id" | "name" | "targetDate" | "sortOrder">>;
+    }
+  >;
 }
 
 const TEAM_META_QUERY = `query TeamMeta($team: String!) {
@@ -96,7 +102,7 @@ const TEAM_META_QUERY = `query TeamMeta($team: String!) {
   workflowStates(teamId: $team) { id teamId name type color position isDefault }
   issueLabels(teamId: $team, includeGroups: true) { id name color teamId parentId isGroup groupType }
   cycles(teamId: $team) { id teamId number name startsAt endsAt isActive isNext isPast }
-  projects(team: $team) { id identifier name color }
+  projects(team: $team) { id identifier name color milestones { id name targetDate sortOrder } }
 }`;
 
 export async function fetchTeamMeta(team: string, signal?: AbortSignal): Promise<TeamMeta> {
@@ -195,6 +201,7 @@ export interface IssueUpdateVars {
   parentId?: string | null;
   labelIds?: string[];
   projectId?: string | null;
+  projectMilestoneId?: string | null;
   cycleId?: string | null;
   dueDate?: string | null;
   sortOrder?: number;
@@ -224,6 +231,7 @@ export interface IssueBatchVars {
   addedLabelIds?: string[];
   removedLabelIds?: string[];
   projectId?: string | null;
+  projectMilestoneId?: string | null;
   cycleId?: string | null;
   estimate?: number | null;
   teamId?: string;
@@ -261,6 +269,7 @@ export interface IssueCreateVars {
   labelIds?: string[];
   parentId?: string;
   projectId?: string;
+  projectMilestoneId?: string;
   cycleId?: string;
   dueDate?: string;
 }

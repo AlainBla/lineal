@@ -155,7 +155,18 @@ export const TEAM_META: TeamMeta = {
     },
   ],
   cycles: [],
-  projects: [{ id: "p-1", identifier: "P-ENG-1", name: "Checkout Relaunch", color: "#4cb782" }],
+  projects: [
+    {
+      id: "p-1",
+      identifier: "P-ENG-1",
+      name: "Checkout Relaunch",
+      color: "#4cb782",
+      milestones: [
+        { id: "m-alpha", name: "Alpha", targetDate: "2026-11-30", sortOrder: 1 },
+        { id: "m-beta", name: "Beta", targetDate: "2027-01-31", sortOrder: 2 },
+      ],
+    },
+  ],
 };
 
 export interface RecordedCall {

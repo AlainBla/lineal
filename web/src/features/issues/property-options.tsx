@@ -73,6 +73,24 @@ export function projectOptions(projects: TeamMeta["projects"]): PickerOption[] {
   ];
 }
 
+/** Meilensteine des Projekts, zu dem das Issue gehört (nach Zieldatum/Reihenfolge). */
+export function milestoneOptions(
+  projects: TeamMeta["projects"],
+  projectId: string | null,
+): PickerOption[] {
+  const ms = [...(projects.find((p) => p.id === projectId)?.milestones ?? [])].sort(
+    (a, b) => a.sortOrder - b.sortOrder,
+  );
+  return [
+    { id: NONE, label: "No milestone" },
+    ...ms.map((m) => ({
+      id: m.id,
+      label: m.name,
+      hint: m.targetDate ? m.targetDate.slice(0, 10) : undefined,
+    })),
+  ];
+}
+
 /** Aktive und künftige Cycles (abgeschlossene sind nicht wählbar, docs/08 F4). */
 export function cycleOptions(cycles: Cycle[]): PickerOption[] {
   return [

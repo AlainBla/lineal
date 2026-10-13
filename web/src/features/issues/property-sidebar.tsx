@@ -82,6 +82,7 @@ export function PropertySidebar({
     return l ? [l] : [];
   });
   const project = lookup.projectName(issue.projectId);
+  const milestone = lookup.milestoneName(issue.projectMilestoneId);
 
   return (
     <dl aria-label="Properties" className="flex flex-col gap-0.5">
@@ -180,6 +181,15 @@ export function PropertySidebar({
           <span className="text-muted-foreground">Add to project</span>
         )}
       </PropertyRow>
+      {issue.projectId && (
+        <PropertyRow label="Milestone" keys="shift+m" onOpen={open(() => onOpen("milestone"))}>
+          {milestone ? (
+            <span>{milestone}</span>
+          ) : (
+            <span className="text-muted-foreground">Set milestone</span>
+          )}
+        </PropertyRow>
+      )}
     </dl>
   );
 }

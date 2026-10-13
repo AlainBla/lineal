@@ -11,6 +11,8 @@ export interface IssueLookup {
   state: (id: string) => WorkflowState | undefined;
   label: (id: string) => IssueLabel | undefined;
   projectName: (id: string | null) => string | null;
+  /** Name eines Projekt-Meilensteins (F.07). */
+  milestoneName: (id: string | null) => string | null;
   assigneeName: (id: string | null) => string | null;
   cycleName: (id: string | null) => string | null;
   /** Schätzskala je Team (`notUsed`, wenn unbekannt). */
@@ -26,6 +28,11 @@ export function useIssueLookup(metas: Array<TeamMeta | undefined>): IssueLookup 
     const states = new Map(all.flatMap((m) => m.states.map((s) => [s.id, s] as const)));
     const labels = new Map(all.flatMap((m) => m.labels.map((l) => [l.id, l] as const)));
     const projects = new Map(all.flatMap((m) => m.projects.map((p) => [p.id, p.name] as const)));
+    const milestones = new Map(
+      all.flatMap((m) =>
+        m.projects.flatMap((p) => (p.milestones ?? []).map((ms) => [ms.id, ms.name] as const)),
+      ),
+    );
     const cycles = new Map(
       all.flatMap((m) => m.cycles.map((c) => [c.id, c.name || `Cycle ${c.number}`] as const)),
     );
@@ -35,6 +42,7 @@ export function useIssueLookup(metas: Array<TeamMeta | undefined>): IssueLookup 
       label: (id) => labels.get(id),
       projectName: (id) => (id ? (projects.get(id) ?? null) : null),
       assigneeName: (id) => userName(id, users, me),
+      milestoneName: (id) => (id ? (milestones.get(id) ?? null) : null),
       cycleName: (id) => (id ? (cycles.get(id) ?? null) : null),
       estimationType: (teamId) => estimation.get(teamId) ?? "notUsed",
     };

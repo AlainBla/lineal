@@ -11,7 +11,7 @@ import { useIssueLookup } from "@/features/issues/issue-lookup";
 import { groupByState, relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
-import type { Project } from "@/gql/graphql";
+import type { Issue, Project } from "@/gql/graphql";
 
 import {
   HEALTH_LABEL,
@@ -206,31 +206,87 @@ function ProjectIssues({ ws, project }: { ws: string; project: Project }) {
   const metas = useTeamMetas(project.teams.flatMap((t) => (t.key ? [t.key] : [])));
   const lookup = useIssueLookup(metas);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"milestone" | "status">("milestone");
+  const stateGroups = (list: Issue[]) =>
+    metas.flatMap((m) =>
+      m
+        ? groupByState(
+            m.states,
+            list.filter((i) => i.teamId === m.team.id),
+            "all",
+          )
+        : [],
+    );
   const groups = useMemo(
-    () =>
-      metas.flatMap((m) =>
-        m
-          ? groupByState(
-              m.states,
-              (issues.data?.issues ?? []).filter((i) => i.teamId === m.team.id),
-              "all",
-            )
-          : [],
-      ),
+    () => stateGroups(issues.data?.issues ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [metas, issues.data],
   );
+  // Gruppierung nach Meilenstein (docs/08 §2.7: Default im Issues-Tab), danach „No milestone“.
+  const milestoneSections = useMemo(() => {
+    const all = issues.data?.issues ?? [];
+    const known = [...project.milestones].sort((a, b) => a.sortOrder - b.sortOrder);
+    const sections = known.map((m) => ({
+      id: m.id,
+      name: m.name,
+      date: m.targetDate,
+      issues: all.filter((i) => i.projectMilestoneId === m.id),
+    }));
+    const knownIds = new Set(known.map((m) => m.id));
+    sections.push({
+      id: "none",
+      name: "No milestone",
+      date: null,
+      issues: all.filter((i) => !i.projectMilestoneId || !knownIds.has(i.projectMilestoneId)),
+    });
+    return sections.filter((s) => s.issues.length > 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.milestones, issues.data]);
   const teamKey = project.leadTeam?.key ?? project.teams[0]?.key ?? undefined;
   if (issues.isLoading) return <ListSkeleton />;
   if (issues.isError) return <ErrorState error={issues.error} />;
   return (
     <div>
-      <div className="flex justify-end border-b border-border px-3 py-1">
+      <div className="flex items-center justify-end gap-2 border-b border-border px-3 py-1">
+        <div role="radiogroup" aria-label="Grouping" className="flex gap-1">
+          {(["milestone", "status"] as const).map((g) => (
+            <Button
+              key={g}
+              type="button"
+              variant="ghost"
+              size="sm"
+              role="radio"
+              aria-checked={mode === g}
+              className={mode === g ? "bg-surface-active" : undefined}
+              onClick={() => setMode(g)}
+            >
+              {g === "milestone" ? "By milestone" : "By status"}
+            </Button>
+          ))}
+        </div>
         <Button size="sm" onClick={() => openCreateIssue({ teamKey, projectId: project.id })}>
           <Plus /> New issue
         </Button>
       </div>
       {groups.length === 0 ? (
         <EmptyState title="No issues" description="Issues added to this project show up here." />
+      ) : mode === "milestone" ? (
+        milestoneSections.map((s) => (
+          <section key={s.id} aria-label={`Milestone ${s.name}`}>
+            <h2 className="flex items-center gap-2 border-b border-border bg-surface-hover px-4 py-1 text-xs font-medium">
+              {s.name}
+              {s.date && <span className="text-muted-foreground">{shortDate(s.date)}</span>}
+              <span className="text-muted-foreground">{s.issues.length}</span>
+            </h2>
+            <IssueList
+              groups={stateGroups(s.issues)}
+              ws={ws}
+              lookup={lookup}
+              focusedId={focusedId}
+              onFocus={setFocusedId}
+            />
+          </section>
+        ))
       ) : (
         <IssueList
           groups={groups}

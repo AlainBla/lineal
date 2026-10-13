@@ -28,6 +28,7 @@ const PICKERS: Array<{ id: string; kind: PickerKind; keys: string; title: string
   { id: "issue.estimate", kind: "estimate", keys: "shift+e", title: "Set estimate…" },
   { id: "issue.cycle", kind: "cycle", keys: "shift+c", title: "Add to cycle…" },
   { id: "issue.project", kind: "project", keys: "shift+p", title: "Add to project…" },
+  { id: "issue.milestone", kind: "milestone", keys: "shift+m", title: "Set milestone…" },
   { id: "issue.team", kind: "team", keys: "mod+shift+m", title: "Move to a different team…" },
 ];
 

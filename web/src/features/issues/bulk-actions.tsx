@@ -5,7 +5,7 @@
  * Toast mit den fehlgeschlagenen Kennungen gemeldet.
  */
 import { Archive, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
   cycleOptions,
   estimatePickerOptions,
   labelOptions,
+  milestoneOptions,
   NONE,
   priorityOptions,
   projectOptions,
@@ -42,6 +43,7 @@ const TITLES: Record<Exclude<BulkKind, "delete" | "team">, string> = {
   "labels-remove": "Remove label…",
   estimate: "Set estimate…",
   project: "Add to project…",
+  milestone: "Set milestone…",
   cycle: "Add to cycle…",
 };
 
@@ -65,6 +67,18 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
   const [pendingTeam, setPendingTeam] = useState<{ id: string; name: string } | null>(null);
   const [withSubs, setWithSubs] = useState(false);
   useShortcutContext("modal", pendingTeam !== null || request === "delete");
+
+  // Meilensteine gehören zu einem Projekt: Bulk nur, wenn alle Issues im selben Projekt liegen.
+  const sharedProject = useMemo(() => {
+    const projects = new Set(issues.map((i) => i.projectId));
+    return projects.size === 1 ? ([...projects][0] ?? null) : null;
+  }, [issues]);
+  useEffect(() => {
+    if (request === "milestone" && issues.length > 0 && !sharedProject) {
+      showToast({ message: "Select issues from one project to set a milestone." });
+      onRequest(null);
+    }
+  }, [request, issues.length, sharedProject, onRequest]);
 
   const ids = useMemo(() => issues.map((i) => i.id), [issues]);
   const identifiers = useMemo(() => new Map(issues.map((i) => [i.id, i.identifier])), [issues]);
@@ -127,6 +141,7 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
         {barButton("labels", "Add label", needsTeam)}
         {barButton("labels-remove", "Remove label", needsTeam)}
         {barButton("project", "Project", needsTeam)}
+        {barButton("milestone", "Milestone", needsTeam || !sharedProject)}
         {barButton("cycle", "Cycle", needsTeam)}
         {!estimatesOff && barButton("estimate", "Estimate", needsTeam)}
         {barButton("team", "Move")}
@@ -194,6 +209,12 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
         {...common("project")}
         options={projectOptions(meta.data?.projects ?? [])}
         onSelect={(id) => run({ projectId: id === NONE ? null : id })}
+      />
+      <PropertyPicker
+        {...common("milestone")}
+        open={request === "milestone" && sharedProject !== null}
+        options={milestoneOptions(meta.data?.projects ?? [], sharedProject)}
+        onSelect={(id) => run({ projectMilestoneId: id === NONE ? null : id })}
       />
       <PropertyPicker
         {...common("cycle")}

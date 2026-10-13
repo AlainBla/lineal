@@ -30,6 +30,7 @@ import {
   cycleOptions,
   estimatePickerOptions,
   labelOptions,
+  milestoneOptions,
   NONE,
   priorityOptions,
   projectOptions,
@@ -41,7 +42,15 @@ import { errorMessage, showToast } from "./toast-store";
 import { useAssignableUsers, useKnownUsers } from "./users";
 
 type ChipKind =
-  "team" | "status" | "priority" | "assignee" | "labels" | "estimate" | "project" | "cycle";
+  | "team"
+  | "status"
+  | "priority"
+  | "assignee"
+  | "labels"
+  | "estimate"
+  | "project"
+  | "milestone"
+  | "cycle";
 
 function Chip({
   label,
@@ -93,6 +102,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
   const [assigneeId, setAssigneeId] = useState<string | null | undefined>(undefined);
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [projectId, setProjectId] = useState<string | null | undefined>(undefined);
+  const [milestoneId, setMilestoneId] = useState<string | null>(null);
   const [cycleId, setCycleId] = useState<string | null | undefined>(undefined);
   const [estimate, setEstimate] = useState<number | null>(null);
   const [createMore, setCreateMore] = useState(false);
@@ -148,6 +158,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
     setStateId(null);
     setLabelIds([]);
     setProjectId(null);
+    setMilestoneId(null);
     setCycleId(null);
     setEstimate(null);
     setAssigneeId(effectiveAssignee);
@@ -172,6 +183,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         ...(effectiveAssignee ? { assigneeId: effectiveAssignee } : {}),
         ...(labelIds.length > 0 ? { labelIds } : {}),
         ...(effectiveProject ? { projectId: effectiveProject } : {}),
+        ...(effectiveProject && milestoneId ? { projectMilestoneId: milestoneId } : {}),
         ...(effectiveCycle ? { cycleId: effectiveCycle } : {}),
         ...(estimate !== null ? { estimate } : {}),
         ...(preset?.parentId ? { parentId: preset.parentId } : {}),
@@ -318,6 +330,13 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         <Chip label="Project" onClick={() => setPicker("project")} muted={!effectiveProject}>
           {m?.projects.find((p) => p.id === effectiveProject)?.name ?? "Project"}
         </Chip>
+        {effectiveProject && (
+          <Chip label="Milestone" onClick={() => setPicker("milestone")} muted={!milestoneId}>
+            {m?.projects
+              .find((p) => p.id === effectiveProject)
+              ?.milestones?.find((ms) => ms.id === milestoneId)?.name ?? "Milestone"}
+          </Chip>
+        )}
         {m?.team.cyclesEnabled && (
           <Chip label="Cycle" onClick={() => setPicker("cycle")} muted={!effectiveCycle}>
             {(() => {
@@ -397,7 +416,18 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
         title="Add to project…"
         options={projectOptions(m?.projects ?? [])}
         selected={effectiveProject ?? NONE}
-        onSelect={(id) => setProjectId(id === NONE ? null : id)}
+        onSelect={(id) => {
+          setProjectId(id === NONE ? null : id);
+          // Meilensteine gehören zu genau einem Projekt.
+          setMilestoneId(null);
+        }}
+      />
+      <PropertyPicker
+        {...pickerProps("milestone")}
+        title="Set milestone…"
+        options={milestoneOptions(m?.projects ?? [], effectiveProject)}
+        selected={milestoneId ?? NONE}
+        onSelect={(id) => setMilestoneId(id === NONE ? null : id)}
       />
       <PropertyPicker
         {...pickerProps("cycle")}
