@@ -1019,3 +1019,33 @@ async fn b1_11_project_remove_team_vs_lead_team(pool: PgPool) {
         );
     }
 }
+
+/// B1.14: parallele issueSubscribe sind idempotent (kein internal, genau ein `changed`).
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_14_parallel_subscribe_is_idempotent(pool: PgPool) {
+    let fx = setup(pool).await;
+    for round in 0..ROUNDS {
+        let issue = fx.issue(&format!("Sub{round}")).await;
+        let calls = (0..4).map(|_| {
+            let app = fx.app.clone();
+            async move {
+                app.subscribe_issue(&ctx_for(SeedUser::Bob), &issue.to_string(), None)
+                    .await
+            }
+        });
+        let rs = futures_join_all(calls).await;
+        assert_no_internal("subscribe", &rs);
+        assert!(rs.iter().all(Result::is_ok), "{rs:?}");
+        let changed = rs.iter().filter(|r| r.as_ref().unwrap().changed).count();
+        assert_eq!(changed, 1, "round {round}: {rs:?}");
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM issue_subscription WHERE issue_id = $1 AND user_id = $2",
+        )
+        .bind(issue)
+        .bind(fx.data.bob.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert_eq!(n, 1);
+    }
+}

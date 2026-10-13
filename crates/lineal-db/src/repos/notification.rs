@@ -1062,9 +1062,10 @@ impl NotificationRepo for PgTx {
         .map_err(db_err)?;
         match existing {
             None => {
-                sqlx::query(
+                let inserted = sqlx::query(
                     "INSERT INTO document_subscription (organization_id, document_id, user_id, active, \
-                     reason, created_at, updated_at) VALUES ($1,$2,$3,true,$4,$5,$5)",
+                     reason, created_at, updated_at) VALUES ($1,$2,$3,true,$4,$5,$5) \
+                     ON CONFLICT DO NOTHING",
                 )
                 .bind(self.org.0)
                 .bind(document)
@@ -1074,6 +1075,10 @@ impl NotificationRepo for PgTx {
                 .execute(&mut *self.tx)
                 .await
                 .map_err(db_err)?;
+                // Parallele Aufrufe: nur der Gewinner meldet `Created` (idempotent).
+                if inserted.rows_affected() == 0 {
+                    return Ok(SubscribeOutcome::Unchanged);
+                }
                 Ok(SubscribeOutcome::Created)
             }
             Some((id, false)) if reason.reactivates() => {
@@ -1162,9 +1167,10 @@ impl NotificationRepo for PgTx {
         .map_err(db_err)?;
         match existing {
             None => {
-                sqlx::query(
+                let inserted = sqlx::query(
                     "INSERT INTO issue_subscription (organization_id, issue_id, user_id, thread_comment_id, \
-                     active, reason, created_at, updated_at) VALUES ($1,$2,$3,$4,true,$5,$6,$6)",
+                     active, reason, created_at, updated_at) VALUES ($1,$2,$3,$4,true,$5,$6,$6) \
+                     ON CONFLICT DO NOTHING",
                 )
                 .bind(self.org.0)
                 .bind(issue.0)
@@ -1175,6 +1181,10 @@ impl NotificationRepo for PgTx {
                 .execute(&mut *self.tx)
                 .await
                 .map_err(db_err)?;
+                // Parallele Aufrufe: nur der Gewinner meldet `Created` (idempotent).
+                if inserted.rows_affected() == 0 {
+                    return Ok(SubscribeOutcome::Unchanged);
+                }
                 Ok(SubscribeOutcome::Created)
             }
             Some((id, false)) if reason.reactivates() => {
