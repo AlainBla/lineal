@@ -17,6 +17,7 @@ import {
   getCreateDraft,
   markCreateReopen,
   openCreateIssue,
+  setCreateContext,
 } from "./create-store";
 import { makeIssue, mockGraphql, renderWithApp, SESSION, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
@@ -291,5 +292,16 @@ describe("Create-Issue-Modal", () => {
     expect(getCreateDraft(alice)).toBeNull();
     expect(sessionStorage.length).toBe(0);
     expect(localStorage.getItem("lineal-create-draft:" + alice)).toBeNull();
+  });
+
+  it("Taste C übernimmt den Seitenkontext (Team/Projekt) (B4.15)", async () => {
+    mockGraphql(handlers());
+    setCreateContext({ teamKey: "DES", projectId: "p-1" });
+    try {
+      await openModal();
+      expect(await screen.findByRole("button", { name: "Team: DES" })).toBeInTheDocument();
+    } finally {
+      setCreateContext(null);
+    }
   });
 });

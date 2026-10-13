@@ -17,6 +17,8 @@ export interface CreatePreset {
 }
 
 let preset: CreatePreset | null = null;
+/** Kontext der aktuellen Seite (Projekt, Cycle …): Vorbelegung für `c`/Stift ohne eigenes Preset. */
+let context: CreatePreset | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
@@ -24,6 +26,12 @@ export function openCreateIssue(p: CreatePreset = {}): void {
   preset = p;
   emit();
   setUiState({ createIssueOpen: true });
+}
+
+/** Seiten melden ihren Kontext, solange sie offen sind; beim Verlassen mit `null` zurücknehmen. */
+export function setCreateContext(c: CreatePreset | null): void {
+  context = c;
+  emit();
 }
 
 export function clearCreatePreset(): void {
@@ -38,11 +46,8 @@ function subscribe(l: () => void) {
 }
 
 export function useCreatePreset(): CreatePreset | null {
-  return useSyncExternalStore(
-    subscribe,
-    () => preset,
-    () => preset,
-  );
+  const get = () => preset ?? context;
+  return useSyncExternalStore(subscribe, get, get);
 }
 
 /**
