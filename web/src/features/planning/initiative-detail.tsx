@@ -15,6 +15,7 @@ import {
   usePostInitiativeUpdate,
   type Health,
 } from "./queries";
+import { useRemindAction } from "@/features/inbox/remind";
 import { RoadmapPage } from "./roadmap-page";
 import { DateText, HealthBadge, PageHeader } from "./ui";
 
@@ -227,6 +228,7 @@ export function InitiativeDetail({
 }) {
   const q = useInitiative(initiativeRef);
   const i = q.data;
+  useRemindAction(i ? { targetType: "initiative", target: i.id, label: i.name } : null);
   if (q.isLoading) return <ListSkeleton rows={4} />;
   if (q.isError || !i)
     return (

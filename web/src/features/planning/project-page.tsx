@@ -23,6 +23,7 @@ import {
   useScopedIssues,
   type Health,
 } from "./queries";
+import { useRemindAction } from "@/features/inbox/remind";
 import { DateText, HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones";
@@ -265,6 +266,8 @@ export function ProjectPage({
     setCreateContext({ teamKey: ctxTeamKey, projectId: ctxProjectId });
     return () => setCreateContext(null);
   }, [ctxProjectId, ctxTeamKey]);
+
+  useRemindAction(p ? { targetType: "project", target: p.id, label: p.name } : null);
 
   if (q.isLoading) return <ListSkeleton />;
   if (q.isError || !p)

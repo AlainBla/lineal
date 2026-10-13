@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { type CollabSession, useCollab } from "@/features/collab/use-collab";
 import { Input } from "@/components/ui/input";
+import { useRemindAction } from "@/features/inbox/remind";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
@@ -32,6 +33,7 @@ function Editor({
   const isCollab = collab !== null;
   const save = useSaveDocument(docRef);
   const users = useKnownUsers();
+  useRemindAction({ targetType: "document", target: doc.id, label: doc.title });
   const [title, setTitle] = useState(doc.title);
   const [status, setStatus] = useState<Status>("saved");
   const [showHistory, setShowHistory] = useState(false);

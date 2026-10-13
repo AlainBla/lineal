@@ -11,6 +11,7 @@ import { Sidebar } from "@/app/sidebar";
 import { Topbar } from "@/app/topbar";
 import { setUiState, useUiState } from "@/app/ui-state";
 import { clearAllCreateDrafts } from "@/features/issues/create-store";
+import { RemindHost } from "@/features/inbox/remind";
 import { IssuesHost } from "@/features/issues/host";
 import { ConnectedNewTeamDialog } from "@/features/settings/new-team-dialog";
 import { attachShortcuts } from "@/lib/shortcuts";
@@ -106,6 +107,7 @@ export function Shell({ session, children }: { session: Session; children: React
       <ConnectedCommandMenu />
       <ShortcutHelp />
       <IssuesHost />
+      <RemindHost />
       <ConnectedNewTeamDialog />
     </div>
   );

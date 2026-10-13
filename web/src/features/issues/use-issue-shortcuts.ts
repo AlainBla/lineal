@@ -6,6 +6,7 @@
 import { useCallback } from "react";
 
 import { useActions, type Action } from "@/app/commands";
+import { useRemindAction } from "@/features/inbox/remind";
 import type { Issue } from "@/gql/graphql";
 import { useShortcuts, type ShortcutContext } from "@/lib/shortcuts";
 
@@ -73,6 +74,11 @@ export function useIssueShortcuts({ context, target, open, actions }: Args): voi
     });
   }
   useActions(list);
+  // Remind me (docs/08 §3.2, Shift+H); in der Inbox bleibt H = Snooze, Shift+H = Erinnerung am Issue.
+  useRemindAction(
+    target ? { targetType: "issue", target: target.id, label: target.identifier } : null,
+    context,
+  );
 
   // Alias aus der Aufgabenstellung („E Estimate“); ohne eigenen Command-Eintrag.
   useShortcuts([
