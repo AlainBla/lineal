@@ -417,6 +417,69 @@ async fn api_patch_over_multibyte_text_updates_open_room(pool: PgPool) {
     assert_eq!(alice.md(), "Hallo 👨‍👩‍👧 und é Welt ä 日本");
 }
 
+/// B2.01: Tipptext im offenen Raum (noch nicht gespeichert) darf durch ein API/MCP-Schreiben
+/// binnen des Debounce-Fensters nicht verloren gehen - auch beim Schreiben im selben Absatz.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn api_patch_within_debounce_window_keeps_unsaved_typing(pool: PgPool) {
+    let cfg = CollabConfig {
+        persist_quiet: Duration::from_millis(1500),
+        persist_max: Duration::from_millis(6000),
+        ..collab_cfg()
+    };
+    let e = env_with(pool, cfg).await;
+    // Mehrere Inhalte: u. a. solche, deren Markdown beim Parsen/Ausgeben nicht stabil ist.
+    let contents = [
+        "Anfang Text\n\nZweiter Absatz",
+        "* Anfang Text\n* eins\n\nZweiter Absatz",
+        "Anfang Text  \nmit Umbruch\n\nZweiter Absatz",
+        "Anfang Text\n\n\n\nZweiter Absatz",
+    ];
+    for (delay_ms, content) in [100u64, 400, 900, 1400]
+        .into_iter()
+        .zip(contents.into_iter().cycle())
+    {
+        let doc = e.doc(SeedUser::Alice, "ENG", "Spec", content).await;
+        let mut alice = e.join("alice", doc).await;
+        alice
+            .edit(|d| {
+                let md = crdt::markdown_of(d);
+                let typed = md.replacen("Anfang Text", "Anfang Text TIPP", 1);
+                crdt::apply_markdown(d, &typed);
+            })
+            .await;
+        alice.pump(Duration::from_millis(delay_ms)).await;
+        e.app
+            .save_document(
+                &user(SeedUser::Bob),
+                SaveDocumentInput {
+                    id: Some(doc.to_string()),
+                    patch: Some(vec![PatchOp::Replace {
+                        old_string: "Zweiter".into(),
+                        new_string: "API-Zweiter".into(),
+                        replace_all: None,
+                    }]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        for _ in 0..30 {
+            alice.pump(Duration::from_millis(100)).await;
+            if alice.md().contains("API-Zweiter") {
+                break;
+            }
+        }
+        assert!(alice.md().contains("API-Zweiter"), "{}", alice.md());
+        assert!(
+            alice.md().contains("TIPP"),
+            "delay {delay_ms}: Raum verlor Tipptext: {}",
+            alice.md()
+        );
+        wait_for_db(&e, doc, |m| m.contains("API-Zweiter") && m.contains("TIPP")).await;
+        drop(alice);
+    }
+}
+
 async fn wait_for_db(e: &Env, doc: Uuid, f: impl Fn(&str) -> bool) {
     for _ in 0..80 {
         if f(&e.db_doc(doc).await.0) {

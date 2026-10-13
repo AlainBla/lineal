@@ -214,7 +214,7 @@ async fn build_room_doc(
         if let Some(state) = load.state.as_deref()
             && let Some(doc) = crdt::doc_from_state(state)
             && crdt::check_limits(&doc).is_ok()
-            && crdt::sanitized_markdown_of(&doc) == load.markdown
+            && crdt::state_matches_markdown(&doc, &load.markdown)
         {
             if let Some(epoch) = load.epoch {
                 return Ok((doc, epoch, load.version));
