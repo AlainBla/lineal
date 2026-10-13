@@ -44,6 +44,8 @@ export interface CollabOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   pingMs?: number;
+  /** So lange muss eine Verbindung halten, bevor der Backoff zurückgesetzt wird. */
+  stableMs?: number;
   random?: () => number;
 }
 
@@ -67,6 +69,7 @@ export class CollabProvider {
   private helloSeen = false;
   private destroyed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly resetListeners = new Set<Listener>();
@@ -82,6 +85,7 @@ export class CollabProvider {
       baseDelayMs: options.baseDelayMs ?? 500,
       maxDelayMs: options.maxDelayMs ?? 30_000,
       pingMs: options.pingMs ?? 25_000,
+      stableMs: options.stableMs ?? 10_000,
       random: options.random ?? Math.random,
     };
     this.doc.on("update", this.onDocUpdate);
@@ -124,6 +128,7 @@ export class CollabProvider {
   destroy(): void {
     this.destroyed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.clearStable();
     this.stopPing();
     const ws = this.ws;
     this.ws = null;
@@ -252,7 +257,13 @@ export class CollabProvider {
     this.identity = msg.user ?? null;
     this.helloSeen = true;
     this.everConnected = true;
-    this.attempts = 0;
+    // Den Backoff erst nach einer stabilen Verbindung zurücksetzen: lehnt der Server nach dem
+    // Handshake ab (z. B. 4400), darf das keine Reconnect-Schleife im Takt der Basiswartezeit ergeben.
+    this.clearStable();
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null;
+      this.attempts = 0;
+    }, this.opts.stableMs);
     this.synced = false;
     if (this.identity) {
       this.awareness.setLocalStateField("user", this.identity);
@@ -289,7 +300,13 @@ export class CollabProvider {
     this.pingTimer = null;
   }
 
+  private clearStable(): void {
+    if (this.stableTimer) clearTimeout(this.stableTimer);
+    this.stableTimer = null;
+  }
+
   private onClosed(code: number): void {
+    this.clearStable();
     this.ws = null;
     this.helloSeen = false;
     this.synced = false;

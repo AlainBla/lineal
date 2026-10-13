@@ -895,6 +895,31 @@ async fn awareness_is_rewritten_to_the_authenticated_identity(pool: PgPool) {
     assert!(c.closed.is_some());
 }
 
+/// B2.07: Nach einem Verbindungsabbruch behält der Browser seine Client-ID; die alte (halboffene)
+/// Verbindung desselben Users hält sie noch. Der Reconnect darf nicht mit 4400 abgelehnt werden.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn reconnect_of_same_user_takes_over_awareness_id_of_stale_connection(pool: PgPool) {
+    let e = env(pool).await;
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", "x").await;
+    let mut old = e.join("alice", doc).await;
+    old.send(&aw(77, 1, json!({"user": {"name": "x"}}).to_string()))
+        .await;
+    old.pump(Duration::from_millis(300)).await;
+    // Neue Verbindung desselben Users mit derselben Client-ID, die alte lebt noch.
+    let mut fresh = e.join("alice", doc).await;
+    fresh
+        .send(&aw(77, 2, json!({"user": {"name": "x"}}).to_string()))
+        .await;
+    fresh.pump(Duration::from_millis(400)).await;
+    assert_eq!(fresh.closed, None, "Reconnect wurde abgelehnt");
+    // Die alte Verbindung räumt beim Schließen die übernommene ID nicht mehr ab.
+    drop(old);
+    fresh.pump(Duration::from_millis(400)).await;
+    let mut watcher = e.join("bob", doc).await;
+    watcher.pump(Duration::from_millis(400)).await;
+    assert!(watcher.awareness.iter().any(|(id, _)| *id == 77));
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn message_rate_is_limited(pool: PgPool) {
     let e = env_with(

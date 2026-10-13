@@ -1171,9 +1171,20 @@ async fn handle_binary(
             for (cid, entry) in update.clients {
                 let id = cid;
                 // Client-IDs gehören genau einer Verbindung (kein Überschreiben fremder Cursor).
-                let owner = st.awareness.get(&id).map(|s| s.conn);
-                if owner.is_some_and(|o| o != conn_id) {
-                    return Handled::Stop(End::Code(CLOSE_INVALID, "invalid awareness"));
+                let mut owner = st.awareness.get(&id).map(|s| s.conn);
+                if let Some(old) = owner.filter(|o| *o != conn_id) {
+                    // Derselbe User darf die ID einer (halboffenen) alten Verbindung übernehmen:
+                    // der Browser behält die Client-ID beim Reconnect, der Server bemerkt die
+                    // tote Verbindung aber erst nach dem Leerlauf-Timeout (B2.07).
+                    let same_user = st.conns.get(&old).is_none_or(|c| c.user == user);
+                    if !same_user {
+                        return Handled::Stop(End::Code(CLOSE_INVALID, "invalid awareness"));
+                    }
+                    if let Some(c) = st.conns.get_mut(&old) {
+                        c.client_ids.remove(&id);
+                    }
+                    st.awareness.remove(&id);
+                    owner = None;
                 }
                 let Some(json) = sanitize_awareness(&entry.json, &access.user_name, user) else {
                     return Handled::Stop(End::Code(CLOSE_INVALID, "invalid awareness"));
