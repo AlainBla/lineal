@@ -90,7 +90,9 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
       data-favorite={id}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={isDragging ? "relative z-10 opacity-70" : undefined}
-      onPointerDown={listeners?.onPointerDown}
+      onPointerDown={
+        listeners?.onPointerDown as React.PointerEventHandler<HTMLLIElement> | undefined
+      }
     >
       <div className="group/fav flex items-center">
         <button
@@ -98,7 +100,9 @@ function SortableRow({ id, label, children }: { id: string; label: string; child
           aria-label={`Reorder favorite ${label}`}
           className="hidden size-4 shrink-0 cursor-grab items-center justify-center text-subtle-foreground group-hover/fav:flex focus-visible:flex"
           {...attributes}
-          onKeyDown={listeners?.onKeyDown}
+          onKeyDown={
+            listeners?.onKeyDown as React.KeyboardEventHandler<HTMLButtonElement> | undefined
+          }
         >
           <GripVertical className="size-3" />
         </button>

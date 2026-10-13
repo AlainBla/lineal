@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Copy, Link as LinkIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useActions } from "@/app/commands";
 import { useSession } from "@/app/auth";
@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
+import { GraphQLRequestError } from "@/lib/graphql";
 import { useShortcutContext } from "@/lib/shortcuts";
 
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
@@ -38,7 +39,15 @@ type SaveStatus = "saved" | "dirty" | "saving";
  * Beschreibung: Echtzeit-Mitbearbeitung (Stufe 2), sobald der Collab-Endpunkt verbunden ist; sonst
  * (nicht erreichbar/beendet) Stufe 1 mit Autosave.
  */
-function DescriptionEditor({ issue, actions }: { issue: Issue; actions: IssueActions }) {
+function DescriptionEditor({
+  issue,
+  actions,
+  readOnly = false,
+}: {
+  issue: Issue;
+  actions: IssueActions;
+  readOnly?: boolean;
+}) {
   const session = useCollab("issue", issue.id);
   if (
     session.status === "connecting" ||
@@ -47,7 +56,7 @@ function DescriptionEditor({ issue, actions }: { issue: Issue; actions: IssueAct
     return <Skeleton className="h-16 w-full" />;
   }
   if (session.status === "fallback" || session.status === "closed" || !session.provider) {
-    return <Stage1DescriptionEditor issue={issue} actions={actions} />;
+    return <Stage1DescriptionEditor issue={issue} actions={actions} readOnly={readOnly} />;
   }
   return <LiveDescriptionEditor issue={issue} session={session} />;
 }
@@ -88,7 +97,15 @@ function LiveDescriptionEditor({
   );
 }
 
-function Stage1DescriptionEditor({ issue, actions }: { issue: Issue; actions: IssueActions }) {
+function Stage1DescriptionEditor({
+  issue,
+  actions,
+  readOnly = false,
+}: {
+  issue: Issue;
+  actions: IssueActions;
+  readOnly?: boolean;
+}) {
   const users = useKnownUsers();
   const session = useSession();
   const [status, setStatus] = useState<SaveStatus>("saved");
@@ -134,6 +151,7 @@ function Stage1DescriptionEditor({ issue, actions }: { issue: Issue; actions: Is
     <div className="flex flex-col gap-1">
       <RichEditor
         value={issue.description ?? ""}
+        editable={!readOnly}
         ariaLabel="Description"
         placeholder="Add description…"
         users={mentionUsers}
@@ -161,38 +179,70 @@ function Stage1DescriptionEditor({ issue, actions }: { issue: Issue; actions: Is
   );
 }
 
-function TitleField({ issue, actions }: { issue: Issue; actions: IssueActions }) {
+function TitleField({
+  issue,
+  actions,
+  readOnly = false,
+}: {
+  issue: Issue;
+  actions: IssueActions;
+  readOnly?: boolean;
+}) {
   const [value, setValue] = useState(issue.title);
   const [syncedTitle, setSyncedTitle] = useState(issue.title);
-  // Serverseitige Änderungen übernehmen, solange nicht getippt wird.
+  // Neuer Titel von außen, der überschrieben würde: Eingabe bleibt, Hinweis erscheint (B4.34).
+  const [conflict, setConflict] = useState<string | null>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
   if (issue.title !== syncedTitle) {
+    const editing = value !== syncedTitle;
     setSyncedTitle(issue.title);
-    setValue(issue.title);
+    if (editing) setConflict(issue.title);
+    else setValue(issue.title);
   }
+  // Mehrzeilig wachsen statt lange Titel abzuschneiden (B4.37).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
   const commit = () => {
     const t = value.trim();
     if (t === "") setValue(issue.title);
     else if (t !== issue.title) actions.setTitle(issue, t);
+    setConflict(null);
   };
   return (
-    <input
-      id="issue-title"
-      aria-label="Title"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          setValue(issue.title);
-          e.currentTarget.blur();
-        }
-      }}
-      className="w-full bg-transparent text-xl font-semibold tracking-tight outline-none placeholder:text-subtle-foreground"
-      placeholder="Issue title"
-    />
+    <div className="flex flex-col gap-1">
+      <textarea
+        ref={ref}
+        id="issue-title"
+        aria-label="Title"
+        rows={1}
+        readOnly={readOnly}
+        value={value}
+        onChange={(e) => setValue(e.target.value.replace(/[\r\n]+/g, " "))}
+        onBlur={() => !readOnly && commit()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setValue(issue.title);
+            setConflict(null);
+            e.currentTarget.blur();
+          }
+        }}
+        className="w-full resize-none overflow-hidden bg-transparent text-xl font-semibold tracking-tight break-words outline-none placeholder:text-subtle-foreground"
+        placeholder="Issue title"
+      />
+      {conflict !== null && (
+        <p role="status" className="text-xs text-muted-foreground">
+          The title was changed to “{conflict}” by someone else. Your edit is kept; press Escape to
+          discard it.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -261,6 +311,14 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
   const parent = useIssue(issue.parentId ?? "");
+  // Geteiltes Issue ohne Teamzugriff (Gast): nur lesen; andere Ladefehler (429, Netz): Retry (B4.16/B4.27).
+  const metaCode = meta.error instanceof GraphQLRequestError ? meta.error.code : undefined;
+  const readOnly = meta.isError && (metaCode === "not_found" || metaCode === "forbidden");
+  const metaError = meta.isError && !readOnly;
+  const parentGone =
+    parent.isError &&
+    parent.error instanceof GraphQLRequestError &&
+    parent.error.code === "not_found";
   const [request, setRequest] = useState<PickerRequest | null>(null);
   const [relationDialog, setRelationDialog] = useState<RelationChoice | null>(null);
   const [addingSub, setAddingSub] = useState(false);
@@ -268,7 +326,12 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const closePicker = useCallback(() => setRequest(null), []);
   useShortcutContext("issue");
 
-  useIssueShortcuts({ context: "issue", target: issue, open: setRequest, actions });
+  useIssueShortcuts({
+    context: "issue",
+    target: readOnly || metaError ? null : issue,
+    open: setRequest,
+    actions,
+  });
   useActions([
     {
       id: "issue.rename",
@@ -335,6 +398,8 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             <Link to={teamPaths(ws, teamKey).all as "/"} className="hover:text-foreground">
               {meta.data?.team.name}
             </Link>
+          ) : meta.isError ? (
+            <span>{issue.identifier.split("-")[0]}</span>
           ) : (
             <Skeleton className="h-3 w-16" />
           )}
@@ -356,6 +421,11 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
           aria-label={`Issue ${issue.identifier}`}
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-6">
+            {parentGone && (
+              <span className="w-fit rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground">
+                Parent issue was deleted
+              </span>
+            )}
             {parent.data && (
               <Link
                 to={issuePath(ws, parent.data.identifier) as "/"}
@@ -364,8 +434,18 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
                 {parent.data.identifier} {parent.data.title}
               </Link>
             )}
-            <TitleField key={`title-${issue.id}`} issue={issue} actions={actions} />
-            <DescriptionEditor key={`desc-${issue.id}`} issue={issue} actions={actions} />
+            <TitleField
+              key={`title-${issue.id}`}
+              issue={issue}
+              actions={actions}
+              readOnly={readOnly}
+            />
+            <DescriptionEditor
+              key={`desc-${issue.id}`}
+              issue={issue}
+              actions={actions}
+              readOnly={readOnly}
+            />
             <SubIssuesSection
               issue={issue}
               ws={ws}
@@ -393,8 +473,11 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             ws={ws}
             onOpen={(kind) => setRequest({ kind, issue })}
             onEditDueDate={() => setDueOpen(true)}
+            readOnly={readOnly}
+            metaError={metaError}
+            onRetryMeta={() => void meta.refetch()}
           />
-          {!issue.dueDate && (
+          {!issue.dueDate && !readOnly && !metaError && (
             <Button
               variant="ghost"
               size="sm"
@@ -466,9 +549,16 @@ export function IssueDetailPage({
     );
   }
   if (issue.isError || !data) {
+    const gone = issue.error instanceof GraphQLRequestError && issue.error.code === "not_found";
     return (
       <ErrorState
-        title="Could not load the issue"
+        title={
+          gone
+            ? issue.data
+              ? "This issue was deleted"
+              : "Issue not found"
+            : "Could not load the issue"
+        }
         error={issue.error}
         onRetry={() => void issue.refetch()}
       />

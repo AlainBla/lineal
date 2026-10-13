@@ -49,13 +49,30 @@ interface SidebarProps {
   ws: string;
   onOpen: (kind: PickerKind) => void;
   onEditDueDate: () => void;
+  /** Geteiltes Issue ohne Teamzugriff: Eigenschaften nur anzeigen (B4.16). */
+  readOnly?: boolean;
+  /** Teamdaten konnten nicht geladen werden (z. B. 429): Hinweis mit Retry statt „Team“ (B4.27). */
+  metaError?: boolean;
+  onRetryMeta?: () => void;
 }
 
 /**
  * Property-Sidebar in der Reihenfolge aus docs/08 §2.2: Status, Team, Priority, Assignee, Cycle,
  * Estimate, Due date, Labels, Project (Milestone und Related folgen im Hauptbereich bzw. entfallen mangels Daten).
  */
-export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate }: SidebarProps) {
+export function PropertySidebar({
+  issue,
+  meta,
+  lookup,
+  ws,
+  onOpen,
+  onEditDueDate,
+  readOnly = false,
+  metaError = false,
+  onRetryMeta,
+}: SidebarProps) {
+  const open = (f: () => void) => (readOnly || metaError ? undefined : f);
+  const teamKeyFromIdentifier = issue.identifier.split("-")[0] ?? "";
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   const cycle = meta?.cycles.find((c) => c.id === issue.cycleId);
@@ -68,12 +85,30 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
 
   return (
     <dl aria-label="Properties" className="flex flex-col gap-0.5">
-      <PropertyRow label="Status" keys="s" onOpen={() => onOpen("status")}>
+      <PropertyRow label="Status" keys="s" onOpen={open(() => onOpen("status"))}>
         <StatusIcon type={issue.stateType} color={state?.color} title={issue.stateName} />
         <span>{issue.stateName}</span>
       </PropertyRow>
-      <PropertyRow label="Team" keys="mod+shift+m" onOpen={() => onOpen("team")}>
-        <span>{meta?.team.name ?? "Team"}</span>
+      <PropertyRow label="Team" keys="mod+shift+m" onOpen={open(() => onOpen("team"))}>
+        {metaError ? (
+          <span className="flex items-center gap-2 text-destructive" role="alert">
+            Could not load team
+            {onRetryMeta && (
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetryMeta();
+                }}
+              >
+                Retry
+              </button>
+            )}
+          </span>
+        ) : (
+          <span>{meta?.team.name ?? teamKeyFromIdentifier}</span>
+        )}
         {meta && (
           <Link
             to={teamPaths(ws, meta.team.key).home as "/"}
@@ -84,11 +119,11 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
           </Link>
         )}
       </PropertyRow>
-      <PropertyRow label="Priority" keys="p" onOpen={() => onOpen("priority")}>
+      <PropertyRow label="Priority" keys="p" onOpen={open(() => onOpen("priority"))}>
         <PriorityIcon priority={issue.priority} />
         <span>{priorityLabel(issue.priority)}</span>
       </PropertyRow>
-      <PropertyRow label="Assignee" keys="a" onOpen={() => onOpen("assignee")}>
+      <PropertyRow label="Assignee" keys="a" onOpen={open(() => onOpen("assignee"))}>
         {issue.assigneeId ? (
           <>
             <Avatar name={assignee ?? "?"} />
@@ -99,7 +134,7 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
         )}
       </PropertyRow>
       {meta?.team.cyclesEnabled && (
-        <PropertyRow label="Cycle" keys="shift+c" onOpen={() => onOpen("cycle")}>
+        <PropertyRow label="Cycle" keys="shift+c" onOpen={open(() => onOpen("cycle"))}>
           {cycle ? (
             <span>Cycle {cycle.number}</span>
           ) : (
@@ -108,7 +143,7 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
         </PropertyRow>
       )}
       {estimationType !== "notUsed" && (
-        <PropertyRow label="Estimate" keys="shift+e" onOpen={() => onOpen("estimate")}>
+        <PropertyRow label="Estimate" keys="shift+e" onOpen={open(() => onOpen("estimate"))}>
           {issue.estimate !== null ? (
             <span>{estimateLabel(estimationType, issue.estimate)}</span>
           ) : (
@@ -117,11 +152,11 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
         </PropertyRow>
       )}
       {issue.dueDate && (
-        <PropertyRow label="Due date" keys="shift+d" onOpen={onEditDueDate}>
+        <PropertyRow label="Due date" keys="shift+d" onOpen={open(onEditDueDate)}>
           <span>{issue.dueDate}</span>
         </PropertyRow>
       )}
-      <PropertyRow label="Labels" keys="l" onOpen={() => onOpen("labels")}>
+      <PropertyRow label="Labels" keys="l" onOpen={open(() => onOpen("labels"))}>
         {labels.length > 0 ? (
           <span className="flex flex-wrap gap-1">
             {labels.map((l) => (
@@ -138,7 +173,7 @@ export function PropertySidebar({ issue, meta, lookup, ws, onOpen, onEditDueDate
           <span className="text-muted-foreground">Add label</span>
         )}
       </PropertyRow>
-      <PropertyRow label="Project" keys="shift+p" onOpen={() => onOpen("project")}>
+      <PropertyRow label="Project" keys="shift+p" onOpen={open(() => onOpen("project"))}>
         {project ? (
           <span>{project}</span>
         ) : (

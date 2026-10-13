@@ -8,6 +8,7 @@ import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 import { IssueDetailPage } from "./issue-detail";
 import type { IssueExtras } from "./queries";
 import { resetKnownUsers } from "./users";
+import { keys } from "./queries";
 import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
@@ -430,5 +431,54 @@ describe("Issue-Detail", () => {
     expect(comment.id).toBe("comment-c1aaaaaa-1");
     await userEvent.click(within(comment).getByRole("button", { name: "Leave a reply…" }));
     expect(await screen.findByLabelText("Leave a reply")).toHaveFocus();
+  });
+
+  const coded = (message: string, code: string) => Object.assign(new Error(message), { code });
+
+  it("Geteiltes Issue ohne Teamzugriff: schreibgeschützt, Kennung statt „Team“ (B4.16)", async () => {
+    mockGraphql({
+      ...handlers(),
+      TeamMeta: () => coded("Could not find referenced Team", "not_found"),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect(title).toHaveAttribute("readonly"));
+    const sidebar = await screen.findByLabelText("Properties");
+    await waitFor(() => expect(within(sidebar).getByText("ENG")).toBeInTheDocument());
+    expect(within(sidebar).queryByRole("button", { name: "Priority: change" })).toBeNull();
+    expect(within(sidebar).queryByText("Team")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Set due date" })).toBeNull();
+  });
+
+  it("Teamdaten nicht ladbar (z. B. 429): Hinweis mit Retry statt „Team“ (B4.27)", async () => {
+    mockGraphql({ ...handlers(), TeamMeta: () => new Error("Too many requests") });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const sidebar = await screen.findByLabelText("Properties");
+    expect(await within(sidebar).findByText("Could not load team")).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(within(sidebar).queryByRole("button", { name: "Status: change" })).toBeNull();
+  });
+
+  it("Titel ist mehrzeilig (Textarea), fremde Titeländerung überschreibt keine Eingabe (B4.37, B4.34)", async () => {
+    mockGraphql(handlers());
+    const client = newClient();
+    await renderWithApp(page(), client, "/acme/issue/ENG-120/x");
+    const title = await screen.findByLabelText("Title");
+    expect(title.tagName).toBe("TEXTAREA");
+    await userEvent.type(title, " plus");
+    expect(title).toHaveValue("Checkout überarbeiten plus");
+    client.setQueryData(keys.issue("ENG-120"), { ...ISSUE, title: "Von Alice geändert" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Von Alice geändert");
+    expect(title).toHaveValue("Checkout überarbeiten plus");
+  });
+
+  it("Gelöschter Parent wird als gelöscht angezeigt (B4.36)", async () => {
+    const child = makeIssue({ id: "i1", identifier: "ENG-120", title: "Kind", parentId: "gone" });
+    mockGraphql({
+      ...handlers(),
+      IssueDetail: (v) => (v.id === "gone" ? coded("not found", "not_found") : { issue: child }),
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    expect(await screen.findByText("Parent issue was deleted")).toBeInTheDocument();
   });
 });

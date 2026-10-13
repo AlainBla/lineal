@@ -18,7 +18,7 @@ import {
   statusOptions,
 } from "./property-options";
 import { TeamSwitchDialog } from "./team-switch-dialog";
-import { showToast } from "./toast-store";
+import { errorMessage, showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
 
 export type PickerKind =
@@ -71,6 +71,15 @@ export function IssuePickerHost({
       : kind === "cycle" && meta.data && !cyclesEnabled
         ? "Cycles are not enabled for this team."
         : null;
+  // Teamdaten nicht ladbar: Fehler statt „No results.“ (B4.27).
+  const metaFailed =
+    meta.isError && !!kind && kind !== "team" && kind !== "priority" && kind !== "assignee";
+  useEffect(() => {
+    if (metaFailed) {
+      showToast({ message: errorMessage(meta.error, "Could not load the team."), tone: "error" });
+      onClose();
+    }
+  }, [metaFailed, meta.error, onClose]);
   useEffect(() => {
     if (unavailable) {
       showToast({ message: unavailable });
@@ -84,7 +93,7 @@ export function IssuePickerHost({
   const me = session ? { id: session.user.id, name: session.user.name } : null;
   const states = meta.data?.states ?? [];
   const common = {
-    open: !unavailable,
+    open: !unavailable && !metaFailed,
     onOpenChange: (o: boolean) => !o && onClose(),
     title: TITLES[kind],
   };

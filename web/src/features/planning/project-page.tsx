@@ -244,7 +244,7 @@ export function ProjectPage({
   const p = q.data;
   const updates = useProjectUpdates(p?.id);
   // `c` und der Stift legen Issues im Projekt an (Team und Projekt vorbelegt).
-  const ctxTeamKey = p?.leadTeam?.key ?? p?.teams[0]?.key;
+  const ctxTeamKey = p?.leadTeam?.key ?? p?.teams[0]?.key ?? undefined;
   const ctxProjectId = p?.id;
   useEffect(() => {
     if (!ctxProjectId) return;
