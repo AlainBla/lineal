@@ -27,7 +27,11 @@ fn not_found(reference: &str) -> AppError {
 
 fn candidate_ids(snap: &PolicySnapshot, visibility: Visibility) -> BTreeSet<TeamId> {
     let mut ids = snap.visible_team_ids();
-    if visibility == Visibility::Management && (snap.actor.is_admin() || snap.actor.is_system()) {
+    // Team-beschränkte API-Keys bleiben auf ihre Teams begrenzt.
+    if visibility == Visibility::Management
+        && (snap.actor.is_admin() || snap.actor.is_system())
+        && snap.actor.team_scope.is_none()
+    {
         ids.extend(snap.tree.all().filter(|t| !t.trashed).map(|t| t.id));
     }
     ids

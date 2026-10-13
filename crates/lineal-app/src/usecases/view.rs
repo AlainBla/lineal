@@ -187,11 +187,11 @@ fn invalid(field: &str, msg: impl Into<String>) -> AppError {
 }
 
 fn clean_name(name: &str) -> AppResult<String> {
-    let n = name.trim();
-    if n.is_empty() || n.chars().count() > MAX_NAME_CHARS {
-        return Err(invalid("name", "name must be 1-80 characters"));
-    }
-    Ok(n.to_owned())
+    Ok(lineal_domain::rules::text::validate_single_line_name(
+        "name",
+        name,
+        MAX_NAME_CHARS,
+    )?)
 }
 
 fn clean_description(d: &str) -> AppResult<Option<String>> {
@@ -1224,11 +1224,12 @@ impl App {
         };
         match kind {
             "folder" => {
-                let n = input.folder_name.as_deref().map(str::trim).unwrap_or("");
-                if n.is_empty() || n.chars().count() > MAX_NAME_CHARS {
-                    return Err(invalid("folderName", "folderName must be 1-80 characters"));
-                }
-                new.folder_name = Some(n.to_owned());
+                let n = lineal_domain::rules::text::validate_single_line_name(
+                    "folderName",
+                    input.folder_name.as_deref().unwrap_or(""),
+                    MAX_NAME_CHARS,
+                )?;
+                new.folder_name = Some(n);
             }
             "predefinedView" => {
                 let t = input
@@ -1297,6 +1298,15 @@ impl App {
             .await?;
         new.sort_order = lineal_domain::rules::sort_order::between(max, None);
         let fav = tx.views().insert_favorite(&new).await?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteCreated {
+                favorite_id: fav.id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(fav)
     }
@@ -1342,6 +1352,15 @@ impl App {
             .update_favorite(access.user_id, id, parent, sort_order, self.clock.now())
             .await?
             .ok_or_else(|| not_found(id, "Favorite"))?;
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteUpdated {
+                favorite_id: id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(saved)
     }
@@ -1356,6 +1375,15 @@ impl App {
             return Err(AppError::not_found("Could not find referenced Favorite.")
                 .with_details(json!({ "reference": id.to_string(), "type": "Favorite" })));
         }
+        emit(
+            &mut *tx,
+            ctx,
+            DomainEvent::FavoriteRemoved {
+                favorite_id: id,
+                user_id: access.user_id,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }

@@ -78,7 +78,10 @@ pub struct LogMailer;
 #[async_trait]
 impl Mailer for LogMailer {
     async fn send(&self, mail: Mail) -> AppResult<()> {
-        tracing::info!(to = %mail.to, subject = %mail.subject, "mail (not sent)");
+        // Defensiv: Zeilenumbrüche/Steuerzeichen in Header-Feldern entfernen (Log-Forging, Header-Injection).
+        let to = lineal_domain::rules::text::sanitize_header_value(&mail.to);
+        let subject = lineal_domain::rules::text::sanitize_header_value(&mail.subject);
+        tracing::info!(%to, %subject, "mail (not sent)");
         Ok(())
     }
 }

@@ -6,6 +6,22 @@ use std::str::FromStr;
 /// Unterschreitet der Abstand zweier Nachbarn diesen Wert, wird neu nummeriert.
 pub const MIN_GAP: f64 = 1e-6;
 
+/// Größter zulässiger Betrag von `sortOrder`/`position` (B8.21): extreme Werte würden alle
+/// folgenden Einträge auf denselben Wert zwingen.
+pub const MAX_ABS: f64 = 1e12;
+
+/// Prüft einen vom Aufrufer gelieferten Sortierwert (endlich, Betrag höchstens [`MAX_ABS`]).
+pub fn validate(field: &str, v: f64) -> Result<f64, crate::DomainError> {
+    if v.is_finite() && v.abs() <= MAX_ABS {
+        Ok(v)
+    } else {
+        Err(crate::DomainError::validation(
+            field,
+            format!("must be a finite number between -{MAX_ABS:e} and {MAX_ABS:e}"),
+        ))
+    }
+}
+
 /// Neuer `sortOrder` zwischen zwei Nachbarn (docs/03 §12).
 ///
 /// `a` ist der Nachbar **davor** (kleinerer Wert), `b` der Nachbar **danach**.

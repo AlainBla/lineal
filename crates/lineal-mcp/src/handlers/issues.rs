@@ -278,9 +278,18 @@ fn opt_list(args: &Value, key: &str) -> AppResult<Option<Vec<String>>> {
 }
 
 fn parse_date(key: &str, s: &str) -> AppResult<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .or_else(|_| DateTime::parse_from_rfc3339(s).map(|d| d.date_naive()))
-        .map_err(|_| bad(key, format!("`{key}` must be an ISO date (YYYY-MM-DD)")))
+    lineal_domain::rules::date::parse_iso_date(key, s)
+        .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|d| d.date_naive())
+                .filter(|d| {
+                    (lineal_domain::rules::date::MIN_YEAR..=lineal_domain::rules::date::MAX_YEAR)
+                        .contains(&chrono::Datelike::year(d))
+                })
+        })
+        .ok_or_else(|| bad(key, format!("`{key}` must be an ISO date (YYYY-MM-DD)")))
 }
 
 fn relation_changes(args: &Value) -> AppResult<RelationChanges> {

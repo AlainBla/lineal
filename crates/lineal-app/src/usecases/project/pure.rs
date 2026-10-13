@@ -80,9 +80,11 @@ pub fn display_date(date: NaiveDate, res: Option<DateResolution>) -> String {
 
 /// Parst `YYYY-MM-DD`; sonst `invalid_request` mit `field`.
 pub fn parse_date(field: &str, s: &str) -> AppResult<NaiveDate> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
-        AppError::invalid_request(format!("`{field}` must be a date (YYYY-MM-DD)"))
-            .with_details(json!({ "field": field }))
+    lineal_domain::rules::date::parse_iso_date(field, s).map_err(|_| {
+        AppError::invalid_request(format!(
+            "`{field}` must be a date (YYYY-MM-DD, year 1900-2200)"
+        ))
+        .with_details(json!({ "field": field }))
     })
 }
 

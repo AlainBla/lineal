@@ -139,7 +139,11 @@ impl OrgRepo for PgTx {
             // Der alte Key wandert in previous_url_keys (die letzten 3 bleiben).
             qb.push(
                 ", previous_url_keys = (SELECT COALESCE(array_agg(k ORDER BY n), '{}') FROM ( \
-                 SELECT k, n FROM unnest(array_append(previous_url_keys, url_key)) WITH ORDINALITY AS t(k, n) \
+                 SELECT k, n FROM unnest(array_append(array_remove(previous_url_keys, ",
+            );
+            qb.push_bind(v.clone());
+            qb.push(
+                "), url_key)) WITH ORDINALITY AS t(k, n) \
                  ORDER BY n DESC LIMIT 3) s)",
             );
             qb.push(", url_key = ").push_bind(v.clone());

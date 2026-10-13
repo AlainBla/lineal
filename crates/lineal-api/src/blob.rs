@@ -195,6 +195,21 @@ impl BlobStore for LocalBlobStore {
         }
     }
 
+    async fn read(&self, key: &str, max_bytes: u64) -> AppResult<Option<Vec<u8>>> {
+        let Some(info) = self.head(key).await? else {
+            return Ok(None);
+        };
+        if info.size > max_bytes {
+            return Ok(None);
+        }
+        let (data_path, _) = self.paths(key);
+        match tokio::fs::read(&data_path).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io_err(e)),
+        }
+    }
+
     async fn delete(&self, key: &str) -> AppResult<()> {
         check_key(key)?;
         let (data_path, meta_path) = self.paths(key);

@@ -34,6 +34,10 @@ pub fn map_db_error(e: &sqlx::Error) -> AppError {
         }
         Some("23505") => AppError::conflict("An object with these values already exists."),
         Some("23P01") => AppError::conflict("The change conflicts with an existing object."),
+        // B8.02: NUL-Zeichen in Texten (22021, bei JSON 22P05) sind ein Eingabefehler.
+        Some("22021" | "22P05") => {
+            AppError::invalid_request("Text must not contain NUL characters.")
+        }
         _ => {
             tracing::error!(error = %e, "database error");
             AppError::internal("database error")

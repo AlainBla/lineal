@@ -11,15 +11,44 @@ fn is_handle_char(c: char) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
 }
 
-/// Alle `@handle`-Kandidaten eines Textes (klein geschrieben). Satzzeichen am Ende werden
-/// zusätzlich abgeschnitten (`@alice.` → `alice`); ein `@` direkt hinter einem Wortzeichen
-/// (E-Mail-Adresse) zählt nicht.
+/// Entfernt Code (Fenced-Blöcke und Inline-Code): `@Name` darin ist keine Erwähnung (B6.15).
+/// Ein nicht geschlossener Block reicht bis zum Textende.
+pub fn strip_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find('`') {
+        out.push_str(&rest[..pos]);
+        let ticks = rest[pos..].chars().take_while(|c| *c == '`').count();
+        let fence = "`".repeat(ticks);
+        let after = &rest[pos + ticks..];
+        match after.find(&fence) {
+            Some(end) => rest = &after[end + ticks..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+        out.push(' ');
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Zeichen, hinter denen ein `@` keine Erwähnung einleitet (E-Mail, URL-Pfad, `@@`).
+fn blocks_mention(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '@' | '\\' | ':')
+}
+
+/// Alle `@handle`-Kandidaten eines Textes (klein geschrieben), Code ausgenommen. Satzzeichen am
+/// Ende werden zusätzlich abgeschnitten (`@alice.` → `alice`); ein `@` direkt hinter einem
+/// Wortzeichen (E-Mail-Adresse) oder Pfadzeichen zählt nicht.
 pub fn extract_handles(text: &str) -> BTreeSet<String> {
+    let text = strip_code(text);
     let chars: Vec<char> = text.chars().collect();
     let mut out = BTreeSet::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '@' && (i == 0 || !chars[i - 1].is_alphanumeric()) {
+        if chars[i] == '@' && (i == 0 || !blocks_mention(chars[i - 1])) {
             let mut j = i + 1;
             let mut handle = String::new();
             while j < chars.len() && handle.len() < 40 {
@@ -121,6 +150,33 @@ pub(crate) async fn link_issue_mentions(
     Ok(())
 }
 
+/// Löst Erwähnungen eines Textes auf aktive User auf (Anzeigename, sonst eindeutiger Name),
+/// ohne Sichtbarkeitsprüfung: Sie liegt beim Empfänger-Check des Fan-outs.
+pub async fn resolve_handles(tx: &mut dyn Tx, text: &str) -> AppResult<Vec<UserId>> {
+    let mut out: Vec<UserId> = Vec::new();
+    for handle in extract_handles(text) {
+        let found = tx.users().find_by_name(&handle).await?;
+        let exact: Vec<_> = found
+            .iter()
+            .filter(|u| u.active && u.display_name.eq_ignore_ascii_case(&handle))
+            .collect();
+        let hits = if exact.is_empty() {
+            found
+                .iter()
+                .filter(|u| u.active && u.name.eq_ignore_ascii_case(&handle))
+                .collect()
+        } else {
+            exact
+        };
+        for u in hits {
+            if !out.contains(&u.id) {
+                out.push(u.id);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Löst Erwähnungen auf aktive User auf, die das Team sehen dürfen.
 pub async fn resolve_mentions(
     tx: &mut dyn Tx,
@@ -175,6 +231,16 @@ mod tests {
         );
         let url = extract_identifiers("https://x.example/acme/issue/DES-4/title");
         assert!(url.contains("DES-4"));
+    }
+
+    #[test]
+    fn code_and_paths_are_no_mentions() {
+        let h = extract_handles(
+            "`@bob` und ```\n@carol\n``` aber @dave, https://x.example/@erin a.@frank",
+        );
+        assert!(h.contains("dave"));
+        assert!(!h.contains("bob") && !h.contains("carol"));
+        assert!(!h.contains("erin") && !h.contains("frank"));
     }
 
     #[test]

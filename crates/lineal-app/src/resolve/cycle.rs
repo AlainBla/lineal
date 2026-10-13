@@ -60,7 +60,13 @@ pub async fn resolve_in(
         .filter(|c| c.name.as_ref().is_some_and(|n| n.to_lowercase() == lower))
         .collect();
     match named.len() {
-        0 => Err(not_found(reference)),
+        // Angezeigter Standardname unbenannter Cycles: „Cycle 2“ (B8.34).
+        0 => lower
+            .strip_prefix("cycle ")
+            .and_then(|rest| rest.trim().parse::<i32>().ok())
+            .and_then(|n| cycles.iter().find(|c| c.number == n && c.name.is_none()))
+            .cloned()
+            .ok_or_else(|| not_found(reference)),
         1 => Ok(named.remove(0).clone()),
         _ => Err(AppError::ambiguous_reference(format!(
             "Cycle name \"{reference}\" matches several cycles."

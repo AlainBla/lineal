@@ -83,7 +83,12 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
         .0
         .lock()
         .unwrap()
-        .insert(key, (48213, "image/png".into()));
+        .insert(key.clone(), (48213, "image/png".into()));
+    env.blobs
+        .1
+        .lock()
+        .unwrap()
+        .insert(key, b"\x89PNG-fake-image".to_vec());
     let att = call(
         &env,
         SeedUser::Bob,
@@ -131,7 +136,12 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
-    assert_eq!(content["note"], "Binary content; download via url");
+    // B8.12: `content` liefert das Bild als image-Element (base64 + mimeType).
+    let parts = content[CONTENT_KEY].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "text");
+    assert_eq!(parts[1]["type"], "image");
+    assert_eq!(parts[1]["mimeType"], "image/png");
+    assert!(!parts[1]["data"].as_str().unwrap().is_empty());
 
     // extract_images: eigene Datei wird aufgelöst, Fremd-URL übersprungen, unbekannte eigene nicht gefunden
     let md = format!(

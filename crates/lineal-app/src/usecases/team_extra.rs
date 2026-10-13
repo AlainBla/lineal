@@ -118,7 +118,8 @@ pub struct UpdateSlaRuleInput {
 }
 
 fn validate_rule(rule: &SlaRule) -> AppResult<()> {
-    let name = rule.name.trim();
+    let name = lineal_domain::rules::text::validate_single_line_name("name", &rule.name, 100)?;
+    let name = name.as_str();
     if name.is_empty() || name.chars().count() > 100 {
         return Err(invalid(
             "name",

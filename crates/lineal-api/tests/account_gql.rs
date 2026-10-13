@@ -236,12 +236,8 @@ async fn repeated_wrong_passwords_are_throttled(pool: sqlx::PgPool) {
     )
     .await;
     assert_eq!(code(&v), "rate_limited", "{v}");
-    assert!(
-        v["errors"][0]["extensions"]["details"]
-            .as_str()
-            .unwrap()
-            .contains("retryAfter")
-    );
+    // `details` ist ein Objekt (B8.18), kein JSON-String.
+    assert!(v["errors"][0]["extensions"]["details"]["retryAfter"].is_number());
     // Das Passwort blieb unverändert; Bob ist nicht betroffen.
     let _ = login(&env, "alice@acme.example", "correct-horse").await;
     let b = login(&env, "bob@acme.example", "correct-horse").await;

@@ -5,7 +5,7 @@
 use super::org::gql_err;
 use crate::context::{app, request_ctx};
 use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
-use chrono::{DateTime, NaiveDate};
+use chrono::DateTime;
 use lineal_app::usecases::cycle::{
     CycleKind, CycleSettingsInput, CycleView, ExistingActiveIssues, UpdateCycleInput,
 };
@@ -200,7 +200,7 @@ impl CycleMutation {
             .first_cycle_start_date
             .as_deref()
             .map(|s| {
-                NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
+                lineal_domain::rules::date::parse_iso_date("firstCycleStartDate", s).map_err(|_| {
                     gql_err(lineal_app::AppError::invalid_request(
                         "`firstCycleStartDate` must be YYYY-MM-DD",
                     ))

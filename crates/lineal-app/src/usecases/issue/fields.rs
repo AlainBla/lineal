@@ -30,21 +30,11 @@ pub const MAX_SUB_ISSUE_DEPTH: i64 = 10;
 
 /// Titel: 1–255 Zeichen nach Trimmen, keine Zeilenumbrüche.
 pub fn validate_title(raw: &str) -> AppResult<String> {
-    let t = raw.trim();
-    let err = |reason: &str| {
+    lineal_domain::rules::text::validate_single_line_name("title", raw, 255).map_err(|e| {
+        let lineal_domain::DomainError::Validation { reason, .. } = e;
         AppError::invalid_request(format!("invalid title: {reason}"))
             .with_details(json!({ "field": "title", "reason": reason }))
-    };
-    if t.is_empty() {
-        return Err(err("must not be empty"));
-    }
-    if t.chars().count() > 255 {
-        return Err(err("must be at most 255 characters"));
-    }
-    if t.contains(['\n', '\r']) {
-        return Err(err("must not contain line breaks"));
-    }
-    Ok(t.to_owned())
+    })
 }
 
 /// Beschreibung: höchstens 500 000 Zeichen; leer = keine Beschreibung.
