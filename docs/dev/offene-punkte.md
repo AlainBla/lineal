@@ -56,7 +56,7 @@ WP07-Leftovers:
 WP13-Lücken (Backend-GraphQL fehlt):
 - users-Query (Assignee-Picker, Mentions) – größte UX-Lücke.
 - Abo-Zustand eines Issues (issueSubscription für Viewer).
-- issueBatchUpdate, Drafts, Template-Auswahl im Create-Modal (nach WP10).
+- (erledigt WP33/F-B) issueBatchUpdate, Template-Auswahl im Create-Modal. Drafts: nur browserlokal (`sessionStorage`), keine Server-Entität `Draft` (docs/01 §3.12, docs/08 §2.3 sehen eine serverseitige Speicherung vor); geräteübergreifende Entwürfe fehlen.
 - issues-Query mit Filter-JSON (WP11) -> Client-Filter ersetzen.
 - Web: Cache-Normalisierung Key vs UUID für Sync (WP15).
 WP12-Leftovers:
@@ -125,3 +125,4 @@ WP32-Leftovers:
 - Beschreibungs-Räume führen den Zustand bei API-Schreibvorgängen nicht nach (Abgleich per Markdown-Diff im offenen Raum, sonst Neuaufbau mit neuer Epoche); ungespeicherte Raumänderungen der letzten ≤ 2 s können bei Schreiben ohne Zustandsführung verloren gehen.
 - Ein Schreib-Scope-Verlust trennt die Verbindung (4403); der Client verbindet sich danach nur lesend. Gewonnene Rechte gelten erst nach dem nächsten Verbindungsaufbau.
 - cargo-deny ist hier nicht installiert: Lizenzen von yrs (MIT) und Abhängigkeiten manuell geprüft.
+F-B (Issues im Web) erledigt: Triage-Ansicht, Kommentar-Aktionen, Anhänge/Bild-Upload mit `resolveAssets`, Parent-Dialog, Listensortierung/DnD, Create-Modal-Templates/-Formulare, Drafts-Seite (siehe docs/15 §2.2). Offen: Tastatur-Umsortieren (Alt+Pfeil), Tie-Breaker `prioritySortOrder`, Anhänge-Links (Link anhängen) in der Detailansicht, Drag & Drop zwischen Gruppen nur bei Gruppierung nach Status, Sortierung der Board-Spalten ist immer manuell, Triage-Liste ohne Filter/Display options, Triage-Kommentar „Rückfrage“ (nur über den Kommentarbereich des Details), Bild-Upload im Dokument-Editor (F-C) nutzt `uploadImage` des `RichEditor` noch nicht.

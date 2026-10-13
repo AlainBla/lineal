@@ -89,6 +89,10 @@ function LiveDescriptionEditor({
         ariaLabel="Description"
         placeholder="Add description…"
         users={mentionUsers}
+        uploadImage={uploadImageAsset}
+        onUploadError={(e) =>
+          showToast({ message: errorMessage(e, "Could not upload the image."), tone: "error" })
+        }
         collab={{ provider, canWrite: session.canWrite }}
       />
       <div className="flex items-center justify-end gap-2 text-xs text-subtle-foreground">
