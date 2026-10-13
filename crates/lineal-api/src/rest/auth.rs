@@ -255,6 +255,7 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
         (Ok(u), Ok(o)) => (u, o),
         (Err(e), _) | (_, Err(e)) => return error_response(e),
     };
+    let owned = app.owned_team_ids(&ctx).await.unwrap_or_default();
     let body: Value = json!({
         "id": user.user.id.to_string(),
         "name": user.user.name,
@@ -269,6 +270,7 @@ pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
             "parentId": t.team.parent_id.map(|p| p.to_string()),
             "cyclesEnabled": t.team.cycles_enabled,
             "triageEnabled": t.team.triage_enabled,
+            "owner": owned.contains(&t.team.id),
         })).collect::<Vec<_>>(),
     });
     (StatusCode::OK, Json(body)).into_response()
@@ -351,6 +353,9 @@ mod tests {
         assert_eq!(body["email"], "alice@acme.example");
         assert_eq!(body["role"], "owner");
         assert_eq!(body["workspace"]["urlKey"], "acme");
+        // B5.36: die Session nennt, in welchen Teams der User Owner-Aktionen ausführen darf.
+        let teams = body["teams"].as_array().unwrap();
+        assert!(!teams.is_empty() && teams.iter().all(|t| t["owner"] == true));
 
         // Ohne Origin/CSRF-Header lehnt der Schutz für Cookie-Sessions ab.
         let blocked = Request::builder()

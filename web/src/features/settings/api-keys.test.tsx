@@ -2,7 +2,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fixtures";
+import { SESSION_QUERY_KEY } from "@/app/auth";
+import { mockGraphql, newClient, renderWithApp, SESSION } from "@/features/issues/test-fixtures";
 
 import { ApiSettingsPage, endOfDayIso } from "./api-keys";
 
@@ -40,6 +41,18 @@ describe("ApiSettingsPage", () => {
     expect(screen.getByRole("button", { name: "Revoke CI pipeline" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revoke Old script" })).not.toBeInTheDocument();
     expect(screen.getByText("Revoked")).toBeInTheDocument();
+  });
+
+  it("guests cannot create keys (B5.36)", async () => {
+    mockGraphql({ SettingsApiKeys: () => ({ apiKeys: [] }) });
+    const client = newClient();
+    client.setQueryData(SESSION_QUERY_KEY, {
+      ...SESSION,
+      user: { ...SESSION.user, role: "guest" },
+    });
+    await renderWithApp(<ApiSettingsPage ws="acme" />, client, "/acme/settings/api");
+    expect(await screen.findByText("Guests cannot create API keys.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New key" })).not.toBeInTheDocument();
   });
 
   it("shows an empty state", async () => {
