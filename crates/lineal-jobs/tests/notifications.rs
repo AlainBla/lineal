@@ -3043,10 +3043,10 @@ async fn label_subscription_uses_event_state_and_notifies_added_labels(pool: PgP
             issue_id: issue,
             team_id: e.d.eng,
             mentioned_user_ids: vec![],
-            initial: Some(IssueInitial {
+            initial: Some(Box::new(IssueInitial {
                 state_type: "unstarted".into(),
                 ..Default::default()
-            }),
+            })),
         },
     ))
     .await;
@@ -3059,8 +3059,10 @@ async fn label_subscription_uses_event_state_and_notifies_added_labels(pool: PgP
         alice,
         DomainEvent::IssueUpdated {
             previous: Some(IssuePrevious {
-                new_recorded: true,
-                labels_added: vec![LabelId(label)],
+                new: Some(Box::new(lineal_domain::events::IssueNewValues {
+                    labels_added: vec![LabelId(label)],
+                    ..Default::default()
+                })),
                 ..Default::default()
             }),
             issue_id: issue,

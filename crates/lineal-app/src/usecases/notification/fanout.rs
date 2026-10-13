@@ -289,7 +289,7 @@ impl<'a> Fan<'a> {
                 initial,
                 ..
             } => {
-                self.issue_created(ev, *issue_id, mentioned_user_ids, initial.as_ref())
+                self.issue_created(ev, *issue_id, mentioned_user_ids, initial.as_deref())
                     .await
             }
             DomainEvent::IssueUpdated {
@@ -498,11 +498,11 @@ impl<'a> Fan<'a> {
         self.target_issue(&f);
         let has = |name: &str| changed.iter().any(|c| c == name);
         // Neue Werte aus dem Ereignis (B6.09); Altdaten ohne sie lesen den aktuellen Zustand.
-        let ev_new = previous.filter(|p| p.new_recorded);
-        let new_assignee = ev_new.map_or(f.assignee_id, |p| p.assignee_to);
-        let new_priority = ev_new.and_then(|p| p.priority_to).unwrap_or(f.priority);
+        let ev_new = previous.and_then(|p| p.new.as_deref());
+        let new_assignee = ev_new.map_or(f.assignee_id, |p| p.assignee_id);
+        let new_priority = ev_new.and_then(|p| p.priority).unwrap_or(f.priority);
         let new_state_type = ev_new
-            .and_then(|p| p.state_type_to.clone())
+            .and_then(|p| p.state_type.clone())
             .unwrap_or_else(|| f.state_type.clone());
         for m in mentioned {
             self.subscribe(&f, *m, None, SubscriptionReason::Mention)

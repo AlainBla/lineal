@@ -136,9 +136,6 @@ pub struct HistoryEntry {
     pub id: Uuid,
     pub issue_id: IssueId,
     pub actor_id: Option<UserId>,
-    /// Name des Akteurs; wird erst beim Lesen (`issue_history`) gefüllt (B4.16: auch Gäste sehen den
-    /// Namen statt „Someone“).
-    pub actor_name: Option<String>,
     pub source: HistorySource,
     /// `{ "<feld>": { "from": …, "to": … } }` mit camelCase-Feldnamen.
     pub changes: Value,

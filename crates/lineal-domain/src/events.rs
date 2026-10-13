@@ -45,23 +45,6 @@ impl std::str::FromStr for EventOrigin {
 /// (`issueUnassignedFromYou`, `issueReopened`, `issueUnblocked`, docs/05 §6.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssuePrevious {
-    /// `true`, wenn die neuen Werte unten erfasst sind (sonst Altdaten: der Handler liest den
-    /// aktuellen Zustand).
-    #[serde(default)]
-    pub new_recorded: bool,
-    /// Neuer Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = jetzt unzugewiesen).
-    /// Der Notification-Handler wertet den Ereignis-Zustand aus, nicht den aktuellen (B6.09).
-    #[serde(default)]
-    pub assignee_to: Option<UserId>,
-    /// Neuer Statustyp; gilt nur, wenn `stateId` in `changed` steht.
-    #[serde(default)]
-    pub state_type_to: Option<String>,
-    /// Neue Priorität; gilt nur, wenn `priority` in `changed` steht.
-    #[serde(default)]
-    pub priority_to: Option<i32>,
-    /// Neu gesetzte Labels (nur wenn `labelIds` in `changed` steht).
-    #[serde(default)]
-    pub labels_added: Vec<LabelId>,
     /// Bisheriger Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = war unzugewiesen).
     #[serde(default)]
     pub assignee_id: Option<UserId>,
@@ -69,6 +52,27 @@ pub struct IssuePrevious {
     /// `duplicate`); gilt nur, wenn `stateId` in `changed` steht.
     #[serde(default)]
     pub state_type: Option<String>,
+    /// Neue Werte; der Notification-Handler wertet den Ereignis-Zustand aus, nicht den aktuellen
+    /// (B6.09). `None` bei Altdaten. Geboxt, damit `DomainEvent` klein bleibt (Debug-Stack).
+    #[serde(default)]
+    pub new: Option<Box<IssueNewValues>>,
+}
+
+/// Neue Werte der in `changed` genannten Felder (siehe [`IssuePrevious::new`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueNewValues {
+    /// Neuer Assignee; gilt nur, wenn `assigneeId` in `changed` steht (`None` = jetzt unzugewiesen).
+    #[serde(default)]
+    pub assignee_id: Option<UserId>,
+    /// Neuer Statustyp; gilt nur, wenn `stateId` in `changed` steht.
+    #[serde(default)]
+    pub state_type: Option<String>,
+    /// Neue Priorität; gilt nur, wenn `priority` in `changed` steht.
+    #[serde(default)]
+    pub priority: Option<i32>,
+    /// Neu gesetzte Labels (nur wenn `labelIds` in `changed` steht).
+    #[serde(default)]
+    pub labels_added: Vec<LabelId>,
 }
 
 impl IssuePrevious {
@@ -77,17 +81,18 @@ impl IssuePrevious {
     pub fn of(changed: &[String], old: (Option<UserId>, &str), new: IssueNow) -> Option<Self> {
         let has = |f: &str| changed.iter().any(|c| c == f);
         (has("assigneeId") || has("stateId") || has("priority") || has("labelIds")).then(|| Self {
-            new_recorded: true,
             assignee_id: has("assigneeId").then_some(old.0).flatten(),
             state_type: has("stateId").then(|| old.1.to_owned()),
-            assignee_to: has("assigneeId").then_some(new.assignee_id).flatten(),
-            state_type_to: has("stateId").then(|| new.state_type.to_owned()),
-            priority_to: has("priority").then_some(new.priority),
-            labels_added: if has("labelIds") {
-                new.labels_added
-            } else {
-                Vec::new()
-            },
+            new: Some(Box::new(IssueNewValues {
+                assignee_id: has("assigneeId").then_some(new.assignee_id).flatten(),
+                state_type: has("stateId").then(|| new.state_type.to_owned()),
+                priority: has("priority").then_some(new.priority),
+                labels_added: if has("labelIds") {
+                    new.labels_added
+                } else {
+                    Vec::new()
+                },
+            })),
         })
     }
 }
@@ -137,7 +142,7 @@ macro_rules! domain_events {
 domain_events! {
     /// `mentioned_user_ids`: @-Erwähnungen in der Beschreibung (für Notifications, WP08).
     /// `initial`: Zustand bei der Anlage (Assignee, Priorität, Statustyp, Labels); `None` bei Altdaten.
-    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId>, #[serde(default)] initial: Option<IssueInitial> },
+    IssueCreated { issue_id: IssueId, team_id: TeamId, mentioned_user_ids: Vec<UserId>, #[serde(default)] initial: Option<Box<IssueInitial>> },
     /// `changed`: geänderte Feldnamen (camelCase, z. B. `assigneeId`, `stateId`, `description`);
     /// `mentioned_user_ids`: neu hinzugekommene @-Erwähnungen in der Beschreibung.
     /// `previous`: alte Werte der Felder `assigneeId`/`stateId` (WP32, nur wenn sie in `changed` stehen;
@@ -227,6 +232,13 @@ domain_events! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hält `DomainEvent` klein: es liegt in vielen Futures, und Debug-Builds legen jeden
+    /// Zwischenwert auf den Stack (Stack-Überlauf beim Issue-Anlegen in 2-MiB-Testthreads).
+    #[test]
+    fn domain_event_stays_small() {
+        assert!(std::mem::size_of::<DomainEvent>() <= 136);
+    }
 
     #[test]
     fn roundtrip_and_type_tag() {

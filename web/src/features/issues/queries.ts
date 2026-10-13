@@ -18,7 +18,8 @@ import { gqlRequest } from "@/lib/graphql";
 export const ISSUE_FIELDS = `
   id identifier previousIdentifiers title description priority estimate teamId
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
-  labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed createdAt updatedAt
+  labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed
+  slaType slaStartedAt slaBreachesAt createdAt updatedAt
 `;
 
 const COMMENT_FIELDS = `

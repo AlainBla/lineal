@@ -175,7 +175,6 @@ fn to_entry(
         id,
         issue_id: issue.id,
         actor_id: actor,
-        actor_name: None,
         source,
         changes: Value::Object(d.changes.clone()),
         added_label_ids: (!d.added_labels.is_empty()).then(|| d.added_labels.clone()),

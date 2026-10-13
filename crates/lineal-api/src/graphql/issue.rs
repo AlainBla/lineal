@@ -44,6 +44,12 @@ pub struct IssueGql {
     pub canceled_at: Option<String>,
     pub archived_at: Option<String>,
     pub trashed: bool,
+    /// SLA-Art (`calendar` | `business`), wenn eine SLA-Regel greift.
+    pub sla_type: Option<String>,
+    /// Beginn der SLA-Frist.
+    pub sla_started_at: Option<String>,
+    /// Ende der SLA-Frist (Verletzung), sofort nach Prioritäts-/Projektänderung neu berechnet.
+    pub sla_breaches_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -78,6 +84,9 @@ impl From<IssueView> for IssueGql {
             canceled_at: ts(i.canceled_at),
             archived_at: ts(i.archived_at),
             trashed: i.trashed,
+            sla_type: i.sla_type.map(|t| t.as_str().to_owned()),
+            sla_started_at: ts(i.sla_started_at),
+            sla_breaches_at: ts(i.sla_breaches_at),
             created_at: i.created_at.to_rfc3339(),
             updated_at: i.updated_at.to_rfc3339(),
         }
@@ -189,7 +198,7 @@ impl IssueGql {
     async fn history(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<IssueHistoryEntry>> {
         charge_detail_field(ctx)?;
         let entries = app(ctx)?
-            .issue_history(request_ctx(ctx)?, &self.id)
+            .issue_history_with_actors(request_ctx(ctx)?, &self.id)
             .await
             .map_err(gql_err)?;
         let ids = |v: Option<Vec<lineal_domain::ids::LabelId>>| {
@@ -200,10 +209,10 @@ impl IssueGql {
         };
         Ok(entries
             .into_iter()
-            .map(|e| IssueHistoryEntry {
+            .map(|(e, actor_name)| IssueHistoryEntry {
                 id: e.id.to_string(),
                 actor_id: e.actor_id.map(|u| u.to_string()),
-                actor_name: e.actor_name,
+                actor_name,
                 source: e.source.as_str().to_owned(),
                 changes: async_graphql::types::Json(e.changes),
                 added_label_ids: ids(e.added_label_ids),

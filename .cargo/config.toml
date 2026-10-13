@@ -1,3 +1,6 @@
 [env]
 # Default für #[sqlx::test] und lokale Läufe (überschreibbar per Umgebungsvariable).
 DATABASE_URL = { value = "postgres://lineal:lineal@localhost:5440/lineal", force = false }
+# Debug-Builds legen Async-Zwischenwerte auf den Stack; die 2-MiB-Standardstacks der Testthreads
+# reichen fuer Issue-Anlegen plus GraphQL-Schema nicht mehr (der Server nutzt 8-MiB-Worker-Stacks).
+RUST_MIN_STACK = { value = "8388608", force = false }

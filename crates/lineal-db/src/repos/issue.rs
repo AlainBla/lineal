@@ -170,7 +170,6 @@ impl From<HistoryRow> for HistoryEntry {
             id: r.id,
             issue_id: IssueId(r.issue_id),
             actor_id: r.actor_id.map(UserId),
-            actor_name: None,
             source: HistorySource::parse(&r.source),
             changes: r.changes,
             added_label_ids: labels(r.added_label_ids),

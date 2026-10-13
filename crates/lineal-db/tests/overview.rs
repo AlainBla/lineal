@@ -351,6 +351,14 @@ async fn stale_health_counts_as_no_update(pool: PgPool) {
         .await
         .unwrap()
         .projects;
-    assert_eq!(after.on_track, before.on_track + 1, "frisches Update bleibt onTrack");
-    assert_eq!(after.no_update, before.no_update + 1, "veraltetes zählt als no update");
+    assert_eq!(
+        after.on_track,
+        before.on_track + 1,
+        "frisches Update bleibt onTrack"
+    );
+    assert_eq!(
+        after.no_update,
+        before.no_update + 1,
+        "veraltetes zählt als no update"
+    );
 }

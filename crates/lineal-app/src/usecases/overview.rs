@@ -8,6 +8,8 @@
 //!   `not_found`).
 //! * Rollups summieren nur sichtbare Sub-Teams.
 
+use super::project::pure::{Staleness, staleness};
+use super::project::update::reminder_cycle_days;
 use crate::app::App;
 use crate::context::RequestCtx;
 use crate::error::AppResult;
@@ -19,11 +21,9 @@ use crate::resolve::team::Visibility;
 use crate::resolve::user::actor_user_id;
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
-use lineal_domain::ids::{ProjectId, TeamId, UserId};
 use lineal_domain::enums::Health;
+use lineal_domain::ids::{ProjectId, TeamId, UserId};
 use lineal_domain::rules::progress::stats;
-use super::project::pure::{Staleness, staleness};
-use super::project::update::reminder_cycle_days;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
