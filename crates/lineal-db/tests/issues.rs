@@ -1836,7 +1836,7 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
             .title,
         "Intern"
     );
-    // Schreiben bleibt verwehrt
+    // Schreiben bleibt verwehrt: forbidden, weil das Issue über die Freigabe sichtbar ist (B8.20)
     assert_eq!(
         kind(
             fx.app
@@ -1849,7 +1849,7 @@ async fn sharing_grants_access_to_a_single_issue(pool: PgPool) {
                 )
                 .await
         ),
-        ErrorKind::NotFound
+        ErrorKind::Forbidden
     );
     // idempotent; Mitglied hat ohnehin Zugriff
     assert!(

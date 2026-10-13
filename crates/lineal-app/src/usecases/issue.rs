@@ -879,7 +879,15 @@ impl App {
                 "archived issues are read-only",
             ));
         }
-        snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::UpdateIssue,
+        )
+        .await?;
         // Issue-Graph (Parent/Kinder): Änderungen, die mehrere Issue-Zeilen betreffen (Parent
         // setzen, Auto-Close-Kaskade), laufen seriell und VOR der ersten Zeilensperre. Sonst sperren
         // gegenläufige Transaktionen (Kind->Parent und Parent->Kind) in entgegengesetzter
@@ -1551,7 +1559,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        snap.require_team(ctx, Action::DeleteIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            &mut *tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::DeleteIssue,
+        )
+        .await?;
         let mut issue = tx
             .issues()
             .get(found.id, true)
@@ -1621,7 +1637,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        resolve::issue::authorize_issue(
+            &mut *tx,
+            &snap,
+            ctx,
+            found.id,
+            found.team_id,
+            Action::UpdateIssue,
+        )
+        .await?;
         let mut issue = tx
             .issues()
             .get(found.id, true)
