@@ -11518,12 +11518,12 @@ function createIssue(input, user):
 <tbody>
 <tr>
 <td><strong>Accept</strong></td>
-<td>Team-Mitglied; ggf. <code>priority != 0</code></td>
+<td>Zugriff auf das Team (Recht wie „Issue bearbeiten“, <a href="#ch-02-teams-rechte">02 §6.5</a>; Gäste nur als Mitglied; Mitgliedschaft ist nicht nötig); ggf. <code>priority != 0</code></td>
 <td>optionaler Kommentar wird angelegt; Wechsel auf <code>defaultIssueState</code> oder einen vom User gewählten Status (<code>backlog</code>, <code>unstarted</code>, <code>started</code>); <code>triagedAt</code> gesetzt</td>
 </tr>
 <tr>
 <td><strong>Decline</strong></td>
-<td>Team-Mitglied</td>
+<td>Zugriff auf das Team (wie Accept)</td>
 <td>optionaler Kommentar mit Begründung; Wechsel auf ersten <code>canceled</code>-Status (oder gewählten <code>canceled</code>-Status); <code>triagedAt</code> gesetzt</td>
 </tr>
 <tr>
@@ -18509,7 +18509,7 @@ function compileVirtual(alias, key, v, ctx):
 </tr>
 <tr>
 <td>Workspace-Template anlegen, ändern, löschen</td>
-<td>Workspace-Admins und -Owner</td>
+<td>Workspace-Admins und -Owner sowie Member, wenn die Workspace-Einstellung <code>templateManagementRole</code> (Default <code>user</code>) es zulässt; Gäste und Apps nie. Festlegung Lineal: Maßgeblich ist <a href="#ch-02-teams-rechte">02 §6.3/§6.5</a>; wer Workspace-Templates auf Admins beschränken will, setzt <code>templateManagementRole = admin</code>.</td>
 <td><code>forbidden</code></td>
 </tr>
 <tr>
@@ -28629,6 +28629,9 @@ enum PaginationOrderBy { createdAt updatedAt }
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Umsetzung (Entscheidung zu B8.13):</strong> Die implementierte GraphQL-Schicht ist vereinfacht und weicht von der obigen Relay-SDL ab; maßgeblich ist <code>web/schema.graphql</code>. Connections tragen <code>nodes</code>, <code>hasNextPage</code> und <code>endCursor</code> (kein <code>pageInfo</code>-Objekt, kein <code>totalCount</code>, keine <code>edges</code>); <code>last</code>/<code>before</code> werden nicht unterstützt (<code>invalid_request</code>). Kleine Listen (<code>teams</code>, <code>workflowStates</code> u. a.) liefern direkt ein Array mit <code>first</code>. <code>filter</code>/<code>orderBy</code> gibt es nur dort, wo das Schema sie nennt (z. B. Views mit <code>filterData</code>). <code>first</code> außerhalb 1..250 (Projekte 1..50) und ungültige Cursor sind <code>invalid_request</code>; <code>after: \"\"</code> gilt wie <code>null</code>. Cursor-Formate sind je Connection verschieden und für Clients opak. Eine Angleichung an die Relay-Form ist nicht geplant (docs/15 §2).</p>
+</blockquote>
 <p><strong>Abweichung von Linear:</strong> Linears Default-<code>orderBy</code> ist <code>createdAt</code>. Lineal nutzt <code>updatedAt</code> (00 ist verbindlich). Cursor sind opak (base64 von <code>{sortKey, id}</code>); ein Cursor ist nur mit derselben <code>orderBy</code>/<code>filter</code>-Kombination gültig, sonst <code>invalid_request</code>.</p>
 <h3 id="ch-09-api-events-1-4-kern-sdl-query-root">1.4 Kern-SDL: Query-Root</h3>
 <p>Auszug, Typen der Entitäten siehe <a href="#ch-01-domaenenmodell">01-domaenenmodell.md</a>. Alle <code>id</code>-Argumente akzeptieren die <strong>flexible Referenz</strong> aus <a href="#ch-00-konventionen">00 §2</a> (UUID, <code>ENG-123</code>, <code>P-ENG-7</code>, <code>I-4</code>, <code>slugId</code>).</p>
@@ -28739,7 +28742,7 @@ type UploadFileHeader { key: String!  value: String! }
   # Issues (Regeln: 03)
   issueCreate(input: IssueCreateInput!): IssuePayload!
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
-  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 50 IDs, atomar
+  issueBatchUpdate(ids: [UUID!]!, input: IssueUpdateInput!): IssueBatchPayload!   # max. 250 IDs, je Issue eigene Transaktion (nicht atomar); Fehler je Eintrag in `failures`
   issueArchive(id: String!, trash: Boolean): IssueArchivePayload!
   issueUnarchive(id: String!): IssueArchivePayload!
   issueDelete(id: String!, permanentlyDelete: Boolean): IssueArchivePayload!       # Default: Papierkorb 30 Tage
