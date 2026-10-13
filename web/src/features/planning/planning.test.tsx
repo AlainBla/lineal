@@ -113,6 +113,49 @@ describe("ProjectPage", () => {
   });
 });
 
+describe("B5.13/B5.26 ProjectPage", () => {
+  it("a double click on Post update posts once and shows the API detail on failure", async () => {
+    const posted: string[] = [];
+    mockGraphql({
+      PlanningProject: () => ({ project: project() }),
+      PlanningProjectUpdates: () => ({ projectUpdates: [] }),
+      PlanningProjectUpdateCreate: (v: Record<string, unknown>) => {
+        posted.push(String(v.body));
+        return { projectUpdateCreate: { success: true } };
+      },
+    });
+    await renderWithApp(
+      <ProjectPage ws="acme" projectRef="P-ENG-1" tab="updates" />,
+      newClient(),
+      "/acme/project/P-ENG-1/updates",
+    );
+    const user = userEvent.setup();
+    await screen.findByRole("form", { name: "Post update" });
+    await user.type(screen.getByLabelText("Update text"), "Einmal");
+    await user.dblClick(screen.getByRole("button", { name: "Post update" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(posted).toEqual(["Einmal"]);
+  });
+
+  it("shows the server error when the milestone cannot be created", async () => {
+    mockGraphql({
+      PlanningProject: () => ({ project: project() }),
+      PlanningMilestoneCreate: () => {
+        throw new Error("name is too long");
+      },
+    });
+    await renderWithApp(
+      <ProjectPage ws="acme" projectRef="P-ENG-1" tab="milestones" />,
+      newClient(),
+      "/acme/project/P-ENG-1/milestones",
+    );
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Milestone name"), "X");
+    await user.click(screen.getByRole("button", { name: /Add milestone/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("name is too long");
+  });
+});
+
 describe("planning helpers", () => {
   it("filters projects by tab", () => {
     const a = project();

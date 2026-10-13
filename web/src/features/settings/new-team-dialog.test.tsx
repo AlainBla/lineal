@@ -103,6 +103,16 @@ describe("NewTeamDialog", () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
+  it("B5.13: a double click creates only one team", async () => {
+    const gql = mockGraphql(handlers());
+    const { user } = await open();
+    await user.type(await screen.findByLabelText("Team name"), "Doppel");
+    await user.dblClick(screen.getByRole("button", { name: "Create team" }));
+    await waitFor(() => expect(gql.of("SettingsTeamCreate")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gql.of("SettingsTeamCreate")).toHaveLength(1);
+  });
+
   it("shows the server's conflict error and stays open", async () => {
     const gql = mockGraphql({
       ...handlers(),

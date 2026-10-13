@@ -1,8 +1,9 @@
 import { Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { errorText } from "@/features/issues/error-text";
 import { openCreateIssue } from "@/features/issues/create-store";
 import { useTeamMetas } from "@/features/issues/hooks";
 import { IssueList } from "@/features/issues/issue-list";
@@ -48,14 +49,20 @@ function UpdateComposer({ projectId }: { projectId: string }) {
   const [body, setBody] = useState("");
   const [health, setHealth] = useState<Health>("onTrack");
   const post = usePostProjectUpdate(projectId);
+  // Ref-Lock: ein Doppelklick vor dem Re-Render legt kein zweites Update an.
+  const busy = useRef(false);
   return (
     <form
       aria-label="Post update"
       className="flex flex-col gap-2 rounded-lg border border-border p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!body.trim()) return;
-        post.mutate({ body: body.trim(), health }, { onSuccess: () => setBody("") });
+        if (!body.trim() || busy.current) return;
+        busy.current = true;
+        post.mutate(
+          { body: body.trim(), health },
+          { onSuccess: () => setBody(""), onSettled: () => (busy.current = false) },
+        );
       }}
     >
       <div role="radiogroup" aria-label="Health" className="flex gap-1">
@@ -84,7 +91,7 @@ function UpdateComposer({ projectId }: { projectId: string }) {
       />
       {post.isError && (
         <p role="alert" className="text-xs text-destructive">
-          Could not post update.
+          {errorText(post.error)}
         </p>
       )}
       <div className="flex justify-end">
@@ -141,7 +148,9 @@ function Milestones({ project }: { project: Project }) {
               size="sm"
               className="ml-auto"
               aria-label={`Delete milestone ${m.name}`}
-              onClick={() => del.mutate(m.id)}
+              onClick={() => {
+                if (window.confirm(`Delete milestone "${m.name}"?`)) del.mutate(m.id);
+              }}
             >
               Delete
             </Button>
@@ -179,10 +188,15 @@ function Milestones({ project }: { project: Project }) {
           onChange={(e) => setDate(e.target.value)}
           className="w-40"
         />
-        <Button type="submit" size="sm" disabled={!name.trim()}>
+        <Button type="submit" size="sm" disabled={!name.trim() || create.isPending}>
           <Plus /> Add milestone
         </Button>
       </form>
+      {(create.isError || del.isError) && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(create.error ?? del.error)}
+        </p>
+      )}
     </div>
   );
 }

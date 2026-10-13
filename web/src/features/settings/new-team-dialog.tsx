@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
@@ -28,6 +28,8 @@ function NewTeamForm({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const teams = useTeamsOverview();
   const create = useCreateTeam();
+  // Ref-Lock gegen Doppelklick: sonst würde ein zweites teamCreate trotz Erfolg einen Fehler zeigen.
+  const busy = useRef(false);
   const all = useMemo(() => teams.data ?? [], [teams.data]);
   const active = useMemo(() => all.filter((t) => !t.retiredAt), [all]);
   const takenKeys = useMemo(
@@ -65,7 +67,8 @@ function NewTeamForm({ onClose }: { onClose: () => void }) {
       className="flex flex-col gap-3 p-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!valid || create.isPending) return;
+        if (!valid || create.isPending || busy.current) return;
+        busy.current = true;
         create.mutate(
           {
             name: name.trim(),
@@ -77,6 +80,10 @@ function NewTeamForm({ onClose }: { onClose: () => void }) {
             ...(copyFrom ? { copySettingsFromTeamId: copyFrom } : {}),
           },
           {
+            // Nach Erfolg schließt der Dialog; nur bei einem Fehler darf erneut gesendet werden.
+            onError: () => {
+              busy.current = false;
+            },
             onSuccess: (team) => {
               onClose();
               if (team && session)
