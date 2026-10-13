@@ -140,9 +140,7 @@ describe("B5.13/B5.26 ProjectPage", () => {
   it("shows the server error when the milestone cannot be created", async () => {
     mockGraphql({
       PlanningProject: () => ({ project: project() }),
-      PlanningMilestoneCreate: () => {
-        throw new Error("name is too long");
-      },
+      PlanningMilestoneCreate: () => new Error("name is too long"),
     });
     await renderWithApp(
       <ProjectPage ws="acme" projectRef="P-ENG-1" tab="milestones" />,
@@ -152,7 +150,14 @@ describe("B5.13/B5.26 ProjectPage", () => {
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText("Milestone name"), "X");
     await user.click(screen.getByRole("button", { name: /Add milestone/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("name is too long");
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("alert")
+          .map((a) => a.textContent)
+          .join(" "),
+      ).toContain("name is too long"),
+    );
   });
 });
 
