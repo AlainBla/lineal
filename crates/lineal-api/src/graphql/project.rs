@@ -631,7 +631,14 @@ impl ProjectMutation {
         let a = app(ctx)?;
         let rctx = request_ctx(ctx)?;
         let default_for = (input.template_id.is_none() && input.use_default_template == Some(true))
-            .then(|| input.lead_team.clone())
+            .then(|| {
+                // Lead-Team: explizit, sonst das erste angegebene Team (docs/04 §2.2, B5.32).
+                input
+                    .lead_team
+                    .clone()
+                    .or_else(|| input.set_teams.as_ref().and_then(|t| t.first().cloned()))
+                    .or_else(|| input.add_teams.as_ref().and_then(|t| t.first().cloned()))
+            })
             .flatten();
         let mut save = project_input(None, input)?;
         if let Some(lead) = default_for {
