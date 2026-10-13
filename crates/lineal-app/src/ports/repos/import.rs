@@ -482,6 +482,13 @@ pub trait ImportRepo: Send {
     }
 
     /// Setzt eine Textspalte (ohne `version`/`updated_at` zu ändern).
+    /// Würde `parent` als Eltern-Issue von `child` einen Zyklus bilden (`parent == child` oder
+    /// `child` ist Vorfahr von `parent`)?
+    async fn issue_parent_would_cycle(&mut self, child: Uuid, parent: Uuid) -> AppResult<bool> {
+        let _ = (child, parent);
+        nyi()
+    }
+
     async fn set_row_text(
         &mut self,
         table: ImportTable,

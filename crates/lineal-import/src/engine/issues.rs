@@ -226,6 +226,25 @@ impl Session<'_, '_> {
                 .await?;
         }
         self.reactions(n, "issue_id", up.id, created).await?;
+        // Ein bereits importierter Elternteil darf keinen Zyklus bilden (Delta-Läufe, geänderte Bezüge).
+        if let Some(p) = parent
+            && self
+                .tx()?
+                .imports()
+                .issue_parent_would_cycle(up.id, p)
+                .await?
+        {
+            self.tx()?
+                .imports()
+                .set_row_uuid(ImportTable::Issue, "parent_id", up.id, None)
+                .await?;
+            self.note(
+                "warning",
+                "Issue",
+                Some(&src),
+                "the parent link would create a cycle (the issue is its own ancestor); the link was dropped",
+            );
+        }
         // Eltern-Bezug, dessen Elternteil noch nicht importiert ist: vormerken (Phase 4b).
         if let Some(p) = parent_src
             && parent.is_none()
@@ -458,7 +477,22 @@ impl Session<'_, '_> {
             for m in &links {
                 let parent_src = m.checksum.clone().unwrap_or_default();
                 match self.target("Issue", &parent_src).await? {
-                    Some(parent) if parent != m.target_id => {
+                    Some(parent)
+                        if self
+                            .tx()?
+                            .imports()
+                            .issue_parent_would_cycle(m.target_id, parent)
+                            .await? =>
+                    {
+                        self.counters("Issue").skipped += 1;
+                        self.note(
+                            "warning",
+                            "Issue",
+                            Some(&m.source_id),
+                            "the parent link would create a cycle (the issue is its own ancestor); the link was dropped",
+                        );
+                    }
+                    Some(parent) => {
                         self.tx()?
                             .imports()
                             .set_row_uuid(

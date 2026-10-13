@@ -836,6 +836,28 @@ impl ImportRepo for PgTx {
         Ok(())
     }
 
+    async fn issue_parent_would_cycle(&mut self, child: Uuid, parent: Uuid) -> AppResult<bool> {
+        if child == parent {
+            return Ok(true);
+        }
+        // UNION (nicht UNION ALL) und Tiefengrenze: terminiert auch auf bereits zyklischen Daten.
+        sqlx::query_scalar(
+            "WITH RECURSIVE anc(id, depth) AS ( \
+               SELECT parent_id, 1 FROM issue WHERE organization_id = $1 AND id = $3 \
+                 AND parent_id IS NOT NULL \
+               UNION \
+               SELECT i.parent_id, a.depth + 1 FROM issue i JOIN anc a ON i.id = a.id \
+               WHERE i.organization_id = $1 AND i.parent_id IS NOT NULL AND a.depth < 1000) \
+             SELECT EXISTS (SELECT 1 FROM anc WHERE id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(child)
+        .bind(parent)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn set_row_text(
         &mut self,
         table: ImportTable,
