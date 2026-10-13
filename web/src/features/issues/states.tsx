@@ -8,6 +8,10 @@ import { GraphQLRequestError } from "@/lib/graphql";
 
 import { errorText } from "./error-text";
 
+export function isNotFound(error: unknown): boolean {
+  return error instanceof GraphQLRequestError && error.code === "not_found";
+}
+
 /** Wiederholen hilft bei Berechtigungs- und Nicht-gefunden-Fehlern nicht. */
 export function isRetryable(error: unknown): boolean {
   if (!(error instanceof GraphQLRequestError)) return true;

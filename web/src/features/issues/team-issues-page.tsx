@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useActions } from "@/app/commands";
 import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
+import { NotFound } from "@/components/not-found";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
@@ -18,7 +19,7 @@ import { IssueList } from "./issue-list";
 import { buildBoardColumns, filterByView, groupByState, type TeamView } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { useSelection } from "./selection";
-import { BoardSkeleton, EmptyState, ErrorState, ListSkeleton } from "./states";
+import { BoardSkeleton, EmptyState, ErrorState, isNotFound, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
 
@@ -156,6 +157,13 @@ export function TeamIssuesPage({
   let body;
   if (issues.isLoading || (meta.isLoading && !meta.data)) {
     body = layout === "board" ? <BoardSkeleton /> : <ListSkeleton />;
+  } else if (isNotFound(issues.error) || isNotFound(meta.error)) {
+    body = (
+      <NotFound
+        title="Team not found"
+        description={`There is no team ${teamKey} you can access.`}
+      />
+    );
   } else if (issues.isError || meta.isError) {
     body = (
       <ErrorState

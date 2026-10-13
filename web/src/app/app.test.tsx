@@ -144,6 +144,15 @@ describe("shell", () => {
     expect(router.state.location.pathname).toBe("/acme/drafts");
   });
 
+  it("unbekannte URLs zeigen eine 404-Seite ohne Try again (B4.21)", async () => {
+    mockFetch(true);
+    await renderApp("/acme/zzz");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Go to my issues" })).toBeInTheDocument();
+  });
+
   it("navigates with key sequences (g i, g m)", async () => {
     const user = userEvent.setup();
     mockFetch(true);

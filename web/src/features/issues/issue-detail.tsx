@@ -6,6 +6,7 @@ import { useActions } from "@/app/commands";
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
+import { NotFound } from "@/components/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
 import { GraphQLRequestError } from "@/lib/graphql";
@@ -24,7 +25,7 @@ import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { PropertySidebar } from "./property-sidebar";
 import { RelationsSection } from "./relations";
 import { RichEditor } from "./rich-editor";
-import { ErrorState } from "./states";
+import { ErrorState, isNotFound } from "./states";
 import { SubIssuesSection } from "./sub-issues";
 import { showToast } from "./toast-store";
 import { useKnownUsers } from "./users";
@@ -486,6 +487,9 @@ export function IssueDetailPage({
     };
   }, [data]);
 
+  if (reference === "") {
+    return <NotFound title="Issue not found" description="No issue was specified in this URL." />;
+  }
   if (issue.isLoading) {
     return (
       <div role="status" aria-label="Loading issue" className="flex flex-col gap-4 p-6">
@@ -496,16 +500,17 @@ export function IssueDetailPage({
     );
   }
   if (issue.isError || !data) {
-    const gone = issue.error instanceof GraphQLRequestError && issue.error.code === "not_found";
+    if (isNotFound(issue.error)) {
+      return (
+        <NotFound
+          title={issue.data ? "This issue was deleted" : "Issue not found"}
+          description="It does not exist, was deleted, or you do not have access to it."
+        />
+      );
+    }
     return (
       <ErrorState
-        title={
-          gone
-            ? issue.data
-              ? "This issue was deleted"
-              : "Issue not found"
-            : "Could not load the issue"
-        }
+        title="Could not load the issue"
         error={issue.error}
         onRetry={() => void issue.refetch()}
       />
