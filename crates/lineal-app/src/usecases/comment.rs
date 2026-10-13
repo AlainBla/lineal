@@ -568,6 +568,14 @@ impl App {
         ctx: &RequestCtx,
         input: CreateCommentInput,
     ) -> AppResult<CommentMutation> {
+        crate::error::with_retry(|| self.create_comment_once(ctx, input.clone())).await
+    }
+
+    async fn create_comment_once(
+        &self,
+        ctx: &RequestCtx,
+        input: CreateCommentInput,
+    ) -> AppResult<CommentMutation> {
         let body = clean_body(&input.body)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;

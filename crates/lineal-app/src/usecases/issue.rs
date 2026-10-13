@@ -10,7 +10,7 @@ pub(crate) mod mentions;
 mod relations;
 
 pub use batch::{BatchFailure, BatchPatch, BatchResult, BatchUpdateInput, MAX_BATCH};
-pub use fields::MAX_SUB_ISSUE_DEPTH;
+pub use fields::{ISSUE_GRAPH_LOCK, MAX_SUB_ISSUE_DEPTH};
 pub use relations::{RelatedIssue, RelationChanges, RelationsView};
 
 use crate::app::App;
@@ -752,10 +752,13 @@ impl App {
         ctx: &RequestCtx,
         input: UpdateIssueInput,
     ) -> AppResult<IssueView> {
-        let mut tx = self.store.begin(ctx.org_id).await?;
-        let view = self.update_issue_in(&mut *tx, ctx, input).await?;
-        tx.commit().await?;
-        Ok(view)
+        crate::error::with_retry(|| async {
+            let mut tx = self.store.begin(ctx.org_id).await?;
+            let view = self.update_issue_in(&mut *tx, ctx, input.clone()).await?;
+            tx.commit().await?;
+            Ok(view)
+        })
+        .await
     }
 
     /// Wie [`App::update_issue`] in einer vorhandenen Transaktion.
@@ -853,6 +856,19 @@ impl App {
             ));
         }
         snap.require_team(ctx, Action::UpdateIssue, found.team_id)?;
+        // Issue-Graph (Parent/Kinder): Änderungen, die mehrere Issue-Zeilen betreffen (Parent
+        // setzen, Auto-Close-Kaskade), laufen seriell und VOR der ersten Zeilensperre. Sonst sperren
+        // gegenläufige Transaktionen (Kind->Parent und Parent->Kind) in entgegengesetzter
+        // Reihenfolge (Deadlock). Eine einzige Advisory-Sperre für beide Fälle vermeidet auch
+        // Reihenfolgeprobleme zwischen mehreren Sperren.
+        if input.parent.is_some()
+            || !input.relations.blocks.is_empty()
+            || !input.relations.blocked_by.is_empty()
+            || (input.state.is_some()
+                && (found.parent_id.is_some() || !tx.issues().children(found.id).await?.is_empty()))
+        {
+            tx.advisory_lock(ISSUE_GRAPH_LOCK, None).await?;
+        }
         // Zeile sperren und frischen Stand lesen.
         let mut issue = tx
             .issues()

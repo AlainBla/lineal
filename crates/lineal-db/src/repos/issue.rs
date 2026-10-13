@@ -441,7 +441,7 @@ impl IssueRepo for PgTx {
     async fn get(&mut self, id: IssueId, lock: bool) -> AppResult<Option<Issue>> {
         let row = sqlx::query_as::<_, IssueRow>(&format!(
             "SELECT {COLS} FROM issue WHERE organization_id = $1 AND id = $2{}",
-            if lock { " FOR UPDATE" } else { "" }
+            if lock { " FOR NO KEY UPDATE" } else { "" }
         ))
         .bind(self.org.0)
         .bind(id.0)
@@ -452,22 +452,35 @@ impl IssueRepo for PgTx {
     }
 
     async fn save(&mut self, i: &Issue, now: DateTime<Utc>) -> AppResult<Issue> {
-        let row = sqlx::query_as::<_, IssueRow>(&format!(
-            "UPDATE issue SET team_id = $3, number = $4, title = $5, description = $6, state_id = $7, \
-             state_entered_at = $8, priority = $9, estimate = $10, assignee_id = $11, delegate_id = $12, \
-             parent_id = $13, project_id = $14, project_milestone_id = $15, cycle_id = $16, due_date = $17, \
-             sort_order = $18, priority_sort_order = $19, sub_issue_sort_order = $20, \
-             started_triage_at = $21, triaged_at = $22, started_at = $23, completed_at = $24, \
-             canceled_at = $25, auto_closed_at = $26, snoozed_until_at = $27, snoozed_by_id = $28, \
-             added_to_team_at = $29, added_to_cycle_at = $30, added_to_project_at = $31, sla_type = $32, \
-             sla_started_at = $33, sla_medium_risk_at = $34, sla_high_risk_at = $35, sla_breaches_at = $36, \
-             trashed = $37, trashed_at = $38, archived_at = $39, version = version + 1, updated_at = $40 \
-             WHERE organization_id = $1 AND id = $2 RETURNING {COLS}"
-        ))
+        // Teamwechsel/neue Nummer separat und nur bei echter Änderung: Steht eine Schlüsselspalte
+        // (team_id, number) in der SET-Liste, sperrt Postgres die Zeile wegen der BEFORE-UPDATE-
+        // Trigger (Kennung, Volltext, Statustyp) vorab mit FOR UPDATE statt FOR NO KEY UPDATE und
+        // verklemmt sich mit den KEY-SHARE-Sperren paralleler Fremdschlüssel-Inserts (Kommentare ...).
+        sqlx::query(
+            "UPDATE issue SET team_id = $3, number = $4 WHERE organization_id = $1 AND id = $2 \
+             AND (team_id, number) IS DISTINCT FROM ($3, $4)",
+        )
         .bind(self.org.0)
         .bind(i.id.0)
         .bind(i.team_id.0)
         .bind(i.number)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(|e| super::org::conflict_or_internal(e, "issue number already in use"))?;
+        let row = sqlx::query_as::<_, IssueRow>(&format!(
+            "UPDATE issue SET title = $3, description = $4, state_id = $5, \
+             state_entered_at = $6, priority = $7, estimate = $8, assignee_id = $9, delegate_id = $10, \
+             parent_id = $11, project_id = $12, project_milestone_id = $13, cycle_id = $14, due_date = $15, \
+             sort_order = $16, priority_sort_order = $17, sub_issue_sort_order = $18, \
+             started_triage_at = $19, triaged_at = $20, started_at = $21, completed_at = $22, \
+             canceled_at = $23, auto_closed_at = $24, snoozed_until_at = $25, snoozed_by_id = $26, \
+             added_to_team_at = $27, added_to_cycle_at = $28, added_to_project_at = $29, sla_type = $30, \
+             sla_started_at = $31, sla_medium_risk_at = $32, sla_high_risk_at = $33, sla_breaches_at = $34, \
+             trashed = $35, trashed_at = $36, archived_at = $37, version = version + 1, updated_at = $38 \
+             WHERE organization_id = $1 AND id = $2 RETURNING {COLS}"
+        ))
+        .bind(self.org.0)
+        .bind(i.id.0)
         .bind(&i.title)
         .bind(&i.description)
         .bind(i.state_id.0)

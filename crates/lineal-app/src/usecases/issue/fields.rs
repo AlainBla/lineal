@@ -559,6 +559,9 @@ pub async fn apply_planning(
     Ok(())
 }
 
+/// Scope der Advisory-Sperre für Änderungen am Issue-Graphen (Parent-Beziehungen, Auto-Close).
+pub const ISSUE_GRAPH_LOCK: &str = "issue_graph";
+
 /// Parent setzen: kein Zyklus, nicht sich selbst, Zugriff auf den Parent, Tiefe ≤ 10 (docs/03 §3.1).
 pub async fn resolve_parent(
     tx: &mut dyn Tx,
@@ -567,6 +570,9 @@ pub async fn resolve_parent(
     issue: &Issue,
     reference: &str,
 ) -> AppResult<Issue> {
+    // Zyklus- und Tiefenprüfung lesen die Ahnenkette: Parent-Änderungen im Workspace seriell
+    // ausführen (sonst: A unter B und B unter A gleichzeitig, Tiefe 10 umgehbar).
+    tx.advisory_lock(ISSUE_GRAPH_LOCK, None).await?;
     let parent = resolve::issue::resolve_in(tx, snap, ctx, reference).await?;
     if parent.trashed {
         return Err(resolve::issue::issue_not_found(reference));
