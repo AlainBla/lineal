@@ -414,6 +414,21 @@ pub trait TriageRepo: Send {
     ) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Teams, in denen zwei benachbarte aktive Issues (nach `sort_order`) näher als `min_gap`
+    /// beieinander liegen (mandantenübergreifend, ohne Teams im Import).
+    async fn teams_with_tight_sort_order(
+        &mut self,
+        _min_gap: f64,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<TeamRef>> {
+        unimplemented_repo()
+    }
+    /// Nummeriert die aktiven Issues des Teams mit Abstand 1 neu (Reihenfolge bleibt, Startwert =
+    /// kleinster bisheriger Wert). Erhöht nur `version`, nicht `updated_at` (kein Aktivitätssignal,
+    /// keine History). Liefert die geänderten Issues.
+    async fn renumber_team_sort_order(&mut self, _team: TeamId) -> AppResult<Vec<IssueId>> {
+        unimplemented_repo()
+    }
     /// Anzahl der wiederkehrenden Regeln, die dieses Template verwenden.
     async fn count_recurring_for_template(&mut self, _template: Uuid) -> AppResult<i64> {
         unimplemented_repo()

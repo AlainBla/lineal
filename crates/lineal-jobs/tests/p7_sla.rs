@@ -9,6 +9,86 @@ use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
 
+/// B7.10: Liegen zwei Nachbarn in der manuellen Sortierung enger als 1e-6, nummeriert der Job das
+/// Team mit Abstand 1 neu (Reihenfolge bleibt, `updated_at` bleibt, Sync-Event je Issue).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn sort_order_is_renumbered_when_gaps_collapse(pool: PgPool) {
+    let store = PgStore::new(pool.clone());
+    let data = SeedData::acme();
+    let mut tx = store.begin(data.org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = test_app(Arc::new(store));
+    let alice = ctx_for(SeedUser::Alice);
+    let mut ids = Vec::new();
+    for t in ["First", "Second", "Third"] {
+        let i = app
+            .create_issue(
+                &alice,
+                CreateIssueInput {
+                    team: "ENG".into(),
+                    title: Some(format!("Sort {t}")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        ids.push(i.issue.id.to_string());
+    }
+    // Die ersten beiden fast identisch (Abstand 5e-10), das dritte weit weg.
+    for (id, v) in ids.iter().zip([-2.0_f64, -1.9999999995, 7.0]) {
+        sqlx::query("UPDATE issue SET sort_order = $2 WHERE id = $1::uuid")
+            .bind(id)
+            .bind(v)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let updated_before: Vec<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let stats = app.run_sort_renumber(chrono::Utc::now()).await.unwrap();
+    assert!(stats.errors.is_empty(), "{:?}", stats.errors);
+    let rows: Vec<(String, f64)> = sqlx::query_as(
+        "SELECT title, sort_order FROM issue WHERE title LIKE 'Sort %' ORDER BY sort_order",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let titles: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(titles, ["Sort First", "Sort Second", "Sort Third"]);
+    assert!(
+        rows.windows(2).all(|w| w[1].1 - w[0].1 >= 1.0 - 1e-9),
+        "gaps of at least 1: {rows:?}"
+    );
+    let updated_after: Vec<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT updated_at FROM issue WHERE title LIKE 'Sort %' ORDER BY title",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated_before, updated_after, "no activity signal");
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE payload->>'type' = 'IssueUpdated' \
+         AND payload::text LIKE '%sortOrder%' AND origin = 'system'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(events >= 1, "the new order is distributed via sync");
+    // Zweiter Lauf: nichts mehr zu tun.
+    assert_eq!(
+        app.run_sort_renumber(chrono::Utc::now())
+            .await
+            .unwrap()
+            .processed,
+        0
+    );
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn priority_change_recomputes_the_sla_synchronously(pool: PgPool) {
     let store = PgStore::new(pool.clone());
