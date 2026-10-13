@@ -1464,13 +1464,17 @@ async fn due_reminders_fire_once_per_stage_after_nine_local(pool: PgPool) {
         0
     );
     assert_eq!(e.count(bob).await, 2);
-    let item = &e
+    let items = e
         .app
         .list_notifications(&ctx_for(SeedUser::Bob), Default::default())
         .await
         .unwrap()
-        .items[0];
-    assert!(item.subtitle.contains("is due soon"));
+        .items;
+    let item = &items[0];
+    let mut texts: Vec<&str> = items.iter().map(|i| i.subtitle.as_str()).collect();
+    texts.sort();
+    assert!(texts[0].ends_with("is due tomorrow"), "{texts:?}");
+    assert!(texts[1].ends_with("is overdue"), "{texts:?}");
     assert_eq!(item.view.n.category, "reminders");
     assert!(item.view.n.actor_id.is_none());
 }
@@ -2519,4 +2523,352 @@ async fn group_actions_never_reach_other_users_rows(pool: PgPool) {
     .await
     .unwrap();
     assert!(!read && !snoozed && !archived);
+}
+
+// --- Paket 6: Projekt-/Initiativ-Benachrichtigungen ---
+
+impl Env {
+    /// Projekt in ENG; `lead` und Inhalt frei wählbar.
+    async fn project_in_eng(&self, number: i32, lead: Option<UserId>, content: &str) -> Uuid {
+        let project = Uuid::now_v7();
+        let status: Uuid = sqlx::query_scalar("SELECT id FROM project_status LIMIT 1")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO project (id, organization_id, name, lead_team_id, number, status_id, creator_id, lead_id, content) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        )
+        .bind(project)
+        .bind(self.d.org.0)
+        .bind(format!("Projekt {number}"))
+        .bind(self.d.eng.0)
+        .bind(number)
+        .bind(status)
+        .bind(self.d.alice.0)
+        .bind(lead.map(|l| l.0))
+        .bind(content)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_team (organization_id, project_id, team_id) VALUES ($1,$2,$3)",
+        )
+        .bind(self.d.org.0)
+        .bind(project)
+        .bind(self.d.eng.0)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        project
+    }
+
+    async fn initiative(&self, number: i32, owner: Option<UserId>, content: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO initiative (id, organization_id, number, name, owner_id, creator_id, content) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(id)
+        .bind(self.d.org.0)
+        .bind(number)
+        .bind(format!("Initiative {number}"))
+        .bind(owner.map(|o| o.0))
+        .bind(self.d.alice.0)
+        .bind(content)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        id
+    }
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_lead_and_mentions_are_notified_once_and_only_if_visible(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob, carol) = (e.d.alice, e.d.bob, e.d.carol);
+    // Carol (Gast, nur WEB) als Lead und per @carol erwähnt, ENG-Projekt: nichts für sie.
+    let project = e
+        .project_in_eng(110, Some(bob), "Plan mit @carol und `@alice` im Code")
+        .await;
+    sqlx::query("UPDATE project SET lead_id = $1 WHERE id = $2")
+        .bind(carol.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let created = e.user_ev(
+        alice,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    );
+    e.handle(&created).await;
+    assert_eq!(
+        e.count(carol).await,
+        0,
+        "kein Zugriff auf ENG: keine Notification"
+    );
+    // Lead wechselt auf Bob (Mitglied von ENG): projectAddedAsLead, Alice im Code nicht erwähnt.
+    sqlx::query("UPDATE project SET lead_id = $1, content = 'Plan mit @bob' WHERE id = $2")
+        .bind(bob.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let updated = e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    );
+    e.handle(&updated).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["projectMention"]);
+    assert_eq!(e.count(alice).await, 0);
+    assert_eq!(e.count(carol).await, 0);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_lead_gets_added_as_lead_and_default_update_subscription(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let project = e.project_in_eng(111, Some(bob), "").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectCreated {
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["projectAddedAsLead"]);
+    // Lead-Abo mit Default-Typ erhält den Statusbericht.
+    {
+        let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+        tx.projects()
+            .subscribe(ProjectId(project), bob, e.app.clock.now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let update = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Läuft @bob')")
+        .bind(update)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    // Bericht mit Erwähnung von Bob und von Carol (Gast, ENG unsichtbar).
+    sqlx::query("UPDATE project_update SET body = 'Läuft @bob @carol' WHERE id = $1")
+        .bind(update)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdateCreated {
+            update_id: ProjectUpdateId(update),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.kinds(bob).await,
+        vec!["projectAddedAsLead", "projectUpdateMention"]
+    );
+    assert_eq!(
+        e.count(e.d.carol).await,
+        0,
+        "Gast ohne Freigabe bleibt außen vor"
+    );
+    // Ohne Erwähnung: das Lead-Abo selbst liefert projectUpdateCreated.
+    let plain = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Weiter')")
+        .bind(plain)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectUpdateCreated {
+            update_id: ProjectUpdateId(plain),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await.last().unwrap(), "projectUpdateCreated");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn initiative_owner_mentions_and_update_reactions(pool: PgPool) {
+    let e = env(pool).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let initiative = e.initiative(120, Some(bob), "Ziel: @bob prüft").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(initiative),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await, vec!["initiativeMention"]);
+    // Gast sieht keine Initiative.
+    let carol_owned = e.initiative(121, Some(e.d.carol), "").await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::InitiativeCreated {
+            initiative_id: InitiativeId(carol_owned),
+        },
+    ))
+    .await;
+    assert_eq!(e.count(e.d.carol).await, 0);
+
+    // Meilenstein-Beschreibung mit Erwähnung.
+    let project = e.project_in_eng(112, None, "").await;
+    let milestone = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_milestone (id, organization_id, project_id, name, description) VALUES ($1,$2,$3,'M1','Prüfen @bob')")
+        .bind(milestone)
+        .bind(e.d.org.0)
+        .bind(project)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ProjectMilestoneCreated {
+            milestone_id: MilestoneId(milestone),
+            project_id: ProjectId(project),
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.kinds(bob).await,
+        vec!["initiativeMention", "projectMilestoneMention"]
+    );
+
+    // Reaktion auf Statusbericht erreicht dessen Autor.
+    let update = Uuid::now_v7();
+    sqlx::query("INSERT INTO project_update (id, organization_id, project_id, user_id, body) VALUES ($1,$2,$3,$4,'Stand')")
+        .bind(update)
+        .bind(e.d.org.0)
+        .bind(project)
+        .bind(bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let reaction = Uuid::now_v7();
+    sqlx::query("INSERT INTO reaction (id, organization_id, emoji, user_id, project_update_id) VALUES ($1,$2,'👍',$3,$4)")
+        .bind(reaction)
+        .bind(e.d.org.0)
+        .bind(alice.0)
+        .bind(update)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::ReactionCreated {
+            reaction_id: ReactionId(reaction),
+        },
+    ))
+    .await;
+    assert_eq!(e.kinds(bob).await.last().unwrap(), "projectUpdateReaction");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn subscription_types_and_priority_settings_are_validated(pool: PgPool) {
+    let e = env(pool).await;
+    use lineal_app::ports::repos::notification::ObjectKind;
+    let ctx = ctx_for(SeedUser::Bob);
+    let project = e.project_in_eng(113, None, "").await;
+    let err = e
+        .app
+        .set_notification_subscription(
+            &ctx,
+            SetObjectSubscriptionInput {
+                kind: ObjectKind::Project,
+                target: project,
+                context_view_type: None,
+                types: Some(vec!["bogusType".into()]),
+                include_sub_initiative_updates: None,
+                active: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    // Duplikate der Priority-Kategorien werden normalisiert.
+    let s = e
+        .app
+        .update_notification_settings(
+            &ctx,
+            NotificationSettingsPatch {
+                priority_categories: Some(vec!["mentions".into(), "mentions".into()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.priority_categories, vec!["mentions"]);
+    // Nur-Priority-Mail ohne Kategorien ist ungültig.
+    let err = e
+        .app
+        .update_notification_settings(
+            &ctx,
+            NotificationSettingsPatch {
+                priority_categories: Some(vec![]),
+                email_only_priority: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_update_prompt_is_priority_and_due_text_distinguishes_stages(pool: PgPool) {
+    let e = env(pool).await;
+    let bob = e.d.bob;
+    let project = e.project_in_eng(114, Some(bob), "").await;
+    sqlx::query(
+        "UPDATE \"user\" SET notification_priority_categories = ARRAY['reminders'] WHERE id = $1",
+    )
+    .bind(bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    {
+        let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+        tx.projects()
+            .record_reminder(
+                "project",
+                project,
+                bob,
+                e.app.clock.now(),
+                1,
+                e.app.clock.now(),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let p: bool = sqlx::query_scalar(
+        "SELECT is_priority FROM notification WHERE type = 'projectUpdatePrompt'",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(p);
 }

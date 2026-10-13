@@ -87,6 +87,10 @@ pub(crate) struct Fan<'a> {
     views: Option<&'a dyn ViewSubscriptionSource>,
     /// Issues, die durch das Ereignis frei geworden sind (`issueUnblocked`).
     unblocked: Vec<IssueId>,
+    /// Ersetzt das Ereignis-Präfix des Dedup-Schlüssels: Objektänderungen (Projekt, Initiative,
+    /// Meilenstein, Bericht) tragen keine Änderungsliste; je Empfänger und Typ gibt es dann
+    /// höchstens eine Benachrichtigung je Objekt.
+    dedup_override: Option<String>,
 }
 
 impl<'a> Fan<'a> {
@@ -108,6 +112,7 @@ impl<'a> Fan<'a> {
             cands: BTreeMap::new(),
             views: None,
             unblocked: Vec::new(),
+            dedup_override: None,
         })
     }
 
@@ -299,6 +304,29 @@ impl<'a> Fan<'a> {
             } => {
                 self.project_update_created(ev, update_id.0, *project_id)
                     .await
+            }
+            DomainEvent::ProjectUpdateUpdated {
+                update_id,
+                project_id,
+            } => {
+                self.project_update_mentions(ev, update_id.0, *project_id)
+                    .await
+            }
+            DomainEvent::ProjectCreated { project_id }
+            | DomainEvent::ProjectUpdated { project_id } => self.project_changed(*project_id).await,
+            DomainEvent::ProjectMilestoneCreated { milestone_id, .. }
+            | DomainEvent::ProjectMilestoneUpdated { milestone_id, .. } => {
+                self.milestone_changed(milestone_id.0).await
+            }
+            DomainEvent::InitiativeCreated { initiative_id }
+            | DomainEvent::InitiativeUpdated { initiative_id } => {
+                self.initiative_changed(initiative_id.0).await
+            }
+            DomainEvent::InitiativeUpdateCreated { update_id, .. } => {
+                self.initiative_update(ev, update_id.0, true).await
+            }
+            DomainEvent::InitiativeUpdateUpdated { update_id, .. } => {
+                self.initiative_update(ev, update_id.0, false).await
             }
             DomainEvent::IssueSlaHighRisk { issue_id } => {
                 self.sla(*issue_id, "issueSlaHighRisk").await
@@ -722,7 +750,99 @@ impl<'a> Fan<'a> {
                 }
                 return Ok(true);
             }
+            if let Some(milestone) = c.project_milestone_id {
+                let Some(m) = self.tx.notifications().milestone_facts(milestone).await? else {
+                    return Ok(false);
+                };
+                self.target_project(m.project_id).await?;
+                self.refs.project_milestone_id = Some(m.id);
+                if let Some(a) = c.author_id {
+                    self.add(a, "projectMilestoneCommentReaction");
+                }
+                return Ok(true);
+            }
+            if let Some(update) = c.project_update_id {
+                let Some(u) = self.tx.notifications().project_update_facts(update).await? else {
+                    return Ok(false);
+                };
+                self.target_project(u.project_id).await?;
+                self.refs.project_update_id = Some(u.id);
+                if let Some(a) = c.author_id {
+                    self.add(a, "projectUpdateCommentReaction");
+                }
+                return Ok(true);
+            }
+            if let Some(initiative) = c.initiative_id {
+                if !self
+                    .tx
+                    .notifications()
+                    .initiative_exists(initiative)
+                    .await?
+                {
+                    return Ok(false);
+                }
+                self.target_initiative(initiative);
+                if let Some(a) = c.author_id {
+                    self.add(a, "initiativeCommentReaction");
+                }
+                return Ok(true);
+            }
+            if let Some(update) = c.initiative_update_id {
+                let Some(u) = self
+                    .tx
+                    .notifications()
+                    .initiative_update_facts(update)
+                    .await?
+                else {
+                    return Ok(false);
+                };
+                self.target_initiative(u.initiative_id);
+                self.refs.initiative_update_id = Some(u.id);
+                if let Some(a) = c.author_id {
+                    self.add(a, "initiativeUpdateCommentReaction");
+                }
+                return Ok(true);
+            }
+            if let Some(document) = c.document_id {
+                let Some(d) = self.tx.notifications().document_facts(document).await? else {
+                    return Ok(false);
+                };
+                if d.trashed {
+                    return Ok(false);
+                }
+                self.refs.target_type = "document";
+                self.refs.document_id = Some(d.id);
+                self.teams = d.teams.clone();
+                self.workspace_only = d.workspace_only;
+                if let Some(a) = c.author_id {
+                    self.add(a, "documentCommentReaction");
+                }
+                return Ok(true);
+            }
             return Ok(false);
+        }
+        if let Some(update) = r.project_update_id {
+            let Some(u) = self.tx.notifications().project_update_facts(update).await? else {
+                return Ok(false);
+            };
+            self.target_project(u.project_id).await?;
+            self.refs.project_update_id = Some(u.id);
+            self.add(u.author_id, "projectUpdateReaction");
+            return Ok(true);
+        }
+        if let Some(update) = r.initiative_update_id {
+            let Some(u) = self
+                .tx
+                .notifications()
+                .initiative_update_facts(update)
+                .await?
+            else {
+                return Ok(false);
+            };
+            self.target_initiative(u.initiative_id);
+            self.refs.initiative_update_id = Some(u.id);
+            self.add(u.author_id, "initiativeUpdateReaction");
+            return Ok(true);
         }
         if let Some(issue) = r.issue_id {
             let Some(f) = self.tx.notifications().issue_facts(issue).await? else {
@@ -786,6 +906,9 @@ impl<'a> Fan<'a> {
         self.fallback_actor(ev.origin, Some(u.author_id));
         self.target_project(project).await?;
         self.refs.project_update_id = Some(u.id);
+        self.dedup_override = Some(format!("once:projectUpdate:{}", u.id));
+        let mentioned = self.mention_users(&u.body).await?;
+        self.add_all(mentioned, "projectUpdateMention");
         let notifications = self.tx.notifications();
         let mut recipients = notifications
             .object_subscribers(ObjectKind::Project, project.0, "projectUpdateCreated")
@@ -796,6 +919,109 @@ impl<'a> Fan<'a> {
                 .await?,
         );
         self.add_all(recipients, "projectUpdateCreated");
+        Ok(true)
+    }
+
+    /// Erwähnte User im Text (aktive User; die Sichtbarkeit prüft `deliver` je Empfänger).
+    async fn mention_users(&mut self, text: &str) -> AppResult<Vec<UserId>> {
+        super::super::issue::mentions::resolve_handles(&mut *self.tx, text).await
+    }
+
+    /// Erwähnungen in einem geänderten Statusbericht (nur neue, je Bericht einmalig).
+    async fn project_update_mentions(
+        &mut self,
+        ev: &StoredEvent,
+        update: Uuid,
+        project: ProjectId,
+    ) -> AppResult<bool> {
+        let Some(u) = self.tx.notifications().project_update_facts(update).await? else {
+            return Ok(false);
+        };
+        self.fallback_actor(ev.origin, Some(u.author_id));
+        self.target_project(project).await?;
+        self.refs.project_update_id = Some(u.id);
+        self.dedup_override = Some(format!("once:projectUpdate:{}", u.id));
+        let mentioned = self.mention_users(&u.body).await?;
+        self.add_all(mentioned, "projectUpdateMention");
+        Ok(true)
+    }
+
+    /// Projekt angelegt oder geändert: neuer Lead (`projectAddedAsLead`) und Erwähnungen in
+    /// Beschreibung/Inhalt (`projectMention`); je Projekt und Empfänger einmalig.
+    async fn project_changed(&mut self, project: ProjectId) -> AppResult<bool> {
+        let Some(p) = self.tx.notifications().project_facts(project).await? else {
+            return Ok(false);
+        };
+        self.target_project(project).await?;
+        self.dedup_override = Some(format!("once:project:{}", project.0));
+        if let Some(lead) = p.lead_id {
+            self.add(lead, "projectAddedAsLead");
+        }
+        let mentioned = self.mention_users(&p.text).await?;
+        self.add_all(mentioned, "projectMention");
+        Ok(true)
+    }
+
+    async fn milestone_changed(&mut self, milestone: Uuid) -> AppResult<bool> {
+        let Some(m) = self.tx.notifications().milestone_facts(milestone).await? else {
+            return Ok(false);
+        };
+        self.target_project(m.project_id).await?;
+        self.refs.project_milestone_id = Some(m.id);
+        self.dedup_override = Some(format!("once:milestone:{}", m.id));
+        let mentioned = self.mention_users(&m.description).await?;
+        self.add_all(mentioned, "projectMilestoneMention");
+        Ok(true)
+    }
+
+    /// Initiative angelegt oder geändert: neuer Owner und Erwähnungen.
+    async fn initiative_changed(&mut self, initiative: Uuid) -> AppResult<bool> {
+        let Some(i) = self.tx.notifications().initiative_facts(initiative).await? else {
+            return Ok(false);
+        };
+        self.target_initiative(initiative);
+        self.dedup_override = Some(format!("once:initiative:{initiative}"));
+        if let Some(owner) = i.owner_id {
+            self.add(owner, "initiativeAddedAsOwner");
+        }
+        let mentioned = self.mention_users(&i.text).await?;
+        self.add_all(mentioned, "initiativeMention");
+        Ok(true)
+    }
+
+    /// Initiative-Statusbericht: Abonnenten und Erwähnungen.
+    async fn initiative_update(
+        &mut self,
+        ev: &StoredEvent,
+        update: Uuid,
+        is_new: bool,
+    ) -> AppResult<bool> {
+        let Some(u) = self
+            .tx
+            .notifications()
+            .initiative_update_facts(update)
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.fallback_actor(ev.origin, Some(u.author_id));
+        self.target_initiative(u.initiative_id);
+        self.refs.initiative_update_id = Some(u.id);
+        self.dedup_override = Some(format!("once:initiativeUpdate:{}", u.id));
+        let mentioned = self.mention_users(&u.body).await?;
+        self.add_all(mentioned, "initiativeUpdateMention");
+        if is_new {
+            let subs = self
+                .tx
+                .notifications()
+                .object_subscribers(
+                    ObjectKind::Initiative,
+                    u.initiative_id,
+                    "initiativeUpdateCreated",
+                )
+                .await?;
+            self.add_all(subs, "initiativeUpdateCreated");
+        }
         Ok(true)
     }
 
@@ -909,6 +1135,10 @@ impl<'a> Fan<'a> {
             .into_iter()
             .collect();
         let teams = self.teams.clone();
+        let dedup_prefix = self
+            .dedup_override
+            .clone()
+            .unwrap_or_else(|| dedup_prefix.to_owned());
         let mut created = 0;
         for (user, kind) in cands {
             let visible = match (self.refs.issue_id, self.refs.team_id) {
@@ -945,6 +1175,18 @@ impl<'a> Fan<'a> {
                 dedup_key: format!("{dedup_prefix}:{kind}"),
                 now: self.now,
             };
+            // Dasselbe Triage-Ereignis höchstens einmal je Empfänger (docs/05 §6.1 Regel 4): die
+            // Triage-Verantwortung hat die Zeile schon angelegt.
+            if kind == "issueAddedToTriage"
+                && let Some(issue) = self.refs.issue_id
+                && self
+                    .tx
+                    .notifications()
+                    .has_issue_notification(user, issue, "triageResponsibilityIssueAddedToTriage")
+                    .await?
+            {
+                continue;
+            }
             if self.bundle(&n).await? {
                 continue;
             }
@@ -979,6 +1221,15 @@ fn is_relevant(e: &DomainEvent) -> bool {
             | DomainEvent::IssueSubscriptionCreated { .. }
             | DomainEvent::IssueSubscriptionRemoved { .. }
             | DomainEvent::ProjectUpdateCreated { .. }
+            | DomainEvent::ProjectUpdateUpdated { .. }
+            | DomainEvent::ProjectCreated { .. }
+            | DomainEvent::ProjectUpdated { .. }
+            | DomainEvent::ProjectMilestoneCreated { .. }
+            | DomainEvent::ProjectMilestoneUpdated { .. }
+            | DomainEvent::InitiativeCreated { .. }
+            | DomainEvent::InitiativeUpdated { .. }
+            | DomainEvent::InitiativeUpdateCreated { .. }
+            | DomainEvent::InitiativeUpdateUpdated { .. }
             | DomainEvent::IssueSlaHighRisk { .. }
             | DomainEvent::IssueSlaBreached { .. }
     )

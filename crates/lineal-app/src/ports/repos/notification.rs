@@ -63,6 +63,11 @@ pub struct NotificationView {
     pub issue_title: Option<String>,
     /// Aktuelle Priorität des Issues (1 = Urgent; für die E-Mail-Dringlichkeit).
     pub issue_priority: Option<i32>,
+    /// Fälligkeitsdatum des Issues (Text von `issueDue`).
+    pub issue_due_date: Option<chrono::NaiveDate>,
+    /// Aktueller Status des Issues (Text von `issueStatusChanged`).
+    pub issue_state_name: Option<String>,
+    pub issue_state_type: Option<String>,
     pub project_name: Option<String>,
     pub initiative_name: Option<String>,
     pub document_title: Option<String>,
@@ -205,6 +210,8 @@ pub struct ReactionFacts {
     pub emoji: String,
     pub issue_id: Option<IssueId>,
     pub comment_id: Option<CommentId>,
+    pub project_update_id: Option<Uuid>,
+    pub initiative_update_id: Option<Uuid>,
 }
 
 /// Fakten einer Issue-Relation.
@@ -221,6 +228,24 @@ pub struct ProjectUpdateFacts {
     pub id: Uuid,
     pub project_id: ProjectId,
     pub author_id: UserId,
+    pub body: String,
+}
+
+/// Fakten eines Projekts (Lead, Text für Erwähnungen).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectFacts {
+    pub id: ProjectId,
+    pub lead_id: Option<UserId>,
+    /// Beschreibung und Inhalt (für Erwähnungen).
+    pub text: String,
+}
+
+/// Fakten einer Initiative (Owner, Text für Erwähnungen).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InitiativeFacts {
+    pub id: Uuid,
+    pub owner_id: Option<UserId>,
+    pub text: String,
 }
 
 /// Fakten eines Meilensteins.
@@ -228,6 +253,7 @@ pub struct ProjectUpdateFacts {
 pub struct MilestoneFacts {
     pub id: Uuid,
     pub project_id: ProjectId,
+    pub description: String,
 }
 
 /// Fakten eines Initiative-Statusberichts.
@@ -236,6 +262,7 @@ pub struct InitiativeUpdateFacts {
     pub id: Uuid,
     pub initiative_id: Uuid,
     pub author_id: UserId,
+    pub body: String,
 }
 
 /// Fakten eines Dokuments: wer es sehen darf und wer es abonniert hat (docs/06, docs/05 §6.3).
@@ -584,6 +611,21 @@ pub trait NotificationRepo: Send {
         unimplemented_repo()
     }
     async fn project_update_facts(&mut self, _id: Uuid) -> AppResult<Option<ProjectUpdateFacts>> {
+        unimplemented_repo()
+    }
+    /// Ob der User zu dem Issue bereits eine nicht archivierte Notification dieses Typs hat.
+    async fn has_issue_notification(
+        &mut self,
+        _user: UserId,
+        _issue: IssueId,
+        _kind: &str,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    async fn project_facts(&mut self, _id: ProjectId) -> AppResult<Option<ProjectFacts>> {
+        unimplemented_repo()
+    }
+    async fn initiative_facts(&mut self, _id: Uuid) -> AppResult<Option<InitiativeFacts>> {
         unimplemented_repo()
     }
     async fn milestone_facts(&mut self, _id: Uuid) -> AppResult<Option<MilestoneFacts>> {

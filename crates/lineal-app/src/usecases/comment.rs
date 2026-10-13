@@ -265,11 +265,17 @@ fn clean_body(body: &str) -> AppResult<String> {
 /// Die Erwähnungs-Kandidaten im Text: je `@`-Lauf die Namen von lang nach kurz
 /// (`@bob.` → `bob.`, `bob`).
 fn mention_runs(body: &str) -> Vec<Vec<String>> {
+    // Code ist keine Erwähnung (B6.15).
+    let body = super::issue::mentions::strip_code(body);
     let chars: Vec<char> = body.chars().collect();
     let mut runs = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '@' && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '@')) {
+        if chars[i] == '@'
+            && (i == 0
+                || !(chars[i - 1].is_alphanumeric()
+                    || matches!(chars[i - 1], '@' | '/' | '\\' | '_' | ':' | '.' | '-')))
+        {
             let mut j = i + 1;
             while j < chars.len()
                 && j - i - 1 < 40
