@@ -40,41 +40,63 @@ fn last_day_of_month(year: i32, month: u32) -> NaiveDate {
         .unwrap_or_default()
 }
 
-/// Normalisiert ein Startdatum (docs/04 §2.5): erster Tag der Auflösung.
-pub fn normalize_start(date: NaiveDate, res: Option<DateResolution>) -> NaiveDate {
-    let (y, m) = (date.year(), date.month());
-    let first = |month: u32| NaiveDate::from_ymd_opt(y, month, 1).unwrap_or(date);
+/// Periodenlänge der Auflösung in Monaten.
+fn period_months(res: DateResolution) -> u32 {
     match res {
-        None => date,
-        Some(DateResolution::Month) => first(m),
-        Some(DateResolution::Quarter) => first((m - 1) / 3 * 3 + 1),
-        Some(DateResolution::HalfYear) => first(if m <= 6 { 1 } else { 7 }),
-        Some(DateResolution::Year) => first(1),
+        DateResolution::Month => 1,
+        DateResolution::Quarter => 3,
+        DateResolution::HalfYear => 6,
+        DateResolution::Year => 12,
     }
+}
+
+/// Erster Monat (Jahr, Monat 1-12) der Periode, in der `date` liegt. Quartale, Halbjahre und
+/// Jahre richten sich nach `fiscal` (`Organization.fiscalYearStartMonth`, 0 = Januar ... 11).
+fn period_start(date: NaiveDate, res: DateResolution, fiscal: u32) -> (i32, u32) {
+    let m0 = date.month0();
+    let f = fiscal % 12;
+    let rel = (m0 + 12 - f) % 12;
+    let len = period_months(res);
+    let start0 = (f + rel / len * len) % 12;
+    let year = if start0 > m0 {
+        date.year() - 1
+    } else {
+        date.year()
+    };
+    (year, start0 + 1)
+}
+
+/// Normalisiert ein Startdatum (docs/04 §2.5): erster Tag der Auflösung.
+pub fn normalize_start(date: NaiveDate, res: Option<DateResolution>, fiscal: u32) -> NaiveDate {
+    let Some(res) = res else { return date };
+    let (y, m) = period_start(date, res, fiscal);
+    NaiveDate::from_ymd_opt(y, m, 1).unwrap_or(date)
 }
 
 /// Normalisiert ein Zieldatum (docs/04 §2.5): letzter Tag der Auflösung.
-pub fn normalize_target(date: NaiveDate, res: Option<DateResolution>) -> NaiveDate {
-    let (y, m) = (date.year(), date.month());
-    match res {
-        None => date,
-        Some(DateResolution::Month) => last_day_of_month(y, m),
-        Some(DateResolution::Quarter) => last_day_of_month(y, (m - 1) / 3 * 3 + 3),
-        Some(DateResolution::HalfYear) => last_day_of_month(y, if m <= 6 { 6 } else { 12 }),
-        Some(DateResolution::Year) => last_day_of_month(y, 12),
-    }
+pub fn normalize_target(date: NaiveDate, res: Option<DateResolution>, fiscal: u32) -> NaiveDate {
+    let Some(res) = res else { return date };
+    let (y, m) = period_start(date, res, fiscal);
+    let end_m0 = m - 1 + period_months(res) - 1;
+    last_day_of_month(y + (end_m0 / 12) as i32, end_m0 % 12 + 1)
 }
 
-/// Anzeige eines Datums nach Auflösung (`Q4 2026`, `Jan 2027`, `Nov 14, 2026`).
-pub fn display_date(date: NaiveDate, res: Option<DateResolution>) -> String {
+/// Anzeige eines Datums nach Auflösung (`Q4 2026`, `Jan 2027`, `Nov 14, 2026`). Fiskalquartale
+/// tragen das Jahr, in dem das Geschäftsjahr endet.
+pub fn display_date(date: NaiveDate, res: Option<DateResolution>, fiscal: u32) -> String {
+    let f = fiscal % 12;
+    let rel = (date.month0() + 12 - f) % 12;
+    let fiscal_year = if f > 0 && date.month0() >= f {
+        date.year() + 1
+    } else {
+        date.year()
+    };
     match res {
         None => date.format("%b %-d, %Y").to_string(),
         Some(DateResolution::Month) => date.format("%b %Y").to_string(),
-        Some(DateResolution::Quarter) => format!("Q{} {}", (date.month() - 1) / 3 + 1, date.year()),
-        Some(DateResolution::HalfYear) => {
-            format!("H{} {}", if date.month() <= 6 { 1 } else { 2 }, date.year())
-        }
-        Some(DateResolution::Year) => date.year().to_string(),
+        Some(DateResolution::Quarter) => format!("Q{} {}", rel / 3 + 1, fiscal_year),
+        Some(DateResolution::HalfYear) => format!("H{} {}", rel / 6 + 1, fiscal_year),
+        Some(DateResolution::Year) => fiscal_year.to_string(),
     }
 }
 
@@ -94,6 +116,7 @@ pub fn resolve_dates(
     start_res: Option<DateResolution>,
     target: Option<NaiveDate>,
     target_res: Option<DateResolution>,
+    fiscal: u32,
 ) -> AppResult<(
     Option<NaiveDate>,
     Option<DateResolution>,
@@ -112,8 +135,8 @@ pub fn resolve_dates(
                 .with_details(json!({ "field": "targetDateResolution" })),
         );
     }
-    let start = start.map(|d| normalize_start(d, start_res));
-    let target = target.map(|d| normalize_target(d, target_res));
+    let start = start.map(|d| normalize_start(d, start_res, fiscal));
+    let target = target.map(|d| normalize_target(d, target_res, fiscal));
     if let (Some(s), Some(t)) = (start, target)
         && s > t
     {
@@ -354,7 +377,12 @@ fn date_of(v: &Value, key: &str) -> Option<NaiveDate> {
 
 /// Diff zwischen zwei Snapshots (docs/04 §5.3). `Some((diff, markdown))`, wenn sich etwas geändert hat.
 /// Der Gesamtfortschritt zählt erst ab mehr als 2 Prozentpunkten Änderung; Meilensteine nur bei Projekten.
-pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(Value, String)> {
+pub fn compute_diff(
+    prev: &Value,
+    cur: &Value,
+    with_progress: bool,
+    fiscal: u32,
+) -> Option<(Value, String)> {
     let mut diff = serde_json::Map::new();
     let mut lines: Vec<String> = Vec::new();
 
@@ -393,7 +421,7 @@ pub fn compute_diff(prev: &Value, cur: &Value, with_progress: bool) -> Option<(V
             }),
         );
         let show = |d: Option<NaiveDate>, r| {
-            d.map(|d| display_date(d, r))
+            d.map(|d| display_date(d, r, fiscal))
                 .unwrap_or_else(|| "none".into())
         };
         lines.push(format!(
@@ -498,38 +526,80 @@ mod tests {
     fn resolution_normalizes_dates() {
         use DateResolution::*;
         let x = d(2026, 11, 14);
-        assert_eq!(normalize_start(x, None), x);
-        assert_eq!(normalize_start(x, Some(Month)), d(2026, 11, 1));
-        assert_eq!(normalize_target(x, Some(Month)), d(2026, 11, 30));
-        assert_eq!(normalize_start(x, Some(Quarter)), d(2026, 10, 1));
-        assert_eq!(normalize_target(x, Some(Quarter)), d(2026, 12, 31));
-        assert_eq!(normalize_start(x, Some(HalfYear)), d(2026, 7, 1));
+        assert_eq!(normalize_start(x, None, 0), x);
+        assert_eq!(normalize_start(x, Some(Month), 0), d(2026, 11, 1));
+        assert_eq!(normalize_target(x, Some(Month), 0), d(2026, 11, 30));
+        assert_eq!(normalize_start(x, Some(Quarter), 0), d(2026, 10, 1));
+        assert_eq!(normalize_target(x, Some(Quarter), 0), d(2026, 12, 31));
+        assert_eq!(normalize_start(x, Some(HalfYear), 0), d(2026, 7, 1));
         assert_eq!(
-            normalize_target(d(2026, 3, 3), Some(HalfYear)),
+            normalize_target(d(2026, 3, 3), Some(HalfYear), 0),
             d(2026, 6, 30)
         );
-        assert_eq!(normalize_start(x, Some(Year)), d(2026, 1, 1));
-        assert_eq!(normalize_target(x, Some(Year)), d(2026, 12, 31));
-        assert_eq!(normalize_target(d(2028, 2, 3), Some(Month)), d(2028, 2, 29));
+        assert_eq!(normalize_start(x, Some(Year), 0), d(2026, 1, 1));
+        assert_eq!(normalize_target(x, Some(Year), 0), d(2026, 12, 31));
+        assert_eq!(
+            normalize_target(d(2028, 2, 3), Some(Month), 0),
+            d(2028, 2, 29)
+        );
+    }
+
+    #[test]
+    fn fiscal_year_start_shifts_quarters_halves_and_years() {
+        use DateResolution::*;
+        // B5.05: Fiskaljahr ab Februar (1): Quartale Feb-Apr, Mai-Jul, Aug-Okt, Nov-Jan.
+        let x = d(2026, 11, 20);
+        assert_eq!(normalize_start(x, Some(Quarter), 1), d(2026, 11, 1));
+        assert_eq!(normalize_target(x, Some(Quarter), 1), d(2027, 1, 31));
+        assert_eq!(
+            normalize_target(d(2027, 1, 5), Some(Quarter), 1),
+            d(2027, 1, 31)
+        );
+        assert_eq!(
+            normalize_start(d(2027, 1, 5), Some(Quarter), 1),
+            d(2026, 11, 1)
+        );
+        assert_eq!(normalize_start(x, Some(HalfYear), 1), d(2026, 8, 1));
+        assert_eq!(normalize_target(x, Some(HalfYear), 1), d(2027, 1, 31));
+        assert_eq!(normalize_start(d(2027, 1, 5), Some(Year), 1), d(2026, 2, 1));
+        assert_eq!(
+            normalize_target(d(2027, 1, 5), Some(Year), 1),
+            d(2027, 1, 31)
+        );
+        assert_eq!(
+            normalize_target(d(2026, 6, 5), Some(Year), 1),
+            d(2027, 1, 31)
+        );
+        // Oktober-Start (9).
+        assert_eq!(
+            normalize_target(d(2026, 11, 20), Some(Quarter), 9),
+            d(2026, 12, 31)
+        );
+        assert_eq!(
+            normalize_start(d(2026, 11, 20), Some(Quarter), 9),
+            d(2026, 10, 1)
+        );
+        assert_eq!(display_date(d(2027, 1, 31), Some(Quarter), 1), "Q4 2027");
+        assert_eq!(display_date(d(2026, 11, 1), Some(Quarter), 1), "Q4 2027");
     }
 
     #[test]
     fn display_follows_resolution() {
         assert_eq!(
-            display_date(d(2026, 12, 31), Some(DateResolution::Quarter)),
+            display_date(d(2026, 12, 31), Some(DateResolution::Quarter), 0),
             "Q4 2026"
         );
         assert_eq!(
-            display_date(d(2027, 1, 31), Some(DateResolution::Month)),
+            display_date(d(2027, 1, 31), Some(DateResolution::Month), 0),
             "Jan 2027"
         );
-        assert_eq!(display_date(d(2026, 11, 14), None), "Nov 14, 2026");
+        assert_eq!(display_date(d(2026, 11, 14), None, 0), "Nov 14, 2026");
         assert_eq!(
-            display_date(d(2026, 12, 31), Some(DateResolution::HalfYear)),
+            display_date(d(2026, 12, 31), Some(DateResolution::HalfYear), 0),
             "H2 2026"
         );
         assert_eq!(
-            display_date(d(2026, 12, 31), Some(DateResolution::Year)),
+            display_date(d(2026, 12, 31), Some(DateResolution::Year), 0),
             "2026"
         );
     }
@@ -537,14 +607,15 @@ mod tests {
     #[test]
     fn dates_are_validated() {
         // Auflösung ohne Datum
-        assert!(resolve_dates(None, Some(DateResolution::Month), None, None).is_err());
+        assert!(resolve_dates(None, Some(DateResolution::Month), None, None, 0).is_err());
         // Start nach Ziel (nach Normalisierung)
-        assert!(resolve_dates(Some(d(2026, 12, 5)), None, Some(d(2026, 12, 1)), None).is_err());
+        assert!(resolve_dates(Some(d(2026, 12, 5)), None, Some(d(2026, 12, 1)), None, 0).is_err());
         let (s, _, t, _) = resolve_dates(
             Some(d(2026, 10, 14)),
             Some(DateResolution::Quarter),
             Some(d(2026, 11, 14)),
             Some(DateResolution::Quarter),
+            0,
         )
         .unwrap();
         assert_eq!((s, t), (Some(d(2026, 10, 1)), Some(d(2026, 12, 31))));
@@ -657,7 +728,7 @@ mod tests {
             "status": { "name": "In Progress" }, "targetDate": "2027-01-31", "targetDateResolution": "month",
             "progress": 0.42, "milestones": [{ "id": "m1", "name": "Beta", "progress": 1.0 }]
         });
-        let (diff, md) = compute_diff(&prev, &cur, true).unwrap();
+        let (diff, md) = compute_diff(&prev, &cur, true, 0).unwrap();
         assert_eq!(diff["status"]["to"], "In Progress");
         assert_eq!(diff["targetDate"]["toResolution"], "month");
         assert_eq!(diff["milestones"][0]["completed"], true);
@@ -670,8 +741,8 @@ mod tests {
         );
         // Fortschritt unter 2 Prozentpunkten wird nicht aufgenommen.
         let small = json!({ "progress": 0.19 });
-        assert!(compute_diff(&json!({ "progress": 0.18 }), &small, true).is_none());
-        assert!(compute_diff(&cur, &cur, true).is_none());
+        assert!(compute_diff(&json!({ "progress": 0.18 }), &small, true, 0).is_none());
+        assert!(compute_diff(&cur, &cur, true, 0).is_none());
     }
 
     #[test]

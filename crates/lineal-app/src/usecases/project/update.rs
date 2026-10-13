@@ -261,7 +261,12 @@ impl App {
             .unwrap_or(Health::OnTrack);
         let snapshot = project_snapshot(&mut *tx, &snap, &r.project, now).await?;
         let (diff, diff_markdown) = match &previous {
-            Some(p) => match compute_diff(&p.snapshot, &snapshot, true) {
+            Some(p) => match compute_diff(
+                &p.snapshot,
+                &snapshot,
+                true,
+                super::fiscal_month(&mut *tx).await?,
+            ) {
                 Some((d, md)) => (Some(d), Some(md)),
                 None => (None, None),
             },

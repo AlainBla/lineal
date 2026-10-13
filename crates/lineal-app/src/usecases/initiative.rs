@@ -590,6 +590,7 @@ impl App {
                         None,
                         input.target_date.flatten(),
                         input.target_date_resolution.flatten(),
+                        super::project::fiscal_month(&mut *tx).await?,
                     )?;
                     (t, tr)
                 };
@@ -678,7 +679,13 @@ impl App {
                         .target_date_resolution
                         .unwrap_or(cur.target_date_resolution);
                     let res = if target.is_none() { None } else { res };
-                    let (_, _, t, tr) = pure::resolve_dates(None, None, target, res)?;
+                    let (_, _, t, tr) = pure::resolve_dates(
+                        None,
+                        None,
+                        target,
+                        res,
+                        super::project::fiscal_month(&mut *tx).await?,
+                    )?;
                     patch.target_date = Some(t);
                     patch.target_date_resolution = Some(tr);
                 }

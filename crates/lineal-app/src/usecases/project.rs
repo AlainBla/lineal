@@ -105,6 +105,15 @@ pub struct ProjectResources {
     pub resource_count: i64,
 }
 
+/// Erster Monat des Geschäftsjahres (0 = Januar) für `quarter`/`halfYear`/`year`-Auflösung.
+pub(crate) async fn fiscal_month(tx: &mut dyn Tx) -> AppResult<u32> {
+    Ok(tx
+        .orgs()
+        .get()
+        .await?
+        .map_or(0, |o| u32::try_from(o.fiscal_year_start_month).unwrap_or(0)))
+}
+
 pub(crate) async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResult<()> {
     tx.outbox().push(NewEvent::from_ctx(event, ctx)).await?;
     Ok(())
@@ -683,11 +692,13 @@ impl App {
                 .cloned()
                 .ok_or_else(|| AppError::internal("no backlog project status configured"))?,
         };
+        let fiscal = fiscal_month(tx).await?;
         let (start, start_res, target, target_res) = pure::resolve_dates(
             input.start_date.flatten(),
             input.start_date_resolution.flatten(),
             input.target_date.flatten(),
             input.target_date_resolution.flatten(),
+            fiscal,
         )?;
         let lead = match &input.lead {
             Some(Some(r)) => {
@@ -1027,7 +1038,13 @@ impl App {
             // Wird ein Datum geleert, wird auch die Auflösung geleert.
             let start_res = if start.is_none() { None } else { start_res };
             let target_res = if target.is_none() { None } else { target_res };
-            let (s, sr, t, tr) = pure::resolve_dates(start, start_res, target, target_res)?;
+            let (s, sr, t, tr) = pure::resolve_dates(
+                start,
+                start_res,
+                target,
+                target_res,
+                fiscal_month(tx).await?,
+            )?;
             patch.start_date = Some(s);
             patch.start_date_resolution = Some(sr);
             patch.target_date = Some(t);
