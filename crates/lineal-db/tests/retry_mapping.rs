@@ -85,3 +85,85 @@ async fn fk_and_unique_violations_map_to_domain_errors(pool: PgPool) {
     assert_eq!(m.kind, ErrorKind::Conflict);
     assert!(!m.is_retryable());
 }
+
+/// B1.12: Eine Verbindung mit offener (dem Client unbekannter) Transaktion wird beim Entnehmen
+/// aus dem Pool verworfen, statt „there is already a transaction in progress“ auszulösen.
+#[sqlx::test(migrations = "./migrations")]
+async fn pool_discards_connection_with_open_transaction(pool: PgPool) {
+    let opts = (*pool.connect_options()).clone();
+    let p = lineal_db::pool_options(1).connect_with(opts).await.unwrap();
+    let pid_before: i32 = {
+        let mut c = p.acquire().await.unwrap();
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *c)
+            .await
+            .unwrap();
+        // Rohes BEGIN am sqlx-Zustand vorbei: wie eine abgebrochene `begin()`-Anfrage.
+        sqlx::raw_sql("BEGIN").execute(&mut *c).await.unwrap();
+        pid
+    };
+    let mut c = p.acquire().await.unwrap();
+    let pid_after: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+    assert_ne!(
+        pid_before, pid_after,
+        "verschmutzte Verbindung wurde wiederverwendet"
+    );
+    assert!(in_clean_state(&mut c).await);
+    drop(c);
+    // Saubere Verbindungen werden weiterverwendet.
+    let pid_a = {
+        let mut c = p.acquire().await.unwrap();
+        sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+            .fetch_one(&mut *c)
+            .await
+            .unwrap()
+    };
+    let pid_b = {
+        let mut c = p.acquire().await.unwrap();
+        sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+            .fetch_one(&mut *c)
+            .await
+            .unwrap()
+    };
+    assert_eq!(pid_a, pid_b);
+}
+
+/// Simples Protokoll: `now()` (Transaktionsbeginn) = `statement_timestamp()` nur ohne offene
+/// Transaktion.
+async fn in_clean_state(c: &mut sqlx::PgConnection) -> bool {
+    use sqlx::Row;
+    sqlx::raw_sql("SELECT now() = statement_timestamp()")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap()
+        .get::<bool, _>(0)
+}
+
+/// B1.12: Wird `PgStore::begin` mitten im `BEGIN` abgebrochen (Client-Abbruch), bleibt keine
+/// offene Server-Transaktion auf der Pool-Verbindung zurück.
+#[sqlx::test(migrations = "./migrations")]
+async fn cancelled_begin_leaves_no_open_transaction(pool: PgPool) {
+    use lineal_app::ports::Store;
+    let store = lineal_db::PgStore::new(pool.clone());
+    // Verbindung vorwärmen (idle im Pool).
+    drop(pool.acquire().await.unwrap());
+    let org = lineal_domain::ids::OrgId::nil();
+    for round in 0..30_u64 {
+        // Anfrage nach unterschiedlich kurzer Zeit abbrechen (mitten in `BEGIN`).
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_micros(round * 50),
+            store.begin(org),
+        )
+        .await;
+        // Dem Hintergrundtask (falls vorhanden) Zeit zum Aufräumen geben.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut c = pool.acquire().await.unwrap();
+        assert!(
+            in_clean_state(&mut c).await,
+            "offene Transaktion auf Pool-Verbindung"
+        );
+    }
+}
