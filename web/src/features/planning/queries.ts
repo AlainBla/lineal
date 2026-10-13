@@ -115,6 +115,24 @@ export function useFiscalMonth(): number {
   return q.data ?? 0;
 }
 
+/** Zeitzone eines Teams (Cycle-Grenzen sind lokale Mitternacht der Team-Zeitzone). */
+export function useTeamTimezone(teamKey: string): string {
+  const q = useQuery({
+    queryKey: ["planning", "team-timezone", teamKey],
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ team: { timezone: string } }, { id: string }>(
+          `query PlanningTeamTimezone($id: String!) { team(id: $id) { id timezone } }`,
+          { id: teamKey },
+          { signal },
+        )
+      ).team.timezone,
+  });
+  return q.data ?? "UTC";
+}
+
 export function useProject(ref: string) {
   return useQuery({
     queryKey: planningKeys.project(ref),
@@ -279,6 +297,15 @@ export function useCycle(team: string, ref: string) {
           { signal },
         );
         return res.cycles[0] ?? null;
+      }
+      if (/^\d+$/.test(ref)) {
+        // Nummer im Teamkontext auflösen (B5.33); unbekannte Nummer = nicht gefunden.
+        const res = await gqlRequest<{ cycles: Cycle[] }, { team: string }>(
+          `query PlanningCycles($team: String!) { cycles(teamId: $team) { ${CYCLE_FIELDS} } }`,
+          { team },
+          { signal },
+        );
+        return res.cycles.find((c) => c.number === Number(ref)) ?? null;
       }
       const res = await gqlRequest<{ cycle: Cycle }, { id: string }>(
         `query PlanningCycle($id: String!) { cycle(id: $id) { ${CYCLE_FIELDS} } }`,

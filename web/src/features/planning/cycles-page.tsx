@@ -9,8 +9,8 @@ import { groupByState } from "@/features/issues/model";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Cycle } from "@/gql/graphql";
 
-import { useCycle, useScopedIssues, useTeamCycles } from "./queries";
-import { PageHeader, ProgressBar, shortDate } from "./ui";
+import { useCycle, useScopedIssues, useTeamCycles, useTeamTimezone } from "./queries";
+import { cycleRange, PageHeader, ProgressBar } from "./ui";
 
 export function cycleBadge(c: Cycle): string {
   if (c.isActive) return "Current";
@@ -27,6 +27,7 @@ const cycleName = (c: Cycle) => c.name ?? `Cycle ${c.number}`;
 /** Cycles eines Teams (docs/08 §2.6): Timeline-Liste, neueste zuerst. */
 export function TeamCyclesPage({ ws, teamKey }: { ws: string; teamKey: string }) {
   const q = useTeamCycles(teamKey);
+  const tz = useTeamTimezone(teamKey);
   const p = teamPaths(ws, teamKey);
   let body;
   if (q.isLoading) body = <ListSkeleton rows={5} />;
@@ -53,7 +54,7 @@ export function TeamCyclesPage({ ws, teamKey }: { ws: string; teamKey: string })
                 {cycleBadge(c)}
               </span>
               <span className="text-xs text-muted-foreground">
-                {shortDate(c.startsAt)} – {shortDate(c.endsAt)}
+                {cycleRange(c.startsAt, c.endsAt, tz)}
               </span>
               <span className="ml-auto flex items-center gap-3">
                 <span className="text-xs text-muted-foreground tabular-nums">
@@ -92,6 +93,7 @@ export function CyclePage({
   cycleRef: string;
 }) {
   const cq = useCycle(teamKey, cycleRef);
+  const tz = useTeamTimezone(teamKey);
   const cycle = cq.data ?? null;
   const issues = useScopedIssues(cycle ? { cycleId: cycle.id } : null);
   const meta = useTeamMeta(teamKey);
@@ -107,8 +109,18 @@ export function CyclePage({
   if (!cycle)
     return (
       <EmptyState
-        title={cycleRef === "upcoming" ? "No upcoming cycle" : "No active cycle"}
-        description="Cycles appear here once they are scheduled."
+        title={
+          cycleRef === "upcoming"
+            ? "No upcoming cycle"
+            : cycleRef === "active"
+              ? "No active cycle"
+              : "Cycle not found"
+        }
+        description={
+          cycleRef === "active" || cycleRef === "upcoming"
+            ? "Cycles appear here once they are scheduled."
+            : "This cycle does not exist in this team."
+        }
       />
     );
   const groups = meta.data ? groupByState(meta.data.states, issues.data?.issues ?? [], "all") : [];
@@ -124,8 +136,7 @@ export function CyclePage({
         ]}
         actions={
           <span className="text-xs text-muted-foreground">
-            {shortDate(cycle.startsAt)} – {shortDate(cycle.endsAt)} ·{" "}
-            {Math.round(cycle.progress * 100)}%
+            {cycleRange(cycle.startsAt, cycle.endsAt, tz)} · {Math.round(cycle.progress * 100)}%
             {cycle.capacity != null && (
               <>
                 {" "}

@@ -5,7 +5,7 @@ import { mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fi
 import type { Project } from "@/gql/graphql";
 
 import { ProjectsPage } from "./projects-page";
-import { dayInZone, shortDate } from "./ui";
+import { cycleRange, dayInZone, shortDate } from "./ui";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -30,6 +30,14 @@ describe("shortDate (B5.12)", () => {
   it("dayInZone nutzt die angegebene Zeitzone (B5.20)", () => {
     expect(dayInZone("2026-10-04T22:00:00Z", "Europe/Berlin")).toBe("5 Oct");
     expect(dayInZone("2026-10-04T22:00:00Z", "America/Los_Angeles")).toBe("4 Oct");
+  });
+});
+
+describe("cycleRange (B5.20)", () => {
+  it("zeigt erster und letzter Tag in der Team-Zeitzone", () => {
+    expect(cycleRange("2026-10-04T22:00:00Z", "2026-10-18T22:00:00Z", "Europe/Berlin")).toBe(
+      "5 Oct – 18 Oct",
+    );
   });
 });
 

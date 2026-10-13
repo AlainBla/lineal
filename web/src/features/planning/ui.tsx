@@ -123,3 +123,10 @@ export const dayInZone = (iso: string, tz: string, offsetDays = 0) => {
   const t = new Date(new Date(iso).getTime() + offsetDays * 86_400_000);
   return t.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: tz });
 };
+
+/**
+ * Zeitraum eines Cycles in der Zeitzone des Teams (docs/04 §1.4): erster und letzter Tag. Das
+ * Ende ist exklusiv (lokale Mitternacht nach dem letzten Tag) und wird als letzter Tag gezeigt.
+ */
+export const cycleRange = (startsAt: string, endsAt: string, tz: string) =>
+  `${dayInZone(startsAt, tz)} – ${dayInZone(endsAt, tz, -1 / 86_400)}`;
