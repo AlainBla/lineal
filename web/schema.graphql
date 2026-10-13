@@ -2464,6 +2464,25 @@ type Team {
 	timezone: String!
 	triageEnabled: Boolean!
 	cyclesEnabled: Boolean!
+	"""
+	Cycle-Dauer in Wochen (1-8).
+	"""
+	cycleDuration: Int!
+	"""
+	Cooldown zwischen Cycles in Wochen (0-8).
+	"""
+	cycleCooldownTime: Int!
+	"""
+	Starttag der Cycles (0 = Sonntag ... 6 = Samstag).
+	"""
+	cycleStartDay: Int!
+	"""
+	Anzahl künftig angelegter Cycles.
+	"""
+	upcomingCycleCount: Int!
+	cycleIssueAutoAssignStarted: Boolean!
+	cycleIssueAutoAssignCompleted: Boolean!
+	cycleLockToActive: Boolean!
 	issueEstimationType: String!
 	inheritWorkflowStatuses: Boolean!
 	issueEstimationExtended: Boolean!

@@ -32,6 +32,17 @@ pub struct TeamGql {
     pub timezone: String,
     pub triage_enabled: bool,
     pub cycles_enabled: bool,
+    /// Cycle-Dauer in Wochen (1-8).
+    pub cycle_duration: i32,
+    /// Cooldown zwischen Cycles in Wochen (0-8).
+    pub cycle_cooldown_time: i32,
+    /// Starttag der Cycles (0 = Sonntag ... 6 = Samstag).
+    pub cycle_start_day: i32,
+    /// Anzahl künftig angelegter Cycles.
+    pub upcoming_cycle_count: i32,
+    pub cycle_issue_auto_assign_started: bool,
+    pub cycle_issue_auto_assign_completed: bool,
+    pub cycle_lock_to_active: bool,
     pub issue_estimation_type: String,
     pub inherit_workflow_statuses: bool,
     pub issue_estimation_extended: bool,
@@ -67,6 +78,13 @@ impl From<TeamView> for TeamGql {
             timezone: t.timezone,
             triage_enabled: t.triage_enabled,
             cycles_enabled: t.cycles_enabled,
+            cycle_duration: t.cycle_duration,
+            cycle_cooldown_time: t.cycle_cooldown_time,
+            cycle_start_day: t.cycle_start_day,
+            upcoming_cycle_count: t.upcoming_cycle_count,
+            cycle_issue_auto_assign_started: t.cycle_issue_auto_assign_started,
+            cycle_issue_auto_assign_completed: t.cycle_issue_auto_assign_completed,
+            cycle_lock_to_active: t.cycle_lock_to_active,
             issue_estimation_type: t.issue_estimation_type.as_str().into(),
             inherit_workflow_statuses: t.inherit_workflow_statuses,
             issue_estimation_extended: t.issue_estimation_extended,

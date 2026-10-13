@@ -25,6 +25,7 @@ import { StatusIcon } from "@/features/issues/icons";
 import type { Team, WorkflowState } from "@/gql/graphql";
 
 import {
+  type CycleSettings,
   useMembership,
   useTeamLabels,
   useTeamMembers,
@@ -533,27 +534,28 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 export function CyclesSection({ team }: { team: Team }) {
   const update = useUpdateCycleSettings(team.id);
   const [enabled, setEnabled] = useState(team.cyclesEnabled);
-  const [duration, setDuration] = useState(2);
-  const [cooldown, setCooldown] = useState(0);
-  const [startDay, setStartDay] = useState(1);
-  const [upcoming, setUpcoming] = useState(2);
+  const [duration, setDuration] = useState(team.cycleDuration);
+  const [cooldown, setCooldown] = useState(team.cycleCooldownTime);
+  const [startDay, setStartDay] = useState(team.cycleStartDay);
+  const [upcoming, setUpcoming] = useState(team.upcomingCycleCount);
   return (
     <Section title="Cycles" description="Time-boxed iterations for this team.">
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          update.mutate(
-            enabled
-              ? {
-                  cyclesEnabled: true,
-                  cycleDuration: duration,
-                  cycleCooldownTime: cooldown,
-                  cycleStartDay: startDay,
-                  upcomingCycleCount: upcoming,
-                }
-              : { cyclesEnabled: false },
-          );
+          // Nur geänderte Werte senden: ein unverändertes Speichern ändert nichts (und kollidiert
+          // nicht mit einem von der Elternebene geerbten Zeitplan).
+          const input: CycleSettings = {};
+          if (enabled !== team.cyclesEnabled) input.cyclesEnabled = enabled;
+          if (enabled) {
+            if (duration !== team.cycleDuration) input.cycleDuration = duration;
+            if (cooldown !== team.cycleCooldownTime) input.cycleCooldownTime = cooldown;
+            if (startDay !== team.cycleStartDay) input.cycleStartDay = startDay;
+            if (upcoming !== team.upcomingCycleCount) input.upcomingCycleCount = upcoming;
+          }
+          if (Object.keys(input).length === 0) return;
+          update.mutate(input);
         }}
       >
         <label className="flex items-center gap-2 text-sm">
@@ -588,7 +590,7 @@ export function CyclesSection({ team }: { team: Team }) {
                 value={cooldown}
                 onChange={(e) => setCooldown(Number(e.target.value))}
               >
-                {[0, 1, 2, 3].map((w) => (
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((w) => (
                   <option key={w} value={w}>
                     {w === 0 ? "None" : `${w} ${w === 1 ? "week" : "weeks"}`}
                   </option>
@@ -616,7 +618,7 @@ export function CyclesSection({ team }: { team: Team }) {
                 value={upcoming}
                 onChange={(e) => setUpcoming(Number(e.target.value))}
               >
-                {[1, 2, 3, 4, 5, 6].map((n) => (
+                {Array.from({ length: 15 }, (_, i) => i + 1).map((n) => (
                   <option key={n} value={n}>
                     {n}
                   </option>

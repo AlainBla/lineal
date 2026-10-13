@@ -63,7 +63,7 @@ export function TeamSettingsPage({
   else {
     const team = q.data;
     // `key` setzt lokale Formularzustände zurück, wenn sich die gespeicherten Werte ändern.
-    const k = `${team.id}:${team.updatedAt ?? ""}:${team.name}:${team.key}:${team.cyclesEnabled}:${team.triageEnabled}`;
+    const k = `${team.id}:${team.updatedAt ?? ""}:${team.name}:${team.key}:${team.cyclesEnabled}:${team.triageEnabled}:${team.cycleDuration}:${team.cycleCooldownTime}:${team.cycleStartDay}:${team.upcomingCycleCount}`;
     body = (
       <>
         {section === "general" && <GeneralSection key={k} team={team} />}

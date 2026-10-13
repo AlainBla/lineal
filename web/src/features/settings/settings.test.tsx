@@ -94,4 +94,40 @@ describe("TeamSettingsPage", () => {
     expect(screen.getByRole("button", { name: "Move Todo up" })).toBeDisabled();
     expect(gql.of("SettingsStateUpdate")).toHaveLength(0);
   });
+
+  it("B5.02: cycles form shows the team schedule and only sends changed values", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsCyclesUpdate: () => ({ teamCyclesUpdate: { success: true } }),
+      SettingsTeam: () => ({
+        team: {
+          ...TEAM_META.team,
+          cyclesEnabled: true,
+          cycleDuration: 3,
+          cycleCooldownTime: 1,
+          cycleStartDay: 4,
+          upcomingCycleCount: 4,
+        },
+      }),
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="cycles" />,
+      newClient(),
+      "/acme/settings/teams/ENG/cycles",
+    );
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText("Cycle duration")).toHaveValue("3");
+    expect(screen.getByLabelText("Cooldown")).toHaveValue("1");
+    expect(screen.getByLabelText("Start day")).toHaveValue("4");
+    expect(screen.getByLabelText("Upcoming cycles")).toHaveValue("4");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(gql.of("SettingsCyclesUpdate")).toHaveLength(0);
+    await user.selectOptions(screen.getByLabelText("Cooldown"), "8");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(gql.of("SettingsCyclesUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsCyclesUpdate")[0]!.variables).toEqual({
+      teamId: "team-eng",
+      input: { cycleCooldownTime: 8 },
+    });
+  });
 });
