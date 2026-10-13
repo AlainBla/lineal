@@ -2353,6 +2353,36 @@ async fn guest_with_share_is_mentioned_and_notified(pool: PgPool) {
     );
     let id = e.first_notification(carol).await;
     e.app.get_notification(&cctx, id).await.unwrap();
+
+    // Freigaben im Workspace abgeschaltet: der Fan-out stellt nichts mehr über die Freigabe zu.
+    sqlx::query(
+        r#"UPDATE organization SET limits = limits || '{"issueSharingEnabled": false}'::jsonb"#,
+    )
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![carol],
+        },
+    ))
+    .await;
+    let c2 = e.comment(_issue, alice, None).await;
+    e.handle(&e.user_ev(
+        alice,
+        DomainEvent::CommentCreated {
+            comment_id: c2,
+            mentioned_user_ids: vec![carol],
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.kinds(carol).await,
+        vec!["issueCommentMention"],
+        "nach Abschalten der Freigaben keine weitere Notification"
+    );
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

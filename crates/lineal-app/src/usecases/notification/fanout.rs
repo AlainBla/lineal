@@ -83,6 +83,8 @@ pub(crate) struct Fan<'a> {
     pub workspace_only: bool,
     pub actor: Option<UserId>,
     cands: BTreeMap<UserId, &'static str>,
+    /// Zwischenspeicher: erlaubt der Workspace Freigaben?
+    sharing_enabled: Option<bool>,
     /// Quelle für View-Abos (WP31); `None` = keine View-Benachrichtigungen.
     views: Option<&'a dyn ViewSubscriptionSource>,
     /// Issues, die durch das Ereignis frei geworden sind (`issueUnblocked`).
@@ -110,6 +112,7 @@ impl<'a> Fan<'a> {
             workspace_only: false,
             actor,
             cands: BTreeMap::new(),
+            sharing_enabled: None,
             views: None,
             unblocked: Vec::new(),
             dedup_override: None,
@@ -161,7 +164,30 @@ impl<'a> Fan<'a> {
             return Ok(true);
         }
         let active = matches!(self.visible.get(&user), Some(Some(_)));
-        Ok(active && self.tx.documents().issue_shared_with(issue, user).await?)
+        if !active || !self.sharing_enabled().await? {
+            return Ok(false);
+        }
+        self.tx.documents().issue_shared_with(issue, user).await
+    }
+
+    /// Ob der Workspace Freigaben erlaubt; abgeschaltet wirken bestehende Freigaben nicht
+    /// (dieselbe Regel wie `resolve::issue::share_recipient`).
+    async fn sharing_enabled(&mut self) -> AppResult<bool> {
+        if let Some(v) = self.sharing_enabled {
+            return Ok(v);
+        }
+        let v = match self.tx.orgs().get().await {
+            Ok(Some(org)) => {
+                crate::policy::OrgPolicy::from_json(&org.security_settings, &org.limits)
+                    .limits
+                    .issue_sharing_enabled
+            }
+            Ok(None) => false,
+            Err(e) if e.message == "not implemented" => false,
+            Err(e) => return Err(e),
+        };
+        self.sharing_enabled = Some(v);
+        Ok(v)
     }
 
     /// Fügt einen Kandidaten hinzu; bei mehreren Gründen gewinnt der spezifischste Typ.
