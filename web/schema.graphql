@@ -1719,7 +1719,7 @@ type NotificationSubscription {
 
 input NotificationSubscriptionInput {
 	"""
-	`team`, `project`, `initiative`, `cycle` oder `label`.
+	`team`, `project`, `initiative`, `cycle`, `label` oder `user` (Assigned-Ansicht, `contextViewType` `assigned`).
 	"""
 	targetType: String!
 	targetId: String!
