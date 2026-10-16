@@ -23,7 +23,7 @@ import { useShortcuts } from "@/lib/shortcuts";
 
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { IssueCardBody, SelectBox } from "./issue-row";
+import { IssueCardBody, IssueCardHover, SelectBox } from "./issue-row";
 import { applyDrop, COLUMN_PREFIX, issuePath, type BoardColumn, type DropResult } from "./model";
 import type { Selection } from "./selection";
 
@@ -37,6 +37,11 @@ interface BoardProps {
   onDrop: (result: DropResult & { issue: Issue }) => void;
   onCreateInColumn?: (stateId: string) => void;
   selection?: Selection;
+  /**
+   * Verschiebt der Drop die Karte sichtbar (Statuswechsel, bei manueller Sortierung auch
+   * Umsortieren)? Dann entfällt die Rückflug-Animation; sonst fliegt die Karte an ihren Platz zurück.
+   */
+  movesCard?: (patch: NonNullable<DropResult["patch"]>) => boolean;
 }
 
 function Card({
@@ -58,7 +63,7 @@ function Card({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: issue.id,
   });
-  return (
+  const link = (
     <Link
       ref={setNodeRef}
       to={issuePath(ws, issue.identifier) as "/"}
@@ -87,6 +92,14 @@ function Card({
       )}
       <IssueCardBody issue={issue} lookup={lookup} />
     </Link>
+  );
+  // Während des Ziehens keine Hover-Details.
+  return isDragging ? (
+    link
+  ) : (
+    <IssueCardHover issue={issue} lookup={lookup}>
+      {link}
+    </IssueCardHover>
   );
 }
 
@@ -169,14 +182,25 @@ export function IssueBoard({
   onDrop,
   onCreateInColumn,
   selection,
+  movesCard = () => true,
 }: BoardProps) {
   const [dragging, setDragging] = useState<Issue | null>(null);
+  // Nach gültigem Drop (Statuswechsel/Umsortieren) entfällt die Rückflug-Animation des Overlays:
+  // sie zielt auf die Kartenposition vor dem optimistischen Update, die Karte erschiene sonst
+  // erst am Ursprung und spränge dann in die Zielspalte. Abbruch und Drop ohne Änderung animieren.
+  const [skipDropAnimation, setSkipDropAnimation] = useState(false);
   // Canceled/Duplicate stehen unter „Hidden columns“ (docs/08 F5), standardmäßig eingeklappt.
-  const [showHidden, setShowHidden] = useState(false);
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(new Set());
   const isHiddenType = (c: BoardColumn) =>
     c.state.type === "canceled" || c.state.type === "duplicate";
   const hiddenColumns = columns.filter(isHiddenType);
-  const shownColumns = showHidden ? columns : columns.filter((c) => !isHiddenType(c));
+  const shownColumns = columns.filter((c) => !isHiddenType(c) || revealed.has(c.state.id));
+  const toggleRevealed = (id: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   // Strg+←/→: fokussierte Karte eine Spalte weiter verschieben (B4.19).
   const moveFocused = (delta: 1 | -1) => {
@@ -213,12 +237,14 @@ export function IssueBoard({
 
   const onDragStart = (e: DragStartEvent) => {
     const id = String(e.active.id);
+    setSkipDropAnimation(false);
     setDragging(columns.flatMap((c) => c.issues).find((i) => i.id === id) ?? null);
   };
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null);
     const result = applyDrop(columns, String(e.active.id), e.over ? String(e.over.id) : null);
     const issue = columns.flatMap((c) => c.issues).find((i) => i.id === result.issueId);
+    setSkipDropAnimation(!!result.patch && !!issue && movesCard(result.patch));
     if (result.patch && issue) onDrop({ ...result, issue });
   };
 
@@ -244,19 +270,33 @@ export function IssueBoard({
           />
         ))}
         {hiddenColumns.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="shrink-0"
-            aria-expanded={showHidden}
-            onClick={() => setShowHidden((v) => !v)}
+          <aside
+            aria-label="Hidden columns"
+            className="flex w-56 shrink-0 flex-col gap-1 rounded-xl bg-surface p-2"
           >
-            {showHidden ? "Hide" : "Hidden columns"} (
-            {hiddenColumns.reduce((n, c) => n + c.issues.length, 0)})
-          </Button>
+            <h2 className="px-2 py-1 text-sm font-medium">Hidden columns</h2>
+            {hiddenColumns.map((c) => {
+              const open = revealed.has(c.state.id);
+              return (
+                <Button
+                  key={c.state.id}
+                  variant="ghost"
+                  size="sm"
+                  className="justify-start gap-2"
+                  aria-pressed={open}
+                  aria-label={`${open ? "Hide" : "Show"} ${c.state.name} column`}
+                  onClick={() => toggleRevealed(c.state.id)}
+                >
+                  <StatusIcon type={c.state.type} color={c.state.color} />
+                  <span className="truncate">{c.state.name}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{c.issues.length}</span>
+                </Button>
+              );
+            })}
+          </aside>
         )}
       </div>
-      <DragOverlay>
+      <DragOverlay dropAnimation={skipDropAnimation ? null : undefined}>
         {dragging && (
           <div className="rounded-lg border border-border-strong bg-card p-2.5 shadow-popover">
             <IssueCardBody issue={dragging} lookup={lookup} />

@@ -159,7 +159,7 @@ Jede Spezifikation nennt Zweck, Bereiche, Aktionen und die benötigten Daten bzw
 | Header | Breadcrumb (`Engineering › Issues`), Stern **Add to favorites**, Glocke (Abo auf neue Issues der Ansicht), Tab-Pills **Active**, **Backlog**, **All issues** + angeheftete Team-Views + **Add new view**; rechts **Add filter** (`F`), **Display options** (`⇧ V`), **Open details** (`]`) |
 | Filterleiste | Chips `[Feld] [Operator] [Wert] [x]`, „+“ (weiterer Filter), **Clear**, **Save** („Create new view…“); Operatoren und Filtermodell siehe [05](05-views-suche-inbox.md) |
 | List-Layout | Gruppen-Header (Icon, Name, Anzahl, „+“ legt Issue mit vorbelegtem Gruppenwert an); Zeile: Priority-Icon, ID, Status-Icon, Titel, Relation-Badges („blocked by 1“), Label-Chips, Projekt-Chip, Cycle-Chip, Assignee-Avatar, Datum |
-| Board-Layout | Spalten = Grouping (Default Status), optional Swimlanes = Sub-grouping; Spaltenkopf mit Anzahl („2 / 7“ bei Filter), „…“ und „+“; leere Spalten unter „Hidden columns“; Karte: ID, Status-Icon, Titel, Assignee, Property-Chips, „Created …“ |
+| Board-Layout | Spalten = Grouping (Default Status), optional Swimlanes = Sub-grouping; Spaltenkopf mit Anzahl („2 / 7“ bei Filter), „…“ und „+“; ausgeblendete Spalten (Canceled/Duplicate) einzeln mit Anzahl unter „Hidden columns“; Karte: feste Höhe (ID, Status-Icon, Titel einzeilig mit Ellipsis, Assignee, Label-Chips einzeilig mit „+N“), Hover-Details mit vollem Titel, allen Labels, Status, Priorität, Assignee; Drop in andere Spalte ohne Rückflug-Animation |
 | Fußzeile | „n issues hidden by filters [Clear Filters]“ bzw. „hidden by display options [Show options]“ |
 | Details-Panel | Zusammenfassung der Ansicht (Anzahl, Verteilung nach Status/Assignee/Label) |
 

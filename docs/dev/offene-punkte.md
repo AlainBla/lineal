@@ -140,3 +140,5 @@ Fix/Import-Sync (Branch `fix/import-sync`) erledigt: Platzhalter-Text bleibt erh
 - Team-Seiten speichern ihre Optionen unter `viewType` `activeIssues`/`backlog`/`allIssues`, die der Server nicht kennt (Server erwartet `teamActive`/`teamBacklog`/`teamAll`); die Speicherung dort schlägt serverseitig fehl und gilt nur lokal (bestehender Fehler, nicht Teil dieser Änderung).
 - Projektseite: Panel ohne Dependencies („Blocked by/Blocking“), Slack, Mini-Diagramm und Progress-Umschaltung nach Assignee/Label/Team; Unter-Tabs je Team im Issues-Tab, Stern und „…“-Menü des Headers (Copy URL, Favorite, Subscribe …) fehlen; Milestone-Zeilenmenü nur Umbenennen/Löschen; „Started“ im Progress ist eine eigene Abfrage (max. 250 Issues).
 
+
+Board-Karten (fix/board-cards): Umsortieren innerhalb einer Spalte wirkt nur bei Ordering „Manual“ (sonst gilt die Anzeigesortierung; die Karte fliegt dann an ihren Platz zurück, der neue `sortOrder` wird trotzdem gespeichert). Hover-Details der Karte sind ein Radix-Tooltip (nicht per Tastatur-Fokus-Hovercard mit Aktionen wie in Linear). Karten ohne Labels lassen die Label-Zeile leer (feste Höhe).

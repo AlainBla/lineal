@@ -258,6 +258,8 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInColumn={create}
         selection={selection}
+        // Ohne manuelle Sortierung ändert nur ein Statuswechsel die Kartenposition.
+        movesCard={(patch) => patch.stateId !== undefined || !ordered}
         onDrop={({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)}
       />
     );

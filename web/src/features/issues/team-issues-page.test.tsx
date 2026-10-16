@@ -67,7 +67,7 @@ describe("Team-Issues", () => {
     await userEvent.click(screen.getByRole("button", { name: "Board layout" }));
     await screen.findByRole("region", { name: "Todo" });
     expect(screen.queryByRole("region", { name: "Canceled" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: /Hidden columns/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Show Canceled column" }));
     expect(await screen.findByRole("region", { name: "Canceled" })).toBeInTheDocument();
     expect(localStorage.getItem("lineal-issues-layout:ENG:all")).toBe("board");
   });

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { useIssueActions } from "@/features/issues/issue-actions";
 import { useIssueLookup } from "@/features/issues/issue-lookup";
-import { IssueCardBody, IssueRow } from "@/features/issues/issue-row";
+import { IssueCardBody, IssueCardHover, IssueRow } from "@/features/issues/issue-row";
 import { PRIORITIES } from "@/features/issues/model";
 import { IssuePickerHost, type PickerRequest } from "@/features/issues/picker-host";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
@@ -258,15 +258,15 @@ export function IssueView({
               <span className="ml-auto flex items-center gap-2">{renderGroupExtra?.(g)}</span>
             </h2>
             {g.issues.map((issue) => (
-              <a
-                key={issue.id}
-                href={`/${ws}/issue/${issue.identifier}`}
-                data-issue-id={issue.id}
-                className="rounded-lg border border-border bg-card p-2.5 text-sm hover:border-border-strong"
-              >
-                <IssueCardBody issue={issue} lookup={lookup} />
-                <span className="mt-1 block">{issue.title}</span>
-              </a>
+              <IssueCardHover key={issue.id} issue={issue} lookup={lookup}>
+                <a
+                  href={`/${ws}/issue/${issue.identifier}`}
+                  data-issue-id={issue.id}
+                  className="rounded-lg border border-border bg-card p-2.5 text-sm hover:border-border-strong"
+                >
+                  <IssueCardBody issue={issue} lookup={lookup} />
+                </a>
+              </IssueCardHover>
             ))}
           </section>
         ))}

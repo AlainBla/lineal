@@ -1,12 +1,13 @@
 import { Link } from "@tanstack/react-router";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import type { Issue } from "@/gql/graphql";
 import { DEFAULT_PROPERTIES, type DisplayProperty } from "@/features/views/display-options";
 
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { estimateLabel, issuePath, relativeTime } from "./model";
+import { estimateLabel, issuePath, priorityLabel, relativeTime } from "./model";
 import type { Selection } from "./selection";
 
 interface RowProps {
@@ -56,10 +57,13 @@ function LabelChips({
   issue,
   lookup,
   max = 3,
+  nowrap = false,
 }: {
   issue: Issue;
   lookup: IssueLookup;
   max?: number;
+  /** Einzeilig: lange Namen werden abgeschnitten (Board-Karte). */
+  nowrap?: boolean;
 }) {
   const labels = issue.labelIds.flatMap((id) => {
     const l = lookup.label(id);
@@ -70,14 +74,17 @@ function LabelChips({
       {labels.slice(0, max).map((l) => (
         <span
           key={l.id}
-          className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 text-xs text-muted-foreground"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border border-border px-1.5 text-xs text-muted-foreground",
+            nowrap && "max-w-24 shrink-0",
+          )}
         >
           <LabelDot color={l.color} />
-          {l.name}
+          {nowrap ? <span className="truncate">{l.name}</span> : l.name}
         </span>
       ))}
       {labels.length > max && (
-        <span className="text-xs text-subtle-foreground">+{labels.length - max}</span>
+        <span className="shrink-0 text-xs text-subtle-foreground">+{labels.length - max}</span>
       )}
     </>
   );
@@ -192,37 +199,87 @@ export function IssueRow({
   );
 }
 
-/** Karte des Boards. */
+/**
+ * Inhalt einer Board-Karte. Feste Höhe, damit alle Karten gleich hoch sind: Titel einzeilig mit
+ * Ellipsis, Label-Zeile einzeilig (Überlauf als „+N“); Vollständiges zeigt `IssueCardHover`.
+ */
 export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLookup }) {
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <div className="flex h-[4.5rem] flex-col gap-2 overflow-hidden" data-testid="issue-card-body">
+      <div className="flex h-4 items-center gap-2 text-xs text-muted-foreground">
         <PriorityIcon priority={issue.priority} />
         <span className="tabular-nums">{issue.identifier}</span>
         <span className="ml-auto">
           {assignee ? (
-            <span title={assignee}>
+            <span>
               <Avatar name={assignee} />
             </span>
           ) : null}
         </span>
       </div>
-      <div className="flex items-start gap-2">
-        <StatusIcon
-          type={issue.stateType}
-          color={state?.color}
-          title={issue.stateName}
-          className="mt-0.5"
-        />
-        <span className="text-sm leading-snug">{issue.title}</span>
+      <div className="flex h-5 items-center gap-2">
+        <StatusIcon type={issue.stateType} color={state?.color} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-sm leading-snug" data-testid="card-title">
+          {issue.title}
+        </span>
       </div>
-      {issue.labelIds.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
-          <LabelChips issue={issue} lookup={lookup} max={2} />
-        </div>
-      )}
+      <div className="flex h-5 flex-nowrap items-center gap-1 overflow-hidden">
+        <LabelChips issue={issue} lookup={lookup} max={2} nowrap />
+      </div>
     </div>
+  );
+}
+
+/** Hover-Details (wie Linear): alles, was die Karte abkürzt, plus Status, Priorität und Assignee. */
+export function IssueCardHover({
+  issue,
+  lookup,
+  children,
+}: {
+  issue: Issue;
+  lookup: IssueLookup;
+  children: React.ReactElement;
+}) {
+  const assignee = lookup.assigneeName(issue.assigneeId);
+  const labels = issue.labelIds.flatMap((id) => {
+    const l = lookup.label(id);
+    return l ? [l] : [];
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent
+        side="right"
+        align="start"
+        data-testid="card-hover"
+        className="max-w-80 flex-col items-start gap-1.5 p-2.5"
+      >
+        <span className="text-muted-foreground tabular-nums">{issue.identifier}</span>
+        <span className="text-sm font-medium break-words whitespace-normal">{issue.title}</span>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-muted-foreground">
+          <dt>Status</dt>
+          <dd className="text-popover-foreground">{issue.stateName}</dd>
+          <dt>Priority</dt>
+          <dd className="text-popover-foreground">{priorityLabel(issue.priority)}</dd>
+          <dt>Assignee</dt>
+          <dd className="text-popover-foreground">{assignee ?? "Unassigned"}</dd>
+        </dl>
+        {labels.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {labels.map((l) => (
+              <span
+                key={l.id}
+                className="inline-flex items-center gap-1 rounded-full border border-border px-1.5"
+              >
+                <LabelDot color={l.color} />
+                {l.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </TooltipContent>
+    </Tooltip>
   );
 }

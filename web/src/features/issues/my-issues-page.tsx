@@ -169,6 +169,7 @@ function MyIssuesList({
           onFocus={setFocusedId}
           selection={selection}
           // Spalten sind Statuskategorien über mehrere Teams: Ziehen ändert nichts.
+          movesCard={() => false}
           onDrop={() => undefined}
         />
         <IssuePickerHost request={request} onClose={closePicker} />
