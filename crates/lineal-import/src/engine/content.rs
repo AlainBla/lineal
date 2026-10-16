@@ -120,12 +120,73 @@ impl Session<'_, '_> {
                 self.item_result("Comment", n.id(), r)?;
             }
             let next = page.next_cursor;
+            if next.is_none() {
+                self.resolve_deferred_parents().await?;
+            }
             self.end_unit(Some(self.cp(step, next.clone()))).await?;
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
             }
         }
+    }
+
+    /// Merkt ein Paar (Antwort, Elternkommentar) vor; steht im Lauf-Status und überlebt Neustarts.
+    fn defer_parent(&mut self, child: &str, parent: &str) {
+        if !self.run.stats.is_object() {
+            self.run.stats = json!({});
+        }
+        if let Some(obj) = self.run.stats.as_object_mut() {
+            let list = obj.entry("deferredParents").or_insert_with(|| json!([]));
+            if let Some(a) = list.as_array_mut() {
+                a.push(json!([child, parent]));
+            }
+        }
+    }
+
+    /// Trägt vorgemerkte Elternbezüge nach, sobald alle Kommentare gelesen sind. Bleibt der Eltern-
+    /// kommentar auch dann unbekannt (gelöscht, anderes Team/Projekt, nicht ausgewählt), bleibt die
+    /// Antwort ein Kommentar auf oberster Ebene; der Bericht nennt die Ursache.
+    async fn resolve_deferred_parents(&mut self) -> AppResult<()> {
+        let pairs: Vec<(String, String)> = self.run.stats["deferredParents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| Some((p[0].as_str()?.to_owned(), p[1].as_str()?.to_owned())))
+            .collect();
+        if let Some(obj) = self.run.stats.as_object_mut() {
+            obj.remove("deferredParents");
+        }
+        let mut fixed = 0u64;
+        for (child, parent) in pairs {
+            let (Some(c), Some(p)) = (
+                self.target("Comment", &child).await?,
+                self.target("Comment", &parent).await?,
+            ) else {
+                self.note(
+                    "warning",
+                    "Comment",
+                    Some(&child),
+                    "the parent comment is not part of the import (deleted in Linear, on another object, or outside the selected teams); imported as a top-level comment",
+                );
+                continue;
+            };
+            let r = row(vec![("parent_id", json!(p)), ("quoted_text", Value::Null)]);
+            self.tx()?
+                .imports()
+                .update_row(ImportTable::Comment, c, &Value::Object(r))
+                .await?;
+            fixed += 1;
+        }
+        if fixed > 0 {
+            self.note(
+                "info",
+                "Comment",
+                None,
+                format!("{fixed} reply comment(s) were attached to their parent comment after all comments were read"),
+            );
+        }
+        Ok(())
     }
 
     async fn comment(&mut self, n: N<'_>, on_update: bool) -> AppResult<()> {
@@ -164,16 +225,15 @@ impl Session<'_, '_> {
             }
             return Ok(());
         }
+        // Linear liefert Antworten oft vor ihrem Elternkommentar (neueste zuerst, Seitengrenzen).
+        // Ein noch nicht importierter Elternkommentar wird vorgemerkt und am Ende des Schritts
+        // nachgetragen (`resolve_deferred_parents`).
+        let mut deferred_parent = None;
         let parent = match n.ref_id("parent") {
             Some(p) => {
                 let t = self.target("Comment", p).await?;
                 if t.is_none() {
-                    self.note(
-                        "warning",
-                        "Comment",
-                        Some(&src),
-                        "the parent comment was not imported; imported as a top-level comment",
-                    );
+                    deferred_parent = Some(p.to_owned());
                 }
                 t
             }
@@ -186,7 +246,7 @@ impl Session<'_, '_> {
             .filter(|b| !b.trim().is_empty())
             .unwrap_or_else(|| "(empty)".to_owned());
         let user = self.target_opt("User", n.ref_id("user")).await?;
-        let top = parent.is_none();
+        let top = parent.is_none() && deferred_parent.is_none();
         let r = row(vec![
             ("body", json!(body)),
             ("user_id", json!(user)),
@@ -214,6 +274,9 @@ impl Session<'_, '_> {
         let up = self
             .upsert("Comment", n, ImportTable::Comment, r, false)
             .await?;
+        if let Some(p) = deferred_parent {
+            self.defer_parent(&src, &p);
+        }
         if !up.wrote() {
             return Ok(());
         }
@@ -665,17 +728,51 @@ impl Session<'_, '_> {
             .target_opt("Initiative", n.ref_id("initiative"))
             .await?;
         let issue = self.target_opt("Issue", n.ref_id("issue")).await?;
-        let parents = [project, initiative, issue].iter().flatten().count();
-        if parents != 1 {
-            self.counters("Document").skipped += 1;
-            self.note(
-                "info",
-                "Document",
-                Some(&src),
-                "the document has no (single) imported parent; skipped",
-            );
-            return Ok(());
-        }
+        let (project, initiative, issue, team) = {
+            let found = [project, initiative, issue].iter().flatten().count();
+            if found == 1 {
+                (project, initiative, issue, None)
+            } else if found > 1 {
+                // Mehrere Eltern gibt es im Modell nicht: Projekt vor Issue vor Initiative.
+                self.note(
+                    "warning",
+                    "Document",
+                    Some(&src),
+                    "the document has several parents; only one is kept (project, issue, initiative)",
+                );
+                if project.is_some() {
+                    (project, None, None, None)
+                } else if issue.is_some() {
+                    (None, None, issue, None)
+                } else {
+                    (None, initiative, None, None)
+                }
+            } else {
+                // Kein eindeutiges Elternobjekt: an das importierte Team hängen (eigenes Team des
+                // Dokuments, sonst das einzige/erste importierte Team) und im Bericht vermerken.
+                match self.document_fallback_team(n).await? {
+                    Some(t) => {
+                        self.note(
+                            "info",
+                            "Document",
+                            Some(&src),
+                            "the document has no (single) imported parent; attached to the imported team",
+                        );
+                        (None, None, None, Some(t))
+                    }
+                    None => {
+                        self.counters("Document").skipped += 1;
+                        self.note(
+                            "warning",
+                            "Document",
+                            Some(&src),
+                            "the document has no imported parent and no imported team to attach it to; skipped",
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        };
         let now = self.now;
         let created = n.ts("createdAt").unwrap_or(now).min(now);
         let updated = n.ts("updatedAt").map(|t| t.min(now)).unwrap_or(created);
@@ -700,6 +797,7 @@ impl Session<'_, '_> {
             ("project_id", json!(project)),
             ("initiative_id", json!(initiative)),
             ("issue_id", json!(issue)),
+            ("team_id", json!(team)),
             ("creator_id", json!(creator)),
             ("updated_by_id", json!(creator)),
             ("archived_at", jts(n.ts("archivedAt"))),
@@ -750,6 +848,33 @@ impl Session<'_, '_> {
             .await?;
         }
         Ok(())
+    }
+
+    /// Team für ein Dokument ohne eindeutiges Elternobjekt.
+    async fn document_fallback_team(&mut self, n: N<'_>) -> AppResult<Option<Uuid>> {
+        if let Some(t) = n.ref_id("team").filter(|t| self.selected.contains(*t)) {
+            let t = t.to_owned();
+            if let Some(id) = self.target("Team", &t).await? {
+                return Ok(Some(id));
+            }
+        }
+        let mut candidates: Vec<(String, String)> = self
+            .selected
+            .iter()
+            .map(|id| {
+                (
+                    self.team_keys.get(id).cloned().unwrap_or_default(),
+                    id.clone(),
+                )
+            })
+            .collect();
+        candidates.sort();
+        for (_, id) in candidates {
+            if let Some(t) = self.target("Team", &id).await? {
+                return Ok(Some(t));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) async fn step_project_updates(&mut self, cursor: Option<String>) -> HResult<()> {

@@ -214,6 +214,15 @@ pub async fn env(pool: PgPool) -> Env {
     env_n(pool, 1).await
 }
 
+/// Wie `env`, mit eigenem Blob-Store in der `App` (Tests für das Direktschreiben).
+pub async fn env_with_blobs(pool: PgPool, blobs: Arc<dyn lineal_app::ports::BlobStore>) -> Env {
+    let mut e = env_n(pool, 1).await;
+    let mut app = Arc::try_unwrap(e.app).ok().unwrap();
+    app.blobs = blobs;
+    e.app = Arc::new(app);
+    e
+}
+
 /// Workspace Nr. `n` (mehrere Workspaces in einer Testdatenbank, z. B. für Vergleichsläufe).
 pub async fn env_n(pool: PgPool, n: u128) -> Env {
     let _ = tracing_subscriber::fmt()

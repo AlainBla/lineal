@@ -211,7 +211,7 @@ fn spec(entity: SourceEntity) -> QuerySpec {
         Documents => conn(
             "documents",
             "id title content icon color slugId createdAt updatedAt archivedAt creator { id } \
-             project { id } initiative { id } issue { id }",
+             project { id } initiative { id } issue { id } team { id }",
             "includeArchived: true",
             true,
         ),

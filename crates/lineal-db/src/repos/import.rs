@@ -928,6 +928,27 @@ impl ImportRepo for PgTx {
         Ok(())
     }
 
+    async fn find_label_by_name_at(
+        &mut self,
+        table: ImportTable,
+        name: &str,
+        team_id: Option<Uuid>,
+        parent_id: Option<Uuid>,
+    ) -> AppResult<Option<Uuid>> {
+        sqlx::query_scalar(&format!(
+            "SELECT id FROM {} WHERE organization_id = $1 AND lower(name) = lower($2) \
+             AND team_id IS NOT DISTINCT FROM $3 AND parent_id IS NOT DISTINCT FROM $4 LIMIT 1",
+            table.name()
+        ))
+        .bind(self.org.0)
+        .bind(name)
+        .bind(team_id)
+        .bind(parent_id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn find_row_id_by_name(
         &mut self,
         table: ImportTable,

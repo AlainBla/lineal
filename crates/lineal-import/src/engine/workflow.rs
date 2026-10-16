@@ -412,6 +412,32 @@ impl Session<'_, '_> {
         if let Err(e) = &up
             && e.kind == ErrorKind::Conflict
         {
+            // Gleichnamiges Label auf derselben Ebene (Team/Workspace, gleiche Gruppe): zuordnen
+            // statt duplizieren. Nur wenn es sich dort nicht ermitteln lässt, Ausweichname.
+            let existing = self
+                .tx()?
+                .imports()
+                .find_label_by_name_at(table, &name, team, parent)
+                .await?;
+            if let (Some(id), Some(src)) = (existing, n.id()) {
+                let checksum = super::node::checksum_of(n.0);
+                self.put_mapping(ty, src, id, n, &checksum).await?;
+                self.cache.insert((ty, src.to_owned()), id);
+                self.counters(ty).unchanged += 1;
+                if issue_label {
+                    self.plan_add("labelsMapped");
+                }
+                self.note(
+                    "info",
+                    ty,
+                    Some(src),
+                    format!(
+                        "mapped to the existing label `{}`",
+                        clean_text(&name, 80, false)
+                    ),
+                );
+                return Ok(());
+            }
             let alt = format!("{} (Linear)", clean_text(&name, 68, false));
             self.note(
                 "warning",
