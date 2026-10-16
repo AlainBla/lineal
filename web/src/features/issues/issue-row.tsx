@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 
 import { cn } from "@/lib/cn";
 import type { Issue } from "@/gql/graphql";
+import { DEFAULT_PROPERTIES, type DisplayProperty } from "@/features/views/display-options";
 
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
@@ -16,7 +17,18 @@ interface RowProps {
   onFocus: (id: string) => void;
   /** Mehrfachauswahl (Shift-/Cmd-Klick, Checkbox); fehlt sie, ist die Zeile nicht auswählbar. */
   selection?: Selection;
+  /** Sichtbare Eigenschaften (Display properties); Standard wie bisher. */
+  display?: readonly DisplayProperty[];
+  /** Einrückung für verschachtelte Sub-Issues. */
+  depth?: number;
 }
+
+const shortDay = (iso: string) =>
+  new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
 
 /** Checkbox am Zeilenanfang: erscheint beim Überfahren, bei Fokus oder sobald etwas gewählt ist. */
 export function SelectBox({ issue, selection }: { issue: Issue; selection: Selection }) {
@@ -72,7 +84,19 @@ function LabelChips({
 }
 
 /** Zeile der Listenansicht: Priority, ID, Status, Titel, Labels, Projekt, Assignee, Datum (docs/08 §2.1). */
-export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: RowProps) {
+export function IssueRow({
+  issue,
+  ws,
+  lookup,
+  focused,
+  onFocus,
+  selection,
+  display = DEFAULT_PROPERTIES,
+  depth = 0,
+}: RowProps) {
+  const show = (p: DisplayProperty) => display.includes(p);
+  const creator = show("creator") ? lookup.assigneeName(issue.creatorId ?? null) : null;
+  const cycle = show("cycle") ? lookup.cycleName(issue.cycleId ?? null) : null;
   const selected = selection?.has(issue.id) ?? false;
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
@@ -96,23 +120,51 @@ export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: Row
       )}
     >
       {selection && <SelectBox issue={issue} selection={selection} />}
-      <PriorityIcon priority={issue.priority} />
-      <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">
-        {issue.identifier}
-      </span>
-      <StatusIcon type={issue.stateType} color={state?.color} title={issue.stateName} />
+      {depth > 0 && <span aria-hidden style={{ width: depth * 20 }} className="shrink-0" />}
+      {show("priority") && <PriorityIcon priority={issue.priority} />}
+      {show("id") && (
+        <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">
+          {issue.identifier}
+        </span>
+      )}
+      {show("status") && (
+        <StatusIcon type={issue.stateType} color={state?.color} title={issue.stateName} />
+      )}
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
-      <span className="hidden items-center gap-1 md:flex">
-        <LabelChips issue={issue} lookup={lookup} />
-      </span>
-      {project && (
+      {show("labels") && (
+        <span className="hidden items-center gap-1 md:flex">
+          <LabelChips issue={issue} lookup={lookup} />
+        </span>
+      )}
+      {cycle && <span className="hidden text-xs text-muted-foreground lg:inline">{cycle}</span>}
+      {show("links") && issue.linkCount > 0 && (
+        <span className="text-xs text-muted-foreground" title="Links">
+          {issue.linkCount} links
+        </span>
+      )}
+      {show("timeInStatus") && (
+        <span className="text-xs text-muted-foreground" title="Time in status">
+          {relativeTime(issue.stateEnteredAt)}
+        </span>
+      )}
+      {show("dueDate") && issue.dueDate && (
+        <span className="text-xs text-muted-foreground" title="Due date">
+          {shortDay(issue.dueDate)}
+        </span>
+      )}
+      {(show("milestone") ? project : null) && (
         <span className="hidden max-w-32 truncate text-xs text-muted-foreground lg:inline">
           {project}
           {milestone && <span title="Milestone"> · {milestone}</span>}
         </span>
       )}
       {estimate && <span className="text-xs text-muted-foreground">{estimate}</span>}
-      {assignee ? (
+      {creator && (
+        <span title={`Creator: ${creator}`}>
+          <Avatar name={creator} />
+        </span>
+      )}
+      {!show("assignee") ? null : assignee ? (
         <span title={assignee}>
           <Avatar name={assignee} />
         </span>
@@ -126,9 +178,16 @@ export function IssueRow({ issue, ws, lookup, focused, onFocus, selection }: Row
           title="Unassigned"
         />
       )}
-      <span className="w-8 shrink-0 text-right text-xs text-subtle-foreground">
-        {relativeTime(issue.updatedAt)}
-      </span>
+      {show("created") && (
+        <span className="w-8 shrink-0 text-right text-xs text-subtle-foreground" title="Created">
+          {relativeTime(issue.createdAt)}
+        </span>
+      )}
+      {show("updated") && (
+        <span className="w-8 shrink-0 text-right text-xs text-subtle-foreground" title="Updated">
+          {relativeTime(issue.updatedAt)}
+        </span>
+      )}
     </Link>
   );
 }

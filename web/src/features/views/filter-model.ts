@@ -23,7 +23,14 @@ export type FilterField =
   | "subscribers"
   | "parent"
   | "slaStatus"
-  | "title";
+  | "title"
+  | "state"
+  | "milestone"
+  | "relations"
+  | "addedToCycle"
+  | "autoClosed"
+  | "content"
+  | "links";
 
 export type FilterOp =
   | "is"
@@ -69,6 +76,13 @@ export const FIELD_LABEL: Record<FilterField, string> = {
   parent: "Parent issue",
   slaStatus: "SLA status",
   title: "Title",
+  state: "Status",
+  milestone: "Project milestone",
+  relations: "Relations",
+  addedToCycle: "Added to cycle",
+  autoClosed: "Auto-closed",
+  content: "Content",
+  links: "Links",
 };
 
 /** Datumsfelder mit den Operatoren before/after (docs/05 §1.5). */
@@ -104,6 +118,13 @@ export const FIELD_OPS: Record<FilterField, FilterOp[]> = {
   parent: ["is", "isNot"],
   slaStatus: ["is", "isNot"],
   title: ["contains"],
+  state: ["is", "isNot"],
+  milestone: ["is", "isNot"],
+  relations: ["is"],
+  addedToCycle: ["is", "isNot"],
+  autoClosed: ["is"],
+  content: ["contains"],
+  links: ["contains"],
 };
 
 export const OP_LABEL: Record<FilterOp, string> = {
@@ -219,6 +240,22 @@ function dueDateFilter(chip: FilterChip): Filter {
   return { dueDate: { lt: "P0D" }, state: { type: { nin: CLOSED_TYPES } } };
 }
 
+/** Relationsarten des Filters „Relations“ → Filter-Teil (docs/05 §1.5). */
+export const RELATION_FILTERS: Record<string, { label: string; filter: Filter }> = {
+  subIssues: { label: "Sub-issues", filter: { children: { length: { gt: 0 } } } },
+  blocked: { label: "Blocked issues", filter: { hasBlockedByRelations: { eq: true } } },
+  blocking: { label: "Blocking issues", filter: { hasBlockingRelations: { eq: true } } },
+  duplicates: { label: "Duplicates", filter: { hasDuplicateRelations: { eq: true } } },
+  related: { label: "Related issues", filter: { hasRelatedRelations: { eq: true } } },
+};
+
+function relationsFilter(chip: FilterChip): Filter {
+  const parts = chip.values.flatMap((v) =>
+    RELATION_FILTERS[v] ? [RELATION_FILTERS[v]!.filter] : [],
+  );
+  return parts.length === 1 ? parts[0]! : { or: parts };
+}
+
 /** Übersetzt einen Chip in sein Filter-JSON. */
 export function chipToFilter(chip: FilterChip): Filter {
   const { field, op, values } = chip;
@@ -261,6 +298,20 @@ export function chipToFilter(chip: FilterChip): Filter {
       return { slaStatus: { [op === "isNot" ? "nin" : "in"]: values } };
     case "title":
       return { title: { containsIgnoreCaseAndAccent: values[0] ?? "" } };
+    case "state":
+      return { state: { id: { [op === "isNot" ? "nin" : "in"]: values } } };
+    case "milestone":
+      return relationFilter("projectMilestone", chip);
+    case "relations":
+      return relationsFilter(chip);
+    case "addedToCycle":
+      return { addedToCyclePeriod: { [op === "isNot" ? "nin" : "in"]: values } };
+    case "autoClosed":
+      return { autoClosedAt: { null: false } };
+    case "content":
+      return { searchableContent: { contains: values[0] ?? "" } };
+    case "links":
+      return { attachments: { some: { url: { containsIgnoreCase: values[0] ?? "" } } } };
   }
 }
 

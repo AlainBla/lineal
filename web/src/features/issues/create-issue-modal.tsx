@@ -118,7 +118,7 @@ function CreateIssueForm({ preset, onClose, onRequestClose }: FormProps) {
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [labelIdsTouched, setLabelIdsTouched] = useState(false);
   const [projectId, setProjectId] = useState<string | null | undefined>(undefined);
-  const [milestoneId, setMilestoneId] = useState<string | null>(null);
+  const [milestoneId, setMilestoneId] = useState<string | null>(preset?.milestoneId ?? null);
   const [cycleId, setCycleId] = useState<string | null | undefined>(undefined);
   const [estimate, setEstimate] = useState<number | null>(null);
   const [dueDate, setDueDate] = useState<string | null>(null);

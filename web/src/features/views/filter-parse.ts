@@ -6,6 +6,7 @@
  */
 import {
   CLOSED_TYPES,
+  RELATION_FILTERS,
   chipToFilter,
   isDateField,
   newChipId,
@@ -193,8 +194,9 @@ function parseKey(key: string, x: unknown): Omit<FilterChip, "id"> | null {
     case "creator":
       return done("creator", parseUser(x));
     case "state": {
-      if (!isObj(x) || keysOf(x).length !== 1 || x.type === undefined) return null;
-      return done("stateType", parseIn(x.type));
+      if (!isObj(x) || keysOf(x).length !== 1) return null;
+      if (x.id !== undefined) return done("state", parseIn(x.id));
+      return x.type === undefined ? null : done("stateType", parseIn(x.type));
     }
     case "priority":
       return done("priority", parseIn(x, true));
@@ -222,6 +224,31 @@ function parseKey(key: string, x: unknown): Omit<FilterChip, "id"> | null {
       return isObj(x) && keysOf(x).length === 1 && typeof x.containsIgnoreCaseAndAccent === "string"
         ? { field: "title", op: "contains", values: [x.containsIgnoreCaseAndAccent] }
         : null;
+    case "projectMilestone":
+      return done("milestone", parseRelation(x));
+    case "addedToCyclePeriod":
+      return done("addedToCycle", parseIn(x));
+    case "autoClosedAt":
+      return isObj(x) && x.null === false && keysOf(x).length === 1
+        ? { field: "autoClosed", op: "is", values: ["yes"] }
+        : null;
+    case "searchableContent":
+      return isObj(x) && keysOf(x).length === 1 && typeof x.contains === "string"
+        ? { field: "content", op: "contains", values: [x.contains] }
+        : null;
+    case "attachments": {
+      const url =
+        isObj(x) && isObj(x.some) && isObj(x.some.url) ? x.some.url.containsIgnoreCase : null;
+      return typeof url === "string" ? { field: "links", op: "contains", values: [url] } : null;
+    }
+    case "hasBlockedByRelations":
+    case "hasBlockingRelations":
+    case "hasDuplicateRelations":
+    case "hasRelatedRelations":
+    case "children": {
+      const hit = Object.entries(RELATION_FILTERS).find(([, r]) => keysOf(r.filter)[0] === key);
+      return hit ? { field: "relations", op: "is", values: [hit[0]] } : null;
+    }
     case "dueDate": {
       const d = parseDate(x);
       return d && { field: "dueDate", op: d.op, values: d.values };

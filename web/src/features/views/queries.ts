@@ -198,6 +198,8 @@ export interface PrefTarget {
   customViewId?: string;
   viewType?: string;
   teamId?: string;
+  /** Mit `viewType: "projectIssues"`: das Projekt (ID oder Kennung). */
+  projectId?: string;
 }
 
 export function usePreferences(t: PrefTarget | null) {
@@ -207,8 +209,8 @@ export function usePreferences(t: PrefTarget | null) {
     queryFn: async ({ signal }) =>
       (
         await gqlRequest<{ viewPreferences: ViewPreferencesValues }, Record<string, unknown>>(
-          `query ViewPrefs($customViewId: String, $viewType: String, $teamId: String) {
-            viewPreferences(customViewId: $customViewId, viewType: $viewType, teamId: $teamId) { values hasPersonal hasDefault }
+          `query ViewPrefs($customViewId: String, $viewType: String, $teamId: String, $projectId: String) {
+            viewPreferences(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId) { values hasPersonal hasDefault }
           }`,
           { ...t },
           { signal },
@@ -224,8 +226,8 @@ export function useUpdatePreferences(t: PrefTarget | null) {
   return useMutation({
     mutationFn: async (preferences: Record<string, unknown>) =>
       gqlRequest(
-        `mutation ViewPrefsUpdate($customViewId: String, $viewType: String, $teamId: String, $preferences: JSON!) {
-          viewPreferencesUpdate(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, preferences: $preferences) { hasPersonal }
+        `mutation ViewPrefsUpdate($customViewId: String, $viewType: String, $teamId: String, $projectId: String, $preferences: JSON!) {
+          viewPreferencesUpdate(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId, preferences: $preferences) { hasPersonal }
         }`,
         { ...t, preferences },
       ),
@@ -251,8 +253,23 @@ export function useResetPreferences(t: PrefTarget | null) {
   return useMutation({
     mutationFn: async () =>
       gqlRequest(
-        `mutation ViewPrefsReset($customViewId: String, $viewType: String, $teamId: String) {
-          viewPreferencesReset(customViewId: $customViewId, viewType: $viewType, teamId: $teamId) { hasPersonal }
+        `mutation ViewPrefsReset($customViewId: String, $viewType: String, $teamId: String, $projectId: String) {
+          viewPreferencesReset(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId) { hasPersonal }
+        }`,
+        { ...t },
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["views", "prefs"] }),
+  });
+}
+
+/** „Set default for everyone“: die wirksamen Optionen werden zum Standard aller (Rechte am Server). */
+export function useSetDefaultPreferences(t: PrefTarget | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      gqlRequest(
+        `mutation ViewPrefsSetDefault($customViewId: String, $viewType: String, $teamId: String, $projectId: String) {
+          viewPreferencesSetDefault(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId) { hasPersonal hasDefault }
         }`,
         { ...t },
       ),
