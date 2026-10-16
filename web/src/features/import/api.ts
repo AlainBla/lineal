@@ -73,6 +73,18 @@ export interface EntityStats {
   errors: number;
 }
 
+/** Optionen eines Laufs (`options`), soweit die Oberfläche sie braucht. */
+export interface RunOptions {
+  teams?: string[];
+  keyMapping?: Record<string, string>;
+  targetTeams?: Record<string, string>;
+  /** Gesetzt bei Läufen des regelmäßigen Abgleichs. */
+  syncId?: string;
+  delta?: boolean;
+  reloadContent?: boolean;
+  mergeLinearLabels?: boolean;
+}
+
 export interface ImportRunView {
   id: string;
   source: string;
@@ -81,6 +93,7 @@ export interface ImportRunView {
   step: string | null;
   dryRun: boolean;
   scan: Scan | null;
+  options?: RunOptions;
   stats: { entities?: Record<string, EntityStats>; plan?: ImportPlan };
   error: string | null;
   startedAt: string | null;
@@ -107,9 +120,12 @@ export const keys = {
   run: (id: string) => ["import", "run", id] as const,
   report: (id: string, severity: string | null) => ["import", "report", id, severity] as const,
   targets: ["import", "targets"] as const,
+  sync: ["import", "sync"] as const,
+  existingUsers: ["import", "existing-users"] as const,
+  joinable: ["import", "joinable-teams"] as const,
 };
 
-const RUN_FIELDS = `id source status phase step dryRun scan stats error startedAt finishedAt createdAt`;
+const RUN_FIELDS = `id source status phase step dryRun scan options stats error startedAt finishedAt createdAt`;
 
 export const ACTIVE: RunStatus[] = ["scanning", "running"];
 
@@ -158,6 +174,22 @@ export interface StartInput {
   projects: string[];
   /** Linear-Team-Key -> ID eines bestehenden Lineal-Teams. */
   targetTeams: Record<string, string>;
+  /** Linear-User-ID -> ID eines bestehenden Lineal-Users (statt E-Mail-Abgleich/Platzhalter). */
+  userMapping?: Record<string, string>;
+}
+
+/** Bestehender, aktiver Lineal-User als Ziel der Zuordnung. */
+export interface ExistingUser {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
+export async function fetchExistingUsers(): Promise<ExistingUser[]> {
+  const d = await gqlRequest<{ users: ExistingUser[] }>(
+    `query ImportExistingUsers { users(first: 200) { id name displayName } }`,
+  );
+  return d.users;
 }
 
 /** Sichtbare Lineal-Teams (mögliche Importziele). */
@@ -199,4 +231,153 @@ export function progressPercent(run: Pick<ImportRunView, "status" | "phase">): n
 /** Summe der Zähler einer Entität (übernommen = created + updated + unchanged). */
 export function handled(s: EntityStats): number {
   return s.created + s.updated + s.unchanged;
+}
+
+// ---------- Regelmäßiger Abgleich (docs/13 §12) ----------
+
+export type SyncInterval = "off" | "hourly" | "every6h" | "daily";
+
+export interface ImportSyncView {
+  id: string;
+  interval: SyncInterval;
+  /** Minuten seit 00:00 UTC (nur `daily`). */
+  dailyAtMinute: number;
+  paused: boolean;
+  teams: string[];
+  projects: string[];
+  /** Ein Schlüssel ist gespeichert (er selbst wird nie ausgegeben). */
+  hasKey: boolean;
+  lastRunId: string | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastStatus: "running" | "completed" | "failed" | null;
+  lastError: string | null;
+  nextRunAt: string | null;
+}
+
+const SYNC_FIELDS = `id interval dailyAtMinute paused teams projects hasKey lastRunId lastRunAt
+  lastSuccessAt lastStatus lastError nextRunAt`;
+
+export async function fetchSync(): Promise<ImportSyncView | null> {
+  const d = await gqlRequest<{ importSync: ImportSyncView | null }>(
+    `query ImportSync { importSync { ${SYNC_FIELDS} } }`,
+  );
+  return d.importSync;
+}
+
+export interface SyncSaveInput {
+  interval: SyncInterval;
+  dailyAtMinute?: number;
+  teams: string[];
+  /** Nur beim Einrichten Pflicht; sonst nur zum Ersetzen des Schlüssels. */
+  token?: string;
+}
+
+export async function saveSync(input: SyncSaveInput): Promise<ImportSyncView> {
+  const d = await gqlRequest<{ importSyncSave: ImportSyncView }, Record<string, unknown>>(
+    `mutation ImportSyncSave($input: ImportSyncInput!) { importSyncSave(input: $input) { ${SYNC_FIELDS} } }`,
+    { input: { ...input } },
+  );
+  return d.importSyncSave;
+}
+
+export async function pauseSync(paused: boolean): Promise<ImportSyncView> {
+  const d = await gqlRequest<{ importSyncPause: ImportSyncView }, Record<string, unknown>>(
+    `mutation ImportSyncPause($paused: Boolean!) { importSyncPause(paused: $paused) { ${SYNC_FIELDS} } }`,
+    { paused },
+  );
+  return d.importSyncPause;
+}
+
+export async function deleteSync(): Promise<void> {
+  await gqlRequest(`mutation ImportSyncDelete { importSyncDelete }`);
+}
+
+export interface SyncRunInput {
+  /** Texte mit Tag-artigem Inhalt neu aus Linear holen (nur lokal unveränderte Objekte). */
+  reloadContent: boolean;
+  /** Frühere „Name (Linear)“-Duplikat-Labels zusammenführen. */
+  mergeLinearLabels: boolean;
+}
+
+export async function runSync(v: SyncRunInput): Promise<ImportRunView> {
+  const d = await gqlRequest<{ importSyncRun: ImportRunView }, Record<string, unknown>>(
+    `mutation ImportSyncRun($reloadContent: Boolean, $mergeLinearLabels: Boolean) {
+       importSyncRun(reloadContent: $reloadContent, mergeLinearLabels: $mergeLinearLabels) { ${RUN_FIELDS} }
+     }`,
+    { ...v },
+  );
+  return d.importSyncRun;
+}
+
+// ---------- Teams nach dem Import beitreten ----------
+
+export interface JoinableTeam {
+  id: string;
+  key: string;
+  name: string;
+  viewer: { isMember: boolean; canJoin: boolean } | null;
+}
+
+export async function fetchTeamsWithViewer(): Promise<JoinableTeam[]> {
+  const d = await gqlRequest<{ teams: JoinableTeam[] }>(
+    `query ImportJoinableTeams { teams(first: 250) { id key name viewer { isMember canJoin } } }`,
+  );
+  return d.teams;
+}
+
+/** Teams des Laufs in Lineal: Ziel-Team, abweichender Key oder gleicher Key. */
+export function importedTeamIds(run: ImportRunView, teams: JoinableTeam[]): string[] {
+  const o = run.options ?? {};
+  const keys = o.teams ?? run.scan?.teams.map((t) => t.key) ?? [];
+  const out = new Set<string>();
+  for (const k of keys) {
+    const direct = o.targetTeams?.[k];
+    if (direct) {
+      out.add(direct);
+      continue;
+    }
+    const key = (o.keyMapping?.[k] ?? k).toUpperCase();
+    const hit = teams.find((t) => t.key.toUpperCase() === key);
+    if (hit) out.add(hit.id);
+  }
+  return [...out];
+}
+
+export async function joinTeams(teamIds: string[], userId: string): Promise<void> {
+  for (const teamId of teamIds) {
+    await gqlRequest(
+      `mutation ImportJoinTeam($teamId: String!, $userId: String!) {
+         teamMembershipCreate(teamId: $teamId, userId: $userId) { success }
+       }`,
+      { teamId, userId },
+    );
+  }
+}
+
+// ---------- Platzhalter einem User zuordnen ----------
+
+export interface PlaceholderMergeResult {
+  success: boolean;
+  moved: number;
+  dropped: number;
+  mentions: number;
+}
+
+export async function mergePlaceholder(
+  placeholderId: string,
+  targetUserId: string,
+): Promise<PlaceholderMergeResult> {
+  const d = await gqlRequest<
+    { importPlaceholderMerge: PlaceholderMergeResult },
+    Record<string, unknown>
+  >(
+    `mutation ImportPlaceholderMerge($placeholderId: String!, $targetUserId: String!) {
+       importPlaceholderMerge(placeholderId: $placeholderId, targetUserId: $targetUserId) {
+         success moved dropped mentions
+       }
+     }`,
+    { placeholderId, targetUserId },
+  );
+  return d.importPlaceholderMerge;
 }

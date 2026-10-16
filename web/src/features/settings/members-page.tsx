@@ -23,6 +23,7 @@ import {
   useInvitations,
   useMemberAdminMutations,
   useMemberList,
+  usePlaceholderMerge,
   type AdminMember,
 } from "./members-queries";
 import { useSecuritySettings } from "./security-queries";
@@ -294,11 +295,13 @@ function AdminMemberRow({
   m,
   session,
   onSuspend,
+  onMerge,
   onError,
 }: {
   m: AdminMember;
   session: Session;
   onSuspend: (m: AdminMember) => void;
+  onMerge: (m: AdminMember) => void;
   onError: (err: unknown) => void;
 }) {
   const { setRole, unsuspend } = useMemberAdminMutations();
@@ -341,6 +344,16 @@ function AdminMemberRow({
         </span>
       </td>
       <td className="px-3 py-1.5 text-right">
+        {m.status === "imported" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Merge ${m.email} with an existing member`}
+            onClick={() => onMerge(m)}
+          >
+            Merge with…
+          </Button>
+        )}
         {suspended ? (
           <Button
             variant="ghost"
@@ -410,13 +423,115 @@ function SuspendDialog({ member, onClose }: { member: AdminMember | null; onClos
   );
 }
 
+/**
+ * Platzhalter (Import, z. B. andere E-Mail in Linear) einem bestehenden aktiven Mitglied zuordnen:
+ * Zuweisungen, Ersteller, Abos, Kommentare, Erwähnungen und Teammitgliedschaften wandern zu ihm.
+ */
+function MergePlaceholderDialog({
+  placeholder,
+  candidates,
+  onClose,
+}: {
+  placeholder: AdminMember | null;
+  candidates: AdminMember[];
+  onClose: () => void;
+}) {
+  const merge = usePlaceholderMerge();
+  const [target, setTarget] = useState("");
+  useShortcutContext("modal", placeholder !== null);
+  const reset = () => {
+    setTarget("");
+    merge.reset();
+    onClose();
+  };
+  return (
+    <Dialog open={placeholder !== null} onOpenChange={(o) => !o && reset()}>
+      <DialogContent className="max-w-md">
+        <div className="flex flex-col gap-3 p-4">
+          <DialogTitle className="text-base font-semibold">
+            Merge {placeholder?.displayName || placeholder?.name} with an existing member
+          </DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            All issues, comments, subscriptions, mentions and team memberships of this imported
+            placeholder move to the member you choose. The placeholder is then removed. This cannot
+            be undone.
+          </DialogDescription>
+          <select
+            aria-label="Merge into"
+            className={selectClass}
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            <option value="">Choose a member…</option>
+            {candidates.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.displayName || c.name} ({c.email})
+              </option>
+            ))}
+          </select>
+          {merge.isError && (
+            <p role="alert" className="text-xs text-destructive">
+              {errorText(merge.error)}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={reset}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!target || merge.isPending}
+              onClick={() =>
+                placeholder &&
+                merge.mutate(
+                  { placeholderId: placeholder.id, targetUserId: target },
+                  {
+                    onSuccess: (r) => {
+                      showToast({
+                        message: `Merged: ${r.moved} references moved${
+                          r.mentions > 0 ? `, ${r.mentions} mentions updated` : ""
+                        }`,
+                      });
+                      reset();
+                    },
+                  },
+                )
+              }
+            >
+              Merge
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Admin-Sicht: alle Mitglieder mit E-Mail, Rolle (änderbar), Status und Sperren/Entsperren. */
 function AdminMembersSection({ session }: { session: Session }) {
   const q = useAdminMembers(true);
   const [suspending, setSuspending] = useState<AdminMember | null>(null);
+  const [merging, setMerging] = useState<AdminMember | null>(null);
+  const [placeholdersOnly, setPlaceholdersOnly] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
+  const placeholders = (q.data ?? []).filter((m) => m.status === "imported");
+  const shown = placeholdersOnly ? placeholders : (q.data ?? []);
   return (
     <Section title="Members" description="Everyone in this workspace, including suspended members.">
+      {placeholders.length > 0 && (
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Show</span>
+          <select
+            aria-label="Filter members"
+            className={selectClass}
+            value={placeholdersOnly ? "imported" : "all"}
+            onChange={(e) => setPlaceholdersOnly(e.target.value === "imported")}
+          >
+            <option value="all">All members</option>
+            <option value="imported">Imported placeholders ({placeholders.length})</option>
+          </select>
+        </label>
+      )}
       {q.isLoading && <ListSkeleton rows={3} />}
       {q.isError && (
         <ErrorState
@@ -440,7 +555,7 @@ function AdminMembersSection({ session }: { session: Session }) {
               </tr>
             </thead>
             <tbody>
-              {q.data.map((m) => (
+              {shown.map((m) => (
                 <AdminMemberRow
                   key={m.id}
                   m={m}
@@ -449,6 +564,7 @@ function AdminMembersSection({ session }: { session: Session }) {
                     setActionError(null);
                     setSuspending(x);
                   }}
+                  onMerge={setMerging}
                   onError={setActionError}
                 />
               ))}
@@ -462,6 +578,11 @@ function AdminMembersSection({ session }: { session: Session }) {
         </p>
       )}
       <SuspendDialog member={suspending} onClose={() => setSuspending(null)} />
+      <MergePlaceholderDialog
+        placeholder={merging}
+        candidates={(q.data ?? []).filter((m) => m.status === "active" && m.role !== "app")}
+        onClose={() => setMerging(null)}
+      />
     </Section>
   );
 }

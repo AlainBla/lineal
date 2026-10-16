@@ -89,9 +89,9 @@ Linear-Markdown enthält eigene Elemente. Der Importer übersetzt:
 | Links auf Projekte/Dokumente/Views | Lineal-URLs über `import_mapping` |
 | `@user`-Erwähnungen | `@displayName` des zugeordneten Lineal-Users |
 | `<linear-image>{json}</linear-image>`, Upload-URLs | heruntergeladene Datei, Lineal-Blob-URL |
-| unbekannte Tags | als Text erhalten, im Bericht gelistet |
+| Tag-artige Folgen (`<token>`, `<uuid>`, `<script>` …) | als wörtlicher Text erhalten (`\<token>`), im Bericht gelistet; nichts wird gelöscht |
 
-Anschließend läuft die normale Markdown-Bereinigung (Allowlist, [10 §11.4](10-architektur-umsetzung.md#114-sicherheitsvorgaben-für-die-umsetzung)).
+Anschließend läuft die normale Markdown-Bereinigung (Allowlist, [10 §11.4](10-architektur-umsetzung.md#114-sicherheitsvorgaben-für-die-umsetzung)). Sie **löscht kein Markup mehr**: Rohes HTML wird nie ausgeführt, aber jede Tag-artige Folge wird mit `\` maskiert und bleibt als Text sichtbar (Linear-Texte enthalten Platzhalter wie `<token>` als normalen Text). Dasselbe gilt für alle Schreibwege (API, MCP, Editor), weil sie dieselbe Funktion `markdown::sanitize` nutzen; einfacher Text (Titel, Namen, Kurzbeschreibungen) behält Tags ohne Maskierung (`sanitize_plain`) und wird vom Web immer als Text ausgegeben. Code-Spans und Code-Blöcke bleiben unverändert, gefährliche Links (`javascript:`, `data:`) verlieren weiterhin ihr Ziel. Der Bericht meldet je Tag-Name einmal „kept as literal text“ (aktive Elemente wie `script`, `iframe` als Warnung „neutralised“).
 
 ## 4. Ablauf
 
@@ -128,7 +128,7 @@ Jede Phase verarbeitet Seiten von 50–100 Objekten pro Transaktion und speicher
 
 ### 4.2 Delta-Import
 
-Läuft mit `updatedAfter = letzter erfolgreicher Laufbeginn`. Geänderte Objekte werden aktualisiert, wenn sich die `checksum` unterscheidet und das Objekt **in Lineal seit dem Import nicht geändert** wurde (`updatedAt <= importedAt`). Sonst Konflikt → Lineal-Stand bleibt, Eintrag im Bericht. In Linear gelöschte Objekte werden nicht automatisch gelöscht (nur gemeldet). Typischer Einsatz: Testimport → paralleler Betrieb → finaler Delta-Import am Umstellungstag.
+Läuft mit `updatedAfter = letzter erfolgreicher Laufbeginn`. Geänderte Objekte werden aktualisiert, wenn sich die `checksum` unterscheidet und das Objekt **in Lineal seit dem Import nicht geändert** wurde (`updatedAt <= importedAt`). Sonst Konflikt → Lineal-Stand bleibt, Eintrag im Bericht. In Linear gelöschte oder archivierte Objekte werden im **Abgleich** (§12) archiviert, nie hart gelöscht; ein manueller Delta-Lauf meldet sie nur. Typischer Einsatz: Testimport → paralleler Betrieb → finaler Delta-Import am Umstellungstag.
 
 ### 4.3 Stille während des Imports
 
@@ -249,3 +249,35 @@ Rechte: Beim Start prüft `importStart` Sichtbarkeit (sonst `not_found`) sowie V
 - **Issue-Reaktionen** werden wie Kommentar-Reaktionen importiert (unbekannte Nutzer entfallen, Dubletten verhindert der Unique-Index). **Kommentare an Projekt-Updates** (inkl. Antworten und Reaktionen) kommen im neuen Schritt `UpdateComments` nach `InitiativeUpdates`; Kommentare an Initiative-Updates bleiben mit Hinweis übersprungen.
 - **Dry-Run:** zählt Downloads, ohne sie zu laden: `ImportSource::probe()` (Linear-Adapter per HEAD mit denselben URL-Prüfungen wie `fetch`, Fake über die Dateilänge). `stats.plan` enthält `downloadFiles`, `downloadBytes`, `downloadSizeUnknown` (kein `Content-Length`), `downloadRejected`; gezählt werden Anhänge und eingebettete Uploads in Issue-Beschreibungen und Kommentaren, je URL einmal.
 - Alle Abfragen bleiben im Schema-Test (`linear_schema.rs`, ≤ 5 000 Punkte). Die Antwortformen des echten API sind weiterhin nicht geprüft.
+
+## 12. Regelmäßiger Abgleich (Sync)
+
+Ein Owner/Admin richtet in `/{ws}/settings/import` (Abschnitt „Sync“) für einen **abgeschlossenen** Linear-Import einen Abgleich ein: Intervall (aus / stündlich / alle 6 h / täglich zu einer Uhrzeit in UTC), Teams (und Projekte) wie beim Import, Linear-API-Schlüssel. „Sync now“, Pausieren/Fortsetzen und Löschen stehen daneben; Status, nächster Lauf und letztes Ergebnis erscheinen im Abschnitt, der Bericht jedes Laufs im Verlauf der Import-Seite (Läufe tragen `options.syncId`).
+
+**Schlüssel.** AES-GCM wie die Import-Tokens (`encrypt_token`, Schlüssel per HKDF aus `LINEAL_SESSION_SECRET`), aber in der eigenen Tabelle `import_sync_credential` (gebunden an die Sync-ID, **keine** 7-Tage-Löschung) und je Lauf neu für die Lauf-ID verschlüsselt. Er erscheint nie in API-Antworten (`hasKey`), Berichten, Audit-Einträgen oder Logs; `GraphQL secret`. Löschen des Syncs löscht den Schlüssel.
+
+**Ablauf.** Der Job `import_runner` (10 s) legt für fällige Einrichtungen einen Delta-Lauf an (`delta`, `updatedAfter` = das spätere von letztem erfolgreichen Sync-Lauf und letztem abgeschlossenen Import, minus 5 min Überlappung) und führt ihn wie jeden Lauf aus. Start nur, wenn kein Lauf der Einrichtung aktiv ist und **kein anderer Lauf für ein überlappendes Team läuft** (Sperre B7.08, `ensure_no_overlapping_run`; sonst wird der Termin übersprungen). Der Lauf gehört dem Einrichtenden: ist er nicht mehr Admin/Owner, startet nichts und er wird benachrichtigt.
+
+**Konfliktregel (Linear ist die Quelle).** Ein Objekt wird nur überschrieben, wenn sich sein Stand in Linear geändert hat (`checksum`) **und** es in Lineal seit dem letzten Abgleich nicht lokal geändert wurde (`updated_at <= imported_at` der Zeile im Mapping). Sonst bleibt der Lineal-Stand, der Bericht nennt den Konflikt („changed in Lineal since the import“). Die Regel gilt je **Objekt** (Issue, Kommentar, Dokument …), nicht je Feld: eine lokale Änderung irgendeines Feldes schützt das ganze Objekt (konservativer als feldweise; entschieden, weil die Importzeile keine Feld-Checksummen führt). Neue Objekte in Linear werden angelegt; Zuordnung läuft über `import_mapping`.
+
+**Gelöschtes/Archiviertes.** In Linear archivierte Objekte kommen mit `archivedAt` und werden entsprechend aktualisiert. In Linear **hart gelöschte** (oder aus dem Umfang verschobene) Objekte liefert die API bei `updatedAfter` nicht mehr; deshalb liest der Schritt `Removed` bei manuellen Läufen und mindestens alle 24 h alle IDs von Issues, Projekten, Initiativen und Dokumenten im Umfang und **archiviert** (`archived_at`, nie `DELETE`) mit Mapping, aber ohne Quelle, sofern sie lokal unverändert sind (sonst Konflikt im Bericht). Teams, die nicht (mehr) zum Abgleich gehören, werden nie archiviert; bei Teilfehlern der Quelle oder unvollständiger Liste wird nichts archiviert. (Dies löst den früheren Satz „nur gemeldet“ ab: entschieden, weil ein Abgleich sonst Geisterobjekte sammelt.)
+
+**Inhalte neu laden.** Option für einen Lauf: liest alle Objekte (ohne `updatedAfter`) und schreibt Beschreibungen, Kommentare, Dokumente und Updates **erneut**, deren Quelltext Tag-artige Folgen enthält (`<token>`; nur dort kann der frühere Importer etwas gelöscht haben), auch bei gleicher Checksum – aber nur, wenn das Objekt lokal unverändert ist (gleiche Konfliktregel). Es werden ausschließlich Zeilen über das Mapping dieser Quelle im eigenen Workspace aktualisiert; die Zeilenänderung ist auf `organization_id` des Laufs begrenzt, ein manipuliertes Mapping auf ein fremdes Objekt läuft ins Leere (Fehlereintrag).
+
+**Label-Aufräumen.** Option „Merge duplicate labels“ (oder GraphQL `importMergeLinearLabels`): Importierte Labels `Name (Linear)` werden mit dem vorhandenen Merge (`merge_issue_label`) in das gleichnamige Label derselben Ebene (Team/Workspace, Gruppe) überführt, das Mapping zeigt danach auf das Ziel. Nie automatisch.
+
+**Fehler und Audit.** Ein fehlgeschlagener Lauf setzt `last_status = failed` und benachrichtigt den Einrichtenden (Notification `importSyncFailed`, Kategorie `system`). Audit-Einträge: `import.sync.created/updated/paused/resumed/deleted`, `import.sync.run_started`, `import.labels_merged`, `import.placeholder_merged` (ohne Schlüssel).
+
+**API.** GraphQL (nur Owner/Admin, Scope `admin`): `importSync`, `importSyncSave`, `importSyncPause`, `importSyncRun(reloadContent, mergeLinearLabels)`, `importSyncDelete`, `importMergeLinearLabels`.
+
+## 13. Korrekturen nach dem ersten echten Lauf
+
+1. **Platzhalter-Text:** siehe §3.3 (nichts wird mehr gelöscht).
+2. **Dateien:** Der Worker schreibt direkt über den Port `BlobStore::put_bytes` (kein HTTP-`PUT` an `LINEAL_BASE_URL`, im Worker-Container oft nicht erreichbar). Der `LocalBlobStore` prüft Größenlimit (50 MB) und Magic-Bytes wie beim Upload. Downloads kommen weiter nur von `uploads.linear.app` (SSRF-Regeln der Quelle). Voraussetzung im Docker-Stack: das Volume `blobs` ist in API und Worker eingehängt (ist es). Sichtbarkeit einer Datei = Sichtbarkeit des Besitzer-Issues (`resolveAssets` prüft das Issue).
+3. **Labels:** Ein gleichnamiges Label (ohne Beachtung der Schreibweise) auf derselben Ebene (Team/Workspace, gleiche Gruppe) wird zugeordnet statt dupliziert (`import_mapping`); nur wenn die Ebene nicht passt, bleibt der Ausweichname `(Linear)`.
+4. **Dokumente ohne eindeutiges Elternobjekt:** nie an den Workspace oder ein fremdes Team. Ein Dokument ohne Projekt/Issue/Initiative/Cycle in Linear, aber mit eigenem importiertem Team, wird ein Team-Dokument dieses Teams (gleiche Sichtbarkeit wie in Linear); hing es in Linear an einem nicht importierten Objekt oder ist sein Team nicht importiert, wird es mit Warnung übersprungen.
+5. **Elternkommentare:** Ursache war die Reihenfolge (Linear liefert Antworten vor dem Elternkommentar, auch über Seitengrenzen). Antworten werden vorgemerkt und nach dem letzten Kommentar nachverknüpft; nur wirklich fehlende Eltern (gelöscht, anderes Team/Projekt) bleiben Kommentare oberster Ebene, der Bericht nennt die Ursache.
+
+## 14. Platzhalter einem bestehenden User zuordnen
+
+Hat ein Mensch in Linear eine andere E-Mail-Adresse als in Lineal, entsteht ein Platzhalter (`status = imported`). Owner/Admin ordnen ihn in `/{ws}/settings/members` (Filter „Imported placeholders“, „Merge with…“) oder per GraphQL `importPlaceholderMerge(placeholderId, targetUserId)` einem aktiven User desselben Workspace zu (nie aktiv → aktiv, nie Platzhalter → Platzhalter). In **einer** Transaktion: alle Fremdschlüssel auf den User (aus dem Katalog ermittelt: Zuweisungen, Ersteller, Abos, Kommentar- und Reaktionsautoren, Notifications, History, Projekt-Lead/-Mitglieder, Initiativ-Owner, Team-Mitgliedschaften als Vereinigung mit ODER auf `owner`, …) wandern zum Ziel; gleichwertige Zeilen beim Ziel (Abo, Mitgliedschaft, Reaktion) entfallen; `@handle` in Beschreibungen, Kommentaren, Dokumenten und Updates wird zu `@handle-des-Ziels`; `import_mapping` (User) zeigt auf das Ziel, damit spätere Delta-/Sync-Läufe es nutzen; der Platzhalter wird gelöscht (ein übersehener Verweis lässt das Löschen und damit alles scheitern). Audit `import.placeholder_merged`, keine Benachrichtigungen. Beim Start eines Imports lässt sich im Plan („People“) je Person ohne E-Mail-Treffer ein vorhandener User wählen (`userMapping`).

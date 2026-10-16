@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Invitation } from "@/gql/graphql";
+import { mergePlaceholder } from "@/features/import/api";
 import { gqlRequest } from "@/lib/graphql";
 
 import type { Member } from "./queries";
@@ -115,6 +116,19 @@ export function useAdminMembers(enabled: boolean) {
           { signal },
         )
       ).workspaceMembers,
+  });
+}
+
+/** Import-Platzhalter einem bestehenden aktiven User zuordnen (nur Owner/Admin; atomar im Server). */
+export function usePlaceholderMerge() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { placeholderId: string; targetUserId: string }) =>
+      mergePlaceholder(v.placeholderId, v.targetUserId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: memberKeys.adminMembers });
+      void qc.invalidateQueries({ queryKey: memberKeys.members });
+    },
   });
 }
 

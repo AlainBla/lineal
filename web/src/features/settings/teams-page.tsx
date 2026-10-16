@@ -10,7 +10,7 @@ import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import { workspaceSettingsNav } from "./nav";
 import { TeamNestingDialog } from "./team-nesting-dialog";
 import { DeletedTeamsSection } from "./teams-deleted";
-import { useTeamsOverview, type TeamRow } from "./teams-queries";
+import { useJoinTeam, useTeamsOverview, type TeamRow } from "./teams-queries";
 import { Section, SettingsShell } from "./ui";
 
 /** Teams in Baumreihenfolge (Parent, dann Sub-Teams); fehlt der Parent, steht das Team an der Wurzel. */
@@ -39,12 +39,17 @@ function TeamRowItem({
   depth,
   parentName,
   onMove,
+  onJoin,
+  joining,
 }: {
   ws: string;
   team: TeamRow;
   depth: number;
   parentName: string | null;
   onMove?: () => void;
+  /** Gesetzt, wenn der Aufrufer beitreten darf (`viewer.canJoin`, noch kein Mitglied). */
+  onJoin?: () => void;
+  joining?: boolean;
 }) {
   const retired = !!team.retiredAt;
   return (
@@ -87,6 +92,17 @@ function TeamRowItem({
       >
         {retired ? "Retired" : "Active"}
       </span>
+      {onJoin && (
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={`Join ${team.name}`}
+          disabled={joining || retired}
+          onClick={onJoin}
+        >
+          Join
+        </Button>
+      )}
       {onMove && (
         <Button
           size="sm"
@@ -112,6 +128,8 @@ export function TeamsSettingsPage({ ws }: { ws: string }) {
   const canTry = session?.user.role !== "guest";
   const admin = session?.user.role === "owner" || session?.user.role === "admin";
   const [moving, setMoving] = useState<TeamRow | null>(null);
+  const join = useJoinTeam();
+  const me = session?.user.id;
   return (
     <SettingsShell title="Settings" nav={nav}>
       <Section title="Teams" description="All teams you can see in this workspace.">
@@ -143,9 +161,20 @@ export function TeamsSettingsPage({ ws }: { ws: string }) {
                 depth={depth}
                 parentName={team.parentId ? (names.get(team.parentId) ?? null) : null}
                 onMove={admin ? () => setMoving(team) : undefined}
+                onJoin={
+                  me && team.viewer?.canJoin && !team.viewer.isMember
+                    ? () => join.mutate({ teamId: team.id, userId: me })
+                    : undefined
+                }
+                joining={join.isPending}
               />
             ))}
           </ul>
+        )}
+        {join.isError && (
+          <p role="alert" className="text-xs text-destructive">
+            {join.error instanceof Error ? join.error.message : "Could not join the team."}
+          </p>
         )}
       </Section>
       {admin && <DeletedTeamsSection />}

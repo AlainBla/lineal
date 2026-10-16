@@ -112,6 +112,46 @@ describe("MembersSettingsPage", () => {
     expect(screen.getByRole("link", { name: "Members" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("filters imported placeholders and merges one with an existing member", async () => {
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsAdminMembers: () => ({
+        workspaceMembers: [
+          member("user-alice", "alice", "alice@acme.example", "owner", "active"),
+          member("user-bob", "bob", "bob@acme.example", "user", "active"),
+          member("ph-dave", "dave", "dave@linear.example", "user", "imported"),
+        ],
+      }),
+      ImportPlaceholderMerge: () => ({
+        importPlaceholderMerge: { success: true, moved: 12, dropped: 1, mentions: 2 },
+      }),
+    });
+    await renderWithApp(
+      <MembersSettingsPage ws="acme" />,
+      clientWithRole("admin", "user-alice"),
+      "/acme/settings/members",
+    );
+    const user = userEvent.setup();
+    expect(await screen.findByText("dave@linear.example")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Filter members"), "imported");
+    expect(screen.queryByText("bob@acme.example")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Merge dave@linear.example with an existing member" }),
+    );
+    const merge = screen.getByRole("button", { name: "Merge" });
+    expect(merge).toBeDisabled();
+    const pick = screen.getByLabelText("Merge into");
+    // Nur aktive Mitglieder sind Ziele, nie andere Platzhalter.
+    expect(within(pick).queryByText(/dave@linear/)).not.toBeInTheDocument();
+    await user.selectOptions(pick, "user-bob");
+    await user.click(merge);
+    await waitFor(() => expect(gql.of("ImportPlaceholderMerge")).toHaveLength(1));
+    expect(gql.of("ImportPlaceholderMerge")[0]!.variables).toEqual({
+      placeholderId: "ph-dave",
+      targetUserId: "user-bob",
+    });
+  });
+
   it("resends and revokes an invitation", async () => {
     const gql = mockGraphql(handlers());
     await renderWithApp(

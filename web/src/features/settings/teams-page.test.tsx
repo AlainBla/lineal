@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -71,6 +71,33 @@ describe("TeamsSettingsPage", () => {
     await renderWithApp(<TeamsSettingsPage ws="acme" />, newClient(), "/acme/settings/teams");
     await userEvent.click(await screen.findByRole("button", { name: "New team" }));
     expect(getUiState().createTeamOpen).toBe(true);
+  });
+
+  it("shows a Join button in the row of teams the viewer can join and joins directly", async () => {
+    const teams = [
+      row({
+        id: "team-eng",
+        key: "ENG",
+        name: "Engineering",
+        viewer: { isMember: false, canJoin: true },
+      }),
+      row({ id: "team-web", key: "WEB", name: "Web", viewer: { isMember: true, canJoin: false } }),
+      row({ id: "team-ops", key: "OPS", name: "Ops", viewer: { isMember: false, canJoin: false } }),
+    ];
+    const api = mockGraphql({
+      SettingsTeams: () => ({ teams }),
+      SettingsTeamsListJoin: () => ({ teamMembershipCreate: { success: true } }),
+    });
+    await renderWithApp(<TeamsSettingsPage ws="acme" />, newClient(), "/acme/settings/teams");
+    const join = await screen.findByRole("button", { name: "Join Engineering" });
+    // Nur beitretbare Nicht-Mitglieds-Teams bekommen den Button.
+    expect(screen.getAllByRole("button", { name: /^Join / })).toHaveLength(1);
+    await userEvent.click(join);
+    await waitFor(() => expect(api.of("SettingsTeamsListJoin")).toHaveLength(1));
+    expect(api.of("SettingsTeamsListJoin")[0]?.variables).toEqual({
+      teamId: "team-eng",
+      userId: SESSION.user.id,
+    });
   });
 
   it("hides the button for guests and shows load errors", async () => {

@@ -20,6 +20,8 @@ export interface TeamRow extends Pick<
 > {
   /** `null`, wenn der Server die Mitglieder nicht preisgibt. */
   memberCount?: number | null;
+  /** Beziehung des Aufrufers zum Team (Anzeige von „Join“; der Server prüft erneut). */
+  viewer?: { isMember: boolean; canJoin: boolean } | null;
 }
 
 export const teamsKeys = { overview: ["settings", "teams"] as const };
@@ -43,12 +45,31 @@ export function useTeamsOverview(enabled = true) {
           `query SettingsTeams {
             teams(includeArchived: true, first: 250) {
               id key name parentId icon color visibility allMembersCanJoin retiredAt createdAt memberCount
+              viewer { isMember canJoin }
             }
           }`,
           undefined,
           { signal },
         )
       ).teams,
+  });
+}
+
+/** Selbstbeitritt aus der Teams-Liste (`canJoin`); der Server prüft die Policy erneut. */
+export function useJoinTeam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { teamId: string; userId: string }) =>
+      gqlRequest(
+        `mutation SettingsTeamsListJoin($teamId: String!, $userId: String!) {
+          teamMembershipCreate(teamId: $teamId, userId: $userId) { success }
+        }`,
+        v,
+      ),
+    onSuccess: async () => {
+      await refreshTeams(qc);
+      void qc.invalidateQueries({ queryKey: teamsKeys.overview });
+    },
   });
 }
 

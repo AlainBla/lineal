@@ -1,13 +1,17 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "@/app/test-polyfills";
-import { mockGraphql, renderWithApp } from "@/features/issues/test-fixtures";
+import { mockGraphql, renderWithApp, SESSION } from "@/features/issues/test-fixtures";
 
 import { progressPercent } from "./api";
 import { ImportPage } from "./import-page";
 
+const USERS = [
+  { id: "lu-1", name: "Dave Dev", displayName: "dave.dev" },
+  { id: "lu-2", name: "Erin", displayName: "erin" },
+];
 const TARGETS = { teams: [{ id: "kp-id", key: "KP", name: "Kolleg Plus" }] };
 
 const PLANNED = {
@@ -86,6 +90,8 @@ describe("progressPercent", () => {
 describe("ImportPage", () => {
   it("sends the token once and never keeps it in the page", async () => {
     const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
       ImportRuns: () => ({ importRuns: [] }),
       ImportScan: () => ({ importScan: { ...PLANNED, status: "scanning", scan: null } }),
       ImportRun: () => ({ importRun: { ...PLANNED, status: "scanning", scan: null } }),
@@ -106,6 +112,8 @@ describe("ImportPage", () => {
 
   it("requires a new key for conflicting teams and starts a dry run with the key mapping", async () => {
     const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
       ImportRuns: () => ({ importRuns: [PLANNED] }),
       ImportRun: () => ({ importRun: PLANNED }),
       ImportStart: () => ({ importStart: { ...PLANNED, status: "running", phase: 1 } }),
@@ -132,12 +140,15 @@ describe("ImportPage", () => {
         delta: false,
         projects: [],
         targetTeams: {},
+        userMapping: {},
       },
     });
   });
 
   it("imports into an existing team and only the checked projects", async () => {
     const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
       ImportRuns: () => ({ importRuns: [PLANNED] }),
       ImportRun: () => ({ importRun: PLANNED }),
       ImportStart: () => ({ importStart: { ...PLANNED, status: "running", phase: 1 } }),
@@ -149,7 +160,7 @@ describe("ImportPage", () => {
     // Ziel: bestehendes Team statt neuem Team; der Key-Konflikt entfällt damit.
     const target = screen.getByLabelText("Target for ENG");
     expect(target).toHaveDisplayValue("As new team (key ENG)");
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3 + 1));
+    await waitFor(() => expect(within(target).getAllByRole("option")).toHaveLength(2));
     await user.selectOptions(target, "kp-id");
     expect(screen.queryByLabelText("Target key for ENG")).not.toBeInTheDocument();
     expect(screen.queryByText(/Team key conflict/)).not.toBeInTheDocument();
@@ -168,8 +179,98 @@ describe("ImportPage", () => {
         delta: false,
         projects: ["p1"],
         targetTeams: { ENG: "kp-id" },
+        userMapping: {},
       },
     });
+  });
+
+  it("maps a person with a different e-mail address to an existing user", async () => {
+    const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportRuns: () => ({ importRuns: [PLANNED] }),
+      ImportRun: () => ({ importRun: PLANNED }),
+      ImportStart: () => ({ importStart: { ...PLANNED, status: "running", phase: 1 } }),
+      ImportTargetTeams: () => TARGETS,
+      ImportExistingUsers: () => ({ users: USERS }),
+    });
+    await renderWithApp(<ImportPage />);
+    const user = userEvent.setup();
+    await screen.findByText("Engineering");
+    // Nur wer keinen E-Mail-Treffer hat, erscheint in der Zuordnung (Alice ist schon zugeordnet).
+    expect(screen.queryByLabelText("Map Alice to")).not.toBeInTheDocument();
+    const pick = await screen.findByLabelText("Map Dave to");
+    await waitFor(() => expect(within(pick).getAllByRole("option")).toHaveLength(3));
+    await user.selectOptions(pick, "lu-2");
+    await user.type(screen.getByLabelText("Target key for ENG"), "engx");
+    await user.click(screen.getByRole("button", { name: "Start import" }));
+    await waitFor(() => expect(api.of("ImportStart")).toHaveLength(1));
+    expect(api.of("ImportStart")[0]?.variables).toMatchObject({
+      input: { userMapping: { u2: "lu-2" } },
+    });
+  });
+
+  it("offers to join the imported teams after a completed import", async () => {
+    const done = {
+      ...PLANNED,
+      status: "completed",
+      options: { teams: ["ENG", "DES"], keyMapping: { ENG: "ENGX" } },
+      stats: {},
+    };
+    const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportRuns: () => ({ importRuns: [done] }),
+      ImportRun: () => ({ importRun: done }),
+      ImportReport: () => ({
+        importReport: { infoCount: 0, warningCount: 0, errorCount: 0, entries: [] },
+      }),
+      ImportJoinableTeams: () => ({
+        teams: [
+          {
+            id: "team-engx",
+            key: "ENGX",
+            name: "Engineering",
+            viewer: { isMember: false, canJoin: true },
+          },
+          {
+            id: "team-des",
+            key: "DES",
+            name: "Design",
+            viewer: { isMember: true, canJoin: false },
+          },
+          { id: "team-other", key: "OPS", name: "Ops", viewer: { isMember: false, canJoin: true } },
+        ],
+      }),
+      ImportJoinTeam: () => ({ teamMembershipCreate: { success: true } }),
+    });
+    await renderWithApp(<ImportPage />);
+    const user = userEvent.setup();
+    const btn = await screen.findByRole("button", { name: "Join imported teams (1)" });
+    expect(screen.getByText(/You are not a member of ENGX/)).toBeInTheDocument();
+    await user.click(btn);
+    await waitFor(() => expect(api.of("ImportJoinTeam")).toHaveLength(1));
+    // Nur das importierte (per Key-Zuordnung ENG -> ENGX) und beitretbare Team, nie fremde Teams.
+    expect(api.of("ImportJoinTeam")[0]?.variables).toEqual({
+      teamId: "team-engx",
+      userId: SESSION.user.id,
+    });
+  });
+
+  it("does not offer to join after a dry run or when nothing is joinable", async () => {
+    const dry = { ...PLANNED, status: "completed", dryRun: true, options: { teams: ["ENG"] } };
+    mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportRuns: () => ({ importRuns: [dry] }),
+      ImportRun: () => ({ importRun: dry }),
+      ImportReport: () => ({
+        importReport: { infoCount: 0, warningCount: 0, errorCount: 0, entries: [] },
+      }),
+      ImportJoinableTeams: () => ({
+        teams: [{ id: "t", key: "ENG", name: "E", viewer: { isMember: false, canJoin: true } }],
+      }),
+    });
+    await renderWithApp(<ImportPage />);
+    await screen.findByText("Report");
+    expect(screen.queryByRole("button", { name: /Join imported teams/ })).not.toBeInTheDocument();
   });
 
   it("shows the planned mappings and warnings of a dry run", async () => {
@@ -192,6 +293,8 @@ describe("ImportPage", () => {
       },
     };
     mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
       ImportRuns: () => ({ importRuns: [dry] }),
       ImportRun: () => ({ importRun: dry }),
       ImportTargetTeams: () => TARGETS,
@@ -232,6 +335,8 @@ describe("ImportPage", () => {
       },
     };
     mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
       ImportRuns: () => ({ importRuns: [done] }),
       ImportRun: () => ({ importRun: done }),
       ImportReport: () => ({

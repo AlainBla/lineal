@@ -38,6 +38,8 @@ docker compose exec -T postgres psql -U lineal -d postgres -v ON_ERROR_STOP=1 \
 
 step "lineal bauen, migrieren, Demo-Daten anlegen"
 cargo build -p lineal-server
+# Mock-Linear für den Import-/Sync-Flow (erfundene Daten, hört nur auf 127.0.0.1)
+cargo build -p lineal-import --example mock_linear
 export LINEAL_BIN="$PWD/target/debug/lineal"
 (
   export DATABASE_URL="$E2E_DB_URL" LINEAL_DEV=1 RUST_LOG=warn
@@ -60,6 +62,8 @@ key_sql() { # $1 Token, $2 Label, $3 team_ids-Ausdruck
   key_sql "$LINEAL_E2E_API_KEY_ENG" "e2e eng only" "ARRAY(SELECT id FROM team WHERE key = 'ENG')"
 } | docker compose exec -T postgres psql -U lineal -d "$E2E_DB" -v ON_ERROR_STOP=1
 
+export LINEAL_E2E_MOCK_PORT="$(free_port 18950)"
+export LINEAL_E2E_MOCK_BIN="$PWD/target/debug/examples/mock_linear"
 export LINEAL_E2E_API_PORT="$(free_port 18741)"
 export LINEAL_E2E_WEB_PORT="$(free_port 4173)"
 export LINEAL_E2E_DATABASE_URL="$E2E_DB_URL"

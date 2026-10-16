@@ -3,6 +3,7 @@ import {
   Box,
   ChevronDown,
   ChevronRight,
+  Compass,
   FileText,
   Gauge,
   Inbox,
@@ -472,6 +473,15 @@ export function Sidebar({
             )}
           </div>
           <TeamsSection ws={ws} data={data} loading={isLoading} />
+          {/* Teams, in denen man (noch) nicht Mitglied ist, z. B. nach einem Import. */}
+          <ul className="mt-0.5 flex flex-col gap-px">
+            <li>
+              <NavLink to={`/${ws}/settings/teams`}>
+                <Compass />
+                Browse teams
+              </NavLink>
+            </li>
+          </ul>
         </nav>
       </div>
     </motion.aside>

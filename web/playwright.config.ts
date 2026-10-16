@@ -13,6 +13,9 @@ const webPort = process.env.LINEAL_E2E_WEB_PORT ?? "4173";
 const databaseUrl =
   process.env.LINEAL_E2E_DATABASE_URL ?? "postgres://lineal:lineal@127.0.0.1:5440/lineal_e2e";
 const bin = process.env.LINEAL_BIN ?? "../target/debug/lineal";
+// Mock-Linear (erfundene Daten, nur lokal): der Worker liest den Endpunkt aus der Umgebung.
+const mockPort = process.env.LINEAL_E2E_MOCK_PORT ?? "18950";
+const mockBin = process.env.LINEAL_E2E_MOCK_BIN ?? "../target/debug/examples/mock_linear";
 const webOrigin = `http://localhost:${webPort}`;
 const backend = `http://127.0.0.1:${apiPort}`;
 
@@ -54,7 +57,18 @@ export default defineConfig({
       command: `${bin} worker`,
       // Der Worker hat keinen HTTP-Port; Bereitschaft = Startmeldung im Log.
       wait: { stdout: /worker started/ },
-      env: { ...serverEnv, RUST_LOG: "info" },
+      env: {
+        ...serverEnv,
+        RUST_LOG: "info",
+        LINEAL_IMPORT_LINEAR_ENDPOINT: `http://127.0.0.1:${mockPort}/graphql`,
+      },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: mockBin,
+      wait: { stdout: /mock linear listening/ },
+      env: { MOCK_LINEAR_PORT: mockPort },
       reuseExistingServer: false,
       timeout: 60_000,
     },

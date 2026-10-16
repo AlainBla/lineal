@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Info, Loader2, ShieldAlert, XCircle } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
+import { useSession } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { GraphQLRequestError } from "@/lib/graphql";
@@ -10,11 +11,15 @@ import { cn } from "@/lib/utils";
 import {
   ACTIVE,
   control,
+  fetchExistingUsers,
   fetchReport,
   fetchRun,
   fetchRuns,
   fetchTargetTeams,
+  fetchTeamsWithViewer,
   handled,
+  importedTeamIds,
+  joinTeams,
   keys,
   progressPercent,
   scan,
@@ -24,6 +29,7 @@ import {
   type ScanTeam,
   type TargetTeam,
 } from "./api";
+import { SyncSection } from "./sync-section";
 
 function errorText(err: unknown): string {
   if (err instanceof GraphQLRequestError) {
@@ -142,6 +148,9 @@ function PlanStep({
   // Abgewählte Projekte (Standard: alle übernehmen).
   const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
   const targetTeams = useQuery({ queryKey: keys.targets, queryFn: fetchTargetTeams });
+  // Linear-User-ID -> bestehender Lineal-User (wenn die E-Mail-Adressen abweichen).
+  const [userMap, setUserMap] = useState<Record<string, string>>({});
+  const existingUsers = useQuery({ queryKey: keys.existingUsers, queryFn: fetchExistingUsers });
   const m = useMutation({
     mutationFn: (dryRun: boolean) => {
       const chosen = teams.filter((t) => selected.has(t.key));
@@ -161,6 +170,7 @@ function PlanStep({
         targetTeams: Object.fromEntries(
           chosen.filter((t) => targets[t.key]).map((t) => [t.key, targets[t.key] as string]),
         ),
+        userMapping: Object.fromEntries(Object.entries(userMap).filter(([, v]) => v)),
       });
     },
     onSuccess: onChanged,
@@ -277,6 +287,38 @@ function PlanStep({
           others are created as placeholder users without login and are linked automatically when
           they are invited with the same e-mail address.
         </p>
+        {users.some((u) => !u.matchedUserId) ? (
+          <div className="mt-3">
+            <h3 className="mb-1 text-xs font-medium text-muted-foreground">
+              People without a match: map to an existing user or keep as placeholder
+            </h3>
+            <ul className="flex flex-col divide-y divide-border text-sm">
+              {users
+                .filter((u) => !u.matchedUserId)
+                .map((u) => (
+                  <li key={u.id} className="flex flex-wrap items-center gap-2 py-1.5">
+                    <span className="flex-1">
+                      {u.name ?? u.displayName}
+                      <span className="ml-1 text-xs text-muted-foreground">{u.email}</span>
+                    </span>
+                    <select
+                      aria-label={`Map ${u.name ?? u.displayName} to`}
+                      className="h-7 rounded-md border border-border bg-surface px-1.5 text-xs"
+                      value={userMap[u.id] ?? ""}
+                      onChange={(e) => setUserMap({ ...userMap, [u.id]: e.target.value })}
+                    >
+                      <option value="">Create placeholder user</option>
+                      {(existingUsers.data ?? []).map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name} ({x.displayName})
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ) : null}
         <p className="mt-2 text-xs text-muted-foreground" data-testid="plan-counts">
           {Object.entries(counts)
             .filter(([, n]) => n > 0)
@@ -499,6 +541,45 @@ function ProgressStep({
   );
 }
 
+/** Nach einem abgeschlossenen Import: den importierten Teams beitreten (für den ausführenden Admin). */
+function JoinImportedTeams({ run }: { run: ImportRunView }) {
+  const session = useSession();
+  const qc = useQueryClient();
+  const teams = useQuery({ queryKey: keys.joinable, queryFn: fetchTeamsWithViewer });
+  const ids = importedTeamIds(run, teams.data ?? []);
+  const joinable = (teams.data ?? []).filter(
+    (t) => ids.includes(t.id) && t.viewer?.canJoin && !t.viewer.isMember,
+  );
+  const join = useMutation({
+    mutationFn: () =>
+      joinTeams(
+        joinable.map((t) => t.id),
+        session?.user.id ?? "",
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.joinable });
+      void qc.invalidateQueries();
+    },
+  });
+  if (run.status !== "completed" || run.dryRun || !session || joinable.length === 0) return null;
+  return (
+    <Card title="Join imported teams">
+      <p className="mb-3 text-sm text-muted-foreground">
+        You are not a member of {joinable.map((t) => t.key).join(", ")}. Join to see these teams in
+        your sidebar and “My issues”.
+      </p>
+      <Button onClick={() => join.mutate()} disabled={join.isPending}>
+        Join imported teams ({joinable.length})
+      </Button>
+      {join.isError ? (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {errorText(join.error)}
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
 /** Schritt 4: Bericht. */
 function ReportStep({ run, onRestart }: { run: ImportRunView; onRestart: () => void }) {
   const [severity, setSeverity] = useState<string | null>(null);
@@ -526,6 +607,7 @@ function ReportStep({ run, onRestart }: { run: ImportRunView; onRestart: () => v
         ) : null}
         <Counters run={run} />
       </Card>
+      <JoinImportedTeams run={run} />
       <Card
         title="Notes and warnings"
         aside={
@@ -629,6 +711,8 @@ export function ImportPage() {
     body = <ReportStep run={r} onRestart={() => setRunId("new")} />;
   }
 
+  const completedRun =
+    runs.data?.find((x) => x.source === "linear" && x.status === "completed" && !x.dryRun) ?? null;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
       <header>
@@ -639,6 +723,9 @@ export function ImportPage() {
         </p>
       </header>
       {body}
+      {!forbidden && !runs.isLoading ? (
+        <SyncSection completedRun={completedRun} onOpenRun={setRunId} />
+      ) : null}
     </div>
   );
 }
