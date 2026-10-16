@@ -12,6 +12,8 @@ export interface CreatePreset {
   assigneeId?: string;
   priority?: number;
   projectId?: string;
+  /** Meilenstein des Projekts (gilt nur zusammen mit `projectId`). */
+  milestoneId?: string;
   cycleId?: string;
   parentId?: string;
   /** Alt+C: das Modal öffnet mit der Template-Auswahl. */

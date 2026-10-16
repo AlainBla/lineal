@@ -21,6 +21,12 @@ export function useFilterSources(): {
       labels: metas.flatMap((m) => (m ? m.labels.filter((l) => !l.isGroup) : [])),
       projects: metas.flatMap((m) => m?.projects ?? []),
       teams: (teams.data ?? []).map((t) => ({ id: t.id, name: t.name })),
+      states: metas.flatMap((m) =>
+        m ? m.states.map((s) => ({ id: s.id, name: s.name, team: m.team.key })) : [],
+      ),
+      milestones: metas
+        .flatMap((m) => m?.projects ?? [])
+        .flatMap((p) => (p.milestones ?? []).map((ms) => ({ id: ms.id, name: ms.name }))),
     }),
     [users.data, metas, teams.data],
   );

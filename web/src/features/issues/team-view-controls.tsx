@@ -108,7 +108,7 @@ export function TeamViewControls({ controls }: { controls: TeamViewControlsState
       section: "View",
       keys: "shift+v",
       context: "list",
-      perform: () => press(root.current?.querySelector('button[aria-haspopup="dialog"]')),
+      perform: () => press(root.current?.querySelector('button[title="Display options"]')),
     },
   ]);
   return (

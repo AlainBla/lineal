@@ -131,6 +131,8 @@ pub struct ViewKeyInput {
     pub view_type: Option<String>,
     /// Team (Referenz) hinter einer vordefinierten Team-Ansicht.
     pub team: Option<String>,
+    /// Projekt (Referenz) hinter `projectIssues`.
+    pub project: Option<String>,
 }
 
 /// Wirksame Anzeigeoptionen einer Ansicht.
@@ -946,6 +948,8 @@ struct ResolvedKey {
     kind: prefs::Kind,
     view_type: Option<String>,
     team: Option<TeamId>,
+    /// Teams des Projekts hinter `projectIssues` (für die Rechteprüfung).
+    project_teams: Option<Vec<TeamId>>,
     view: Option<CustomView>,
 }
 
@@ -968,6 +972,7 @@ async fn resolve_key(
                 kind: kind_of_model(v.model),
                 view_type: None,
                 team: v.team_id,
+                project_teams: None,
                 view: Some(v),
             })
         }
@@ -982,6 +987,25 @@ async fn resolve_key(
                 ),
                 None => None,
             };
+            if t == prefs::PROJECT_ISSUES {
+                let r = input
+                    .project
+                    .as_deref()
+                    .ok_or_else(|| invalid("project", "this view type needs a project"))?;
+                let p = resolve::project::resolve_in(tx, snap, r).await?;
+                return Ok(ResolvedKey {
+                    key: ViewKey {
+                        custom_view_id: None,
+                        view_type: Some(t.clone()),
+                        view_target_id: Some(p.project.id.0),
+                    },
+                    kind,
+                    view_type: Some(t.clone()),
+                    team: None,
+                    project_teams: Some(p.teams),
+                    view: None,
+                });
+            }
             if t.starts_with("team") && team.is_none() && !matches!(t.as_str(), "teamProjects") {
                 return Err(invalid("team", "this view type needs a team"));
             }
@@ -995,6 +1019,7 @@ async fn resolve_key(
                 kind,
                 view_type: Some(t.clone()),
                 team,
+                project_teams: None,
                 view: None,
             })
         }
@@ -1084,6 +1109,10 @@ impl App {
         let now = self.clock.now();
         let rk = resolve_key(&mut *tx, &snap, ctx, &access, &input).await?;
         let allowed = match (&rk.view, rk.team) {
+            _ if rk.project_teams.is_some() => {
+                let teams = rk.project_teams.as_deref().unwrap_or_default();
+                super::project::require_manage(&snap, ctx, Action::ManageProject, teams).is_ok()
+            }
             (Some(v), _) => {
                 can_edit(&snap, access.user_id, v) && (v.shared || v.owner_id == access.user_id)
             }

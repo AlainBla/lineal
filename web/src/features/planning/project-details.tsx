@@ -19,11 +19,18 @@ import {
 import { useProjectLabels, useProjectLifecycle, useUpdateProject } from "./queries";
 
 /**
- * Bearbeitbare Eigenschaften eines Projekts (docs/08 §2.7, F10). Jede Änderung geht sofort als
- * `projectUpdate` an den Server; dessen Regeln (Teams, Lead-Team, Status, Daten) und Rechte gelten,
- * Fehler erscheinen direkt unter den Feldern.
+ * Die Eigenschaftsfelder eines Projekts (Status … Initiatives), direkt editierbar. `stacked` stellt sie
+ * untereinander dar (Seitenpanel der Issue-Ansicht), sonst als Raster (Overview).
  */
-export function ProjectDetails({ project: p, ws }: { project: Project; ws: string }) {
+export function ProjectProperties({
+  project: p,
+  ws,
+  stacked,
+}: {
+  project: Project;
+  ws: string;
+  stacked?: boolean;
+}) {
   const update = useUpdateProject();
   const teams = useTeams();
   const users = useKnownUsers();
@@ -34,24 +41,9 @@ export function ProjectDetails({ project: p, ws }: { project: Project; ws: strin
     label: `${t.name} (${t.key})`,
   }));
   const userOptions = users.map((u) => ({ value: u.id, label: u.name }));
-
   return (
     <div className="flex flex-col gap-4">
-      <TextField
-        label="Project name"
-        value={p.name}
-        required
-        maxLength={255}
-        onCommit={(name) => save({ name })}
-      />
-      <TextField
-        label="Summary"
-        value={p.summary ?? ""}
-        maxLength={255}
-        placeholder="A short summary"
-        onCommit={(summary) => save({ summary })}
-      />
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className={stacked ? "flex flex-col gap-3" : "grid grid-cols-2 gap-4 sm:grid-cols-4"}>
         <SelectField
           label="Status"
           value={p.status.type}
@@ -79,7 +71,7 @@ export function ProjectDetails({ project: p, ws }: { project: Project; ws: strin
           onChange={(leadTeam) => leadTeam && save({ leadTeam })}
         />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className={stacked ? "flex flex-col gap-3" : "grid grid-cols-1 gap-4 sm:grid-cols-2"}>
         <DateField
           label="Start date"
           date={p.startDate}
@@ -142,6 +134,36 @@ export function ProjectDetails({ project: p, ws }: { project: Project; ws: strin
           {errorText(update.error)}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Bearbeitbare Eigenschaften eines Projekts (docs/08 §2.7, F10). Jede Änderung geht sofort als
+ * `projectUpdate` an den Server; dessen Regeln (Teams, Lead-Team, Status, Daten) und Rechte gelten,
+ * Fehler erscheinen direkt unter den Feldern.
+ */
+export function ProjectDetails({ project: p, ws }: { project: Project; ws: string }) {
+  const update = useUpdateProject();
+  const save = (input: Record<string, unknown>) => update.mutate({ id: p.id, input });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <TextField
+        label="Project name"
+        value={p.name}
+        required
+        maxLength={255}
+        onCommit={(name) => save({ name })}
+      />
+      <TextField
+        label="Summary"
+        value={p.summary ?? ""}
+        maxLength={255}
+        placeholder="A short summary"
+        onCommit={(summary) => save({ summary })}
+      />
+      <ProjectProperties project={p} ws={ws} />
       <section aria-label="Description">
         <h2 className="mb-2 text-xs font-medium text-muted-foreground">Description</h2>
         <PlanningDescription

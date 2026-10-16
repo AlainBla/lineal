@@ -1,15 +1,24 @@
-import { SlidersHorizontal } from "lucide-react";
+import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  LayoutGrid,
+  List,
+  SlidersHorizontal,
+} from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/cn";
 
 import {
   COMPLETED_WINDOWS,
+  DISPLAY_PROPERTIES,
   GROUPINGS,
   ORDERINGS,
   defaultDirection,
   type DisplayOptions,
+  type DisplayProperty,
 } from "./display-options";
 
 const LABEL: Record<string, string> = {
@@ -29,11 +38,32 @@ const LABEL: Record<string, string> = {
   estimate: "Estimate",
   linkCount: "Link count",
   timeInStatus: "Time in status",
-  all: "All issues",
+  all: "All",
   pastDay: "Past day",
   pastWeek: "Past week",
   pastMonth: "Past month",
+  showAll: "Show all",
+  showMatching: "Show matching",
+  hide: "Hide",
 };
+
+const PROPERTY_LABEL: Record<DisplayProperty, string> = {
+  id: "ID",
+  status: "Status",
+  assignee: "Assignee",
+  creator: "Creator",
+  priority: "Priority",
+  dueDate: "Due date",
+  milestone: "Milestone",
+  cycle: "Cycle",
+  labels: "Labels",
+  links: "Links",
+  timeInStatus: "Time in status",
+  created: "Created",
+  updated: "Updated",
+};
+
+const selectCls = "h-8 min-w-36 rounded-md border border-input bg-transparent px-2 text-sm";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -44,52 +74,145 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-const selectCls = "h-8 rounded-md border border-input bg-transparent px-2 text-sm";
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <Row label={label}>
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={label}
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-8 cursor-pointer accent-primary"
+      />
+    </Row>
+  );
+}
 
 /**
- * Anzeigeoptionen (docs/05 §2.1) als Dialog. Jede Änderung ist persönlich und wird sofort über
- * `onChange` gemeldet (der Aufrufer speichert sie per `viewPreferencesUpdate`).
+ * Anzeigeoptionen (docs/05 §2.1) als Popover: Layout, Gruppierung/Untergruppierung, Sortierung mit
+ * Richtung, erledigte Issues, Sub-Issues, Listenoptionen und Display properties. Jede Änderung ist
+ * persönlich und wird sofort über `onChange` gemeldet; „Set default for everyone“ übernimmt die
+ * wirksamen Optionen als Standard für alle (Rechte prüft der Server).
  */
 export function DisplayMenu({
   options,
   onChange,
   onReset,
+  onSetDefault,
+  customized,
+  compact,
+  showLayout,
 }: {
   options: DisplayOptions;
   onChange: (patch: Partial<DisplayOptions>) => void;
   onReset?: () => void;
+  onSetDefault?: () => void;
+  /** Punkt am Knopf, wenn die Anzeige vom Standard abweicht. */
+  customized?: boolean;
+  /** Nur Symbol statt „Display“. */
+  compact?: boolean;
+  /** List/Board-Umschalter anbieten (nur, wo die Ansicht beides darstellen kann). */
+  showLayout?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const desc = options.orderDirection === "desc";
   return (
-    <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)} aria-haspopup="dialog">
-        <SlidersHorizontal /> Display
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm" aria-describedby={undefined}>
-          <DialogTitle>Display options</DialogTitle>
-          <DialogDescription className="sr-only">
-            Grouping, ordering and visibility of issues.
-          </DialogDescription>
-          <div className="flex flex-col gap-3">
-            <Row label="Grouping">
-              <select
-                aria-label="Grouping"
-                className={selectCls}
-                value={options.grouping}
-                onChange={(e) =>
-                  onChange({ grouping: e.target.value as DisplayOptions["grouping"] })
-                }
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size={compact ? "icon" : "sm"}
+          aria-label={compact ? "Display options" : undefined}
+          title="Display options"
+          className="relative"
+        >
+          <SlidersHorizontal />
+          {!compact && " Display"}
+          {customized && (
+            <span
+              data-testid="display-customized"
+              className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
+            />
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent aria-label="Display options" className="w-80">
+        <div className="flex flex-col gap-3">
+          {showLayout && (
+            <div role="group" aria-label="Layout" className="grid grid-cols-2 gap-2">
+              {(["list", "board"] as const).map((l) => (
+                <Button
+                  key={l}
+                  variant="ghost"
+                  size="sm"
+                  aria-pressed={options.layout === l}
+                  className={cn(
+                    "border border-border",
+                    options.layout === l && "bg-surface-active",
+                  )}
+                  onClick={() => onChange({ layout: l })}
+                >
+                  {l === "list" ? <List /> : <LayoutGrid />}
+                  {l === "list" ? "List" : "Board"}
+                </Button>
+              ))}
+            </div>
+          )}
+          <Row label="Grouping">
+            <select
+              aria-label="Grouping"
+              className={selectCls}
+              value={options.grouping}
+              onChange={(e) => onChange({ grouping: e.target.value as DisplayOptions["grouping"] })}
+            >
+              {GROUPINGS.map((g) => (
+                <option key={g} value={g}>
+                  {LABEL[g]}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Sub-grouping">
+            <select
+              aria-label="Sub-grouping"
+              className={selectCls}
+              value={options.subGrouping}
+              disabled={options.grouping === "none"}
+              onChange={(e) =>
+                onChange({ subGrouping: e.target.value as DisplayOptions["subGrouping"] })
+              }
+            >
+              {GROUPINGS.filter((g) => g !== options.grouping).map((g) => (
+                <option key={g} value={g}>
+                  {LABEL[g]}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <label htmlFor="display-ordering">Ordering</label>
+            <span className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Order direction"
+                title={desc ? "Descending" : "Ascending"}
+                disabled={options.ordering === "manual"}
+                onClick={() => onChange({ orderDirection: desc ? "asc" : "desc" })}
               >
-                {GROUPINGS.map((g) => (
-                  <option key={g} value={g}>
-                    {LABEL[g]}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Ordering">
+                {desc ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
+              </Button>
               <select
+                id="display-ordering"
                 aria-label="Ordering"
                 className={selectCls}
                 value={options.ordering}
@@ -104,55 +227,105 @@ export function DisplayMenu({
                   </option>
                 ))}
               </select>
-            </Row>
-            <Row label="Direction">
-              <select
-                aria-label="Direction"
-                disabled={options.ordering === "manual"}
-                className={selectCls}
-                value={options.orderDirection}
-                onChange={(e) =>
-                  onChange({ orderDirection: e.target.value as DisplayOptions["orderDirection"] })
-                }
-              >
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </select>
-            </Row>
-            <Row label="Completed issues">
-              <select
-                aria-label="Completed issues"
-                className={selectCls}
-                value={options.showCompletedIssues}
-                onChange={(e) =>
-                  onChange({
-                    showCompletedIssues: e.target.value as DisplayOptions["showCompletedIssues"],
-                  })
-                }
-              >
-                {COMPLETED_WINDOWS.map((w) => (
-                  <option key={w} value={w}>
-                    {w === "none" ? "None" : LABEL[w]}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Show sub-issues">
-              <input
-                type="checkbox"
-                aria-label="Show sub-issues"
-                checked={options.showSubIssues}
-                onChange={(e) => onChange({ showSubIssues: e.target.checked })}
-              />
-            </Row>
-            {onReset && (
-              <Button variant="ghost" size="sm" className="self-end" onClick={onReset}>
-                Reset to default
-              </Button>
-            )}
+            </span>
           </div>
-        </DialogContent>
-      </Dialog>
-    </>
+          <hr className="border-border" />
+          <Row label="Completed issues">
+            <select
+              aria-label="Completed issues"
+              className={selectCls}
+              value={options.showCompletedIssues}
+              onChange={(e) =>
+                onChange({
+                  showCompletedIssues: e.target.value as DisplayOptions["showCompletedIssues"],
+                })
+              }
+            >
+              {COMPLETED_WINDOWS.map((w) => (
+                <option key={w} value={w}>
+                  {w === "none" ? "None" : LABEL[w]}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Toggle
+            label="Show sub-issues"
+            checked={options.showSubIssues}
+            onChange={(showSubIssues) => onChange({ showSubIssues })}
+          />
+          <hr className="border-border" />
+          <div className="text-sm font-medium">List options</div>
+          <Row label="Nested sub-issues">
+            <select
+              aria-label="Nested sub-issues"
+              className={selectCls}
+              value={options.nestedSubIssues}
+              onChange={(e) =>
+                onChange({ nestedSubIssues: e.target.value as DisplayOptions["nestedSubIssues"] })
+              }
+            >
+              {(["showMatching", "showAll", "hide"] as const).map((v) => (
+                <option key={v} value={v}>
+                  {LABEL[v]}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Toggle
+            label="Show empty groups"
+            checked={options.showEmptyGroups}
+            onChange={(showEmptyGroups) => onChange({ showEmptyGroups })}
+          />
+          <hr className="border-border" />
+          <div className="text-sm font-medium">Display properties</div>
+          <div role="group" aria-label="Display properties" className="flex flex-wrap gap-1.5">
+            {DISPLAY_PROPERTIES.map((p) => {
+              const on = options.displayProperties.includes(p);
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  aria-pressed={on}
+                  className={cn(
+                    "rounded-full border border-border px-2.5 py-0.5 text-sm",
+                    on ? "bg-surface-active" : "text-muted-foreground hover:bg-surface-hover",
+                  )}
+                  onClick={() =>
+                    onChange({
+                      displayProperties: DISPLAY_PROPERTIES.filter((x) =>
+                        x === p ? !on : options.displayProperties.includes(x),
+                      ),
+                    })
+                  }
+                >
+                  {PROPERTY_LABEL[p]}
+                </button>
+              );
+            })}
+          </div>
+          {(onReset || onSetDefault) && (
+            <div className="flex items-center justify-end gap-2 border-t border-border pt-2">
+              {onReset && (
+                <Button variant="ghost" size="sm" onClick={onReset}>
+                  Reset
+                </Button>
+              )}
+              {onSetDefault && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-primary"
+                  onClick={() => {
+                    onSetDefault();
+                  }}
+                >
+                  Set default for everyone
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

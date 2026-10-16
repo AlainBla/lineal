@@ -425,6 +425,8 @@ Die Tabelle listet jeden Filter aus dem Filtermenü („Add filter“, Taste `F`
 
 Operatorwahl der UI: Bei **einem** gewählten Wert bietet die UI `is` / `is not` (bzw. `include` / `do not include` bei Mengenfeldern), bei **mehreren** Werten `is any of` / `is none of` (bzw. die vier Label-Operatoren). Der Wechsel zwischen Ein- und Mehrfachauswahl passt den Operator automatisch an (`is` → `is any of`, `is not` → `is none of`); der gespeicherte JSON-Filter ist in beiden Fällen dieselbe Mengenform (`in` bzw. `nin`), `eq`/`neq` sind nur API-Komfort.
 
+> **Umsetzung (Filtermenü im Web, `feat/project-issues-view`):** „Add filter…“ (Taste `F`) öffnet ein Popover mit Suchfeld, „Advanced filter“ (rohes Filter-JSON, vom Server geprüft) und den Kategorien Team, Status, Status type, Assignee, Creator, Priority, Labels, Relations (Sub-issues, Blocked, Blocking, Duplicates, Related), Dates (Due date, Created, Updated, Started, Completed, Canceled), Project milestone, Cycle, Added to cycle, Subscribers, Auto-closed, Content, Links sowie Project, Estimate, Parent issue, SLA status und Title. Statt kaskadierender Untermenüs öffnet jede Kategorie den Wertedialog (Operator und Werte). Nicht gebaut: Agent, Agent Session, AI filter, Suggested label, External source, Template (keine Wertequelle bzw. Funktion in Lineal). Neue Chips werden als Filter-JSON gespeichert und beim Laden einer View zurück in Chips gewandelt (mehrere Relationen in einem Chip als `or` bleiben ein „erweiterter Filter“).
+
 ### 1.6 UI-Operatoren → Filter-JSON
 
 Für **skalare und To-One-Felder** (Beispiel Assignee mit Bob = `u-bob`, Carol = `u-carol`):
@@ -789,6 +791,9 @@ Regeln:
 4. Eine Custom View speichert beim Anlegen die zum Zeitpunkt des Anlegens effektiven Optionen als `organization`-Zeile der View; der Ersteller hat danach keine persönliche Zeile.
 5. **Manuelle Sortierung ist nicht persönlich**: Das Verschieben in einer `manual`-sortierten Ansicht ändert `Issue.sortOrder` workspaceweit (2.5).
 6. Löschen einer Custom View löscht alle zugehörigen `ViewPreferences`-Zeilen.
+
+> **Umsetzung (Display options im Web, `feat/project-issues-view`):** Das Popover (`features/views/display-menu.tsx`) bietet List/Board, Grouping, Sub-grouping, Ordering mit Richtungs-Knopf, Completed issues, Show sub-issues, List options (Nested sub-issues, Show empty groups) und Display properties (ID, Status, Assignee, Creator, Priority, Due date, Milestone, Cycle, Labels, Links, Time in status, Created, Updated; „Pull requests“ gibt es serverseitig als Schlüssel, aber ohne Datenquelle, daher ohne Chip), unten Reset und „Set default for everyone“ (zeigt nur, wo ein Speicherort existiert; die Rechte prüft der Server, Fehler erscheint in der Kopfzeile). Neuer Schlüssel `displayProperties` (Liste der Eigenschaften, Standard: id, status, assignee, priority, dueDate, milestone, labels, updated). Der Punkt am Knopf erscheint, wenn die Optionen vom Web-Standard abweichen oder eine persönliche Zeile existiert. Neuer vordefinierter Schlüssel `projectIssues` (Ziel = Projekt, nicht favorisierbar, Art Issues). Board im Web: schreibgeschützte Spalten je Gruppe (kein Drag & Drop; die Team-Seiten behalten ihr Board). Nested sub-issues: „Show matching“ und „Show all“ rücken Sub-Issues unter ihren Parent derselben Gruppe ein (es werden nur Issues der Treffermenge gezeigt; „Show all“ lädt keine Nicht-Treffer nach). Sub-grouping gruppiert innerhalb jeder Gruppe nochmals; „Show empty groups“ ergänzt leere Gruppen für Priorität und (im Projekt) Meilensteine.
+
 
 ### 2.3 Gruppierungs-Algorithmus
 

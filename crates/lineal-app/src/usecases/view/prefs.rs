@@ -22,6 +22,10 @@ pub const VIEW_TYPES: [&str; 12] = [
     "initiativesAll",
 ];
 
+/// Issue-Tab einer Projektseite; Ziel ist das Projekt (`view_target_id`). Nur für Anzeigeoptionen,
+/// keine favorisierbare Ansicht (daher nicht in [`VIEW_TYPES`]).
+pub const PROJECT_ISSUES: &str = "projectIssues";
+
 /// Entität, auf die sich die Optionen beziehen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -34,7 +38,7 @@ pub enum Kind {
 pub fn kind_of_view_type(t: &str) -> Option<Kind> {
     match t {
         "teamTriage" | "teamActive" | "teamBacklog" | "teamAll" | "teamCurrentCycle"
-        | "teamUpcomingCycle" | "myIssuesAssigned" => Some(Kind::Issues),
+        | "teamUpcomingCycle" | "myIssuesAssigned" | PROJECT_ISSUES => Some(Kind::Issues),
         "projectsAll" | "teamProjects" => Some(Kind::Projects),
         "initiativesActive" | "initiativesPlanned" | "initiativesAll" => Some(Kind::Initiatives),
         _ => None,
@@ -96,6 +100,36 @@ const PROJECT_ORDERING: [&str; 9] = [
     "targetDate",
 ];
 
+/// Anzeige-Eigenschaften der Issue-Zeile (docs/05 §2.1 „Display properties“).
+pub const DISPLAY_PROPERTIES: [&str; 14] = [
+    "id",
+    "status",
+    "assignee",
+    "creator",
+    "priority",
+    "dueDate",
+    "milestone",
+    "cycle",
+    "labels",
+    "links",
+    "timeInStatus",
+    "created",
+    "updated",
+    "pullRequests",
+];
+
+/// Voreingestellte Anzeige-Eigenschaften.
+const DEFAULT_DISPLAY_PROPERTIES: [&str; 8] = [
+    "id",
+    "status",
+    "assignee",
+    "priority",
+    "dueDate",
+    "milestone",
+    "labels",
+    "updated",
+];
+
 fn bad(key: &str, reason: impl Into<String>) -> AppError {
     AppError::invalid_request(format!("Invalid display option `{key}`: {}", reason.into()))
         .with_details(json!({ "field": key }))
@@ -128,10 +162,11 @@ pub fn system_defaults(view_type: Option<&str>, kind: Kind) -> Map<String, Value
     m.insert("layout".into(), json!(if board { "board" } else { "list" }));
     m.insert(
         "grouping".into(),
-        json!(if kind == Kind::Issues {
-            "status"
-        } else {
-            "none"
+        json!(match (kind, view_type) {
+            // Projekt-Issues sind standardmäßig nach Meilenstein gruppiert (docs/08 §2.7).
+            (Kind::Issues, Some(PROJECT_ISSUES)) => "milestone",
+            (Kind::Issues, _) => "status",
+            _ => "none",
         }),
     );
     m.insert("groupOrdering".into(), json!("default"));
@@ -159,6 +194,10 @@ pub fn system_defaults(view_type: Option<&str>, kind: Kind) -> Map<String, Value
     m.insert("showTriageIssues".into(), json!(false));
     m.insert("showClosedProjects".into(), json!("all"));
     m.insert("groupCountMode".into(), json!("count"));
+    m.insert(
+        "displayProperties".into(),
+        json!(DEFAULT_DISPLAY_PROPERTIES),
+    );
     m
 }
 
@@ -198,6 +237,11 @@ pub fn validate_patch(
                 v.as_str(),
                 Some("all" | "pastWeek" | "pastMonth" | "pastYear" | "none")
             ),
+            "displayProperties" => v.as_array().is_some_and(|a| {
+                a.len() <= DISPLAY_PROPERTIES.len()
+                    && a.iter()
+                        .all(|x| x.as_str().is_some_and(|s| DISPLAY_PROPERTIES.contains(&s)))
+            }),
             "groupCountMode" => matches!(v.as_str(), Some("count" | "estimateSum")),
             "orderCompletedByRecency"
             | "showSubIssues"
@@ -263,6 +307,8 @@ mod tests {
         assert_eq!(my["ordering"], "importance");
         assert_eq!(my["showCompletedIssues"], "pastDay");
         assert_eq!(system_defaults(None, Kind::Projects)["grouping"], "none");
+        let tab = system_defaults(Some(PROJECT_ISSUES), Kind::Issues);
+        assert_eq!(tab["grouping"], "milestone");
     }
 
     #[test]
@@ -276,6 +322,17 @@ mod tests {
         assert!(!ok(json!({"layout": "timeline"}), Kind::Issues, None));
         assert!(ok(json!({"layout": "timeline"}), Kind::Projects, None));
         assert!(!ok(json!({"bogus": 1}), Kind::Issues, None));
+        assert!(ok(
+            json!({"displayProperties": ["id", "labels"]}),
+            Kind::Issues,
+            None
+        ));
+        assert!(!ok(
+            json!({"displayProperties": ["id", "nope"]}),
+            Kind::Issues,
+            None
+        ));
+        assert!(!ok(json!({"displayProperties": "id"}), Kind::Issues, None));
         assert!(!ok(json!({"showSubIssues": "yes"}), Kind::Issues, None));
         // `focus` und `importance` nur in My Issues.
         assert!(!ok(json!({"grouping": "focus"}), Kind::Issues, None));

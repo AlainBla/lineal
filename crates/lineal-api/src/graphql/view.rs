@@ -268,11 +268,13 @@ fn key(
     custom_view_id: Option<String>,
     view_type: Option<String>,
     team_id: Option<String>,
+    project_id: Option<String>,
 ) -> ViewKeyInput {
     ViewKeyInput {
         custom_view: custom_view_id,
         view_type,
         team: team_id,
+        project: project_id,
     }
 }
 
@@ -366,9 +368,13 @@ impl ViewQuery {
         custom_view_id: Option<String>,
         view_type: Option<String>,
         team_id: Option<String>,
+        project_id: Option<String>,
     ) -> async_graphql::Result<ViewPreferencesGql> {
         Ok(app(ctx)?
-            .view_preferences(request_ctx(ctx)?, key(custom_view_id, view_type, team_id))
+            .view_preferences(
+                request_ctx(ctx)?,
+                key(custom_view_id, view_type, team_id, project_id),
+            )
             .await
             .gql(ctx)?
             .into())
@@ -622,12 +628,13 @@ impl ViewMutation {
         custom_view_id: Option<String>,
         view_type: Option<String>,
         team_id: Option<String>,
+        project_id: Option<String>,
         preferences: Json<Value>,
     ) -> async_graphql::Result<ViewPreferencesGql> {
         Ok(app(ctx)?
             .update_view_preferences(
                 request_ctx(ctx)?,
-                key(custom_view_id, view_type, team_id),
+                key(custom_view_id, view_type, team_id, project_id),
                 preferences.0,
             )
             .await
@@ -642,11 +649,12 @@ impl ViewMutation {
         custom_view_id: Option<String>,
         view_type: Option<String>,
         team_id: Option<String>,
+        project_id: Option<String>,
     ) -> async_graphql::Result<ViewPreferencesGql> {
         Ok(app(ctx)?
             .set_view_preferences_default(
                 request_ctx(ctx)?,
-                key(custom_view_id, view_type, team_id),
+                key(custom_view_id, view_type, team_id, project_id),
             )
             .await
             .gql(ctx)?
@@ -660,9 +668,13 @@ impl ViewMutation {
         custom_view_id: Option<String>,
         view_type: Option<String>,
         team_id: Option<String>,
+        project_id: Option<String>,
     ) -> async_graphql::Result<ViewPreferencesGql> {
         Ok(app(ctx)?
-            .reset_view_preferences(request_ctx(ctx)?, key(custom_view_id, view_type, team_id))
+            .reset_view_preferences(
+                request_ctx(ctx)?,
+                key(custom_view_id, view_type, team_id, project_id),
+            )
             .await
             .gql(ctx)?
             .into())

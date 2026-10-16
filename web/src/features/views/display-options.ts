@@ -26,25 +26,61 @@ export type Ordering =
   | "timeInStatus"
   | "manual";
 export type CompletedWindow = "all" | "pastDay" | "pastWeek" | "pastMonth" | "none";
+export type NestedSubIssues = "showAll" | "showMatching" | "hide";
+
+/** Anzeige-Eigenschaften der Issue-Zeile (docs/05 §2.1); Schlüssel wie am Server. */
+export const DISPLAY_PROPERTIES = [
+  "id",
+  "status",
+  "assignee",
+  "creator",
+  "priority",
+  "dueDate",
+  "milestone",
+  "cycle",
+  "labels",
+  "links",
+  "timeInStatus",
+  "created",
+  "updated",
+] as const;
+export type DisplayProperty = (typeof DISPLAY_PROPERTIES)[number];
+export const DEFAULT_PROPERTIES: DisplayProperty[] = [
+  "id",
+  "status",
+  "assignee",
+  "priority",
+  "dueDate",
+  "milestone",
+  "labels",
+  "updated",
+];
 
 export interface DisplayOptions {
   layout: "list" | "board";
   grouping: Grouping;
+  /** Zweite Gruppierungsebene innerhalb jeder Gruppe (`none` = keine). */
+  subGrouping: Grouping;
   ordering: Ordering;
   orderDirection: "asc" | "desc";
   showSubIssues: boolean;
   showCompletedIssues: CompletedWindow;
   showEmptyGroups: boolean;
+  nestedSubIssues: NestedSubIssues;
+  displayProperties: DisplayProperty[];
 }
 
 export const DEFAULT_DISPLAY: DisplayOptions = {
   layout: "list",
   grouping: "status",
+  subGrouping: "none",
   ordering: "priority",
   orderDirection: "asc",
   showSubIssues: true,
   showCompletedIssues: "all",
   showEmptyGroups: false,
+  nestedSubIssues: "hide",
+  displayProperties: DEFAULT_PROPERTIES,
 };
 
 export const GROUPINGS: Grouping[] = [
@@ -90,9 +126,36 @@ export function mergeDisplay(saved: Record<string, unknown> | null | undefined):
   out.orderDirection = pick(saved.orderDirection, ["asc", "desc"] as const) ?? out.orderDirection;
   out.showCompletedIssues =
     pick(saved.showCompletedIssues, COMPLETED_WINDOWS) ?? out.showCompletedIssues;
+  out.subGrouping = pick(saved.subGrouping, GROUPINGS) ?? out.subGrouping;
+  if (out.subGrouping === out.grouping) out.subGrouping = "none";
+  out.nestedSubIssues =
+    pick(saved.nestedSubIssues, ["showAll", "showMatching", "hide"] as const) ??
+    out.nestedSubIssues;
+  if (Array.isArray(saved.displayProperties)) {
+    out.displayProperties = DISPLAY_PROPERTIES.filter((p) =>
+      (saved.displayProperties as unknown[]).includes(p),
+    );
+  }
   if (typeof saved.showSubIssues === "boolean") out.showSubIssues = saved.showSubIssues;
   if (typeof saved.showEmptyGroups === "boolean") out.showEmptyGroups = saved.showEmptyGroups;
   return out;
+}
+
+/** Weicht die Anzeige vom Standard ab (Punkt am Display-Knopf)? Nur Schlüssel, die der Knopf steuert. */
+export function isCustomDisplay(o: DisplayOptions): boolean {
+  const d = DEFAULT_DISPLAY;
+  return (
+    o.layout !== d.layout ||
+    o.grouping !== d.grouping ||
+    o.subGrouping !== d.subGrouping ||
+    o.ordering !== d.ordering ||
+    o.orderDirection !== d.orderDirection ||
+    o.showSubIssues !== d.showSubIssues ||
+    o.showCompletedIssues !== d.showCompletedIssues ||
+    o.showEmptyGroups !== d.showEmptyGroups ||
+    o.nestedSubIssues !== d.nestedSubIssues ||
+    o.displayProperties.join() !== d.displayProperties.join()
+  );
 }
 
 const WINDOW_MS: Record<CompletedWindow, number> = {
@@ -204,6 +267,8 @@ export interface IssueGroup {
   key: string;
   label: string;
   issues: Issue[];
+  /** Zweite Gruppierungsebene (nur wenn `subGrouping` gesetzt ist). */
+  subGroups?: IssueGroup[];
 }
 
 export interface GroupNames {
@@ -269,4 +334,63 @@ export function groupIssues(issues: Issue[], g: Grouping, names: GroupNames): Is
     );
   }
   return groups;
+}
+
+/** Gruppen, die auch leer erscheinen sollen (`showEmptyGroups`); schon vorhandene bleiben unberührt. */
+export function withEmptyGroups(
+  groups: IssueGroup[],
+  all: Array<{ key: string; label: string }>,
+  grouping: Grouping,
+): IssueGroup[] {
+  if (all.length === 0) return groups;
+  const have = new Set(groups.map((g) => g.key));
+  const extra = all.filter((g) => !have.has(g.key)).map((g) => ({ ...g, issues: [] as Issue[] }));
+  if (extra.length === 0) return groups;
+  const order = new Map(all.map((g, i) => [g.key, i] as const));
+  const merged = [...groups, ...extra];
+  // Status und Priorität behalten ihre Reihenfolge, Meilensteine/Namen folgen der Quellliste.
+  if (grouping === "milestone" || grouping === "cycle" || grouping === "team") {
+    merged.sort((a, b) => (order.get(a.key) ?? 1e6) - (order.get(b.key) ?? 1e6));
+  } else if (grouping === "priority") {
+    merged.sort((a, b) => priorityRank(Number(a.key)) - priorityRank(Number(b.key)));
+  }
+  return merged;
+}
+
+/** Zweite Gruppierungsebene: jede Gruppe wird nach `sub` unterteilt. */
+export function applySubGrouping(
+  groups: IssueGroup[],
+  sub: Grouping,
+  names: GroupNames,
+): IssueGroup[] {
+  if (sub === "none") return groups;
+  return groups.map((g) => ({ ...g, subGroups: groupIssues(g.issues, sub, names) }));
+}
+
+/** Alle Issues in Anzeigereihenfolge (für Tastaturnavigation), auch unter Untergruppen. */
+export const flatIssues = (groups: IssueGroup[]): Issue[] =>
+  groups.flatMap((g) => (g.subGroups ? g.subGroups.flatMap((s) => s.issues) : g.issues));
+
+/**
+ * Sub-Issues unter ihrem Parent einrücken (Nested sub-issues ≠ hide): Kinder, deren Parent in
+ * derselben Liste steht, folgen direkt auf ihn (Tiefe 1+); alle anderen bleiben oben.
+ */
+export function nestIssues(issues: Issue[]): Array<{ issue: Issue; depth: number }> {
+  const ids = new Set(issues.map((i) => i.id));
+  const children = new Map<string, Issue[]>();
+  for (const i of issues) {
+    if (i.parentId && ids.has(i.parentId)) {
+      children.set(i.parentId, [...(children.get(i.parentId) ?? []), i]);
+    }
+  }
+  const out: Array<{ issue: Issue; depth: number }> = [];
+  const walk = (i: Issue, depth: number, seen: Set<string>) => {
+    if (seen.has(i.id)) return;
+    seen.add(i.id);
+    out.push({ issue: i, depth });
+    for (const c of children.get(i.id) ?? []) walk(c, depth + 1, seen);
+  };
+  const seen = new Set<string>();
+  for (const i of issues) if (!i.parentId || !ids.has(i.parentId)) walk(i, 0, seen);
+  return out;
 }

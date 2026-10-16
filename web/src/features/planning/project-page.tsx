@@ -1,4 +1,5 @@
-import { Plus } from "lucide-react";
+import { PanelRight, Plus } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import type { Project } from "@/gql/graphql";
 
 import { DateField, TextField } from "./fields";
 import { ProjectActions, ProjectDetails } from "./project-details";
+import { ProjectPanel } from "./project-panel";
 import {
   HEALTH_LABEL,
   useCreateMilestone,
@@ -26,6 +28,7 @@ import {
 } from "./queries";
 import { useRemindAction } from "@/features/inbox/remind";
 import { IssueView } from "@/features/views/issue-view";
+import { cn } from "@/lib/cn";
 import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones" | "resources";
@@ -236,19 +239,110 @@ function Milestones({ project }: { project: Project }) {
   );
 }
 
-function ProjectIssues({ ws, project }: { ws: string; project: Project }) {
+const PANEL_KEY = "lineal.project.panel";
+
+/** Seitenpanel ein/aus, pro Browser gemerkt (Standard: ein). */
+function usePanelOpen(): [boolean, (v: boolean) => void] {
+  const [open, setOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(PANEL_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  return [
+    open,
+    (v) => {
+      setOpen(v);
+      try {
+        window.localStorage.setItem(PANEL_KEY, v ? "1" : "0");
+      } catch {
+        /* ohne Speicher bleibt es beim Sitzungswert */
+      }
+    },
+  ];
+}
+
+function ProjectIssues({
+  ws,
+  project,
+  toolbarSlot,
+  panelOpen,
+  setPanelOpen,
+}: {
+  ws: string;
+  project: Project;
+  toolbarSlot: HTMLElement | null;
+  panelOpen: boolean;
+  setPanelOpen: (v: boolean) => void;
+}) {
   const teamKey = project.leadTeam?.key ?? project.teams[0]?.key ?? undefined;
   const scope = useMemo(() => ({ project: { id: { in: [project.id] } } }), [project.id]);
+  const prefsTarget = useMemo(
+    () => ({ viewType: "projectIssues", projectId: project.id }),
+    [project.id],
+  );
+  const emptyGroups = useMemo(
+    () => ({
+      milestone: [
+        ...project.milestones.map((m) => ({ key: m.id, label: m.name })),
+        { key: "none", label: "No milestone" },
+      ],
+    }),
+    [project.milestones],
+  );
+  const dates = useMemo(
+    () => new Map(project.milestones.map((m) => [m.id, m.targetDate] as const)),
+    [project.milestones],
+  );
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex justify-end border-b border-border px-3 py-1">
-        <Button size="sm" onClick={() => openCreateIssue({ teamKey, projectId: project.id })}>
-          <Plus /> New issue
-        </Button>
+    <div className="flex h-full min-h-0">
+      <div className="min-w-0 flex-1">
+        <IssueView
+          ws={ws}
+          title="Issues"
+          scope={scope}
+          prefsTarget={prefsTarget}
+          embedded
+          toolbarSlot={toolbarSlot}
+          emptyGroups={emptyGroups}
+          trailingControls={
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={panelOpen ? "Hide side panel" : "Show side panel"}
+              aria-pressed={panelOpen}
+              title="Toggle side panel"
+              className={cn(panelOpen && "bg-surface-active")}
+              onClick={() => setPanelOpen(!panelOpen)}
+            >
+              <PanelRight />
+            </Button>
+          }
+          renderGroupExtra={(g) => {
+            const milestoneId = dates.has(g.key) ? g.key : undefined;
+            const date = dates.get(g.key);
+            return (
+              <>
+                {date && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {shortDate(date).replace(/ \d{4}$/, "")}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`New issue in ${g.label}`}
+                  onClick={() => openCreateIssue({ teamKey, projectId: project.id, milestoneId })}
+                >
+                  <Plus />
+                </Button>
+              </>
+            );
+          }}
+        />
       </div>
-      <div className="min-h-0 flex-1">
-        <IssueView ws={ws} title="Issues" scope={scope} />
-      </div>
+      {panelOpen && <ProjectPanel project={project} ws={ws} />}
     </div>
   );
 }
@@ -266,6 +360,8 @@ export function ProjectPage({
   const q = useProject(projectRef);
   const p = q.data;
   const updates = useProjectUpdates(p?.id);
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  const [panelOpen, setPanelOpen] = usePanelOpen();
   // `c` und der Stift legen Issues im Projekt an (Team und Projekt vorbelegt).
   const ctxTeamKey = p?.leadTeam?.key ?? p?.teams[0]?.key ?? undefined;
   const ctxProjectId = p?.id;
@@ -289,11 +385,6 @@ export function ProjectPage({
       <PageHeader
         title={p.name}
         docTitle={p.name}
-        tabs={PROJECT_TABS.map((t) => ({
-          label: TAB_LABEL[t],
-          to: `/${ws}/project/${projectRef}/${t}`,
-          active: t === tab,
-        }))}
         actions={
           <>
             <HealthBadge health={p.health} />
@@ -301,7 +392,25 @@ export function ProjectPage({
           </>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <nav aria-label="Sections" className="flex items-center gap-1">
+          {PROJECT_TABS.map((t) => (
+            <Link
+              key={t}
+              to={`/${ws}/project/${projectRef}/${t}` as "/"}
+              aria-current={t === tab ? "page" : undefined}
+              className={cn(
+                "rounded-full border border-border px-3 py-0.5 text-sm text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+                t === tab && "bg-surface-active text-foreground",
+              )}
+            >
+              {TAB_LABEL[t]}
+            </Link>
+          ))}
+        </nav>
+        <div ref={setToolbarSlot} className="ml-auto flex items-center gap-1" />
+      </div>
+      <div className={cn("min-h-0 flex-1", tab === "issues" ? "overflow-hidden" : "overflow-auto")}>
         {tab === "overview" && (
           <div className="flex max-w-3xl flex-col gap-6 p-4">
             <ProjectDetails project={p} ws={ws} />
@@ -347,7 +456,15 @@ export function ProjectPage({
             </section>
           </div>
         )}
-        {tab === "issues" && <ProjectIssues ws={ws} project={p} />}
+        {tab === "issues" && (
+          <ProjectIssues
+            ws={ws}
+            project={p}
+            toolbarSlot={toolbarSlot}
+            panelOpen={panelOpen}
+            setPanelOpen={setPanelOpen}
+          />
+        )}
         {tab === "updates" && (
           <div className="flex max-w-3xl flex-col gap-4 p-4">
             <UpdateComposer projectId={p.id} />

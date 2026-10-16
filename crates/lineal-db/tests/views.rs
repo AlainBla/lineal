@@ -975,3 +975,55 @@ async fn custom_views_filter_projects_and_initiatives(pool: PgPool) {
         .await;
     assert_eq!(kind(e), ErrorKind::NotFound);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn project_issue_tab_options_are_per_project_and_default_needs_manage_rights(pool: PgPool) {
+    use lineal_testkit::seed::planning::seed_project_id;
+    let fx = setup(pool).await;
+    let key = ViewKeyInput {
+        view_type: Some("projectIssues".into()),
+        project: Some(seed_project_id().to_string()),
+        ..Default::default()
+    };
+    // System-Default einer Issue-Liste; ohne Projekt ist der Schlüssel ungültig.
+    let eff = fx.app.view_preferences(&bob(), key.clone()).await.unwrap();
+    assert_eq!(eff.effective["grouping"], "milestone");
+    assert_eq!(eff.effective["nestedSubIssues"], "hide");
+    let no_project = ViewKeyInput {
+        view_type: Some("projectIssues".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        kind(fx.app.view_preferences(&bob(), no_project).await),
+        ErrorKind::InvalidRequest
+    );
+    // Persönliche Änderung gilt nur für Bob.
+    fx.app
+        .update_view_preferences(&bob(), key.clone(), json!({"grouping": "assignee"}))
+        .await
+        .unwrap();
+    let mine = fx.app.view_preferences(&bob(), key.clone()).await.unwrap();
+    assert_eq!(mine.effective["grouping"], "assignee");
+    assert!(mine.has_personal);
+    let other = fx
+        .app
+        .view_preferences(&alice(), key.clone())
+        .await
+        .unwrap();
+    assert_eq!(other.effective["grouping"], "milestone");
+    // „Set default for everyone“ braucht Verwaltungsrecht am Projekt; Gäste scheitern.
+    assert!(
+        fx.app
+            .set_view_preferences_default(&carol(), key.clone())
+            .await
+            .is_err()
+    );
+    let set = fx
+        .app
+        .set_view_preferences_default(&bob(), key.clone())
+        .await
+        .unwrap();
+    assert!(set.has_default && !set.has_personal);
+    let again = fx.app.view_preferences(&alice(), key).await.unwrap();
+    assert_eq!(again.effective["grouping"], "assignee");
+}
