@@ -28,6 +28,9 @@ impl Session<'_, '_> {
         if !self.opts.detect_removed {
             return Ok(());
         }
+        // Erst alle Listen vollständig lesen, dann archivieren: schlägt eine fehl oder ist
+        // unvollständig, wird in diesem Lauf nichts archiviert.
+        let mut lists = Vec::new();
         for (entity, ty, table) in [
             (SourceEntity::Issues, "Issue", ImportTable::Issue),
             (SourceEntity::Projects, "Project", ImportTable::Project),
@@ -43,17 +46,22 @@ impl Session<'_, '_> {
                     "warning",
                     ty,
                     None,
-                    "the list of objects could not be read completely; removed objects were not checked this time",
+                    "the list of objects could not be read completely; nothing was archived in this run",
                 );
-                continue;
+                return Ok(());
             };
+            lists.push((ty, table, present));
+        }
+        for (ty, table, present) in lists {
             self.archive_missing(ty, table, &present).await?;
         }
         Ok(())
     }
 
-    /// Alle IDs einer Entität im Umfang des Laufs (ohne Delta-Filter). `None`, wenn die Liste
-    /// unvollständig oder unsicher ist (Teilfehler der Quelle, zu viele Seiten).
+    /// Alle IDs einer Entität im **ganzen** Quell-Workspace, ohne Delta-, Team- oder Projektfilter:
+    /// ein Objekt gilt nur als entfernt, wenn Linear es überhaupt nicht mehr auflistet (nie wegen
+    /// eines Filters oder weil es in ein anderes Projekt/Team verschoben wurde). `None`, wenn die
+    /// Liste unvollständig oder unsicher ist (Teilfehler der Quelle, zu viele Seiten).
     async fn source_ids(&mut self, entity: SourceEntity) -> HResult<Option<HashSet<String>>> {
         let _ = self.eng.source.take_warnings();
         let mut ids = HashSet::new();
@@ -65,7 +73,7 @@ impl Session<'_, '_> {
                     cursor: cursor.clone(),
                     updated_after: None,
                     limit: self.eng.config.page_size.clamp(1, 100),
-                    scope: self.scope(),
+                    scope: crate::port::Scope::default(),
                 }))
                 .await?;
             ids.extend(
@@ -91,11 +99,19 @@ impl Session<'_, '_> {
         present: &HashSet<String>,
     ) -> HResult<()> {
         let source = self.source().to_owned();
+        // Nur Teams der Konfiguration dieses Laufs (nicht alle je gemappten): wer ein Team aus dem
+        // Abgleich nimmt, archiviert damit nichts.
         let selected_teams: HashSet<Uuid> = {
+            let src_ids: Vec<String> = self.selected.iter().cloned().collect();
             self.begin_unit().await?;
-            let ids = self.mapped_team_ids().await?;
+            let mut out = HashSet::new();
+            for id in src_ids {
+                if let Some(t) = self.target("Team", &id).await? {
+                    out.insert(t);
+                }
+            }
             self.end_unit(None).await?;
-            ids.into_iter().collect()
+            out
         };
         let mut after: Option<String> = None;
         loop {

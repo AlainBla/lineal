@@ -47,7 +47,10 @@ impl MockLinear {
 
     /// Wie `start`, auf einer festen Adresse (nur `127.0.0.1`; für das Beispiel-Binary der E2E-Tests).
     pub async fn start_on(source: Arc<FakeSource>, bind: &str) -> (Arc<MockLinear>, String) {
-        assert!(bind.starts_with("127.0.0.1:"), "the mock only listens locally");
+        assert!(
+            bind.starts_with("127.0.0.1:"),
+            "the mock only listens locally"
+        );
         let mock = Arc::new(MockLinear {
             source,
             faults: Mutex::default(),

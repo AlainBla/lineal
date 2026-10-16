@@ -698,9 +698,15 @@ impl App {
             .users()
             .get(UserId(starter))
             .await?
-            .filter(|u| u.active && u.status == "active")
+            .filter(|u| {
+                u.active
+                    && u.status == "active"
+                    && matches!(u.role, UserRole::Owner | UserRole::Admin)
+            })
             .ok_or_else(|| {
-                AppError::forbidden("the user who started the run is no longer active")
+                AppError::forbidden(
+                    "the user who started the run is no longer an active administrator",
+                )
             })?;
         Ok(RequestCtx {
             org_id: org,

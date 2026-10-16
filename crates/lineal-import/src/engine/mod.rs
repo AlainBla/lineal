@@ -1119,6 +1119,11 @@ impl Session<'_, '_> {
             .app
             .import_verify_targets(self.org, &self.run)
             .await?;
+        // Sync-Läufe gehören dem Einrichtenden: dessen Rechte werden bei jeder Ausführung erneut
+        // geprüft (aktiv, Owner/Admin), bevor etwas geschrieben wird.
+        if self.run.options["syncId"].is_string() {
+            self.eng.app.import_run_ctx(self.org, &self.run).await?;
+        }
         let ws = self.eng.source.workspace().await?;
         if self.run.checkpoint["step"].is_null() {
             for n in self.eng.source.notices() {

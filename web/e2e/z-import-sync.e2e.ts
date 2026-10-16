@@ -28,7 +28,7 @@ test("import from the mock Linear, then sync, merge a placeholder and join the t
   await join.click();
   await expect(join).toBeHidden();
   await expect(page.getByRole("link", { name: "Browse teams" })).toBeVisible();
-  await expect(page.getByRole("navigation").getByText("Platform")).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Sidebar" }).getByText("Platform")).toBeVisible();
 
   // Sync einrichten (Schlüssel nur senden, nie anzeigen) und sofort abgleichen.
   const sync = page.getByTestId("sync-section");

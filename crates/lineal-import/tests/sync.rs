@@ -704,3 +704,120 @@ async fn duplicate_linear_labels_are_merged_only_with_the_explicit_option(pool: 
     .unwrap();
     assert_eq!(mapped, own);
 }
+
+fn remove_issues(source: &FakeSource, ids: &[&str]) {
+    let mut issues = source.entity(SourceEntity::Issues);
+    issues.retain(|i| !ids.contains(&i["id"].as_str().unwrap_or_default()));
+    source.set_entity(SourceEntity::Issues, issues);
+}
+
+async fn archived_issue(pool: &PgPool, org: Uuid, key: &str, n: i32) -> bool {
+    sqlx::query_scalar("SELECT i.archived_at IS NOT NULL FROM issue i JOIN team t ON t.id = i.team_id WHERE t.organization_id = $1 AND t.key = $2 AND i.number = $3")
+        .bind(org)
+        .bind(key)
+        .bind(n)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn removal_is_limited_to_the_sync_scope_source_and_workspace(pool: PgPool) {
+    let source = fake();
+    let e = imported(pool.clone(), &source).await;
+    // Zweiter Workspace mit demselben Import (gleiche Quell-IDs, eigene Mappings).
+    let other = env_n(pool.clone(), 2).await;
+    let (_, out) = other.import_all(&source, ImportStartInput::default()).await;
+    assert_eq!(out, RunOutcome::Completed);
+    // Der Abgleich umfasst nur ENG und das Projekt p-1.
+    e.app
+        .import_sync_save(
+            &e.alice_ctx(),
+            ImportSyncInput {
+                teams: vec!["ENG".into()],
+                projects: vec!["p-1".into()],
+                ..input()
+            },
+        )
+        .await
+        .unwrap();
+    // In Linear gelöscht: ein ENG-Issue (im Umfang) und ein PLT-Issue (nicht mehr im Abgleich).
+    remove_issues(&source, &["i-ENG-3", "i-PLT-5"]);
+    let (_, out) = run_sync(&e, &source, SyncRunOptions::default()).await;
+    assert_eq!(out, RunOutcome::Completed);
+    assert!(
+        archived_issue(&pool, e.org.0, "ENG", 3).await,
+        "in scope and deleted: archived"
+    );
+    assert!(
+        !archived_issue(&pool, e.org.0, "PLT", 5).await,
+        "a team that is not part of the sync is never archived (scope reduction archives nothing)"
+    );
+    // Issues außerhalb des Projektfilters, die es in Linear noch gibt, bleiben unberührt.
+    assert!(!archived_issue(&pool, e.org.0, "ENG", 5).await);
+    // Anderer Workspace: unberührt, auch wenn dieselbe Quell-ID gelöscht wurde.
+    assert!(!archived_issue(&pool, other.org.0, "ENG", 3).await);
+    assert!(!archived_issue(&pool, other.org.0, "PLT", 5).await);
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn aborted_or_incomplete_runs_archive_nothing(pool: PgPool) {
+    let source = fake();
+    let e = imported(pool.clone(), &source).await;
+    e.app
+        .import_sync_save(&e.alice_ctx(), input())
+        .await
+        .unwrap();
+    remove_issues(&source, &["i-ENG-3"]);
+    // Die Issue-Liste ist vollständig, aber das Lesen der Dokumente bricht danach ab.
+    source.fail_after(
+        SourceEntity::Documents,
+        1,
+        SourceError::Transport("boom".into()),
+    );
+    let (_, out) = run_sync(&e, &source, SyncRunOptions::default()).await;
+    assert!(matches!(out, RunOutcome::Failed(_)), "{out:?}");
+    assert!(
+        !archived_issue(&pool, e.org.0, "ENG", 3).await,
+        "no archiving on an incomplete run, even for entities that were listed completely"
+    );
+    // Danach, mit vollständigen Listen, wird archiviert.
+    source.fail_after_clear();
+    let (_, out) = run_sync(&e, &source, SyncRunOptions::default()).await;
+    assert_eq!(out, RunOutcome::Completed);
+    assert!(archived_issue(&pool, e.org.0, "ENG", 3).await);
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn rights_of_the_person_who_set_up_the_sync_are_checked_on_every_run(pool: PgPool) {
+    let source = fake();
+    let e = imported(pool.clone(), &source).await;
+    e.app
+        .import_sync_save(&e.alice_ctx(), input())
+        .await
+        .unwrap();
+    remove_issues(&source, &["i-ENG-3"]);
+    e.clock.set(t0() + Duration::hours(1));
+    let run = e
+        .app
+        .import_sync_run_now(&e.alice_ctx(), SyncRunOptions::default())
+        .await
+        .unwrap();
+    // Alice verliert nach dem Anlegen des Laufs ihre Admin-Rechte: der Lauf schreibt nichts.
+    sqlx::query("UPDATE \"user\" SET role = 'user' WHERE id = $1")
+        .bind(e.alice.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let out = e
+        .engine(&source, EngineConfig::default())
+        .run(e.org, run.id)
+        .await
+        .unwrap();
+    assert!(matches!(out, RunOutcome::Failed(_)), "{out:?}");
+    assert!(!archived_issue(&pool, e.org.0, "ENG", 3).await);
+    // Auch der Planer startet dann nichts mehr.
+    e.clock.set(t0() + Duration::hours(5));
+    let started = e.app.import_sync_tick(e.clock_now()).await.unwrap();
+    assert_eq!(started, 0);
+}
