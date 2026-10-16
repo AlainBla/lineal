@@ -1,17 +1,56 @@
-# Lineal
+<p align="center">
+  <img src="docs/assets/lineal-logo.svg" alt="Lineal" width="560">
+</p>
 
-Nachbau von Linear (Issue-Tracking) mit Rust-Backend (GraphQL, MCP, Sync) und React-Frontend.
-Die Spezifikation liegt in [`docs/`](docs/README.md); Architektur in
-[`docs/11-implementierungsarchitektur.md`](docs/11-implementierungsarchitektur.md), Arbeitspakete in
-[`docs/12-arbeitspakete.md`](docs/12-arbeitspakete.md).
+<p align="center">
+  <strong>Issue-Tracking für Teams – ein Nachbau von Linear</strong><br>
+  Rust-Backend (GraphQL, MCP, Echtzeit-Sync, CRDT) · React-Frontend · selbst gehostet per Docker
+</p>
 
-## Voraussetzungen
+---
+
+## Was Lineal kann
+
+- **Issues & Workflow:** Teams mit eigenen Status, Labels, Estimates, Triage, SLA, Sub-Issues,
+  Relationen, wiederkehrenden Issues, Templates (auch Formulare), Mehrfachauswahl und Bulk-Aktionen,
+  Papierkorb mit Wiederherstellen.
+- **Planung:** Projekte mit Meilensteinen und Status-Updates, Initiativen, Cycles mit Kapazität,
+  Roadmap-Zeitachse, firmenweite Übersicht über alle Teams.
+- **Views, Suche, Inbox:** gespeicherte Filter-Views, Favoriten, Volltextsuche, Command-Menü,
+  Inbox mit Priority-Tabs, Snooze und „Remind me“.
+- **Dokumente:** Echtzeit-Mitbearbeitung (Yjs/CRDT) mit Inline-Kommentaren, Historie und Templates.
+- **Zusammenarbeit:** Echtzeit-Sync per WebSocket, Benachrichtigungen (In-App und E-Mail-Digest),
+  Freigabe einzelner Issues an Gäste.
+- **Integration:** GraphQL-API, MCP-Server für KI-Agenten (55 Linear-kompatible Tools), OAuth 2.1,
+  API-Keys mit Team-Beschränkung, Webhooks, Import aus Linear inkl. regelmäßigem Abgleich.
+- **Betrieb & Sicherheit:** Rollen und Security-Settings, Audit-Log, Rate-Limits, CSRF/CSP,
+  Backup/Restore-Skripte, Ersteinrichtung per CLI.
+
+Die vollständige, sprachneutrale Spezifikation liegt in [`docs/`](docs/README.md)
+(als HTML: [`docs/index.html`](docs/index.html)); den aktuellen Umsetzungsstand beschreibt
+[`docs/15-umsetzungsstand.md`](docs/15-umsetzungsstand.md).
+
+## Betrieb mit Docker
+
+```bash
+cp .env.example .env    # LINEAL_SESSION_SECRET und LINEAL_DB_PASSWORD setzen (openssl rand -hex 32)
+docker compose --profile app up -d --build
+docker compose --profile app run --rm migrate create-workspace \
+  --name "Meine Firma" --owner-email du@example.com --owner-name "Dein Name"
+# → http://localhost:8088
+```
+
+Details zu Umgebungsvariablen, TLS, Backups und Updates: [`docs/15-umsetzungsstand.md`](docs/15-umsetzungsstand.md) §3.
+
+## Entwicklung
+
+### Voraussetzungen
 
 - Rust stable (Edition 2024, `rustfmt` und `clippy`; `rust-toolchain.toml` ist hinterlegt)
 - Node 22+ mit npm
 - Docker (PostgreSQL 16 auf `127.0.0.1:5440`)
 
-## Schnellstart
+### Schnellstart
 
 ```bash
 cp .env.example .env
@@ -68,3 +107,7 @@ ausschließlich in `lineal-domain` und `lineal-app`.
 - Fehlercodes und Enums exakt nach [`docs/00-konventionen.md`](docs/00-konventionen.md).
 - Neue Migrationen nur im eigenen Nummernbereich (siehe `docs/12-arbeitspakete.md`).
 - npm statt pnpm; das generierte `web/src/routeTree.gen.ts` und `web/src/gql/` sind nicht eingecheckt.
+
+## Lizenz
+
+[MIT](LICENSE)
