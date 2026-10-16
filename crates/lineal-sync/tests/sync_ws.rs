@@ -451,7 +451,12 @@ async fn notify_wakes_connections_without_polling(pool: PgPool) {
     })
     .await;
     let mut ws = e.connect("bob", None).await;
-    assert_eq!(next_json(&mut ws, WAIT).await.unwrap()["type"], "hello");
+    // Der erste Verbindungsaufbau startet den LISTEN-Task mit eigener Verbindung; unter Last
+    // dauert "hello" hier länger als WAIT.
+    assert_eq!(
+        next_json(&mut ws, Duration::from_secs(30)).await.unwrap()["type"],
+        "hello"
+    );
     // Warten, bis der LISTEN-Task wirklich lauscht (unter Last kann das deutlich länger als
     // ein paar hundert Millisekunden dauern; ein NOTIFY davor ginge verloren).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -479,8 +484,10 @@ async fn notify_wakes_connections_without_polling(pool: PgPool) {
         json!({ "tag": "wake" }),
     )
     .await;
+    // Unter Last (voller Workspace-Lauf mit nice) braucht der Weg NOTIFY -> Wake -> Delta
+    // länger als WAIT; großzügig warten, Polling bleibt bei 3600 s ausgeschlossen.
     assert_eq!(
-        model_ids(&next_sync(&mut ws, WAIT).await.unwrap()),
+        model_ids(&next_sync(&mut ws, Duration::from_secs(30)).await.unwrap()),
         ["wake"]
     );
 }
