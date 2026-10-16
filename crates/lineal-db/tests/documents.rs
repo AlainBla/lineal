@@ -815,8 +815,9 @@ async fn markdown_is_sanitized_everywhere(pool: PgPool) {
     let alice = ctx_for(SeedUser::Alice);
     let evil = "Hallo <script>alert(1)</script><img src=x onerror=alert(2)> [klick](javascript:alert(3)) ![b](data:text/html;base64,AAAA) **fett**";
     let d = create(&env, SeedUser::Alice, in_team("ENG", "XSS", evil)).await;
-    for bad in ["<script", "onerror", "javascript:", "data:text/html"] {
-        assert!(!d.doc.content.contains(bad), "{bad} in {}", d.doc.content);
+    let live = d.doc.content.replace("\\<", "");
+    for bad in ["<script", "<img", "javascript:", "data:text/html"] {
+        assert!(!live.contains(bad), "{bad} in {}", d.doc.content);
     }
     assert!(d.doc.content.contains("**fett**"));
     // Patch und Update werden ebenfalls bereinigt, auch die Snapshots.
@@ -834,14 +835,20 @@ async fn markdown_is_sanitized_everywhere(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!upd.doc.content.contains("<iframe") && !upd.doc.content.contains("vbscript:"));
+    assert!(
+        !upd.doc.content.replace("\\<", "").contains("<iframe")
+            && !upd.doc.content.contains("vbscript:")
+    );
     let h = env
         .app
         .document_history(&alice, &d.doc.id.to_string(), None, 10)
         .await
         .unwrap();
     for e in &h.items {
-        assert!(!e.markdown.contains("<script") && !e.markdown.contains("<iframe"));
+        assert!(
+            !e.markdown.replace("\\<", "").contains("<script")
+                && !e.markdown.replace("\\<", "").contains("<iframe")
+        );
     }
     // Icon und Farbe werden validiert.
     for (icon, color) in [("a b", ""), ("", "red"), ("<x>", "")] {

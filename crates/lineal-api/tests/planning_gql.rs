@@ -76,6 +76,7 @@ async fn projects_cycles_initiatives_over_graphql(pool: PgPool) {
         !d["projectCreate"]["project"]["description"]
             .as_str()
             .unwrap()
+            .replace("\\<", "")
             .contains("<script")
     );
     let (d, _) = run(

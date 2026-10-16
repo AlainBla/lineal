@@ -49,7 +49,13 @@ async fn documents_over_graphql(pool: PgPool) {
     .await;
     assert!(e.is_empty(), "{e:?}");
     let doc = &d["documentCreate"]["document"];
-    assert!(!doc["content"].as_str().unwrap().contains("<script"));
+    assert!(
+        !doc["content"]
+            .as_str()
+            .unwrap()
+            .replace("\\<", "")
+            .contains("<script")
+    );
     let id = doc["id"].as_str().unwrap().to_owned();
     // Bob sieht es, Alice (kein DES-Mitglied) nicht: get, Liste und Suche.
     let (d, e) = run(

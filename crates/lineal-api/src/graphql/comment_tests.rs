@@ -83,7 +83,13 @@ async fn comment_lifecycle_over_graphql(pool: sqlx::PgPool) {
     let c = &created["commentCreate"];
     assert_eq!(c["success"], true);
     assert!(c["lastSyncId"].as_f64().unwrap() > 0.0);
-    assert!(!c["comment"]["body"].as_str().unwrap().contains("<script"));
+    assert!(
+        !c["comment"]["body"]
+            .as_str()
+            .unwrap()
+            .replace("\\<", "")
+            .contains("<script")
+    );
     assert_eq!(c["comment"]["issueId"], eng.to_string());
     assert_eq!(c["comment"]["quotedText"], "timeout");
     assert_eq!(c["comment"]["user"]["displayName"], "alice");

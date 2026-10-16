@@ -854,7 +854,7 @@ pub async fn validate_and_normalize(
             clean_opt(&mut d.summary);
             clean_opt(&mut d.description);
             for m in d.milestones.iter_mut().flatten() {
-                clean(&mut m.name);
+                clean_plain(&mut m.name);
                 clean_opt(&mut m.description);
             }
             for e in d.issues.iter_mut().flatten() {
@@ -877,6 +877,17 @@ fn clean(s: &mut String) {
     *s = lineal_domain::rules::markdown::sanitize(s);
 }
 
+/// Einfacher Text (Titel): Platzhalter bleiben ohne Markdown-Maskierung.
+fn clean_plain(s: &mut String) {
+    *s = lineal_domain::rules::markdown::sanitize_plain(s);
+}
+
+fn clean_plain_opt(s: &mut Option<String>) {
+    if let Some(x) = s {
+        clean_plain(x);
+    }
+}
+
 fn clean_opt(s: &mut Option<String>) {
     if let Some(x) = s {
         clean(x);
@@ -885,7 +896,7 @@ fn clean_opt(s: &mut Option<String>) {
 
 fn sanitize_subs(subs: &mut [SubIssueData]) {
     for s in subs {
-        clean(&mut s.title);
+        clean_plain(&mut s.title);
         clean_opt(&mut s.description);
         if let Some(c) = s.sub_issues.as_mut() {
             sanitize_subs(c);
@@ -895,7 +906,7 @@ fn sanitize_subs(subs: &mut [SubIssueData]) {
 
 /// Bereinigt alle Freitexte eines Issue-Templates (Titel, Beschreibungen, Sub-Issues).
 pub fn sanitize_issue_data(d: &mut IssueData) {
-    clean_opt(&mut d.title);
+    clean_plain_opt(&mut d.title);
     clean_opt(&mut d.description);
     if let Some(s) = d.sub_issues.as_mut() {
         sanitize_subs(s);
@@ -903,7 +914,7 @@ pub fn sanitize_issue_data(d: &mut IssueData) {
 }
 
 fn sanitize_doc_data(d: &mut DocData) {
-    clean_opt(&mut d.title);
+    clean_plain_opt(&mut d.title);
     clean_opt(&mut d.content);
 }
 

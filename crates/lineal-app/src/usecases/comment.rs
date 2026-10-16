@@ -1273,7 +1273,11 @@ mod tests {
     #[test]
     fn body_is_sanitized_and_checked() {
         let cleaned = clean_body("hi <script>alert(1)</script> [x](javascript:alert(1))").unwrap();
-        assert!(!cleaned.contains("<script"), "{cleaned}");
+        assert!(!cleaned.replace("\\<", "").contains("<script"), "{cleaned}");
+        assert!(
+            cleaned.contains("\\<script>alert(1)"),
+            "kept as text: {cleaned}"
+        );
         assert!(!cleaned.contains("javascript:"), "{cleaned}");
         assert!(clean_body("   ").is_err());
         assert!(clean_body(&"a".repeat(MAX_BODY_CHARS + 1)).is_err());

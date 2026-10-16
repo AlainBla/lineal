@@ -78,6 +78,14 @@ pub fn sanitize(md: &str) -> String {
     current.replace('<', "&lt;")
 }
 
+/// Wie [`sanitize`] für **einfachen Text** (Titel, Namen, Kurzbeschreibungen, Linkbezeichnungen):
+/// unsichere Links verlieren ihr Ziel, Tag-artige Folgen (`<token>`) bleiben als Text erhalten,
+/// aber ohne Markdown-Maskierung (`<` statt `\<`), weil das Feld nicht als Markdown dargestellt
+/// wird. Die Anzeige muss einfachen Text immer als Text ausgeben (kein `innerHTML`).
+pub fn sanitize_plain(text: &str) -> String {
+    sanitize(text).replace("\\<", "<")
+}
+
 /// Ein Durchlauf; `None`, wenn nichts zu ändern war.
 fn sanitize_pass(md: &str) -> Option<String> {
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
@@ -184,6 +192,17 @@ mod tests {
         let out = sanitize("<div>\nhallo\n</div>\n\nrest\n");
         assert!(!has_raw_tag(&out), "{out:?}");
         assert!(out.contains("hallo") && out.contains("rest") && out.contains("div"));
+    }
+
+    #[test]
+    fn plain_text_keeps_placeholders_without_markdown_escapes() {
+        assert_eq!(
+            sanitize_plain("Fix <uuid> in <script>x</script>"),
+            "Fix <uuid> in <script>x</script>"
+        );
+        assert_eq!(sanitize_plain("[a](javascript:x) b"), "a b");
+        // Der Wert aus einem früheren Speichern (mit `\<`) bleibt stabil.
+        assert_eq!(sanitize_plain("T \\<x>"), "T <x>");
     }
 
     #[test]

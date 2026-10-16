@@ -670,8 +670,9 @@ async fn markdown_is_sanitized(pool: PgPool) {
         .await
         .unwrap();
     let body = &c.view.comment.body;
-    assert!(!body.contains("<script"), "{body}");
-    assert!(!body.contains("onerror"), "{body}");
+    // Kein aktives Markup: Tags bleiben als maskierter Text (`\<`) erhalten.
+    assert!(!body.replace("\\<", "").contains("<script"), "{body}");
+    assert!(!body.replace("\\<", "").contains("<img"), "{body}");
     assert!(!body.contains("javascript:"), "{body}");
     assert!(body.contains("**bold**"));
     let stored: String = sqlx::query_scalar("SELECT body FROM comment WHERE id = $1")
@@ -689,7 +690,14 @@ async fn markdown_is_sanitized(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!edited.view.comment.body.contains("<iframe"));
+    assert!(
+        !edited
+            .view
+            .comment
+            .body
+            .replace("\\<", "")
+            .contains("<iframe")
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

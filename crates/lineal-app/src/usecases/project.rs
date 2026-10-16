@@ -178,7 +178,7 @@ fn writable(p: &Project) -> AppResult<()> {
 
 /// Entfernt aktive Inhalte aus einfachem Text (Name, Kurzbeschreibung, Titel).
 pub(crate) fn clean_text(s: &str) -> String {
-    lineal_domain::rules::markdown::sanitize(s.trim())
+    lineal_domain::rules::markdown::sanitize_plain(s.trim())
         .trim()
         .to_owned()
 }

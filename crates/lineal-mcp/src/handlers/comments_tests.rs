@@ -130,7 +130,13 @@ async fn save_list_and_delete_comments(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
-    assert!(!root["body"].as_str().unwrap().contains("<script"));
+    assert!(
+        !root["body"]
+            .as_str()
+            .unwrap()
+            .replace("\\<", "")
+            .contains("<script")
+    );
     assert_eq!(root["parentId"], Value::Null);
     assert_eq!(root["quotedText"], Value::Null);
     assert_eq!(root["onBehalfOf"], Value::Null);

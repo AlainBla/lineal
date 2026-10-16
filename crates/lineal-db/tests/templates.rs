@@ -933,8 +933,11 @@ async fn template_content_is_sanitized_on_save_and_apply(pool: PgPool) {
     .await;
     // Beim Speichern bereinigt.
     let stored = tpl.template.template_data.to_string();
-    for bad in ["<script", "javascript:", "onerror"] {
-        assert!(!stored.contains(bad), "{bad} in {stored}");
+    for bad in ["<script", "<img", "javascript:"] {
+        assert!(
+            !stored.replace("\\\\<", "").contains(bad),
+            "{bad} in {stored}"
+        );
     }
     // Auch wenn ein altes Template ungeprueft in der DB steht, bereinigt das Anwenden.
     sqlx::query("UPDATE template SET template_data = $2 WHERE id = $1")
@@ -953,14 +956,14 @@ async fn template_content_is_sanitized_on_save_and_apply(pool: PgPool) {
         .await
         .unwrap();
     for v in std::iter::once(&out.root).chain(out.children.iter()) {
-        let all = format!(
-            "{} {}",
-            v.issue.title,
-            v.issue.description.clone().unwrap_or_default()
-        );
-        for bad in ["<script", "javascript:", "onerror", "<img"] {
-            assert!(!all.contains(bad), "{bad} in {all}");
+        // Titel sind einfacher Text (Tags bleiben als Text); die Beschreibung ist Markdown und
+        // enthält nur maskierte Tags.
+        let desc = v.issue.description.clone().unwrap_or_default();
+        let live = desc.replace("\\<", "");
+        for bad in ["<script", "javascript:", "<img"] {
+            assert!(!live.contains(bad), "{bad} in {desc}");
         }
+        assert!(!v.issue.title.contains("javascript:"));
     }
 }
 

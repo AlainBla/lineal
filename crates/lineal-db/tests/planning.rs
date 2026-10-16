@@ -2085,11 +2085,12 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!v.project.name.contains('<') && v.project.name.contains("Safe"));
-    assert!(!v.project.description.clone().unwrap().contains('<'));
+    // Einfacher Text (Name, Kurzbeschreibung): Tags bleiben als Text erhalten.
+    assert!(v.project.name.contains("Safe") && v.project.name.contains("<script>"));
+    assert!(v.project.description.clone().unwrap().contains("kurz"));
     let content = v.project.content.clone().unwrap();
     assert!(
-        !content.contains("<script") && !content.contains("javascript:"),
+        !content.replace("\\<", "").contains("<script") && !content.contains("javascript:"),
         "{content}"
     );
     assert!(content.contains("**fett**"));
@@ -2138,7 +2139,10 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!u.update.body.contains("<script") && !u.update.body.contains("javascript:"));
+    assert!(
+        !u.update.body.replace("\\<", "").contains("<script")
+            && !u.update.body.contains("javascript:")
+    );
     let (_, m) = app
         .save_milestone(
             &alice,
@@ -2152,7 +2156,14 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         .await
         .unwrap();
     assert!(!m.milestone.name.contains('<'));
-    assert!(!m.milestone.description.clone().unwrap().contains("<script"));
+    assert!(
+        !m.milestone
+            .description
+            .clone()
+            .unwrap()
+            .replace("\\<", "")
+            .contains("<script")
+    );
     let i = app
         .save_initiative(
             &alice,
@@ -2171,6 +2182,7 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
             .content
             .clone()
             .unwrap_or_default()
+            .replace("\\<", "")
             .contains("<script")
     );
     assert_eq!(

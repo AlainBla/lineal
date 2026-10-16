@@ -227,7 +227,7 @@ async fn build_issue_input(
         .filter(|t| !t.is_empty())
         .map(str::to_owned)
         .or_else(|| data.title.clone().filter(|t| !t.trim().is_empty()));
-    let title = title.map(|t| lineal_domain::rules::markdown::sanitize(&t));
+    let title = title.map(|t| lineal_domain::rules::markdown::sanitize_plain(&t));
     out.title = Some(title.ok_or_else(|| {
         invalid(
             "title",
@@ -562,7 +562,7 @@ pub(crate) async fn merge_document(
         _ => data.content.as_deref().map(strip_placeholders),
     };
     tx.templates().mark_applied(tpl.id, now).await?;
-    let san = |s: String| lineal_domain::rules::markdown::sanitize(&s);
+    let san = |s: String| lineal_domain::rules::markdown::sanitize_plain(&s);
     Ok(MergedDocument {
         title: title.or(data.title).map(san),
         content,
@@ -645,7 +645,7 @@ pub(crate) async fn merge_project(
     if input.summary.is_none() {
         input.summary = data.summary.clone();
     }
-    let san = |s: &String| lineal_domain::rules::markdown::sanitize(s);
+    let san = |s: &String| lineal_domain::rules::markdown::sanitize_plain(s);
     input.name = input.name.as_ref().map(san);
     input.summary = input.summary.as_ref().map(san);
     input.description = match opt_str(&input.description) {
@@ -817,7 +817,7 @@ pub(crate) async fn apply_project_children(
             .insert_milestone(&NewMilestone {
                 id,
                 project_id: project,
-                name: lineal_domain::rules::markdown::sanitize(name.trim()),
+                name: lineal_domain::rules::markdown::sanitize_plain(name.trim()),
                 description: description
                     .as_deref()
                     .map(lineal_domain::rules::markdown::sanitize),
