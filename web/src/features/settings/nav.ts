@@ -28,7 +28,8 @@ type WorkspaceSection =
   | "api"
   | "security"
   | "audit"
-  | "webhooks";
+  | "webhooks"
+  | "import";
 
 /**
  * Navigation der Settings (linke Spalte): Gruppe „Account“ (persönlich), dann die Workspace-Seiten,
@@ -60,6 +61,7 @@ export function workspaceSettingsNav(
           { label: "Security", to: `/${ws}/settings/security`, active: section === "security" },
           { label: "Audit log", to: `/${ws}/settings/audit`, active: section === "audit" },
           { label: "Webhooks", to: `/${ws}/settings/webhooks`, active: section === "webhooks" },
+          { label: "Import", to: `/${ws}/settings/import`, active: section === "import" },
         ]
       : []),
     { label: "API", to: `/${ws}/settings/api`, active: section === "api" },
