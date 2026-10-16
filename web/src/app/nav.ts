@@ -14,6 +14,7 @@ export interface WorkspaceNav {
   cycles: string;
   projects: string;
   initiatives: string;
+  roadmap: string;
   views: string;
   trash: string;
   settings: string;
@@ -31,6 +32,7 @@ export function workspacePaths(ws: string): WorkspaceNav {
     cycles: `/${ws}/cycles`,
     projects: `/${ws}/projects/all`,
     initiatives: `/${ws}/initiatives/active`,
+    roadmap: `/${ws}/roadmap`,
     views: `/${ws}/views/issues`,
     trash: `/${ws}/trash/issues`,
     settings: `/${ws}/settings/workspace`,
@@ -43,11 +45,11 @@ export interface TeamNav {
   active: string;
   backlog: string;
   all: string;
-  archive: string;
   cycles: string;
   currentCycle: string;
   upcomingCycle: string;
   projects: string;
+  roadmap: string;
   views: string;
   trash: string;
   documents: string;
@@ -57,16 +59,17 @@ export interface TeamNav {
 export function teamPaths(ws: string, key: string): TeamNav {
   const base = `/${ws}/team/${key}`;
   return {
-    home: `${base}/overview`,
+    // Team-Startseite = alle Issues (eine eigene Team-Übersicht gibt es nicht).
+    home: `${base}/all`,
     triage: `${base}/triage`,
     active: `${base}/active`,
     backlog: `${base}/backlog`,
     all: `${base}/all`,
-    archive: `${base}/archive`,
     cycles: `${base}/cycles`,
     currentCycle: `${base}/cycle/active`,
     upcomingCycle: `${base}/cycle/upcoming`,
     projects: `${base}/projects/all`,
+    roadmap: `${base}/roadmap`,
     views: `${base}/views/issues`,
     trash: `${base}/trash`,
     documents: `${base}/documents`,

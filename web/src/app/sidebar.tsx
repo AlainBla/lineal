@@ -1,4 +1,5 @@
 import {
+  GanttChart,
   Box,
   ChevronDown,
   ChevronRight,
@@ -232,6 +233,12 @@ function TeamEntry({
                 </NavLink>
               </li>
               <li>
+                <NavLink to={p.roadmap}>
+                  <GanttChart />
+                  Roadmap
+                </NavLink>
+              </li>
+              <li>
                 <NavLink to={p.views}>
                   <LayoutDashboard />
                   Views
@@ -410,6 +417,12 @@ export function Sidebar({
                 </NavLink>
               </li>
             )}
+            <li>
+              <NavLink to={p.roadmap}>
+                <GanttChart />
+                Roadmap
+              </NavLink>
+            </li>
             <li>
               <NavLink to={p.views}>
                 <Layers />

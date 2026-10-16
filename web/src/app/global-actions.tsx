@@ -1,6 +1,5 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Archive,
   Box,
   CalendarClock,
   CalendarDays,
@@ -291,14 +290,6 @@ export function buildGlobalActions(args: {
         keys: "g e",
         icon: Layers,
         perform: () => go(t.all),
-      },
-      {
-        id: "team.archive",
-        title: "Go to Archive",
-        section: nav,
-        keys: "g x",
-        icon: Archive,
-        perform: () => go(t.archive),
       },
       {
         id: "team.cycles",
