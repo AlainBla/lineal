@@ -933,10 +933,17 @@ async fn template_content_is_sanitized_on_save_and_apply(pool: PgPool) {
     .await;
     // Beim Speichern bereinigt.
     let stored = tpl.template.template_data.to_string();
-    for bad in ["<script", "<img", "javascript:"] {
+    // Titel sind einfacher Text (Tags bleiben als Text); Beschreibungen sind Markdown (maskiert).
+    let data = &tpl.template.template_data;
+    let descriptions = format!(
+        "{} {}",
+        data["description"], data["subIssues"][0]["description"]
+    );
+    assert!(!stored.contains("javascript:"));
+    for bad in ["<script", "<img"] {
         assert!(
-            !stored.replace("\\\\<", "").contains(bad),
-            "{bad} in {stored}"
+            !descriptions.replace("\\\\<", "").contains(bad),
+            "{bad} in {descriptions}"
         );
     }
     // Auch wenn ein altes Template ungeprueft in der DB steht, bereinigt das Anwenden.

@@ -1547,7 +1547,7 @@ async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: P
     let id = created.issue.id.0;
     let stored = created.issue.description.clone().unwrap_or_default();
     assert!(
-        !stored.contains('<') && !stored.contains("javascript"),
+        !stored.replace("\\<", "").contains('<') && !stored.contains("javascript"),
         "{stored}"
     );
     let updated = e
@@ -1562,7 +1562,11 @@ async fn issue_description_is_sanitized_on_api_save_and_opening_keeps_it(pool: P
         )
         .await
         .unwrap();
-    assert_eq!(updated.issue.description, None);
+    // Früher blieb nichts übrig (Tags gelöscht); jetzt bleibt der Text sichtbar, maskiert.
+    assert_eq!(
+        updated.issue.description.as_deref(),
+        Some("\\<script>alert(1)\\</script>")
+    );
     let _ = e
         .app
         .update_issue(

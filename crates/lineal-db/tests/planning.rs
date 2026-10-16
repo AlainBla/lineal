@@ -2155,7 +2155,8 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!m.milestone.name.contains('<'));
+    // Einfacher Text: Tags bleiben als Text, ohne Markdown-Maskierung.
+    assert!(!m.milestone.name.contains("\\<"));
     assert!(
         !m.milestone
             .description
@@ -2176,7 +2177,7 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         )
         .await
         .unwrap();
-    assert!(!i.initiative.name.contains('<'));
+    assert!(!i.initiative.name.contains("\\<"));
     assert!(
         !i.initiative
             .content
