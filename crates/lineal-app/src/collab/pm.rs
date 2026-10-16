@@ -1072,6 +1072,36 @@ mod tests {
     }
 
     #[test]
+    fn sanitized_placeholders_roundtrip_through_the_editor_without_loss() {
+        use lineal_domain::rules::markdown::sanitize;
+        let src = "Setze <token> und <uuid> in <datei> auf <host-ipv4>, Mail <e-mail>, <https>://x, <script>alert(1)</script>.\n\n\
+                   - Punkt mit <img src=x onerror=1>\n\n`<code-tag>` und\n\n```\n<block-tag>\n```\n\n\
+                   <div>\nHTML-Block <token>\n</div>\n";
+        let stored = sanitize(src);
+        let back = roundtrip(&stored);
+        assert_eq!(sanitize(&back), back, "stable under sanitize: {back:?}");
+        for p in [
+            "token",
+            "uuid",
+            "datei",
+            "host-ipv4",
+            "e-mail",
+            "https",
+            "script",
+            "img src=x onerror=1",
+            "div",
+        ] {
+            assert!(back.contains(&format!("\\<{p}")), "{p} lost: {back:?}");
+        }
+        assert!(
+            back.contains("`<code-tag>`") && back.contains("<block-tag>"),
+            "{back:?}"
+        );
+        // Zweiter Durchlauf ändert nichts mehr.
+        assert_eq!(roundtrip(&back), back);
+    }
+
+    #[test]
     fn table_and_task_nodes_have_the_schema_shape() {
         let blocks = parse_markdown("| a | b |\n|:-:|--|\n| 1 | 2 |\n\n- [x] ok\n- plain");
         let Pm::Elem { tag, content, .. } = &blocks[0] else {

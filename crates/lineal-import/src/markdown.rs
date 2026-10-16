@@ -56,6 +56,24 @@ const KNOWN_TAGS: &[&str] = &[
     "div",
 ];
 
+/// Elemente, die im Browser etwas ausführen/einbetten würden (Bericht: „entschärft“).
+pub fn is_active_tag(t: &str) -> bool {
+    matches!(
+        t,
+        "script"
+            | "style"
+            | "iframe"
+            | "object"
+            | "embed"
+            | "svg"
+            | "math"
+            | "form"
+            | "link"
+            | "meta"
+            | "base"
+    )
+}
+
 /// Kontext des Umschreibens.
 #[derive(Debug, Clone, Default)]
 pub struct RewriteCtx {
@@ -227,11 +245,35 @@ mod tests {
             "x <script>alert(1)</script> <linear-image>{\"a\":1}</linear-image> [t](javascript:alert(1)) <img src=x onerror=alert(1)>",
             1000,
         );
-        assert!(!out.text.contains("<script"));
-        assert!(!out.text.contains("javascript:"));
-        assert!(!out.text.contains("onerror"));
+        // Kein ausführbares Markup mehr: jedes Tag ist mit `\` maskiert und bleibt als Text sichtbar.
+        assert!(!out.text.contains(" <script") && out.text.contains("\\<script>alert(1)"));
+        assert!(!out.text.contains("](javascript:"), "{}", out.text);
+        assert!(
+            out.text.contains("\\<img src=x onerror=alert(1)>"),
+            "{}",
+            out.text
+        );
         assert!(out.unknown_tags.contains("linear-image"));
         assert!(out.unknown_tags.contains("script"));
+    }
+
+    #[test]
+    fn many_placeholders_are_kept_verbatim() {
+        let src = "Nutze <token> mit <uuid>, Datei <datei> auf <host-ipv4> (<e-mail>), Schema <https>://x und <script> als Wort. `<code-tag>` bleibt.";
+        let out = ctx().rewrite(src, 10_000);
+        for p in [
+            "token",
+            "uuid",
+            "datei",
+            "host-ipv4",
+            "e-mail",
+            "https",
+            "script",
+        ] {
+            assert!(out.text.contains(&format!("\\<{p}>")), "{p}: {}", out.text);
+            assert!(out.unknown_tags.contains(p), "{p}");
+        }
+        assert!(out.text.contains("`<code-tag>`"));
     }
 
     #[test]

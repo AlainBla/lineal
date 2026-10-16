@@ -1,8 +1,10 @@
 //! Markdown-Sanitizing (docs/00 §6, docs/07 §2.8): Markdown ist das Austauschformat für alle
 //! Rich-Text-Felder, Eingaben stammen von Nutzern, Agenten und Integrationen.
 //!
-//! * [`sanitize`] liefert wieder Markdown: rohes HTML wird entfernt (Tags weg, Text bleibt),
-//!   Links/Bilder mit unsicherem Schema werden zu reinem Text. Alles andere bleibt Byte für Byte
+//! * [`sanitize`] liefert wieder Markdown: rohes HTML wird nie ausgeführt, aber auch nie
+//!   gelöscht. Jede Tag-artige Folge (`<token>`, `<uuid>`, `<script>`, `<img onerror=…>`) wird als
+//!   wörtlicher Text maskiert (`\<`) und bleibt lesbar; Linear-Texte enthalten solche Platzhalter
+//!   als normalen Text. Links/Bilder mit unsicherem Schema werden zu reinem Text. Alles andere bleibt Byte für Byte
 //!   erhalten (Allowlist = Markdown-Syntax plus Schemata `http`, `https`, `mailto` und
 //!   relative Ziele).
 //! * [`render_html`] rendert Markdown zu HTML und filtert es zusätzlich mit der
@@ -36,11 +38,22 @@ pub fn is_safe_url(url: &str) -> bool {
     SAFE_SCHEMES.contains(&cleaned[..colon].to_ascii_lowercase().as_str())
 }
 
-fn strip_html(raw: &str) -> String {
-    ammonia::Builder::empty()
-        .clean_content_tags(HashSet::from(["script", "style"]))
-        .clean(raw)
-        .to_string()
+/// Maskiert jedes `<`, das ein Tag, Ende-Tag, Kommentar oder eine Processing-Instruction
+/// beginnen könnte, mit `\`. Der Text bleibt erhalten, wird aber nicht mehr als HTML geparst.
+fn escape_html_as_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '<'
+            && chars
+                .peek()
+                .is_some_and(|n| n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?'))
+        {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn escape_text(s: &str) -> String {
@@ -91,7 +104,7 @@ fn sanitize_pass(md: &str) -> Option<String> {
         }
         match event {
             Event::Html(_) | Event::InlineHtml(_) => {
-                let cleaned = strip_html(&md[range.clone()]);
+                let cleaned = escape_html_as_text(&md[range.clone()]);
                 if cleaned != md[range.clone()] {
                     edits.push((range, cleaned));
                 }
@@ -149,14 +162,62 @@ mod tests {
         assert_eq!(sanitize(doc), doc);
     }
 
+    /// Gibt es ein `<`, das nicht mit `\` maskiert ist und ein Tag beginnen würde?
+    fn has_raw_tag(s: &str) -> bool {
+        let b: Vec<char> = s.chars().collect();
+        b.iter().enumerate().any(|(i, c)| {
+            *c == '<'
+                && b.get(i + 1)
+                    .is_some_and(|n| n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?'))
+                && (i == 0 || b[i - 1] != '\\')
+        })
+    }
+
     #[test]
-    fn raw_html_tags_are_removed_text_is_kept() {
-        assert_eq!(sanitize("a <b>fett</b> b"), "a fett b");
-        assert_eq!(sanitize("x <img src=x onerror=alert(1)> y"), "x  y");
-        assert_eq!(sanitize("a <!-- geheim --> b"), "a  b");
+    fn raw_html_tags_become_literal_text() {
+        assert_eq!(sanitize("a <b>fett</b> b"), "a \\<b>fett\\</b> b");
+        assert_eq!(
+            sanitize("x <img src=x onerror=alert(1)> y"),
+            "x \\<img src=x onerror=alert(1)> y"
+        );
+        assert_eq!(sanitize("a <!-- geheim --> b"), "a \\<!-- geheim --> b");
         let out = sanitize("<div>\nhallo\n</div>\n\nrest\n");
-        assert!(!out.contains('<'), "{out:?}");
-        assert!(out.contains("hallo") && out.contains("rest"));
+        assert!(!has_raw_tag(&out), "{out:?}");
+        assert!(out.contains("hallo") && out.contains("rest") && out.contains("div"));
+    }
+
+    #[test]
+    fn placeholders_survive_as_text() {
+        let md = "Setze <token> und <uuid> in <datei> auf <host-ipv4>, mail an <e-mail> via <https> \
+                  oder <script>.";
+        let out = sanitize(md);
+        assert!(!has_raw_tag(&out), "{out:?}");
+        for p in [
+            "token",
+            "uuid",
+            "datei",
+            "host-ipv4",
+            "e-mail",
+            "https",
+            "script",
+        ] {
+            assert!(out.contains(&format!("\\<{p}>")), "{p}: {out:?}");
+        }
+        // Kein Verlust beim Rendern: Text erscheint maskiert im HTML.
+        let html = render_html(&out);
+        assert!(
+            html.contains("&lt;token&gt;") && html.contains("&lt;script&gt;"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("<token") && !html.contains("<script"),
+            "{html}"
+        );
+        // Nicht tag-artige spitze Klammern bleiben unberührt.
+        assert_eq!(
+            sanitize("a < b und 1<2 und x -> y"),
+            "a < b und 1<2 und x -> y"
+        );
     }
 
     #[test]
@@ -170,7 +231,15 @@ mod tests {
             "<svg onload=alert(1)>",
         ] {
             let out = sanitize(md);
-            assert!(!out.contains('<'), "{md:?} -> {out:?}");
+            // `<scr<script>` ist kein Tag (nur Text); entscheidend ist, was gerendert wird.
+            let html = render_html(&out).to_lowercase();
+            assert!(
+                !html.contains("<script")
+                    && !html.contains("<iframe")
+                    && !html.contains("<svg")
+                    && !html.contains("<a href"),
+                "{md:?} -> {html}"
+            );
         }
     }
 
@@ -197,7 +266,7 @@ mod tests {
     #[test]
     fn replacement_text_cannot_reintroduce_html() {
         let out = sanitize("[&lt;script&gt;alert(1)&lt;/script&gt;](javascript:x)");
-        assert!(!out.contains('<'), "{out:?}");
+        assert!(!has_raw_tag(&out), "{out:?}");
     }
 
     #[test]
@@ -326,10 +395,7 @@ mod tests {
                 );
             }
             let clean = sanitize(md).to_lowercase();
-            assert!(
-                !clean.contains('<') || !clean.contains("javascript"),
-                "{md:?} -> {clean}"
-            );
+            assert!(!has_raw_tag(&clean), "{md:?} -> {clean}");
         }
         // Erlaubt bleiben http, https, mailto und relative Ziele; tel nicht mehr.
         let h =

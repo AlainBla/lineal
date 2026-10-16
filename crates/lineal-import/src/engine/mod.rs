@@ -1022,12 +1022,13 @@ impl Session<'_, '_> {
         let out = self.rewrite.rewrite(text, max);
         for t in &out.unknown_tags {
             if self.reported_tags.insert(t.clone()) {
-                self.note(
-                    "info",
-                    ty,
-                    Some(id),
-                    format!("unknown markup element <{t}> was removed"),
-                );
+                // Nichts wird gelöscht: Tag-artige Folgen bleiben als wörtlicher Text erhalten.
+                let (sev, how) = if crate::markdown::is_active_tag(t) {
+                    ("warning", "was neutralised and is shown as literal text")
+                } else {
+                    ("info", "is kept as literal text")
+                };
+                self.note(sev, ty, Some(id), format!("markup element <{t}> {how}"));
             }
         }
         if out.truncated {

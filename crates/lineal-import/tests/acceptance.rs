@@ -285,10 +285,14 @@ async fn criterion_1_full_import_with_matching_counts(pool: PgPool) {
         "{d10}"
     );
     let d5 = desc("ENG", 5).await;
+    // Kein ausführbares Markup, aber der Text bleibt sichtbar (`\<script>`).
     assert!(
-        !d5.contains("<script") && !d5.contains("javascript:"),
+        !d5.contains(" <script")
+            && d5.contains("\\<script>alert(1)")
+            && !d5.contains("](javascript:"),
         "{d5}"
     );
+    assert!(d5.contains("\\<linear-image>"), "{d5}");
     assert!(
         desc("ENG", 9).await.contains("@bob"),
         "mention rewritten to the Lineal display name"
@@ -306,7 +310,7 @@ async fn criterion_1_full_import_with_matching_counts(pool: PgPool) {
             .await
             .unwrap();
     assert!(
-        !c1.contains("onerror") && !c1.contains("uploads.linear.app"),
+        c1.contains("\\<img src=x onerror=alert(1)>") && !c1.contains("uploads.linear.app"),
         "{c1}"
     );
 
