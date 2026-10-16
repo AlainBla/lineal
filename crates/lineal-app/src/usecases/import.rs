@@ -678,6 +678,81 @@ impl App {
         Ok(())
     }
 
+    /// Ordnet einen Import-Platzhalter einem bestehenden aktiven User zu (z. B. wenn die E-Mail in
+    /// Linear eine andere war): alle Verweise (Zuweisungen, Ersteller, Abos, Kommentar-/Reaktions-
+    /// autoren, Erwähnungen auch im Text, Teammitgliedschaften als Vereinigung, Benachrichtigungen,
+    /// History, Projekt-/Initiativ-Rollen) wandern atomar zum Ziel, `import_mapping` zeigt danach
+    /// auf das Ziel (spätere Abgleiche nutzen es), der Platzhalter wird gelöscht.
+    /// Nur Workspace-Admins/Owner; nur Platzhalter -> aktiver User desselben Workspace.
+    pub async fn import_placeholder_merge(
+        &self,
+        ctx: &RequestCtx,
+        placeholder_id: Uuid,
+        target_id: Uuid,
+    ) -> AppResult<crate::ports::repos::import::UserMergeStats> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        require_workspace(&mut *tx, ctx, Action::ManageImport).await?;
+        if placeholder_id == target_id {
+            return Err(invalid(
+                "targetUserId",
+                "the target must differ from the placeholder",
+            ));
+        }
+        let missing = || AppError::not_found("User not found.");
+        let placeholder = tx
+            .users()
+            .get(UserId(placeholder_id))
+            .await?
+            .ok_or_else(missing)?;
+        let target = tx
+            .users()
+            .get(UserId(target_id))
+            .await?
+            .ok_or_else(missing)?;
+        if placeholder.status != "imported" || placeholder.active {
+            return Err(invalid(
+                "placeholderId",
+                "only import placeholders can be merged into another user",
+            ));
+        }
+        if target.status != "active"
+            || !target.active
+            || target.role == lineal_domain::enums::UserRole::App
+        {
+            return Err(invalid(
+                "targetUserId",
+                "the target must be an active user of this workspace",
+            ));
+        }
+        let stats = tx
+            .imports()
+            .merge_user_references(
+                placeholder_id,
+                target_id,
+                &placeholder.display_name,
+                &target.display_name,
+            )
+            .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "import.placeholder_merged",
+                "user",
+                Some(target_id),
+                json!({
+                    "placeholderId": placeholder_id,
+                    "moved": stats.moved,
+                    "dropped": stats.dropped,
+                    "mentionsRewritten": stats.mentions,
+                }),
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(stats)
+    }
+
     /// Entschlüsselt das Token eines Laufs (nur für den Importer in Job/CLI; System- oder
     /// Admin-Kontext, kein GraphQL-Pfad).
     pub async fn import_load_token(
@@ -700,7 +775,7 @@ impl App {
 /// Zwei gleichzeitige Läufe ins selbe Team würden sich gegenseitig mit Konflikten überschütten
 /// (doppelte Nummern, Mapping-Überschneidungen): ein zweiter echter Lauf wird abgelehnt, solange
 /// ein anderer Lauf für ein überlappendes Team `running` ist. Eine leere Teamliste heißt "alle".
-async fn ensure_no_overlapping_run(
+pub(super) async fn ensure_no_overlapping_run(
     tx: &mut dyn Tx,
     run: &ImportRun,
     teams: &[String],

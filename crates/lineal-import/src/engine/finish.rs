@@ -95,6 +95,7 @@ impl Session<'_, '_> {
             Step::InitiativeUpdates => self.step_initiative_updates(cursor).await,
             Step::UpdateComments => self.step_update_comments(cursor).await,
             Step::Views => self.step_views(cursor).await,
+            Step::Removed => self.step_removed().await,
             Step::Finalize => self.step_finalize().await,
         }
     }
@@ -297,6 +298,17 @@ impl Session<'_, '_> {
         };
         tx.imports().set_import_lease(run_id, None).await?;
         tx.commit().await?;
+        if !dry && matches!(outcome, RunOutcome::Completed | RunOutcome::Failed(_)) {
+            // Abgleich: Ergebnis verbuchen, bei Fehler den Einrichtenden benachrichtigen.
+            if let Err(e) = self
+                .eng
+                .app
+                .import_sync_run_finished(self.org, run_id)
+                .await
+            {
+                tracing::warn!(run = %run_id, error = %e.message, "could not record the sync result");
+            }
+        }
         Ok(outcome)
     }
 }

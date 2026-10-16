@@ -125,6 +125,45 @@ pub struct ImportRun {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Ergebnis von `merge_user_references`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserMergeStats {
+    /// Umgehängte Verweise (Zeilen).
+    pub moved: u64,
+    /// Zeilen, die beim Ziel-User schon gleichwertig vorhanden waren (Mitgliedschaft, Abo, Reaktion)
+    /// und deshalb entfielen.
+    pub dropped: u64,
+    /// Texte, in denen `@alt` durch `@neu` ersetzt wurde.
+    pub mentions: u64,
+}
+
+/// Einrichtung des regelmäßigen Abgleichs (ohne Token; der liegt separat verschlüsselt).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportSyncRow {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    /// `off`, `hourly`, `every6h`, `daily`.
+    pub interval: String,
+    /// Minuten seit 00:00 UTC (nur `daily`).
+    pub daily_at_minute: i32,
+    pub paused: bool,
+    pub teams: Vec<String>,
+    pub projects: Vec<String>,
+    pub target_teams: Value,
+    pub user_mapping: Value,
+    pub key_mapping: Value,
+    pub created_by: Option<Uuid>,
+    pub last_run_id: Option<Uuid>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    pub last_removal_check_at: Option<DateTime<Utc>>,
+    pub next_run_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Neuer Importlauf.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewImportRun {
@@ -521,6 +560,133 @@ pub trait ImportRepo: Send {
         value: &str,
     ) -> AppResult<()> {
         let _ = (table, column, id, value);
+        nyi()
+    }
+
+    /// Die Abgleich-Einrichtung dieses Workspace.
+    async fn get_import_sync(&mut self) -> AppResult<Option<ImportSyncRow>> {
+        nyi()
+    }
+
+    /// Legt die Einrichtung an oder ersetzt sie (je Workspace eine); `token` (verschlüsselt)
+    /// nur, wenn er sich ändert.
+    async fn put_import_sync(
+        &mut self,
+        row: &ImportSyncRow,
+        token: Option<&[u8]>,
+    ) -> AppResult<()> {
+        let _ = (row, token);
+        nyi()
+    }
+
+    /// Verschlüsseltes Token der Einrichtung.
+    async fn get_import_sync_token(&mut self, sync_id: Uuid) -> AppResult<Option<Vec<u8>>> {
+        let _ = sync_id;
+        nyi()
+    }
+
+    async fn delete_import_sync(&mut self, sync_id: Uuid) -> AppResult<bool> {
+        let _ = sync_id;
+        nyi()
+    }
+
+    /// Fällige Einrichtungen aller Workspaces (`next_run_at <= now`, nicht pausiert); nur mit
+    /// System-Transaktion.
+    async fn due_import_syncs(&mut self, now: DateTime<Utc>) -> AppResult<Vec<ImportSyncRow>> {
+        let _ = now;
+        nyi()
+    }
+
+    /// Aktiver Lauf (scanning/planned/running/paused) dieser Einrichtung.
+    async fn active_sync_run(&mut self, sync_id: Uuid) -> AppResult<Option<Uuid>> {
+        let _ = sync_id;
+        nyi()
+    }
+
+    /// Verbucht einen gestarteten Lauf (letzter Lauf, nächster Termin).
+    async fn sync_mark_started(
+        &mut self,
+        sync_id: Uuid,
+        run_id: Uuid,
+        started: DateTime<Utc>,
+        next_run_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
+        let _ = (sync_id, run_id, started, next_run_at);
+        nyi()
+    }
+
+    /// Verbucht das Ergebnis eines Laufs.
+    async fn sync_mark_result(
+        &mut self,
+        sync_id: Uuid,
+        run_id: Option<Uuid>,
+        status: &str,
+        error: Option<&str>,
+        success_started_at: Option<DateTime<Utc>>,
+        removal_checked_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
+        let _ = (
+            sync_id,
+            run_id,
+            status,
+            error,
+            success_started_at,
+            removal_checked_at,
+        );
+        nyi()
+    }
+
+    /// Hängt **alle** Verweise auf den Platzhalter `from` auf den User `to` um (Fremdschlüssel werden
+    /// aus dem Katalog ermittelt; Zeilen, die beim Ziel schon gleichwertig vorhanden sind, entfallen),
+    /// schreibt `@from_handle` in Texten zu `@to_handle` um, führt die Team-Rollen zusammen
+    /// (Eigentümer-Flag = ODER), setzt `import_mapping` (User) auf `to` und löscht den Platzhalter.
+    /// Alles in der Transaktion des Aufrufers; ein übersehener Verweis lässt das Löschen scheitern.
+    async fn merge_user_references(
+        &mut self,
+        from: Uuid,
+        to: Uuid,
+        from_handle: &str,
+        to_handle: &str,
+    ) -> AppResult<UserMergeStats> {
+        let _ = (from, to, from_handle, to_handle);
+        nyi()
+    }
+
+    /// Hängt `import_mapping`-Einträge eines Typs von einem Ziel auf ein anderes um (nach dem
+    /// Zusammenführen von Objekten).
+    async fn repoint_mappings(
+        &mut self,
+        source_type: &str,
+        from: Uuid,
+        to: Uuid,
+    ) -> AppResult<u64> {
+        let _ = (source_type, from, to);
+        nyi()
+    }
+
+    /// Team einer Issue-Zeile.
+    async fn row_team_id(&mut self, table: ImportTable, id: Uuid) -> AppResult<Option<Uuid>> {
+        let _ = (table, id);
+        nyi()
+    }
+
+    /// Archiviert eine Zeile (setzt `archived_at`, wenn leer; ohne `updated_at` zu ändern).
+    /// `true`, wenn sie vorher nicht archiviert war.
+    async fn archive_row(
+        &mut self,
+        table: ImportTable,
+        id: Uuid,
+        at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let _ = (table, id, at);
+        nyi()
+    }
+
+    /// Import-Labels `<Name> (Linear)` (Ergebnis früherer Namenskonflikte): (id, Basisname,
+    /// Team, Gruppe). Nur Zeilen, die über `import_mapping` aus dem Import stammen.
+    async fn list_linear_suffixed_labels(
+        &mut self,
+    ) -> AppResult<Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)>> {
         nyi()
     }
 

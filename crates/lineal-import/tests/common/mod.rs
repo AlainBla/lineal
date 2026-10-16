@@ -80,6 +80,11 @@ impl Env {
         }
     }
 
+    /// Aktuelle Zeit der Testuhr.
+    pub fn clock_now(&self) -> DateTime<Utc> {
+        self.clock.now()
+    }
+
     pub fn alice_ctx(&self) -> RequestCtx {
         self.ctx(self.alice, UserRole::Owner)
     }

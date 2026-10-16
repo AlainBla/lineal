@@ -182,6 +182,21 @@ pub fn row(pairs: Vec<(&str, Value)>) -> Map<String, Value> {
     pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
 }
 
+/// Enthält ein Textfeld (`description`, `body`, `content`) etwas, das wie ein Tag aussieht
+/// (`<token>`, `</x>`, `<!--`)? Nur solche Objekte kann der frühere Sanitizer verändert haben.
+pub fn has_markup_like_text(v: &Value) -> bool {
+    ["description", "body", "content"].iter().any(|k| {
+        v[*k].as_str().is_some_and(|s| {
+            s.match_indices('<').any(|(i, _)| {
+                s[i + 1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+            })
+        })
+    })
+}
+
 /// Zeitpunkt als JSON-String (oder null).
 pub fn jts(t: Option<DateTime<Utc>>) -> Value {
     t.map_or(Value::Null, |t| json!(t.to_rfc3339()))

@@ -632,6 +632,33 @@ type ImportIssue {
 }
 
 """
+Ergebnis von `importMergeLinearLabels`.
+"""
+type ImportLabelMerge {
+	merged: Int!
+	skipped: [String!]!
+}
+
+"""
+Ergebnis von `importPlaceholderMerge`.
+"""
+type ImportPlaceholderMerge {
+	success: Boolean!
+	"""
+	Umgehängte Verweise.
+	"""
+	moved: Int!
+	"""
+	Beim Ziel schon vorhandene gleichwertige Zeilen (entfallen).
+	"""
+	dropped: Int!
+	"""
+	Texte mit umgeschriebener `@`-Erwähnung.
+	"""
+	mentions: Int!
+}
+
+"""
 Bericht eines Laufs.
 """
 type ImportReport {
@@ -727,6 +754,66 @@ input ImportStartInput {
 	werden geprüft).
 	"""
 	targetTeams: JSON
+}
+
+"""
+Einrichtung des regelmäßigen Abgleichs (`ImportSync`). Der Linear-API-Schlüssel wird nie
+ausgegeben; `hasKey` zeigt nur, dass einer gespeichert ist.
+"""
+type ImportSync {
+	id: String!
+	"""
+	`off`, `hourly`, `every6h`, `daily`.
+	"""
+	interval: String!
+	"""
+	Minuten seit 00:00 UTC (nur `daily`).
+	"""
+	dailyAtMinute: Int!
+	paused: Boolean!
+	teams: [String!]!
+	projects: [String!]!
+	targetTeams: JSON!
+	userMapping: JSON!
+	keyMapping: JSON!
+	hasKey: Boolean!
+	lastRunId: String
+	lastRunAt: String
+	lastSuccessAt: String
+	"""
+	`running`, `completed`, `failed`.
+	"""
+	lastStatus: String
+	lastError: String
+	nextRunAt: String
+	createdAt: String!
+	updatedAt: String!
+}
+
+"""
+Eingabe `importSyncSave`. Der Schlüssel ist `secret` (nie in Fehlern oder Logs).
+"""
+input ImportSyncInput {
+	"""
+	`off`, `hourly`, `every6h`, `daily`.
+	"""
+	interval: String!
+	"""
+	Minuten seit 00:00 UTC (nur `daily`).
+	"""
+	dailyAtMinute: Int
+	"""
+	Linear-Team-Keys; leer = Teams des letzten abgeschlossenen Imports.
+	"""
+	teams: [String!]! = []
+	projects: [String!]! = []
+	targetTeams: JSON
+	userMapping: JSON
+	keyMapping: JSON
+	"""
+	Pflicht beim Einrichten; später nur zum Ersetzen.
+	"""
+	token: String
 }
 
 type Initiative {
@@ -1593,6 +1680,32 @@ type Mutation {
 	Lauf starten (asynchron als Job). Key-Konflikte mit bestehenden Teams brechen vorher ab.
 	"""
 	importStart(input: ImportStartInput!): ImportRun!
+	"""
+	Abgleich einrichten oder ändern (Intervall, Teams/Projekte, Schlüssel).
+	"""
+	importSyncSave(input: ImportSyncInput!): ImportSync!
+	"""
+	Abgleich pausieren (`true`) oder fortsetzen (`false`).
+	"""
+	importSyncPause(paused: Boolean!): ImportSync!
+	"""
+	Abgleich samt gespeichertem Schlüssel löschen.
+	"""
+	importSyncDelete: Boolean!
+	"""
+	„Jetzt abgleichen“. `reloadContent`: Texte mit Tag-artigem Inhalt neu aus Linear holen
+	(nur lokal unveränderte Objekte); `mergeLinearLabels`: frühere `Name (Linear)`-Duplikate
+	zusammenführen.
+	"""
+	importSyncRun(reloadContent: Boolean, mergeLinearLabels: Boolean): ImportRun!
+	"""
+	Einmalige Aufräumfunktion: führt frühere `Name (Linear)`-Duplikat-Labels zusammen.
+	"""
+	importMergeLinearLabels: ImportLabelMerge!
+	"""
+	Ordnet einen Import-Platzhalter einem bestehenden aktiven User zu (nur Owner/Admin).
+	"""
+	importPlaceholderMerge(placeholderId: String!, targetUserId: String!): ImportPlaceholderMerge!
 	importPause(runId: String!): ImportRun!
 	importResume(runId: String!): ImportRun!
 	importCancel(runId: String!): ImportRun!
@@ -2296,6 +2409,10 @@ type Query {
 	Alle Importläufe, neueste zuerst (nur Admins).
 	"""
 	importRuns(first: Int): [ImportRun!]!
+	"""
+	Die Einrichtung des regelmäßigen Abgleichs (nur Admins); `null`, wenn keine existiert.
+	"""
+	importSync: ImportSync
 	"""
 	Bericht eines Laufs (übernommen, übersprungen, Warnungen, Konflikte).
 	"""

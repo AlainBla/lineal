@@ -34,7 +34,12 @@ pub async fn fail_run(app: &App, org: OrgId, run_id: Uuid, message: &str) -> App
         )
         .await?;
     tx.imports().set_import_lease(run_id, None).await?;
-    tx.commit().await
+    tx.commit().await?;
+    // Abgleich: Fehler verbuchen und den Einrichtenden benachrichtigen.
+    if let Err(e) = app.import_sync_run_finished(org, run_id).await {
+        tracing::warn!(run = %run_id, error = %e.message, "could not record the sync result");
+    }
+    Ok(())
 }
 
 /// Führt einen reservierten Lauf aus (`scanning` -> Scan, `running` -> Import).
@@ -77,6 +82,10 @@ pub async fn run_claimed(app: &App, run: &ImportRun) -> AppResult<()> {
 /// Ein Takt des Runners: abgelaufene Zugangsdaten löschen, einen Lauf reservieren und ausführen.
 /// Liefert `true`, wenn ein Lauf bearbeitet wurde.
 pub async fn tick(app: &App, now: DateTime<Utc>) -> AppResult<bool> {
+    // Fällige Abgleiche legen Delta-Läufe an; der Runner nimmt sie gleich anschließend auf.
+    if let Err(e) = app.import_sync_tick(now).await {
+        tracing::warn!(error = %e.message, "scheduling due syncs failed");
+    }
     let mut tx = app.store.begin_system().await?;
     let purged = tx.imports().delete_expired_import_credentials(now).await?;
     if purged > 0 {

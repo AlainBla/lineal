@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::ImportRepo;
 use lineal_app::ports::repos::import::{
-    ImportCounter, ImportRun, ImportRunUpdate, ImportTable, MappingRow, NewImportRun, NewMapping,
-    ReportEntry,
+    ImportCounter, ImportRun, ImportRunUpdate, ImportSyncRow, ImportTable, MappingRow,
+    NewImportRun, NewMapping, ReportEntry, UserMergeStats,
 };
 use lineal_app::{AppError, AppResult};
 use serde_json::{Map, Value, json};
@@ -120,6 +120,68 @@ fn prepare_row(org: Uuid, row: &Value, with_org: bool) -> AppResult<(Vec<String>
 }
 
 /// Eine vom Schema abgelehnte Zeile (Eindeutigkeit, Referenz, Check) → `conflict`; Details im Log.
+const SYNC_COLS: &str = "id, organization_id, interval, daily_at_minute, paused, teams, projects, \
+    target_teams, user_mapping, key_mapping, created_by, last_run_id, last_run_at, last_success_at, \
+    last_status, last_error, last_removal_check_at, next_run_at, created_at, updated_at";
+
+#[derive(sqlx::FromRow)]
+struct SyncRowDb {
+    id: Uuid,
+    organization_id: Uuid,
+    interval: String,
+    daily_at_minute: i32,
+    paused: bool,
+    teams: Vec<String>,
+    projects: Vec<String>,
+    target_teams: Value,
+    user_mapping: Value,
+    key_mapping: Value,
+    created_by: Option<Uuid>,
+    last_run_id: Option<Uuid>,
+    last_run_at: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    last_status: Option<String>,
+    last_error: Option<String>,
+    last_removal_check_at: Option<DateTime<Utc>>,
+    next_run_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<SyncRowDb> for ImportSyncRow {
+    fn from(r: SyncRowDb) -> Self {
+        Self {
+            id: r.id,
+            org_id: r.organization_id,
+            interval: r.interval,
+            daily_at_minute: r.daily_at_minute,
+            paused: r.paused,
+            teams: r.teams,
+            projects: r.projects,
+            target_teams: r.target_teams,
+            user_mapping: r.user_mapping,
+            key_mapping: r.key_mapping,
+            created_by: r.created_by,
+            last_run_id: r.last_run_id,
+            last_run_at: r.last_run_at,
+            last_success_at: r.last_success_at,
+            last_status: r.last_status,
+            last_error: r.last_error,
+            last_removal_check_at: r.last_removal_check_at,
+            next_run_at: r.next_run_at,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+/// Unique- oder Check-Verletzung (23505/23514): die Zeile würde beim Ziel doppelt vorkommen.
+fn is_constraint_clash(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|c| c == "23505" || c == "23514")
+}
+
 fn row_rejected(e: &sqlx::Error) -> AppError {
     // Der Constraint-Name ist kein Nutzerinhalt und steht im Bericht; die Details nur im Debug-Log.
     tracing::debug!(error = %e, "import row rejected by the database");
@@ -926,6 +988,415 @@ impl ImportRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn get_import_sync(&mut self) -> AppResult<Option<ImportSyncRow>> {
+        let row: Option<SyncRowDb> = sqlx::query_as(&format!(
+            "SELECT {SYNC_COLS} FROM import_sync WHERE organization_id = $1"
+        ))
+        .bind(self.org.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn put_import_sync(&mut self, r: &ImportSyncRow, token: Option<&[u8]>) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO import_sync (id, organization_id, interval, daily_at_minute, paused, teams, projects, \
+               target_teams, user_mapping, key_mapping, created_by, next_run_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13) \
+             ON CONFLICT (organization_id) DO UPDATE SET interval = $3, daily_at_minute = $4, paused = $5, \
+               teams = $6, projects = $7, target_teams = $8, user_mapping = $9, key_mapping = $10, \
+               next_run_at = $12, updated_at = $13, version = import_sync.version + 1",
+        )
+        .bind(r.id)
+        .bind(self.org.0)
+        .bind(&r.interval)
+        .bind(r.daily_at_minute)
+        .bind(r.paused)
+        .bind(&r.teams)
+        .bind(&r.projects)
+        .bind(&r.target_teams)
+        .bind(&r.user_mapping)
+        .bind(&r.key_mapping)
+        .bind(r.created_by)
+        .bind(r.next_run_at)
+        .bind(r.updated_at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if let Some(t) = token {
+            sqlx::query(
+                "INSERT INTO import_sync_credential (sync_id, organization_id, encrypted_token) \
+                 SELECT id, organization_id, $2 FROM import_sync WHERE organization_id = $1 \
+                 ON CONFLICT (sync_id) DO UPDATE SET encrypted_token = $2, updated_at = now()",
+            )
+            .bind(self.org.0)
+            .bind(t)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        }
+        Ok(())
+    }
+
+    async fn get_import_sync_token(&mut self, sync_id: Uuid) -> AppResult<Option<Vec<u8>>> {
+        sqlx::query_scalar(
+            "SELECT encrypted_token FROM import_sync_credential WHERE organization_id = $1 AND sync_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(sync_id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn delete_import_sync(&mut self, sync_id: Uuid) -> AppResult<bool> {
+        let r = sqlx::query("DELETE FROM import_sync WHERE organization_id = $1 AND id = $2")
+            .bind(self.org.0)
+            .bind(sync_id)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    async fn due_import_syncs(&mut self, now: DateTime<Utc>) -> AppResult<Vec<ImportSyncRow>> {
+        let rows: Vec<SyncRowDb> = sqlx::query_as(&format!(
+            "SELECT {SYNC_COLS} FROM import_sync WHERE NOT paused AND interval <> 'off' \
+             AND next_run_at IS NOT NULL AND next_run_at <= $1 ORDER BY next_run_at LIMIT 50"
+        ))
+        .bind(now)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn active_sync_run(&mut self, sync_id: Uuid) -> AppResult<Option<Uuid>> {
+        sqlx::query_scalar(
+            "SELECT id FROM import_run WHERE organization_id = $1 AND options->>'syncId' = $2 \
+             AND status IN ('scanning', 'planned', 'running', 'paused') AND archived_at IS NULL LIMIT 1",
+        )
+        .bind(self.org.0)
+        .bind(sync_id.to_string())
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn sync_mark_started(
+        &mut self,
+        sync_id: Uuid,
+        run_id: Uuid,
+        started: DateTime<Utc>,
+        next_run_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE import_sync SET last_run_id = $3, last_run_at = $4, last_status = 'running', \
+               last_error = NULL, next_run_at = $5, updated_at = $4, version = version + 1 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(sync_id)
+        .bind(run_id)
+        .bind(started)
+        .bind(next_run_at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn sync_mark_result(
+        &mut self,
+        sync_id: Uuid,
+        run_id: Option<Uuid>,
+        status: &str,
+        error: Option<&str>,
+        success_started_at: Option<DateTime<Utc>>,
+        removal_checked_at: Option<DateTime<Utc>>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE import_sync SET last_status = $4, last_error = $5, \
+               last_success_at = COALESCE($6, last_success_at), \
+               last_removal_check_at = COALESCE($7, last_removal_check_at), \
+               updated_at = now(), version = version + 1 \
+             WHERE organization_id = $1 AND id = $2 AND ($3::uuid IS NULL OR last_run_id = $3)",
+        )
+        .bind(self.org.0)
+        .bind(sync_id)
+        .bind(run_id)
+        .bind(status)
+        .bind(error)
+        .bind(success_started_at)
+        .bind(removal_checked_at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn merge_user_references(
+        &mut self,
+        from: Uuid,
+        to: Uuid,
+        from_handle: &str,
+        to_handle: &str,
+    ) -> AppResult<UserMergeStats> {
+        let org = self.org.0;
+        let mut stats = UserMergeStats::default();
+        // Rollen: Eigentümer-Flag der Mitgliedschaften gilt auch beim Ziel (ODER).
+        sqlx::query(
+            "UPDATE team_membership t SET owner = true, version = t.version + 1 \
+             FROM team_membership p \
+             WHERE t.organization_id = $1 AND p.organization_id = $1 AND p.user_id = $2 AND t.user_id = $3 \
+               AND t.team_id = p.team_id AND t.archived_at IS NULL AND p.archived_at IS NULL \
+               AND p.owner AND NOT t.owner",
+        )
+        .bind(org)
+        .bind(from)
+        .bind(to)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        // Alle Fremdschlüssel auf "user"(id) aus dem Katalog (Spalte, ggf. zugehörige Mandantenspalte).
+        let refs: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT c.conrelid::regclass::text, a.attname::text, o.attname::text \
+             FROM pg_constraint c \
+             JOIN LATERAL unnest(c.conkey, c.confkey) AS k(col, fcol) ON true \
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.col \
+             JOIN pg_attribute fa ON fa.attrelid = c.confrelid AND fa.attnum = k.fcol AND fa.attname = 'id' \
+             LEFT JOIN LATERAL ( \
+               SELECT oa.attname FROM unnest(c.conkey, c.confkey) AS k2(col, fcol) \
+               JOIN pg_attribute oa ON oa.attrelid = c.conrelid AND oa.attnum = k2.col \
+               JOIN pg_attribute ofa ON ofa.attrelid = c.confrelid AND ofa.attnum = k2.fcol \
+                 AND ofa.attname = 'organization_id' LIMIT 1) o ON true \
+             WHERE c.contype = 'f' AND c.confrelid = '\"user\"'::regclass \
+             ORDER BY 1, 2",
+        )
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        for (table, col, org_col) in refs {
+            let ident_ok = |s: &str| {
+                s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '"' | '.'))
+            };
+            if !ident_ok(&table)
+                || !ident_ok(&col)
+                || org_col.as_deref().is_some_and(|c| !ident_ok(c))
+            {
+                return Err(AppError::internal(
+                    "unexpected identifier in the schema catalog",
+                ));
+            }
+            let scope = match &org_col {
+                Some(c) => format!(" AND \"{c}\" = $3"),
+                None => String::new(),
+            };
+            let bulk = format!("UPDATE {table} SET \"{col}\" = $2 WHERE \"{col}\" = $1{scope}");
+            let mut sp = sqlx::Acquire::begin(&mut *self.tx).await.map_err(db_err)?;
+            let mut q = sqlx::query(&bulk).bind(from).bind(to);
+            if org_col.is_some() {
+                q = q.bind(org);
+            }
+            match q.execute(&mut *sp).await {
+                Ok(r) => {
+                    sp.commit().await.map_err(db_err)?;
+                    stats.moved += r.rows_affected();
+                }
+                Err(e) if is_constraint_clash(&e) => {
+                    sp.rollback().await.map_err(db_err)?;
+                    // Zeilenweise: kollidierende Zeilen (beim Ziel gleichwertig vorhanden) entfallen.
+                    let sel = format!(
+                        "SELECT ctid::text FROM {table} WHERE \"{col}\" = $1{}",
+                        scope.replace("$3", "$2")
+                    );
+                    let mut q = sqlx::query_scalar::<_, String>(&sel).bind(from);
+                    if org_col.is_some() {
+                        q = q.bind(org);
+                    }
+                    let ctids = q.fetch_all(&mut *self.tx).await.map_err(db_err)?;
+                    for ctid in ctids {
+                        let mut sp = sqlx::Acquire::begin(&mut *self.tx).await.map_err(db_err)?;
+                        let upd =
+                            format!("UPDATE {table} SET \"{col}\" = $2 WHERE ctid = $1::text::tid");
+                        match sqlx::query(&upd)
+                            .bind(&ctid)
+                            .bind(to)
+                            .execute(&mut *sp)
+                            .await
+                        {
+                            Ok(r) => {
+                                sp.commit().await.map_err(db_err)?;
+                                stats.moved += r.rows_affected();
+                            }
+                            Err(e) if is_constraint_clash(&e) => {
+                                sp.rollback().await.map_err(db_err)?;
+                                let del = format!("DELETE FROM {table} WHERE ctid = $1::text::tid");
+                                let r = sqlx::query(&del)
+                                    .bind(&ctid)
+                                    .execute(&mut *self.tx)
+                                    .await
+                                    .map_err(db_err)?;
+                                stats.dropped += r.rows_affected();
+                            }
+                            Err(e) => return Err(db_err(e)),
+                        }
+                    }
+                }
+                Err(e) => return Err(db_err(e)),
+            }
+        }
+        // Arrays von User-IDs (ohne Fremdschlüssel).
+        for (table, col) in [
+            ("issue_history", "notified_user_ids"),
+            ("document_content_history", "actor_ids"),
+            ("triage_responsibility", "manual_user_ids"),
+        ] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET {col} = array_replace({col}, $1, $2) \
+                 WHERE organization_id = $3 AND {col} @> ARRAY[$1]::uuid[]"
+            ))
+            .bind(from)
+            .bind(to)
+            .bind(org)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        }
+        // Erwähnungen im Text: `@alt` -> `@neu` (Namensgrenzen, ohne Übergriff auf längere Namen).
+        let esc = from_handle.replace('.', "\\.");
+        let pattern = format!("(^|[^a-z0-9._@-])@{esc}(?![a-z0-9_-]|\\.[a-z0-9_-])");
+        let replacement = format!("\\1@{to_handle}");
+        for (table, col) in [
+            ("issue", "description"),
+            ("comment", "body"),
+            ("document", "content"),
+            ("document_content", "markdown"),
+            ("document_content_history", "markdown"),
+            ("project", "content"),
+            ("project", "description"),
+            ("initiative", "content"),
+            ("initiative", "description"),
+            ("project_update", "body"),
+            ("initiative_update", "body"),
+            ("project_milestone", "description"),
+        ] {
+            // Der CRDT-Zustand eines Dokuments wird verworfen und aus dem Markdown neu aufgebaut.
+            let extra = if table == "document_content" {
+                ", content_state = NULL"
+            } else {
+                ""
+            };
+            let r = sqlx::query(&format!(
+                "UPDATE {table} SET {col} = regexp_replace({col}, $1, $2, 'gi'){extra} \
+                 WHERE organization_id = $3 AND {col} ~* $1"
+            ))
+            .bind(&pattern)
+            .bind(&replacement)
+            .bind(org)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            stats.mentions += r.rows_affected();
+        }
+        sqlx::query(
+            "UPDATE import_mapping SET target_id = $2, updated_at = now() \
+             WHERE organization_id = $3 AND source_type = 'User' AND target_id = $1",
+        )
+        .bind(from)
+        .bind(to)
+        .bind(org)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let del = sqlx::query(
+            "DELETE FROM \"user\" WHERE id = $1 AND organization_id = $2 AND status = 'imported'",
+        )
+        .bind(from)
+        .bind(org)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "placeholder user is still referenced");
+            AppError::conflict("the placeholder is still referenced and cannot be removed")
+        })?;
+        if del.rows_affected() != 1 {
+            return Err(AppError::not_found("Placeholder user not found."));
+        }
+        Ok(stats)
+    }
+
+    async fn repoint_mappings(
+        &mut self,
+        source_type: &str,
+        from: Uuid,
+        to: Uuid,
+    ) -> AppResult<u64> {
+        let r = sqlx::query(
+            "UPDATE import_mapping SET target_id = $2, updated_at = now() \
+             WHERE organization_id = $3 AND source_type = $4 AND target_id = $1",
+        )
+        .bind(from)
+        .bind(to)
+        .bind(self.org.0)
+        .bind(source_type)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(r.rows_affected())
+    }
+
+    async fn row_team_id(&mut self, table: ImportTable, id: Uuid) -> AppResult<Option<Uuid>> {
+        if table != ImportTable::Issue {
+            return Ok(None);
+        }
+        sqlx::query_scalar("SELECT team_id FROM issue WHERE organization_id = $1 AND id = $2")
+            .bind(self.org.0)
+            .bind(id)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)
+    }
+
+    async fn archive_row(
+        &mut self,
+        table: ImportTable,
+        id: Uuid,
+        at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let r = sqlx::query(&format!(
+            "UPDATE {} SET archived_at = $3, version = version + 1 \
+             WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL",
+            table.name()
+        ))
+        .bind(self.org.0)
+        .bind(id)
+        .bind(at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    async fn list_linear_suffixed_labels(
+        &mut self,
+    ) -> AppResult<Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)>> {
+        let rows: Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT l.id, left(l.name, char_length(l.name) - 9), l.team_id, l.parent_id FROM issue_label l \
+             WHERE l.organization_id = $1 AND l.name LIKE '% (Linear)' AND NOT l.is_group \
+               AND EXISTS (SELECT 1 FROM import_mapping m WHERE m.organization_id = l.organization_id \
+                           AND m.source_type = 'IssueLabel' AND m.target_id = l.id) \
+             ORDER BY l.name",
+        )
+        .bind(self.org.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows)
     }
 
     async fn find_label_by_name_at(

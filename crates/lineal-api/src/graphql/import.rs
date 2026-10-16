@@ -11,8 +11,9 @@ use async_graphql::types::Json;
 use async_graphql::{Context, InputObject, Object, SimpleObject};
 use chrono::{DateTime, SecondsFormat, Utc};
 use lineal_app::AppError;
-use lineal_app::ports::repos::import::{ImportRun, ReportEntry};
+use lineal_app::ports::repos::import::{ImportRun, ImportSyncRow, ReportEntry};
 use lineal_app::usecases::import::{ImportScanInput, ImportStartInput};
+use lineal_app::usecases::import_sync::{ImportSyncInput, SyncRunOptions};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -59,6 +60,8 @@ impl From<ImportRun> for ImportRunGql {
         let mut stats = r.stats.clone();
         if let Some(o) = stats.as_object_mut() {
             o.remove("scan");
+            // Interner Zwischenstand des Importers (Elternkommentare), kein Teil der API.
+            o.remove("deferredParents");
         }
         Self {
             id: r.id.to_string(),
@@ -150,6 +153,101 @@ pub struct ImportStartInputGql {
     /// wird in das Lineal-Team importiert statt ein neues anzulegen (Sichtbarkeit und Schreibrecht
     /// werden geprüft).
     pub target_teams: Option<Json<Value>>,
+}
+
+/// Einrichtung des regelmäßigen Abgleichs (`ImportSync`). Der Linear-API-Schlüssel wird nie
+/// ausgegeben; `hasKey` zeigt nur, dass einer gespeichert ist.
+#[derive(SimpleObject)]
+#[graphql(name = "ImportSync")]
+pub struct ImportSyncGql {
+    pub id: String,
+    /// `off`, `hourly`, `every6h`, `daily`.
+    pub interval: String,
+    /// Minuten seit 00:00 UTC (nur `daily`).
+    pub daily_at_minute: i32,
+    pub paused: bool,
+    pub teams: Vec<String>,
+    pub projects: Vec<String>,
+    pub target_teams: Json<Value>,
+    pub user_mapping: Json<Value>,
+    pub key_mapping: Json<Value>,
+    pub has_key: bool,
+    pub last_run_id: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_success_at: Option<String>,
+    /// `running`, `completed`, `failed`.
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    pub next_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<ImportSyncRow> for ImportSyncGql {
+    fn from(r: ImportSyncRow) -> Self {
+        Self {
+            id: r.id.to_string(),
+            interval: r.interval,
+            daily_at_minute: r.daily_at_minute,
+            paused: r.paused,
+            teams: r.teams,
+            projects: r.projects,
+            target_teams: Json(r.target_teams),
+            user_mapping: Json(r.user_mapping),
+            key_mapping: Json(r.key_mapping),
+            has_key: true,
+            last_run_id: r.last_run_id.map(|i| i.to_string()),
+            last_run_at: r.last_run_at.map(ts),
+            last_success_at: r.last_success_at.map(ts),
+            last_status: r.last_status,
+            last_error: r.last_error,
+            next_run_at: r.next_run_at.map(ts),
+            created_at: ts(r.created_at),
+            updated_at: ts(r.updated_at),
+        }
+    }
+}
+
+/// Eingabe `importSyncSave`. Der Schlüssel ist `secret` (nie in Fehlern oder Logs).
+#[derive(InputObject)]
+#[graphql(name = "ImportSyncInput")]
+pub struct ImportSyncInputGql {
+    /// `off`, `hourly`, `every6h`, `daily`.
+    pub interval: String,
+    /// Minuten seit 00:00 UTC (nur `daily`).
+    pub daily_at_minute: Option<i32>,
+    /// Linear-Team-Keys; leer = Teams des letzten abgeschlossenen Imports.
+    #[graphql(default)]
+    pub teams: Vec<String>,
+    #[graphql(default)]
+    pub projects: Vec<String>,
+    pub target_teams: Option<Json<Value>>,
+    pub user_mapping: Option<Json<Value>>,
+    pub key_mapping: Option<Json<Value>>,
+    /// Pflicht beim Einrichten; später nur zum Ersetzen.
+    #[graphql(secret)]
+    pub token: Option<String>,
+}
+
+/// Ergebnis von `importMergeLinearLabels`.
+#[derive(SimpleObject)]
+#[graphql(name = "ImportLabelMerge")]
+pub struct ImportLabelMergeGql {
+    pub merged: i32,
+    pub skipped: Vec<String>,
+}
+
+/// Ergebnis von `importPlaceholderMerge`.
+#[derive(SimpleObject)]
+#[graphql(name = "ImportPlaceholderMerge")]
+pub struct ImportPlaceholderMergeGql {
+    pub success: bool,
+    /// Umgehängte Verweise.
+    pub moved: i32,
+    /// Beim Ziel schon vorhandene gleichwertige Zeilen (entfallen).
+    pub dropped: i32,
+    /// Texte mit umgeschriebener `@`-Erwähnung.
+    pub mentions: i32,
 }
 
 fn target_teams(v: Option<Json<Value>>) -> async_graphql::Result<BTreeMap<String, Uuid>> {
@@ -271,6 +369,15 @@ impl ImportQuery {
         Ok(runs.into_iter().map(Into::into).collect())
     }
 
+    /// Die Einrichtung des regelmäßigen Abgleichs (nur Admins); `null`, wenn keine existiert.
+    async fn import_sync(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<ImportSyncGql>> {
+        let row = app(ctx)?
+            .import_sync_get(request_ctx(ctx)?)
+            .await
+            .map_err(gql_err)?;
+        Ok(row.map(Into::into))
+    }
+
     /// Bericht eines Laufs (übernommen, übersprungen, Warnungen, Konflikte).
     async fn import_report(
         &self,
@@ -356,6 +463,114 @@ impl ImportMutation {
             .await
             .map_err(gql_err)?;
         Ok(run.into())
+    }
+
+    /// Abgleich einrichten oder ändern (Intervall, Teams/Projekte, Schlüssel).
+    async fn import_sync_save(
+        &self,
+        ctx: &Context<'_>,
+        input: ImportSyncInputGql,
+    ) -> async_graphql::Result<ImportSyncGql> {
+        let row = app(ctx)?
+            .import_sync_save(
+                request_ctx(ctx)?,
+                ImportSyncInput {
+                    interval: input.interval,
+                    daily_at_minute: input.daily_at_minute,
+                    teams: input.teams,
+                    projects: input.projects,
+                    target_teams: target_teams(input.target_teams)?,
+                    user_mapping: user_mapping(input.user_mapping)?,
+                    key_mapping: key_mapping(input.key_mapping)?,
+                    token: input.token,
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(row.into())
+    }
+
+    /// Abgleich pausieren (`true`) oder fortsetzen (`false`).
+    async fn import_sync_pause(
+        &self,
+        ctx: &Context<'_>,
+        paused: bool,
+    ) -> async_graphql::Result<ImportSyncGql> {
+        let row = app(ctx)?
+            .import_sync_set_paused(request_ctx(ctx)?, paused)
+            .await
+            .map_err(gql_err)?;
+        Ok(row.into())
+    }
+
+    /// Abgleich samt gespeichertem Schlüssel löschen.
+    async fn import_sync_delete(&self, ctx: &Context<'_>) -> async_graphql::Result<bool> {
+        app(ctx)?
+            .import_sync_delete(request_ctx(ctx)?)
+            .await
+            .map_err(gql_err)?;
+        Ok(true)
+    }
+
+    /// „Jetzt abgleichen“. `reloadContent`: Texte mit Tag-artigem Inhalt neu aus Linear holen
+    /// (nur lokal unveränderte Objekte); `mergeLinearLabels`: frühere `Name (Linear)`-Duplikate
+    /// zusammenführen.
+    async fn import_sync_run(
+        &self,
+        ctx: &Context<'_>,
+        reload_content: Option<bool>,
+        merge_linear_labels: Option<bool>,
+    ) -> async_graphql::Result<ImportRunGql> {
+        let run = app(ctx)?
+            .import_sync_run_now(
+                request_ctx(ctx)?,
+                SyncRunOptions {
+                    reload_content: reload_content.unwrap_or(false),
+                    merge_linear_labels: merge_linear_labels.unwrap_or(false),
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(run.into())
+    }
+
+    /// Einmalige Aufräumfunktion: führt frühere `Name (Linear)`-Duplikat-Labels zusammen.
+    async fn import_merge_linear_labels(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<ImportLabelMergeGql> {
+        let r = app(ctx)?
+            .import_merge_linear_labels(request_ctx(ctx)?)
+            .await
+            .map_err(gql_err)?;
+        Ok(ImportLabelMergeGql {
+            merged: i32::try_from(r.merged).unwrap_or(i32::MAX),
+            skipped: r.skipped,
+        })
+    }
+
+    /// Ordnet einen Import-Platzhalter einem bestehenden aktiven User zu (nur Owner/Admin).
+    async fn import_placeholder_merge(
+        &self,
+        ctx: &Context<'_>,
+        placeholder_id: String,
+        target_user_id: String,
+    ) -> async_graphql::Result<ImportPlaceholderMergeGql> {
+        let r = app(ctx)?
+            .import_placeholder_merge(
+                request_ctx(ctx)?,
+                parse_id(&placeholder_id)?,
+                parse_id(&target_user_id)?,
+            )
+            .await
+            .map_err(gql_err)?;
+        let n = |v: u64| i32::try_from(v).unwrap_or(i32::MAX);
+        Ok(ImportPlaceholderMergeGql {
+            success: true,
+            moved: n(r.moved),
+            dropped: n(r.dropped),
+            mentions: n(r.mentions),
+        })
     }
 
     async fn import_pause(

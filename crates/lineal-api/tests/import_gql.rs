@@ -119,3 +119,50 @@ async fn only_admins_can_use_the_import_api(pool: PgPool) {
     assert!(codes.is_empty());
     assert_eq!(d["importCancel"]["status"], "canceled");
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn sync_and_placeholder_merge_are_admin_only_and_never_echo_the_key(pool: PgPool) {
+    let schema = setup(pool).await;
+    let key = "lin_api_SYNCGQLSECRET0123456789";
+    let save = format!(
+        "mutation {{ importSyncSave(input: {{ interval: \"hourly\", token: \"{key}\" }}) {{ id hasKey }} }}"
+    );
+    let uid = uuid::Uuid::now_v7();
+    let queries = [
+        save.clone(),
+        "{ importSync { id } }".to_owned(),
+        "mutation { importSyncPause(paused: true) { id } }".to_owned(),
+        "mutation { importSyncDelete }".to_owned(),
+        "mutation { importSyncRun(reloadContent: true) { id } }".to_owned(),
+        "mutation { importMergeLinearLabels { merged } }".to_owned(),
+        format!(
+            "mutation {{ importPlaceholderMerge(placeholderId: \"{uid}\", targetUserId: \"{uid}\") {{ success }} }}"
+        ),
+    ];
+    for who in [SeedUser::Bob, SeedUser::Carol] {
+        for q in &queries {
+            let (_, codes, raw) = run(&schema, who, q).await;
+            assert_eq!(codes, ["\"forbidden\""], "{who:?} {q}");
+            assert!(!raw.contains("SYNCGQLSECRET"), "key in error output: {raw}");
+        }
+    }
+    // Owner: noch keine Einrichtung; ohne abgeschlossenen Import ist Einrichten ein Eingabefehler,
+    // und der Schlüssel steht in keiner Antwort.
+    let (d, codes, _) = run(&schema, SeedUser::Alice, "{ importSync { id } }").await;
+    assert!(codes.is_empty());
+    assert!(d["importSync"].is_null());
+    let (d, codes, raw) = run(&schema, SeedUser::Alice, &save).await;
+    assert_eq!(codes, ["\"invalid_request\""], "{raw}");
+    assert!(!d.to_string().contains("SYNCGQLSECRET") && !raw.contains("SYNCGQLSECRET"));
+    // Zusammenführen: unbekannte Benutzer sind not_found.
+    let (_, codes, _) = run(
+        &schema,
+        SeedUser::Alice,
+        &format!(
+            "mutation {{ importPlaceholderMerge(placeholderId: \"{uid}\", targetUserId: \"{}\") {{ success }} }}",
+            uuid::Uuid::now_v7()
+        ),
+    )
+    .await;
+    assert_eq!(codes, ["\"not_found\""]);
+}

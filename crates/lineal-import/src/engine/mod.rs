@@ -14,6 +14,7 @@ mod issues;
 pub mod node;
 mod people;
 mod planning;
+mod reconcile;
 mod views;
 mod workflow;
 
@@ -114,6 +115,13 @@ pub(crate) struct Options {
     pub projects: HashSet<String>,
     /// Linear-Team-Key -> bestehendes Lineal-Team.
     pub target_teams: HashMap<String, Uuid>,
+    /// Sync: Beschreibungen/Kommentare/Dokumente mit Tag-artigem Text neu laden (nur lokal
+    /// unveränderte Objekte).
+    pub reload_content: bool,
+    /// Sync: frühere `Name (Linear)`-Duplikat-Labels zusammenführen.
+    pub merge_labels: bool,
+    /// Sync: in Linear gelöschte/verschobene Objekte archivieren.
+    pub detect_removed: bool,
 }
 
 impl Options {
@@ -156,6 +164,9 @@ impl Options {
             dry_run: v["dryRun"].as_bool().unwrap_or(false),
             updated_after: v["updatedAfter"].as_str().and_then(|s| s.parse().ok()),
             projects: strings("projects").into_iter().collect(),
+            reload_content: v["reloadContent"].as_bool().unwrap_or(false),
+            merge_labels: v["mergeLinearLabels"].as_bool().unwrap_or(false),
+            detect_removed: v["detectRemoved"].as_bool().unwrap_or(false),
             target_teams: v["targetTeams"]
                 .as_object()
                 .map(|m| {
@@ -203,11 +214,12 @@ pub(crate) enum Step {
     InitiativeUpdates,
     UpdateComments,
     Views,
+    Removed,
     Finalize,
 }
 
 impl Step {
-    pub const ALL: [Step; 26] = [
+    pub const ALL: [Step; 27] = [
         Self::Users,
         Self::Teams,
         Self::Memberships,
@@ -233,6 +245,7 @@ impl Step {
         Self::InitiativeUpdates,
         Self::UpdateComments,
         Self::Views,
+        Self::Removed,
         Self::Finalize,
     ];
 
@@ -253,7 +266,7 @@ impl Step {
             | Self::InitiativeUpdates
             | Self::UpdateComments
             | Self::Views => 7,
-            Self::Finalize => 8,
+            Self::Removed | Self::Finalize => 8,
         }
     }
 
@@ -284,6 +297,7 @@ impl Step {
             Self::InitiativeUpdates => "InitiativeUpdates",
             Self::UpdateComments => "UpdateComments",
             Self::Views => "Views",
+            Self::Removed => "Removed",
             Self::Finalize => "Finalize",
         }
     }
@@ -849,7 +863,11 @@ impl Session<'_, '_> {
             }
             Some(m) => {
                 self.cache.insert((ty, src.clone()), m.target_id);
-                if insert_only || m.checksum.as_deref() == Some(checksum.as_str()) {
+                // „Inhalte neu laden“: auch bei gleicher Checksum Texte mit Tag-artigem Inhalt erneut
+                // schreiben (früher gelöschte Platzhalter kommen zurück); die Regel „lokal
+                // geändert -> Lineal-Stand bleibt“ gilt unverändert.
+                let reload = self.opts.reload_content && node::has_markup_like_text(node.0);
+                if insert_only || (m.checksum.as_deref() == Some(checksum.as_str()) && !reload) {
                     self.counters(ty).unchanged += 1;
                     return Ok(Upserted {
                         id: m.target_id,

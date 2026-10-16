@@ -42,6 +42,12 @@ pub struct MockLinear {
 impl MockLinear {
     /// Startet den Server und liefert Handle und Endpunkt-URL (`http://127.0.0.1:<port>/graphql`).
     pub async fn start(source: Arc<FakeSource>) -> (Arc<MockLinear>, String) {
+        Self::start_on(source, "127.0.0.1:0").await
+    }
+
+    /// Wie `start`, auf einer festen Adresse (nur `127.0.0.1`; für das Beispiel-Binary der E2E-Tests).
+    pub async fn start_on(source: Arc<FakeSource>, bind: &str) -> (Arc<MockLinear>, String) {
+        assert!(bind.starts_with("127.0.0.1:"), "the mock only listens locally");
         let mock = Arc::new(MockLinear {
             source,
             faults: Mutex::default(),
@@ -52,7 +58,7 @@ impl MockLinear {
         let app = Router::new()
             .route("/graphql", post(handle))
             .with_state(mock.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (mock, format!("http://{addr}/graphql"))

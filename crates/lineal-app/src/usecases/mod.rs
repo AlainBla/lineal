@@ -10,6 +10,7 @@ pub mod cycle;
 pub mod document;
 pub mod fulltext;
 pub mod import;
+pub mod import_sync;
 pub mod initiative;
 pub mod invitation;
 pub mod issue;
