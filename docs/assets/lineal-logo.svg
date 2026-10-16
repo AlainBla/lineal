@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="160" viewBox="0 0 640 160" role="img" aria-labelledby="t d">
   <title id="t">Lineal</title>
-  <desc id="d">Ein Lineal mit Zentimeter- und Millimeterstrichen, darauf der Schriftzug Lineal.</desc>
+  <desc id="d">A ruler with centimetre and millimetre marks and the word Lineal on it.</desc>
   <defs>
     <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#7c86ea"/>
@@ -15,7 +15,7 @@
     <rect width="600" height="88" rx="12" fill="url(#body)"/>
     <rect width="600" height="30" rx="12" fill="url(#shine)"/>
     <g stroke="#ffffff" stroke-linecap="round" opacity=".9">
-      <!-- Millimeter- (kurz), Halbzentimeter- (mittel) und Zentimeterstriche (lang) -->
+      <!-- millimetre (short), half-centimetre (medium) and centimetre marks (long) -->
       <g id="cm" stroke-width="2">
         <line x1="0" y1="0" x2="0" y2="30"/>
         <line x1="5" y1="0" x2="5" y2="10" stroke-width="1.5"/>
