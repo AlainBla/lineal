@@ -19,8 +19,8 @@ Fachkapitel, Abweichungen als „Umsetzung: …“-Blockzitat dort vermerken.
 - Niemals `mcp__claude_ai_Linear__*` oder Playwright gegen linear.app; keine echten Kundendaten.
 - Prüfung: cargo fmt --check, cargo clippy --workspace --all-targets -- -D warnings, cargo test
   (mindestens betroffene Crates, am Ende --workspace), Schema-Export, in web: npm run typecheck,
-  npm run lint, npm test. rustfmt/clippy:
-  `export PATH=<rusttools>/usr/bin:$PATH`.
+  npm run lint, npm test. rustfmt/clippy müssen installiert sein
+  (`rustup component add rustfmt clippy` bzw. Distributionspakete).
 - Doku: docs/15 §2 (erledigte Lücken streichen, Neues beschreiben), docs/dev/offene-punkte.md,
   `python3 tools/build_index.py`.
 - Nicht pushen, nicht mergen. Abschlussbericht deutsch, knapp: Commits, Tests, Entscheidungen,
