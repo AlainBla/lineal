@@ -1428,15 +1428,15 @@ type Mutation {
 	"""
 	Persönliche Änderung der Anzeigeoptionen (nur die genannten Schlüssel).
 	"""
-	viewPreferencesUpdate(customViewId: String, viewType: String, teamId: String, preferences: JSON!): ViewPreferencesValues!
+	viewPreferencesUpdate(customViewId: String, viewType: String, teamId: String, projectId: String, preferences: JSON!): ViewPreferencesValues!
 	"""
 	„Set default for everyone“ (Team-Owner, View-Owner bzw. Admins).
 	"""
-	viewPreferencesSetDefault(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	viewPreferencesSetDefault(customViewId: String, viewType: String, teamId: String, projectId: String): ViewPreferencesValues!
 	"""
 	„Reset“: löscht die persönlichen Overrides.
 	"""
-	viewPreferencesReset(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	viewPreferencesReset(customViewId: String, viewType: String, teamId: String, projectId: String): ViewPreferencesValues!
 	"""
 	Platzhalter des Scaffolds (der Mutation-Root darf nicht leer sein).
 	"""
@@ -2183,7 +2183,7 @@ type Query {
 	"""
 	Wirksame Anzeigeoptionen einer Custom View oder vordefinierten Ansicht.
 	"""
-	viewPreferences(customViewId: String, viewType: String, teamId: String): ViewPreferencesValues!
+	viewPreferences(customViewId: String, viewType: String, teamId: String, projectId: String): ViewPreferencesValues!
 	"""
 	Issues über Custom View und/oder Filter: View UND Filter UND Suchbegriff-Regeln
 	(docs/05 §4.3); Sortierung nach `updatedAt`, nicht aus der View.

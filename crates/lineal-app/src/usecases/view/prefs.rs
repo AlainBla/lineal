@@ -22,6 +22,10 @@ pub const VIEW_TYPES: [&str; 12] = [
     "initiativesAll",
 ];
 
+/// Issue-Tab einer Projektseite; Ziel ist das Projekt (`view_target_id`). Nur für Anzeigeoptionen,
+/// keine favorisierbare Ansicht (daher nicht in [`VIEW_TYPES`]).
+pub const PROJECT_ISSUES: &str = "projectIssues";
+
 /// Entität, auf die sich die Optionen beziehen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -34,7 +38,7 @@ pub enum Kind {
 pub fn kind_of_view_type(t: &str) -> Option<Kind> {
     match t {
         "teamTriage" | "teamActive" | "teamBacklog" | "teamAll" | "teamCurrentCycle"
-        | "teamUpcomingCycle" | "myIssuesAssigned" => Some(Kind::Issues),
+        | "teamUpcomingCycle" | "myIssuesAssigned" | PROJECT_ISSUES => Some(Kind::Issues),
         "projectsAll" | "teamProjects" => Some(Kind::Projects),
         "initiativesActive" | "initiativesPlanned" | "initiativesAll" => Some(Kind::Initiatives),
         _ => None,
