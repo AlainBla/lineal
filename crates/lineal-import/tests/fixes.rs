@@ -272,17 +272,26 @@ async fn labels_with_the_same_name_are_mapped_not_duplicated(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
-async fn document_without_parent_is_attached_to_the_team(pool: PgPool) {
-    let source = fake();
+fn orphan_docs(source: &FakeSource) {
+    let at = "2026-01-01T00:00:00Z";
     let mut docs = source.entity(SourceEntity::Documents);
-    docs.push(json!({ "id": "d-orphan", "title": "Team notes", "content": "Orphan", "team": { "id": "t-plt" },
-        "creator": { "id": "u-alice" }, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z" }));
-    docs.push(
-        json!({ "id": "d-orphan2", "title": "No team at all", "content": "Orphan 2",
-        "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z" }),
-    );
+    for (id, team, project) in [
+        ("d-team-plt", Some("t-plt"), None),
+        ("d-team-des", Some("t-des"), None),
+        ("d-noteam", None, None),
+        // Elternprojekt gibt es in der Quelle, es wird aber nicht importiert (unbekannt).
+        ("d-gone-parent", Some("t-plt"), Some("p-private-unknown")),
+    ] {
+        docs.push(json!({ "id": id, "title": id, "content": "Orphan", "team": team.map(|t| json!({"id": t})),
+            "project": project.map(|p| json!({"id": p})), "creator": { "id": "u-alice" }, "createdAt": at, "updatedAt": at }));
+    }
     source.set_entity(SourceEntity::Documents, docs);
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn orphaned_documents_only_go_to_their_own_imported_team(pool: PgPool) {
+    let source = fake();
+    orphan_docs(&source);
     let e = env(pool.clone()).await;
     let (run, out) = e.import_all(&source, ImportStartInput::default()).await;
     assert_eq!(out, RunOutcome::Completed);
@@ -293,20 +302,60 @@ async fn document_without_parent_is_attached_to_the_team(pool: PgPool) {
                 "SELECT t.key FROM document d LEFT JOIN team t ON t.id = d.team_id WHERE d.title = $1",
             )
             .bind(title)
-            .fetch_one(&pool)
+            .fetch_optional(&pool)
             .await
             .unwrap()
         }
     };
-    assert_eq!(team_of("Team notes").await.as_deref(), Some("PLT"));
-    // Ohne eigenes Team: das erste importierte Team (nach Key).
-    assert_eq!(team_of("No team at all").await.as_deref(), Some("DES"));
+    assert_eq!(team_of("d-team-plt").await, Some(Some("PLT".into())));
+    assert_eq!(team_of("d-team-des").await, Some(Some("DES".into())));
+    // Kein eigenes Team, oder Elternobjekt nicht importiert: bleibt draußen (nie Workspace/anderes Team).
+    assert_eq!(team_of("d-noteam").await, None);
+    assert_eq!(team_of("d-gone-parent").await, None);
     assert_eq!(
         e.count(&format!(
-            "SELECT count(*) FROM import_issue WHERE import_run_id = '{run}' AND message LIKE '%attached to the imported team%'"
+            "SELECT count(*) FROM import_issue WHERE import_run_id = '{run}' AND severity = 'warning' AND source_type = 'Document'"
         ))
         .await,
         2
+    );
+    // Das Dokument des privaten Teams DES ist für Bob (kein Mitglied) unsichtbar.
+    let mut tx = e.app.store.begin(e.org).await.unwrap();
+    let snap = lineal_app::policy::PolicySnapshot::load(&mut *tx, &e.bob_ctx())
+        .await
+        .unwrap();
+    let des: uuid::Uuid = sqlx::query_scalar("SELECT id FROM team WHERE key = 'DES'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!snap.visible_team_ids().iter().any(|t| t.0 == des));
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn orphaned_document_of_a_team_that_is_not_imported_stays_out(pool: PgPool) {
+    let source = fake();
+    orphan_docs(&source);
+    let e = env(pool.clone()).await;
+    let planned = e.scan(&source).await;
+    e.start(
+        planned.id,
+        ImportStartInput {
+            teams: vec!["ENG".into()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let out = e
+        .engine(&source, Default::default())
+        .run(e.org, planned.id)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    assert_eq!(
+        e.count("SELECT count(*) FROM document WHERE title LIKE 'd-%'")
+            .await,
+        0,
+        "no orphan of a team outside the selection is imported"
     );
 }
 

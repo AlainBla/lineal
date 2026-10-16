@@ -748,15 +748,27 @@ impl Session<'_, '_> {
                     (None, initiative, None, None)
                 }
             } else {
-                // Kein eindeutiges Elternobjekt: an das importierte Team hängen (eigenes Team des
-                // Dokuments, sonst das einzige/erste importierte Team) und im Bericht vermerken.
-                match self.document_fallback_team(n).await? {
+                // Kein importiertes Elternobjekt. Sichtbarkeit darf nie wachsen: Ein Dokument, das in
+                // Linear an einem (nicht importierten, womöglich privaten) Projekt, Issue, Cycle oder
+                // einer Initiative hing, bleibt draußen. Nur ein Dokument, das in Linear selbst ein
+                // Team-Dokument ist (kein anderes Elternobjekt), geht an genau dieses Team, sofern
+                // es importiert wurde (gleiche Sichtbarkeit wie in Linear), nie an den Workspace
+                // oder ein beliebiges anderes Team.
+                let had_parent = ["project", "initiative", "issue", "cycle"]
+                    .iter()
+                    .any(|k| n.ref_id(k).is_some());
+                let own_team = if had_parent {
+                    None
+                } else {
+                    self.document_team(n).await?
+                };
+                match own_team {
                     Some(t) => {
                         self.note(
                             "info",
                             "Document",
                             Some(&src),
-                            "the document has no (single) imported parent; attached to the imported team",
+                            "the document has no parent object; attached to its own imported team",
                         );
                         (None, None, None, Some(t))
                     }
@@ -766,7 +778,11 @@ impl Session<'_, '_> {
                             "warning",
                             "Document",
                             Some(&src),
-                            "the document has no imported parent and no imported team to attach it to; skipped",
+                            if had_parent {
+                                "the parent of the document (project, issue, cycle or initiative) was not imported; the document was skipped so that it does not become visible to more people than in Linear"
+                            } else {
+                                "the document has no parent object and its team was not imported; skipped"
+                            },
                         );
                         return Ok(());
                     }
@@ -850,31 +866,15 @@ impl Session<'_, '_> {
         Ok(())
     }
 
-    /// Team für ein Dokument ohne eindeutiges Elternobjekt.
-    async fn document_fallback_team(&mut self, n: N<'_>) -> AppResult<Option<Uuid>> {
-        if let Some(t) = n.ref_id("team").filter(|t| self.selected.contains(*t)) {
-            let t = t.to_owned();
-            if let Some(id) = self.target("Team", &t).await? {
-                return Ok(Some(id));
+    /// Das eigene, importierte Team eines Dokuments (nur wenn es in der Auswahl liegt).
+    async fn document_team(&mut self, n: N<'_>) -> AppResult<Option<Uuid>> {
+        match n.ref_id("team").filter(|t| self.selected.contains(*t)) {
+            Some(t) => {
+                let t = t.to_owned();
+                self.target("Team", &t).await
             }
+            None => Ok(None),
         }
-        let mut candidates: Vec<(String, String)> = self
-            .selected
-            .iter()
-            .map(|id| {
-                (
-                    self.team_keys.get(id).cloned().unwrap_or_default(),
-                    id.clone(),
-                )
-            })
-            .collect();
-        candidates.sort();
-        for (_, id) in candidates {
-            if let Some(t) = self.target("Team", &id).await? {
-                return Ok(Some(t));
-            }
-        }
-        Ok(None)
     }
 
     pub(crate) async fn step_project_updates(&mut self, cursor: Option<String>) -> HResult<()> {
