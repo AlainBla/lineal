@@ -28,13 +28,13 @@ test("import from the mock Linear, then sync, merge a placeholder and join the t
   await join.click();
   await expect(join).toBeHidden();
   await expect(page.getByRole("link", { name: "Browse teams" })).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Sidebar" }).getByText("Platform")).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "Sidebar" }).getByText("Platform"),
+  ).toBeVisible();
 
   // Sync einrichten (Schlüssel nur senden, nie anzeigen) und sofort abgleichen.
   const sync = page.getByTestId("sync-section");
-  await sync
-    .getByLabel("Linear API key for the sync")
-    .fill("lin_api_e2e_mock_key_0000000000");
+  await sync.getByLabel("Linear API key for the sync").fill("lin_api_e2e_mock_key_0000000000");
   await sync.getByLabel("Sync interval").selectOption("hourly");
   await sync.getByRole("button", { name: "Set up sync" }).click();
   await expect(sync.getByTestId("sync-state")).toHaveText("Active");
