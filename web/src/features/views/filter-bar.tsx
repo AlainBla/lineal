@@ -1,5 +1,5 @@
 import { ChevronRight, ListFilter, Plus, Search, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -434,6 +434,12 @@ export function FilterMenu({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // Innerhalb eines modalen Dialogs (View-Builder) ist das Popover selbst modal (verschachtelte Ebene).
+  const [inDialog, setInDialog] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    setInDialog(!!triggerRef.current?.closest('[role="dialog"]'));
+  }, []);
   const [query, setQuery] = useState("");
   const [dates, setDates] = useState(false);
   const [adding, setAdding] = useState<FilterField | null>(null);
@@ -460,6 +466,7 @@ export function FilterMenu({
   return (
     <>
       <Popover
+        modal={inDialog}
         open={open}
         onOpenChange={(o) => {
           setOpen(o);
@@ -476,6 +483,7 @@ export function FilterMenu({
             aria-label="Add filter"
             title="Add filter (F)"
             className="relative"
+            ref={triggerRef}
           >
             {compact || chips.length === 0 ? <ListFilter /> : <Plus />}
             {!compact && " Filter"}

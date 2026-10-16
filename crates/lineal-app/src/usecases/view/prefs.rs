@@ -162,10 +162,11 @@ pub fn system_defaults(view_type: Option<&str>, kind: Kind) -> Map<String, Value
     m.insert("layout".into(), json!(if board { "board" } else { "list" }));
     m.insert(
         "grouping".into(),
-        json!(if kind == Kind::Issues {
-            "status"
-        } else {
-            "none"
+        json!(match (kind, view_type) {
+            // Projekt-Issues sind standardmäßig nach Meilenstein gruppiert (docs/08 §2.7).
+            (Kind::Issues, Some(PROJECT_ISSUES)) => "milestone",
+            (Kind::Issues, _) => "status",
+            _ => "none",
         }),
     );
     m.insert("groupOrdering".into(), json!("default"));
@@ -306,6 +307,8 @@ mod tests {
         assert_eq!(my["ordering"], "importance");
         assert_eq!(my["showCompletedIssues"], "pastDay");
         assert_eq!(system_defaults(None, Kind::Projects)["grouping"], "none");
+        let tab = system_defaults(Some(PROJECT_ISSUES), Kind::Issues);
+        assert_eq!(tab["grouping"], "milestone");
     }
 
     #[test]

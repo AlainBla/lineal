@@ -987,7 +987,7 @@ async fn project_issue_tab_options_are_per_project_and_default_needs_manage_righ
     };
     // System-Default einer Issue-Liste; ohne Projekt ist der Schlüssel ungültig.
     let eff = fx.app.view_preferences(&bob(), key.clone()).await.unwrap();
-    assert_eq!(eff.effective["grouping"], "status");
+    assert_eq!(eff.effective["grouping"], "milestone");
     assert_eq!(eff.effective["nestedSubIssues"], "hide");
     let no_project = ViewKeyInput {
         view_type: Some("projectIssues".into()),
@@ -999,18 +999,18 @@ async fn project_issue_tab_options_are_per_project_and_default_needs_manage_righ
     );
     // Persönliche Änderung gilt nur für Bob.
     fx.app
-        .update_view_preferences(&bob(), key.clone(), json!({"grouping": "milestone"}))
+        .update_view_preferences(&bob(), key.clone(), json!({"grouping": "assignee"}))
         .await
         .unwrap();
     let mine = fx.app.view_preferences(&bob(), key.clone()).await.unwrap();
-    assert_eq!(mine.effective["grouping"], "milestone");
+    assert_eq!(mine.effective["grouping"], "assignee");
     assert!(mine.has_personal);
     let other = fx
         .app
         .view_preferences(&alice(), key.clone())
         .await
         .unwrap();
-    assert_eq!(other.effective["grouping"], "status");
+    assert_eq!(other.effective["grouping"], "milestone");
     // „Set default for everyone“ braucht Verwaltungsrecht am Projekt; Gäste scheitern.
     assert!(
         fx.app
@@ -1025,5 +1025,5 @@ async fn project_issue_tab_options_are_per_project_and_default_needs_manage_righ
         .unwrap();
     assert!(set.has_default && !set.has_personal);
     let again = fx.app.view_preferences(&alice(), key).await.unwrap();
-    assert_eq!(again.effective["grouping"], "milestone");
+    assert_eq!(again.effective["grouping"], "assignee");
 }

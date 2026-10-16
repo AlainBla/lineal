@@ -296,7 +296,11 @@ export function IssueView({
       onChange={onOptions}
       compact={embedded}
       showLayout
-      customized={isCustomDisplay(options) || !!prefs.data?.hasPersonal}
+      customized={
+        target
+          ? !!prefs.data?.hasPersonal || Object.keys(local).length > 0
+          : isCustomDisplay(options)
+      }
       onReset={
         target
           ? () => {
