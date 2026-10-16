@@ -524,6 +524,20 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Label (Issue- oder Projektlabel) gleichen Namens (ohne Beachtung der Schreibweise) auf
+    /// derselben Ebene: gleiches Team (oder beide Workspace) und gleiche Gruppe. Auch
+    /// zurückgezogene/archivierte Zeilen zählen (sie belegen den eindeutigen Namen).
+    async fn find_label_by_name_at(
+        &mut self,
+        table: ImportTable,
+        name: &str,
+        team_id: Option<Uuid>,
+        parent_id: Option<Uuid>,
+    ) -> AppResult<Option<Uuid>> {
+        let _ = (table, name, team_id, parent_id);
+        nyi()
+    }
+
     /// Eine Zeile (Name ohne Beachtung der Groß-/Kleinschreibung, optional je Team) – für Statuswerte,
     /// die einem vorhandenen gleichnamigen Eintrag zugeordnet werden.
     async fn find_row_id_by_name(

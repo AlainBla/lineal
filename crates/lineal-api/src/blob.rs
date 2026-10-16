@@ -224,6 +224,48 @@ impl BlobStore for LocalBlobStore {
         Ok(())
     }
 
+    async fn put_bytes(&self, key: &str, content_type: &str, bytes: Vec<u8>) -> AppResult<()> {
+        check_key(key)?;
+        if content_type.is_empty()
+            || content_type.len() > 255
+            || content_type.chars().any(char::is_control)
+        {
+            return Err(AppError::invalid_request("Invalid content type."));
+        }
+        if bytes.len() as u64 > self.max_bytes {
+            return Err(AppError::limit_exceeded(format!(
+                "Upload exceeds the maximum of {} bytes.",
+                self.max_bytes
+            ))
+            .with_details(serde_json::json!({ "maxBytes": self.max_bytes })));
+        }
+        if !magic_matches(&essence(content_type), &bytes[..bytes.len().min(16)]) {
+            return Err(AppError::invalid_request(
+                "The file content does not match the declared content type.",
+            ));
+        }
+        let (data_path, meta_path) = self.paths(key);
+        for p in [&data_path, &meta_path] {
+            if let Some(parent) = p.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(io_err)?;
+            }
+        }
+        let tmp = self.dir.join(format!("{}.tmp", Uuid::now_v7().simple()));
+        if let Err(e) = tokio::fs::write(&tmp, &bytes).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(io_err(e));
+        }
+        tokio::fs::rename(&tmp, &data_path).await.map_err(io_err)?;
+        let meta = Meta {
+            key: key.to_owned(),
+            content_type: content_type.to_owned(),
+            size: bytes.len() as u64,
+        };
+        tokio::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap_or_default())
+            .await
+            .map_err(io_err)
+    }
+
     async fn signed_put_url(
         &self,
         key: &str,
@@ -516,6 +558,45 @@ mod tests {
 
     fn token_of(url: &str) -> &str {
         url.rsplit('/').next().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn put_bytes_writes_directly_and_enforces_size_and_magic_bytes() {
+        let dir = std::env::temp_dir().join(format!("lineal-putbytes-{}", Uuid::now_v7()));
+        let s = LocalBlobStore::new(
+            &dir,
+            "change-me-32-bytes-minimum-xxxxxxxx",
+            "http://unreachable.invalid",
+            Arc::new(At(1_000)),
+        )
+        .with_max_bytes(32);
+        let png = b"\x89PNG\r\n\x1a\nrest".to_vec();
+        s.put_bytes("org/a/b", "image/png", png.clone())
+            .await
+            .unwrap();
+        let info = s.head("org/a/b").await.unwrap().unwrap();
+        assert_eq!(
+            (info.size, info.content_type.as_str()),
+            (png.len() as u64, "image/png")
+        );
+        assert_eq!(s.read("org/a/b", 100).await.unwrap().unwrap(), png);
+        // Typ passt nicht zum Inhalt
+        assert!(
+            s.put_bytes("org/a/c", "image/png", b"not a png".to_vec())
+                .await
+                .is_err()
+        );
+        assert!(s.head("org/a/c").await.unwrap().is_none());
+        // zu groß
+        let err = s
+            .put_bytes("org/a/d", "application/octet-stream", vec![0; 33])
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, lineal_app::ErrorKind::LimitExceeded);
+        // ungültiger Schlüssel/Typ
+        assert!(s.put_bytes("", "image/png", png.clone()).await.is_err());
+        assert!(s.put_bytes("org/a/e", "", png).await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

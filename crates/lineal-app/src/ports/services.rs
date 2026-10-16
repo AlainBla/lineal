@@ -48,6 +48,15 @@ pub trait BlobStore: Send + Sync {
         Ok(())
     }
 
+    /// Schreibt Bytes direkt in den Store (ohne HTTP-Umweg über eine signierte URL), z. B. für
+    /// den Import im Worker, der die eigene `LINEAL_BASE_URL` nicht erreicht. Der Store wendet
+    /// dieselben Prüfungen an wie beim Upload (Größenlimit, Magic-Bytes zum Content-Type).
+    /// Der Standard meldet einen Fehler (Stores ohne Direktschreiben, Fakes).
+    async fn put_bytes(&self, key: &str, content_type: &str, bytes: Vec<u8>) -> AppResult<()> {
+        let _ = (key, content_type, bytes);
+        Err(AppError::internal("blob put not supported by this store"))
+    }
+
     /// Signierte Upload-URL (PUT).
     async fn signed_put_url(
         &self,
