@@ -166,3 +166,28 @@ async fn sync_and_placeholder_merge_are_admin_only_and_never_echo_the_key(pool: 
     .await;
     assert_eq!(codes, ["\"not_found\""]);
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn import_placeholders_are_listed_as_imported_not_suspended(pool: PgPool) {
+    let schema = setup(pool.clone()).await;
+    let org = SeedData::acme().org.0;
+    sqlx::query("INSERT INTO \"user\" (id, organization_id, name, display_name, email, role, active, status) VALUES ($1, $2, 'Dave', 'dave.imp', 'dave@linear.example', 'user', false, 'imported')")
+        .bind(uuid::Uuid::now_v7())
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (d, codes, _) = run(
+        &schema,
+        SeedUser::Alice,
+        "{ workspaceMembers(includeSuspended: true) { email status } }",
+    )
+    .await;
+    assert!(codes.is_empty(), "{codes:?}");
+    let members = d["workspaceMembers"].as_array().unwrap();
+    let dave = members
+        .iter()
+        .find(|m| m["email"] == "dave@linear.example")
+        .expect("placeholder is listed");
+    assert_eq!(dave["status"], "imported");
+}

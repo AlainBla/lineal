@@ -186,7 +186,11 @@ pub struct WorkspaceMemberGql {
 impl From<UserView> for WorkspaceMemberGql {
     fn from(v: UserView) -> Self {
         let u = v.user;
-        let status = if !u.active {
+        // Platzhalter des Imports sind per Definition inaktiv (kein Login): sie zeigen `imported`,
+        // nicht `suspended` (sonst ließen sie sich weder filtern noch zuordnen).
+        let status = if u.status == "imported" {
+            "imported".to_owned()
+        } else if !u.active {
             "suspended".to_owned()
         } else {
             u.status
