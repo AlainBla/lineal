@@ -17,6 +17,7 @@ use tower::ServiceExt;
 
 const RW: &str = "lineal_api_readwrite";
 const RO: &str = "lineal_api_readonly";
+const SESSION: &str = "web-session-cookie-value";
 
 fn principal(scopes: Scopes) -> Principal {
     let seed = SeedData::acme();
@@ -35,7 +36,12 @@ fn principal(scopes: Scopes) -> Principal {
 fn app() -> Router {
     let store = FakeStore::new()
         .with_principal(hash_token(RW), principal(Scopes::read_write()))
-        .with_principal(hash_token(RO), principal(Scopes::read_only()));
+        .with_principal(hash_token(RO), principal(Scopes::read_only()))
+        .with_principal(hash_token(SESSION), {
+            let mut p = principal(Scopes::all());
+            p.kind = lineal_app::ports::repos::CredentialKind::Session;
+            p
+        });
     lineal_mcp::router(test_app(Arc::new(store)))
 }
 
@@ -115,6 +121,18 @@ async fn missing_token_is_401_with_www_authenticate() {
     let body = body_json(resp).await;
     assert_eq!(body["error"], "unauthenticated");
     assert_eq!(body["status"], 401);
+}
+
+#[tokio::test]
+async fn session_token_as_bearer_is_rejected() {
+    let router = app();
+    let msg = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let (status, resp) = send(&router, Method::POST, "/mcp", Some(SESSION), None, msg).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(resp.headers().contains_key(header::WWW_AUTHENTICATE));
+    // Gegenprobe: API-Key funktioniert weiterhin.
+    let (status, _) = send(&router, Method::POST, "/mcp", Some(RW), None, msg).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

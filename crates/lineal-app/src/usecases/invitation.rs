@@ -78,10 +78,12 @@ fn invitation_not_found() -> AppError {
 }
 
 fn require_creator_or_admin(ctx: &RequestCtx, inv: &InvitationRecord) -> AppResult<()> {
-    let admin = matches!(
-        ctx.actor,
-        Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin)
-    );
+    // Die Admin-Abkürzung gilt nur mit Scope `admin` (Sessions tragen ihn).
+    let admin = ctx.scopes.admin
+        && matches!(
+            ctx.actor,
+            Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin)
+        );
     if admin || resolve::user::actor_user_id(ctx) == Some(inv.inviter_id) {
         Ok(())
     } else {

@@ -147,6 +147,18 @@ pub(crate) fn blocked_response(path: &str, retry_after_secs: u64) -> Response {
     }
 }
 
+/// Zählt einen Fehlversuch (ungültiges Token) auf die Client-IP. Ist die IP bereits gesperrt,
+/// antwortet die Anfrage mit 429 (kein weiterer Lookup-Spielraum für Token-Raten); gültige
+/// Tokens kommen hier nie an.
+fn fail_attempt(p: &Platform, ip: Option<&str>, now_ms: i64, path: &str) -> Option<Response> {
+    let ip = ip?;
+    if let Some(wait) = p.fails.ip_blocked(ip, now_ms) {
+        return Some(blocked_response(path, wait));
+    }
+    p.fails.record_ip(ip, now_ms);
+    None
+}
+
 pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next) -> Response {
     let now_ms = p.app.clock.now().timestamp_millis();
     let ip_key = crate::rate_limit::client_ip(&req);
@@ -154,18 +166,16 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
     let state = match extract_token(req.headers()) {
         None => AuthState::Anonymous,
         Some((token, class)) => {
-            // Brute-Force-Schutz: zu viele Fehlversuche dieser IP sperren schon den Lookup.
-            if let Some(wait) = ip_key
-                .as_deref()
-                .and_then(|ip| p.fails.ip_blocked(ip, now_ms))
-            {
-                return blocked_response(req.uri().path(), wait);
-            }
+            // Brute-Force-Schutz: Der IP-Zähler zählt nur echte Fehlversuche und sperrt nur
+            // Anfragen mit ungültigem Token (siehe unten); gültige Sessions/Keys bleiben auch
+            // dann nutzbar, wenn andere Clients derselben IP viele Fehlversuche verursachen.
             match lookup_principal(&p.app, &token).await {
                 Ok(Some(principal)) if !transport_matches(class, principal.kind) => {
                     // Token-Art passt nicht zum Transport (z. B. API-Key im Session-Cookie).
-                    if let Some(ip) = &ip_key {
-                        p.fails.record_ip(ip, now_ms);
+                    if let Some(resp) =
+                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path())
+                    {
+                        return resp;
                     }
                     AuthState::Invalid
                 }
@@ -199,8 +209,10 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                     }
                 }
                 Ok(None) => {
-                    if let Some(ip) = &ip_key {
-                        p.fails.record_ip(ip, now_ms);
+                    if let Some(resp) =
+                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path())
+                    {
+                        return resp;
                     }
                     AuthState::Invalid
                 }

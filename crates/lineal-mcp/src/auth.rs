@@ -7,6 +7,7 @@
 use crate::wellknown::protected_resource_metadata_url;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use lineal_app::ports::repos::CredentialKind;
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 use serde_json::json;
 
@@ -52,6 +53,11 @@ pub async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, 
         .await
         .map_err(AuthFailure::Internal)?
         .ok_or(AuthFailure::Invalid)?;
+    // Token-Art-Kopplung (wie lineal-api/lineal-sync): `Authorization` transportiert nur
+    // API-Keys und OAuth-Tokens, nie ein Web-Session-Token (Cookie-Wert).
+    if principal.kind == CredentialKind::Session {
+        return Err(AuthFailure::Invalid);
+    }
     Ok(RequestCtx {
         org_id: principal.org_id,
         actor: principal.actor,

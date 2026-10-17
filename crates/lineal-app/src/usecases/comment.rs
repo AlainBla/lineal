@@ -553,14 +553,17 @@ async fn load_accessible(
     Ok((comment, scope))
 }
 
+/// Admin-Abkürzung (fremde Kommentare löschen): Rolle **und** Scope `admin` (Sessions tragen ihn).
 fn is_admin(ctx: &RequestCtx) -> bool {
-    matches!(
-        ctx.actor,
-        Actor::User {
-            role: UserRole::Owner | UserRole::Admin,
-            ..
-        } | Actor::System
-    )
+    matches!(ctx.actor, Actor::System)
+        || (ctx.scopes.admin
+            && matches!(
+                ctx.actor,
+                Actor::User {
+                    role: UserRole::Owner | UserRole::Admin,
+                    ..
+                }
+            ))
 }
 
 impl App {
