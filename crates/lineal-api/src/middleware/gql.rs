@@ -34,7 +34,34 @@ pub const MAX_QUERY_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Felder, die große Freitexte liefern können.
 fn is_heavy_text(name: &str) -> bool {
-    matches!(name, "description" | "body" | "content" | "diffMarkdown")
+    matches!(
+        name,
+        "description"
+            | "body"
+            | "content"
+            | "diffMarkdown"
+            | "markdown"
+            | "summary"
+            | "quotedText"
+            | "templateData"
+    )
+}
+
+/// Einfache Listen von Objekten ohne `first`/`last`/`nodes` (kein Connection-Muster): Faktor =
+/// angenommene Zeilenzahl. Ohne diese Gewichtung zählte `cycles { description }` einmal statt
+/// je Zeile. `first` (falls gesetzt) gilt über [`is_connection`]; hier nur die Default-Größen.
+fn plain_list_size(name: &str) -> Option<u64> {
+    match name {
+        // Batch-Payloads: bis zu 250 Issues je Aufruf.
+        "issues" | "subIssues" => Some(250),
+        // Je Projekt eine Handvoll (Obergrenze 50 nur in Vorlagen); 5 hält die Web-Listen im Budget.
+        "milestones" | "projectMilestones" => Some(5),
+        "cycles" | "templates" | "workflowStates" | "projects" | "trashedProjects"
+        | "initiatives" | "trashedInitiatives" | "projectUpdates" | "initiativeUpdates"
+        | "trashedIssues" | "triageIssues" | "issueLabels" | "projectLabels" | "attachments"
+        | "recurringIssues" => Some(DEFAULT_CONNECTION_SIZE),
+        _ => None,
+    }
 }
 
 /// Anzahl der Einträge in `ids`-Listen der Argumente (`ids: [...]` oder `input: {ids: [...]}`).
@@ -134,6 +161,9 @@ fn selection_cost(
                     let n = int_arg(field, "first", request)
                         .or_else(|| int_arg(field, "last", request))
                         .unwrap_or(DEFAULT_CONNECTION_SIZE);
+                    let inner = selection_cost(doc, children, request, walk);
+                    total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
+                } else if let Some(n) = plain_list_size(name) {
                     let inner = selection_cost(doc, children, request, walk);
                     total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
                 } else if name == "history" {
@@ -433,6 +463,37 @@ mod tests {
         assert!(cost_of(q4, json!({ "i": { "ids": ids, "priority": 1 } })) > 10_000);
         let few = cost_of(q, json!({ "i": { "ids": ["a", "b"], "priority": 1 } }));
         assert!(few < 100, "{few}");
+    }
+
+    #[test]
+    fn plain_lists_and_more_text_fields_are_weighted() {
+        // Einfache Listen ohne first: Faktor je Zeile statt einmal.
+        let cycles = cost_of("{ cycles(teamId: \"t\") { description } }", json!({}));
+        assert!(cycles >= 500, "{cycles}");
+        let ms = cost_of(
+            "{ projectMilestones(projectId: \"p\") { description } }",
+            json!({}),
+        );
+        assert!(ms >= 50, "{ms}");
+        // Alias zählt nach Feldname, nicht nach Alias.
+        let aliased = cost_of("{ x: issue(id: \"a\") { d: description } }", json!({}));
+        assert!(aliased >= 10, "{aliased}");
+        for f in ["markdown", "summary", "templateData", "quotedText", "body"] {
+            let c = cost_of(
+                &format!("{{ issues(first: 250) {{ nodes {{ {f} }} }} }}"),
+                json!({}),
+            );
+            assert!(c > 2_000, "{f}: {c}");
+        }
+        // Die Web-Projektliste (PROJECT_FIELDS, 100 je Seite) bleibt klar im Budget.
+        let q = "{ projectsPage(first: 100) { nodes { id identifier slugId name summary description icon \
+                 status { id name type color } health progress leadTeam { id name key } \
+                 teams { id name key } lead { id name key } members { id name key } \
+                 labels { id name key } initiatives { id name key } \
+                 milestones { id name description targetDate sortOrder status progress } \
+                 createdAt } }";
+        let ui = cost_of(&format!("{q} }}"), json!({}));
+        assert!(ui < 10_000, "{ui}");
     }
 
     #[test]
