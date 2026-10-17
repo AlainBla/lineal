@@ -211,7 +211,10 @@ export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLo
       <div className="flex h-4 items-center gap-2 text-xs text-muted-foreground">
         <PriorityIcon priority={issue.priority} />
         <span className="tabular-nums">{issue.identifier}</span>
-        <span className="ml-auto">
+        <span className="ml-auto tabular-nums" data-testid="card-state-age">
+          {relativeTime(issue.stateEnteredAt)}
+        </span>
+        <span>
           {assignee ? (
             <span>
               <Avatar name={assignee} />
@@ -261,6 +264,10 @@ export function IssueCardHover({
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-muted-foreground">
           <dt>Status</dt>
           <dd className="text-popover-foreground">{issue.stateName}</dd>
+          <dt>In status since</dt>
+          <dd className="text-popover-foreground">
+            {shortDay(issue.stateEnteredAt)} ({relativeTime(issue.stateEnteredAt)})
+          </dd>
           <dt>Priority</dt>
           <dd className="text-popover-foreground">{priorityLabel(issue.priority)}</dd>
           <dt>Assignee</dt>
