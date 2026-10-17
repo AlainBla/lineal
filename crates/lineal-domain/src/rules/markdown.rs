@@ -7,6 +7,11 @@
 //!   als normalen Text. Links/Bilder mit unsicherem Schema werden zu reinem Text. Alles andere bleibt Byte für Byte
 //!   erhalten (Allowlist = Markdown-Syntax plus Schemata `http`, `https`, `mailto` und
 //!   relative Ziele).
+//!   Zusätzlich parserunabhängig (FUZZ-01/INJECT-01): `javascript:`/`vbscript:`/`data:` direkt nach
+//!   `(`, `<`, `=` oder `[x]:` erhalten `%3A` statt `:` (auch nach Entity-/Steuerzeichen-
+//!   Normalisierung), und `<` + Buchstabe/`/`/`!`/`?` in Text, den pulldown-cmark nicht als HTML
+//!   liest, wird maskiert. Code-Spans/-Blöcke bleiben unverändert, soweit sie das Muster nicht
+//!   selbst enthalten.
 //! * [`render_html`] rendert Markdown zu HTML und filtert es zusätzlich mit der
 //!   `ammonia`-Allowlist (z. B. für E-Mail-Benachrichtigungen).
 
@@ -91,6 +96,7 @@ fn sanitize_pass(md: &str) -> Option<String> {
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     // Aktives unsicheres Link-/Bild-Element: (Gesamtbereich, Tiefe, gesammelter Text).
     let mut open: Option<(Range<usize>, usize, String)> = None;
+    let mut in_code_block = false;
 
     for (event, range) in Parser::new_ext(md, options()).into_offset_iter() {
         if let Some((_, depth, text)) = open.as_mut() {
@@ -122,18 +128,183 @@ fn sanitize_pass(md: &str) -> Option<String> {
             {
                 open = Some((range, 1, String::new()));
             }
+            // Was pulldown-cmark als Text liest, kann ein HTML5-Tokenizer oder ein anderer
+            // Markdown-Parser als Tag lesen (`<img/src=x/onerror=…>`, unterminierte Tags, INJECT-01).
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+            Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::Text(_) if !in_code_block => mask_stray_tag_starts(md, range, &mut edits),
             _ => {}
         }
     }
 
-    if edits.is_empty() {
-        return None;
-    }
     let mut out = md.to_owned();
     for (range, replacement) in edits.into_iter().rev() {
         out.replace_range(range, &replacement);
     }
-    Some(out)
+    // Parserunabhängige Nachbehandlung (FUZZ-01): was andere CommonMark-Renderer als Link lesen.
+    let out = neutralize_unsafe_schemes(&out);
+    (out != md).then_some(out)
+}
+
+/// Maskiert `<` mit folgendem Buchstaben, `/`, `!` oder `?` in Textstücken, die pulldown-cmark
+/// nicht als HTML erkannt hat, soweit das `<` nicht schon per Backslash maskiert ist.
+fn mask_stray_tag_starts(md: &str, range: Range<usize>, edits: &mut Vec<(Range<usize>, String)>) {
+    let bytes = md.as_bytes();
+    for pos in range.clone() {
+        if bytes[pos] != b'<' {
+            continue;
+        }
+        let tag_like = bytes
+            .get(pos + 1)
+            .is_some_and(|n| n.is_ascii_alphabetic() || matches!(n, b'/' | b'!' | b'?'));
+        let backslashes = bytes[..pos]
+            .iter()
+            .rev()
+            .take_while(|b| **b == b'\\')
+            .count();
+        if tag_like && backslashes % 2 == 0 {
+            edits.push((pos..pos, "\\".to_owned()));
+        }
+    }
+}
+
+/// Endet `before` auf einen URL-Attributnamen (`href`, `src`, …)? Ein beliebiges `=` (etwa
+/// `?q=data:1` in einer URL) löst die Entschärfung nicht aus.
+fn url_attribute_before(before: &str) -> bool {
+    let name: String = before
+        .trim_end()
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-'))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "href" | "xlink:href" | "src" | "action" | "formaction" | "data" | "poster" | "background"
+    )
+}
+
+/// Unsichere Schemata, die in keinem Link-Ziel überleben dürfen.
+const BLOCKED_SCHEMES: [&str; 3] = ["javascript", "vbscript", "data"];
+
+/// Liest ab `i` ein Zeichen so, wie ein Browser es nach dem Entity-Dekodieren eines Attributs
+/// sieht: numerische Entities sowie `&Tab;`, `&NewLine;`, `&colon;`. Liefert Zeichen und Länge.
+fn norm_char(s: &str, i: usize) -> Option<(char, usize)> {
+    let rest = &s[i..];
+    let c = rest.chars().next()?;
+    if c != '&' {
+        return Some((c, c.len_utf8()));
+    }
+    for (name, ch) in [("&Tab;", '\t'), ("&NewLine;", '\n'), ("&colon;", ':')] {
+        if rest.len() >= name.len()
+            && rest.as_bytes()[..name.len()].eq_ignore_ascii_case(name.as_bytes())
+        {
+            return Some((ch, name.len()));
+        }
+    }
+    if let Some(num) = rest.strip_prefix("&#") {
+        let (digits, radix) = match num.strip_prefix(['x', 'X']) {
+            Some(h) => (h, 16),
+            None => (num, 10),
+        };
+        let end = digits
+            .find(|c: char| !c.is_digit(radix))
+            .unwrap_or(digits.len());
+        if (1..=8).contains(&end) {
+            let value = u32::from_str_radix(&digits[..end], radix).ok()?;
+            let used = 2 + (num.len() - digits.len()) + end;
+            let used = used + usize::from(digits[end..].starts_with(';'));
+            return Some((char::from_u32(value).unwrap_or('\u{fffd}'), used));
+        }
+    }
+    Some(('&', 1))
+}
+
+/// Zeichen, die Browser in URLs ignorieren (Tab, Zeilenumbrüche, übrige Steuerzeichen).
+fn url_ignorable(c: char) -> bool {
+    c.is_control()
+}
+
+/// Versucht ab `start` ein unsicheres Schema samt `:` zu lesen (ignoriert Steuerzeichen und
+/// Entities dazwischen). Liefert das Schema und das Ende des gelesenen Bereichs.
+fn match_blocked_scheme(s: &str, start: usize) -> Option<(&'static str, usize)> {
+    'scheme: for name in BLOCKED_SCHEMES {
+        let mut i = start;
+        for expected in name.chars() {
+            loop {
+                let (c, len) = norm_char(s, i).filter(|_| i < s.len())?;
+                i += len;
+                if url_ignorable(c) {
+                    continue;
+                }
+                if c.to_ascii_lowercase() == expected {
+                    break;
+                }
+                continue 'scheme;
+            }
+        }
+        loop {
+            let Some((c, len)) = norm_char(s, i).filter(|_| i < s.len()) else {
+                continue 'scheme;
+            };
+            i += len;
+            if url_ignorable(c) {
+                continue;
+            }
+            if c == ':' {
+                return Some((name, i));
+            }
+            continue 'scheme;
+        }
+    }
+    None
+}
+
+/// Entschärft `javascript:`, `vbscript:` und `data:` an Stellen, an denen ein CommonMark-Renderer
+/// ein Link-Ziel lesen könnte: nach `(`, `<`, `=` (`href=`) und nach der Referenzdefinition `[x]:`. Der
+/// Doppelpunkt wird zu `%3A` (aus `javascript:x` wird das relative Ziel `javascript%3Ax`; ein
+/// Entity wie `&#58;` würde der Browser im Attribut wieder zum Doppelpunkt dekodieren).
+/// Unabhängig davon, ob pulldown-cmark die Stelle als Link, Text, Code oder Kommentar liest.
+fn neutralize_unsafe_schemes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i..].chars().next().unwrap_or('\0');
+        out.push(c);
+        i += c.len_utf8();
+        let trigger = match c {
+            // `=` fängt `href=javascript:` in Tags, die ein Renderer nach einem verschluckten `\\` liest.
+            '(' | '<' => true,
+            '=' => url_attribute_before(&s[..i - 1]),
+            ':' => s[..i - 1]
+                .trim_end_matches(|c: char| c.is_whitespace() || c.is_control())
+                .ends_with(']'),
+            _ => false,
+        };
+        if !trigger {
+            continue;
+        }
+        // Leerraum, Steuerzeichen und Entity-Leerraum zwischen Auslöser und Schema bleiben stehen.
+        let mut j = i;
+        if c == '=' && s[j..].starts_with(['"', '\'']) {
+            j += 1;
+        }
+        while j < s.len() {
+            match norm_char(s, j) {
+                Some((ch, len)) if ch.is_whitespace() || url_ignorable(ch) => j += len,
+                _ => break,
+            }
+        }
+        if let Some((name, end)) = match_blocked_scheme(s, j) {
+            out.push_str(&s[i..j]);
+            out.push_str(name);
+            out.push_str("%3A");
+            i = end;
+        }
+    }
+    out
 }
 
 /// Rendert Markdown zu sicherem HTML: rohes HTML wird zu Text, das Ergebnis läuft durch die
@@ -266,8 +437,9 @@ mod tests {
     fn unsafe_link_schemes_become_plain_text() {
         assert_eq!(sanitize("[klick](javascript:alert(1))"), "klick");
         assert_eq!(sanitize("a [klick](JaVaScRiPt:alert(1)) b"), "a klick b");
-        // Kein gültiger Link (Tab im Ziel): bleibt Text und damit harmlos.
-        assert!(!render_html(&sanitize("[x](java\tscript:alert(1))")).contains("href"));
+        // Tab im Ziel: Browser ignorieren ihn, daher wird das Schema entschärft (relatives Ziel).
+        let html = render_html(&sanitize("[x](java\tscript:alert(1))")).replace("%3A", "");
+        assert!(!html.contains("javascript:"), "{html}");
         assert_eq!(sanitize("[x](&#106;avascript:alert(1))"), "x");
         assert_eq!(sanitize("[x](vbscript:msgbox)"), "x");
         assert_eq!(sanitize("![alt](data:image/svg+xml;base64,AAAA)"), "alt");
@@ -356,6 +528,98 @@ mod tests {
         assert!(!h.contains("data:"), "{h}");
         let h = render_html("```\n<b>x</b>\n```");
         assert!(h.contains("&lt;b&gt;x&lt;/b&gt;"), "{h}");
+    }
+
+    /// Kein Link-Ziel mit unsicherem Schema in der Ausgabe (nach Entfernen von Leerraum/Steuerzeichen
+    /// und Dekodieren der üblichen Entities), egal wie ein Renderer sie lesen würde.
+    fn has_active_scheme(out: &str) -> bool {
+        let flat: String = out
+            .replace("&#58;", ":")
+            .replace("&#106;", "j")
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_control())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        ["javascript:", "vbscript:", "data:"].iter().any(|s| {
+            ["(", "<", "]:", "(<"]
+                .iter()
+                .any(|p| flat.contains(&format!("{p}{s}")))
+        })
+    }
+
+    #[test]
+    fn parser_differential_examples_are_neutralized() {
+        // FUZZ-01 (marked liest diese als Link, pulldown-cmark nicht) und INJECT-01-Referenzen.
+        for md in [
+            "[](javascript:()",
+            "a\r<javascript:>",
+            "?\n```<javascript:>",
+            "[r]:\x0c<javascript:>",
+            "[r]: javascript:alert(8)\n\n[e][r]",
+            "http://a\\<vbscript:>",
+            "[data:](<javascript:alert(1)>[r]: ",
+            "[x](  java\tscript:alert(1)",
+            "[x](&#106;avascript&#58;alert(1)",
+            "[x](&#x6A;avascript&colon;alert(1)",
+            "[x](\n&Tab;JAVASCRIPT:alert(1)",
+            "[x]:\n  vbscript:msgbox",
+            "[x](data:text/html;base64,AAAA",
+            "![i](<data:image/svg+xml;base64,AAAA",
+            "[a]( ( javascript:alert(1) ",
+            "https://a.b\\<a href=JavaScript:alert(1)>x",
+            "<a href='vbscript:x'>",
+        ] {
+            let out = sanitize(md);
+            assert!(!has_active_scheme(&out), "{md:?} -> {out:?}");
+            assert_eq!(sanitize(&out), out, "nicht idempotent: {md:?}");
+        }
+        assert_eq!(sanitize("[](javascript:()"), "[](javascript%3A()");
+        assert_eq!(sanitize("[r]: javascript:x"), "[r]: javascript%3Ax");
+    }
+
+    #[test]
+    fn html5_only_tags_are_masked() {
+        // INJECT-01: pulldown-cmark liest diese als Text, ein HTML5-Tokenizer als Tag.
+        for md in [
+            "<img/src=x/onerror=alert(1)>",
+            "<svg/onload=alert(1)>",
+            "<img src=\"x\"onerror=alert(1)>",
+            "<img src=`x` onerror=alert(1)>",
+            "<img src=x onerror=alert(1) \n/ >",
+            "text <img src=x onerror=alert(1) \n\n> more",
+            "<img src=x onerror=alert(1)//",
+            "<body/onload=alert(1)>",
+            "<iframe/src=//evil>",
+            "<input/autofocus/onfocus=alert(1)>",
+            "<math/href=javascript:1>",
+        ] {
+            let out = sanitize(md);
+            assert!(!has_raw_tag(&out), "{md:?} -> {out:?}");
+            assert_eq!(sanitize(&out), out, "nicht idempotent: {md:?}");
+        }
+        // Schon maskiertes und Codebereiche bleiben, ebenso nicht tag-artige Klammern.
+        for stable in [
+            "\\<img/src=x>",
+            "`<img/src=x>`",
+            "```\n<img/src=x onerror=1>\n```",
+            "a < b, 1<2, x<=y",
+        ] {
+            assert_eq!(sanitize(stable), stable);
+        }
+        // Doppelter Backslash maskiert nur sich selbst: das `<` bleibt gefährlich und wird maskiert.
+        assert_eq!(sanitize("\\\\<img/src=x>"), "\\\\\\<img/src=x>");
+    }
+
+    #[test]
+    fn harmless_schemes_in_prose_and_code_stay() {
+        for md in [
+            "Das Schema data ist ok, javascript auch: kein Link",
+            "`javascript:void(0)` im Code",
+            "[a](https://x.example/?q=data:1) und (data) sowie (data kein Ziel)",
+            "Datei: data.csv, Metadaten: (javascript)",
+        ] {
+            assert_eq!(sanitize(md), md);
+        }
     }
 
     #[test]
