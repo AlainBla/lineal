@@ -126,6 +126,48 @@ pub async fn authorize_issue(
     Ok(())
 }
 
+/// TOCTOU-Schutz: nach `FOR UPDATE` das Recht erneut gegen den GELADENEN Stand prüfen. Hat ein
+/// Berechtigter das Issue zwischen `resolve_in`/`authorize_issue` und der Sperre in ein anderes
+/// Team verschoben, gilt die Prüfung für das neue Team: unsichtbar → `not_found`, sichtbar, aber
+/// ohne Recht → `forbidden`. Ohne Teamwechsel kostet der Aufruf nichts.
+pub async fn reauthorize_locked(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    prechecked_team: TeamId,
+    locked: &Issue,
+    action: Action,
+    reference: &str,
+) -> AppResult<()> {
+    if locked.team_id == prechecked_team {
+        return Ok(());
+    }
+    if !can_see(tx, snap, ctx, locked).await? {
+        return Err(issue_not_found(reference));
+    }
+    authorize_issue(tx, snap, ctx, locked.id, locked.team_id, action).await
+}
+
+/// Zentraler Ablauf „Recht prüfen → Zeile sperren → Recht gegen frischen Stand erneut prüfen“.
+/// Liefert das gesperrte Issue (frischer Stand).
+pub async fn lock_then_authorize(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    found: &Issue,
+    action: Action,
+    reference: &str,
+) -> AppResult<Issue> {
+    authorize_issue(tx, snap, ctx, found.id, found.team_id, action).await?;
+    let issue = tx
+        .issues()
+        .get(found.id, true)
+        .await?
+        .ok_or_else(|| issue_not_found(reference))?;
+    reauthorize_locked(tx, snap, ctx, found.team_id, &issue, action, reference).await?;
+    Ok(issue)
+}
+
 pub(crate) async fn lookup(tx: &mut dyn Tx, reference: &str) -> AppResult<IssueId> {
     if let Ok(uuid) = Uuid::parse_str(reference) {
         return Ok(IssueId(uuid));

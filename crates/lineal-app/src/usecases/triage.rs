@@ -243,6 +243,13 @@ async fn prelude(
         .get(found.id, true)
         .await?
         .ok_or_else(|| resolve::issue::issue_not_found(reference))?;
+    // TOCTOU: nach der Sperre gegen den frischen Stand (Team) erneut prüfen.
+    if issue.team_id != found.team_id {
+        if !resolve::issue::can_see(tx, snap, ctx, &issue).await? {
+            return Err(resolve::issue::issue_not_found(reference));
+        }
+        snap.require_team(ctx, Action::TriageIssue, issue.team_id)?;
+    }
     if issue.trashed {
         return Err(invalid(
             "issue",

@@ -909,6 +909,31 @@ impl App {
             .get(found.id, true)
             .await?
             .ok_or_else(|| resolve::issue::issue_not_found(&input.id))?;
+        resolve::issue::reauthorize_locked(
+            tx,
+            &snap,
+            ctx,
+            found.team_id,
+            &issue,
+            Action::UpdateIssue,
+            &input.id,
+        )
+        .await?;
+        // Papierkorb/Archiv erneut prüfen: der Stand kann sich vor der Sperre geändert haben.
+        if issue.trashed {
+            return Err(invalid(
+                "id",
+                "issue_trashed",
+                "the issue is in the trash; restore it first",
+            ));
+        }
+        if issue.archived_at.is_some() {
+            return Err(invalid(
+                "id",
+                "issue_archived",
+                "archived issues are read-only",
+            ));
+        }
 
         if input.labels.is_some()
             && (!input.add_labels.is_empty() || !input.remove_labels.is_empty())
@@ -1567,20 +1592,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        resolve::issue::authorize_issue(
+        let mut issue = resolve::issue::lock_then_authorize(
             &mut *tx,
             &snap,
             ctx,
-            found.id,
-            found.team_id,
+            &found,
             Action::DeleteIssue,
+            reference,
         )
         .await?;
-        let mut issue = tx
-            .issues()
-            .get(found.id, true)
-            .await?
-            .ok_or_else(|| resolve::issue::issue_not_found(reference))?;
         if permanently {
             if !(snap.actor.is_admin() || snap.actor.is_system()) {
                 return Err(
@@ -1645,20 +1665,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        resolve::issue::authorize_issue(
+        let mut issue = resolve::issue::lock_then_authorize(
             &mut *tx,
             &snap,
             ctx,
-            found.id,
-            found.team_id,
+            &found,
             Action::UpdateIssue,
+            reference,
         )
         .await?;
-        let mut issue = tx
-            .issues()
-            .get(found.id, true)
-            .await?
-            .ok_or_else(|| resolve::issue::issue_not_found(reference))?;
         let was_trashed = issue.trashed;
         if was_trashed {
             let days = snap.org.limits.trash_retention_days;
@@ -1737,7 +1752,15 @@ impl App {
         if issue.trashed {
             return Err(resolve::issue::issue_not_found(issue_ref));
         }
-        snap.require_team(ctx, Action::ShareIssue, issue.team_id)?;
+        let issue = resolve::issue::lock_then_authorize(
+            &mut *tx,
+            &snap,
+            ctx,
+            &issue,
+            Action::ShareIssue,
+            issue_ref,
+        )
+        .await?;
         let user = resolve::user::resolve_in(&mut *tx, &snap, ctx, user_ref).await?;
         if fields::user_can_access_team(&mut *tx, &snap.tree, &user, issue.team_id).await? {
             return Ok(ShareResult {
@@ -1811,7 +1834,15 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, issue_ref).await?;
-        snap.require_team(ctx, Action::ShareIssue, issue.team_id)?;
+        let issue = resolve::issue::lock_then_authorize(
+            &mut *tx,
+            &snap,
+            ctx,
+            &issue,
+            Action::ShareIssue,
+            issue_ref,
+        )
+        .await?;
         let user = resolve::user::resolve_in(&mut *tx, &snap, ctx, user_ref).await?;
         if tx.issues().delete_share(issue.id, user.id).await? {
             emit(

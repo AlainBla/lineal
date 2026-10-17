@@ -201,20 +201,15 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
         let found = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
-        resolve::issue::authorize_issue(
+        let mut issue = resolve::issue::lock_then_authorize(
             &mut *tx,
             &snap,
             ctx,
-            found.id,
-            found.team_id,
+            &found,
             Action::UpdateIssue,
+            reference,
         )
         .await?;
-        let mut issue = tx
-            .issues()
-            .get(found.id, true)
-            .await?
-            .ok_or_else(|| resolve::issue::issue_not_found(reference))?;
         if issue.trashed {
             return Err(invalid(
                 "id",

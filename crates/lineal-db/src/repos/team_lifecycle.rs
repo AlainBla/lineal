@@ -158,6 +158,7 @@ impl PgTx {
              OR (owner_type = 'document' AND owner_id IN (SELECT id FROM document WHERE organization_id = $1 AND (team_id = $2 \
                  OR issue_id IN (SELECT id FROM issue WHERE organization_id = $1 AND team_id = $2) \
                  OR cycle_id IN (SELECT id FROM cycle WHERE organization_id = $1 AND team_id = $2)))) \
+             OR (owner_type = 'initiative' AND owner_id IN (SELECT id FROM initiative WHERE organization_id = $1 AND lead_team_id = $2)) \
              OR (owner_type = 'project' AND owner_id IN (SELECT p.id FROM project p WHERE p.organization_id = $1 \
                  AND EXISTS (SELECT 1 FROM project_team pt WHERE pt.project_id = p.id AND pt.team_id = $2) \
                  AND NOT EXISTS (SELECT 1 FROM project_team pt WHERE pt.project_id = p.id AND pt.team_id <> $2)))";
@@ -186,7 +187,11 @@ impl PgTx {
              (SELECT id FROM issue_label WHERE organization_id = $1 AND team_id = $2)",
             "UPDATE cycle SET inherited_from_id = NULL WHERE organization_id = $1 AND inherited_from_id IN \
              (SELECT id FROM cycle WHERE organization_id = $1 AND team_id = $2)",
-            "UPDATE initiative SET lead_team_id = NULL WHERE organization_id = $1 AND lead_team_id = $2",
+            // Initiativen des Teams mit entfernen, NICHT öffnen: `lead_team_id = NULL` würde sie für
+            // alle Nicht-Gäste sichtbar machen (eine vorher private Initiative samt Beschreibung,
+            // Updates und Projektverknüpfungen würde offengelegt). Abhängiges hängt per ON DELETE
+            // CASCADE daran; Projekte anderer Teams bleiben, nur die Verknüpfung entfällt.
+            "DELETE FROM initiative WHERE organization_id = $1 AND lead_team_id = $2",
             // Dokumente
             "DELETE FROM document WHERE organization_id = $1 AND (team_id = $2 \
                OR issue_id IN (SELECT id FROM issue WHERE organization_id = $1 AND team_id = $2) \

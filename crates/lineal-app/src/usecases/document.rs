@@ -519,6 +519,40 @@ async fn load_visible(
     Ok((doc, parent, scope))
 }
 
+/// Sperrt die Inhaltszeile des Dokuments und lädt Dokument, Eltern und Scope auf dem Stand NACH
+/// der Sperre neu; sichtbar muss es weiterhin sein (sonst `not_found`). Verhindert TOCTOU: ein
+/// Berechtigter kann das Dokument (oder das Eltern-Issue/-Projekt) parallel in ein für den Akteur
+/// unsichtbares Team verschoben haben, nachdem `load_visible` geprüft hat. Das Schreibrecht
+/// prüft der Aufrufer anschließend gegen das zurückgegebene `(parent, scope)`.
+async fn lock_then_authorize(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &RequestCtx,
+    reference: &str,
+    loaded: &Document,
+    want_trashed: bool,
+) -> AppResult<(Document, DocParent, ParentScope)> {
+    tx.documents()
+        .content_state(loaded.content_id, true)
+        .await?;
+    let doc = tx
+        .documents()
+        .get(loaded.id)
+        .await?
+        .filter(|d| d.trashed == want_trashed)
+        .ok_or_else(|| not_found(reference))?;
+    let parent = doc.parent().ok_or_else(|| not_found(reference))?;
+    let scope = tx
+        .documents()
+        .parent_scope(parent)
+        .await?
+        .ok_or_else(|| not_found(reference))?;
+    if !can_see(tx, snap, ctx, parent, &scope).await? {
+        return Err(not_found(reference));
+    }
+    Ok((doc, parent, scope))
+}
+
 impl App {
     async fn document_view(
         &self,
@@ -964,13 +998,10 @@ impl App {
         // Inhaltszeile sperren (gleiche Reihenfolge wie der Raum: erst Inhalt, dann Dokument) und
         // das Dokument auf frischem Stand neu lesen: sonst gewinnen bei parallelen Schreibern
         // mehrere dieselbe `expectedVersion`, und Patches werden auf veraltetem Text angewandt.
-        tx.documents().content_state(doc.content_id, true).await?;
-        let mut doc = tx
-            .documents()
-            .get(doc.id)
-            .await?
-            .filter(|d| !d.trashed)
-            .ok_or_else(|| not_found(reference))?;
+        let (mut doc, parent, scope) =
+            lock_then_authorize(tx, snap, ctx, reference, &doc, false).await?;
+        require_write(snap, ctx, parent, &scope)?;
+        require_writable_parent(&scope)?;
         let loaded_updated_at = doc.updated_at;
         if let Some(v) = input.expected_version
             && v != doc.content_version
@@ -1139,7 +1170,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
-        let (mut doc, parent, scope) = load_visible(&mut *tx, &snap, ctx, reference, false).await?;
+        let (doc, _, _) = load_visible(&mut *tx, &snap, ctx, reference, false).await?;
+        let (mut doc, parent, scope) =
+            lock_then_authorize(&mut *tx, &snap, ctx, reference, &doc, false).await?;
         require_write(&snap, ctx, parent, &scope)?;
         if scope.state.archived {
             return Err(AppError::invalid_request("parent is archived or trashed")
@@ -1174,7 +1207,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
-        let (mut doc, parent, scope) = load_visible(&mut *tx, &snap, ctx, reference, true).await?;
+        let (doc, _, _) = load_visible(&mut *tx, &snap, ctx, reference, true).await?;
+        let (mut doc, parent, scope) =
+            lock_then_authorize(&mut *tx, &snap, ctx, reference, &doc, true).await?;
         require_write(&snap, ctx, parent, &scope)?;
         if scope.state.trashed || scope.state.archived {
             return Err(AppError::invalid_request("restore parent first")
@@ -1236,7 +1271,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
-        let (doc, parent, scope) = load_visible(&mut *tx, &snap, ctx, reference, false).await?;
+        let (doc, _, _) = load_visible(&mut *tx, &snap, ctx, reference, false).await?;
+        let (doc, parent, scope) =
+            lock_then_authorize(&mut *tx, &snap, ctx, reference, &doc, false).await?;
         require_write(&snap, ctx, parent, &scope)?;
         require_writable_parent(&scope)?;
         let hid = Uuid::parse_str(history_id.trim())
