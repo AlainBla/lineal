@@ -932,6 +932,46 @@ async fn bootstrap_rejects_bad_requests_and_anonymous_callers(pool: PgPool) {
     assert!(lines.last().unwrap().starts_with("_metadata_="));
 }
 
+/// F-09/DOS-02: Ein Paket überschreitet die Byte-Obergrenze nicht (plus eine Zeile), der Rest
+/// kommt über `nextCursor`; nichts geht verloren.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn bootstrap_caps_package_bytes_and_continues_via_cursor(pool: PgPool) {
+    let e = env(pool).await;
+    let d = e.d;
+    for number in 300..324 {
+        sqlx::query(
+            "INSERT INTO issue (organization_id, team_id, number, title, description, state_id, creator_id) \
+             VALUES ($1,$2,$3,'Gross',repeat('x', 400000),$4,$5)",
+        )
+        .bind(d.org.0)
+        .bind(d.eng.0)
+        .bind(number)
+        .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(1)[1].0)
+        .bind(d.bob.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
+    let mut query = "?modelNames=Issue&limit=2000".to_owned();
+    let (mut pages, mut big) = (0, 0);
+    loop {
+        let (status, lines) = bootstrap(&e, Some("bob"), &query).await;
+        assert_eq!(status, StatusCode::OK);
+        let bytes: usize = lines.iter().map(|l| l.len() + 1).sum();
+        assert!(bytes < 8 * 1024 * 1024 + 600_000, "Paket zu gross: {bytes}");
+        let (objs, meta) = split(&lines);
+        big += objs.iter().filter(|o| o["title"] == "Gross").count();
+        pages += 1;
+        match meta["nextCursor"].as_str() {
+            Some(c) => query = format!("?cursor={}", c.replace(';', "%3B").replace(',', "%2C")),
+            None => break,
+        }
+        assert!(pages < 50);
+    }
+    assert_eq!(big, 24, "alle Issues kommen an");
+    assert!(pages >= 2, "mehrere Pakete: {pages}");
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn bootstrap_never_leaks_foreign_teams_to_a_guest(pool: PgPool) {
     let e = env(pool).await;

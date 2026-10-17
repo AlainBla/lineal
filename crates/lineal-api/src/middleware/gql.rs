@@ -20,6 +20,46 @@ use serde_json::json;
 const DEFAULT_CONNECTION_SIZE: u64 = 50;
 const MAX_FRAGMENT_DEPTH: usize = 64;
 
+/// Kosten (Zehntelpunkte) eines Freitext-Leaffelds (`description`, `body`, …) je Knoten. Diese
+/// Felder können bis zu 500 000 Zeichen enthalten (F-09/DOS-01); als Skalar (1) gewogen ließen
+/// sich per Alias-Vervielfachung hunderte MB je Anfrage bei winziger `x-complexity` abrufen.
+/// Bei 10 000 Punkten Query-Budget bleiben so höchstens rund 100 Freitext-Knoten je Anfrage.
+const HEAVY_TEXT_COST: u64 = 100;
+/// Kosten (Zehntelpunkte) je Eintrag einer Id-Liste (`input.ids` der Batch-Mutationen, F-09/DOS-03):
+/// jeder Eintrag ist eine volle Einzeländerung samt Events.
+const BATCH_ID_COST: u64 = 100;
+/// Obergrenze der serialisierten Antwort einer Query (Verteidigung in der Tiefe; Mutationen
+/// sind ausgenommen, weil sie dann bereits ausgeführt wären).
+pub const MAX_QUERY_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Felder, die große Freitexte liefern können.
+fn is_heavy_text(name: &str) -> bool {
+    matches!(name, "description" | "body" | "content" | "diffMarkdown")
+}
+
+/// Anzahl der Einträge in `ids`-Listen der Argumente (`ids: [...]` oder `input: {ids: [...]}`).
+fn batch_ids(field: &async_graphql::parser::types::Field, request: &Request) -> u64 {
+    fn count(name: Option<&str>, v: &Value) -> u64 {
+        match v {
+            Value::List(items) if name == Some("ids") => items.len() as u64,
+            Value::Object(map) => map.iter().map(|(k, v)| count(Some(k.as_str()), v)).sum(),
+            _ => 0,
+        }
+    }
+    field
+        .arguments
+        .iter()
+        .filter_map(|(n, v)| {
+            let value = v
+                .node
+                .clone()
+                .into_const_with(|var| request.variables.get(&var).cloned().ok_or(()))
+                .ok()?;
+            Some(count(Some(n.node.as_str()), &value))
+        })
+        .sum()
+}
+
 /// Statische Komplexität nach 09 §3.2 (aufgerundet). Intern in Zehntelpunkten gerechnet,
 /// damit Gleitkomma-Rauschen das Aufrunden nicht verfälscht.
 pub fn complexity(doc: &ExecutableDocument, operation: &SelectionSet, request: &Request) -> u64 {
@@ -80,8 +120,14 @@ fn selection_cost(
                 let field = &f.node;
                 let children = &field.selection_set.node;
                 let name = field.name.node.as_str();
+                total =
+                    total.saturating_add(batch_ids(field, request).saturating_mul(BATCH_ID_COST));
                 if children.items.is_empty() {
-                    total += 1;
+                    total += if is_heavy_text(name) {
+                        HEAVY_TEXT_COST
+                    } else {
+                        1
+                    };
                 } else if matches!(name, "nodes" | "edges" | "node") {
                     total = total.saturating_add(selection_cost(doc, children, request, walk));
                 } else if is_connection(field) {
@@ -226,14 +272,14 @@ pub async fn execute(
         // Parse-Fehler: Ausführung liefert die ordentliche Fehlerantwort (400, invalid_request).
         let parsed = request.parsed_query().ok().cloned();
         let Some(doc) = parsed else {
-            return run(schema, request, &ctx.request_id, None).await;
+            return run(schema, request, &ctx.request_id, None, false).await;
         };
         match operation(&doc, name.as_deref()) {
             Some(op) => (
                 op.ty == OperationType::Mutation,
                 complexity(&doc, &op.selection_set.node, &request),
             ),
-            None => return run(schema, request, &ctx.request_id, None).await,
+            None => return run(schema, request, &ctx.request_id, None, false).await,
         }
     };
     if is_mutation && !ctx.scopes.write {
@@ -266,6 +312,7 @@ pub async fn execute(
         request.data(ctx.clone()).data(class),
         &ctx.request_id,
         decision,
+        !is_mutation,
     )
     .await
 }
@@ -275,6 +322,7 @@ async fn run(
     request: Request,
     request_id: &str,
     decision: Option<(crate::rate_limit::Decision, u64)>,
+    cap_response: bool,
 ) -> Response {
     // Frisches Request-Budget für `Issue.children/relations/history` (nie wiederverwendet).
     let mut response = schema
@@ -286,7 +334,24 @@ async fn run(
     } else {
         StatusCode::OK
     };
-    let mut res = (status, Json(response)).into_response();
+    let mut res = match serde_json::to_vec(&response) {
+        Ok(bytes) if cap_response && bytes.len() > MAX_QUERY_RESPONSE_BYTES => {
+            return graphql_error_response(
+                &AppError::limit_exceeded(format!(
+                    "Response exceeds the maximum of {MAX_QUERY_RESPONSE_BYTES} bytes; \
+                     request fewer items or fewer text fields."
+                ))
+                .with_details(json!({ "maxBytes": MAX_QUERY_RESPONSE_BYTES })),
+            );
+        }
+        Ok(bytes) => (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (status, Json(response)).into_response(),
+    };
     if let Some((d, cost)) = decision {
         complexity_headers(res.headers_mut(), &d, cost);
     }
@@ -342,6 +407,32 @@ mod tests {
         let cost = cost_of(&q, serde_json::json!({}));
         assert!(start.elapsed() < std::time::Duration::from_secs(1));
         assert!(cost > 0);
+    }
+
+    #[test]
+    fn text_fields_and_batch_ids_are_weighted() {
+        // F-09/DOS-01: 8 Aliase mit 250 Beschreibungen sprengen das Budget (vorher ~400 Punkte).
+        let alias = "{ issues(first: 250) { nodes { description } } }";
+        let one = cost_of(alias, json!({}));
+        assert!(one > 2_000, "{one}");
+        let eight = (0..8)
+            .map(|i| format!("a{i}: issues(first: 250) {{ nodes {{ description }} }}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(cost_of(&format!("{{ {eight} }}"), json!({})) > 10_000);
+        // Schlanke Felder bleiben billig.
+        assert!(cost_of("{ issues(first: 250) { nodes { identifier } } }", json!({})) < 100);
+        // DOS-03: Batch-Größe zählt (Literal und Variable); 4 Aliase x 250 Ids > Budget.
+        let ids: Vec<String> = (0..250).map(|i| format!("{i}")).collect();
+        let q = "mutation($i: IssueBatchUpdateInput!) { issueBatchUpdate(input: $i) { updated } }";
+        let c = cost_of(q, json!({ "i": { "ids": ids, "priority": 1 } }));
+        assert!(c >= 2_500, "{c}");
+        let q4 = "mutation($i: IssueBatchUpdateInput!) { a: issueBatchUpdate(input: $i) { updated } \
+                  b: issueBatchUpdate(input: $i) { updated } c: issueBatchUpdate(input: $i) { updated } \
+                  d: issueBatchUpdate(input: $i) { updated } }";
+        assert!(cost_of(q4, json!({ "i": { "ids": ids, "priority": 1 } })) > 10_000);
+        let few = cost_of(q, json!({ "i": { "ids": ["a", "b"], "priority": 1 } }));
+        assert!(few < 100, "{few}");
     }
 
     #[test]
