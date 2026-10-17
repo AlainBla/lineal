@@ -11,6 +11,10 @@
   <img src="docs/assets/screenshot-board.png" alt="Lineal board view with issues across Backlog, Todo, In Progress and Done" width="900">
 </p>
 
+<p align="center">
+  <img src="docs/assets/screenshot-list.png" alt="Lineal list view with issues grouped by status, showing priority, labels, due dates and assignees" width="900">
+</p>
+
 ---
 
 ## Features
