@@ -4,7 +4,8 @@
 //! Sync-`data` plus `__class` (Modellname) und `syncGroups`; die letzte Zeile ist
 //! `_metadata_={"lastSyncId":N,"subscribedSyncGroups":[…],"databaseVersion":1,"nextCursor":…}`.
 //!
-//! **Pakete.** `limit` (Default 1000, höchstens 2000) begrenzt die Zeilen je Antwort. Ist
+//! **Pakete.** `limit` (Default 1000, höchstens 2000) begrenzt die Zeilen je Antwort, zusätzlich
+//! endet ein Paket spätestens nach ca. 8 MiB Nutzdaten (`MAX_PACKAGE_BYTES`, nextCursor gesetzt). Ist
 //! `nextCursor` gesetzt, ruft der Client mit `?cursor=<nextCursor>` das nächste Paket ab (Modelle
 //! und `lastSyncId` stecken im Cursor). `lastSyncId` ist der Stand des Logs **vor** dem ersten
 //! Lesen: Der Client öffnet danach `GET /sync?since=<lastSyncId>` und spielt Änderungen, die
@@ -55,6 +56,13 @@ pub const DATABASE_VERSION: u32 = 1;
 const DEFAULT_LIMIT: i64 = 1000;
 const MAX_LIMIT: i64 = 2000;
 const MAX_CURSOR_LEN: usize = 512;
+/// Obergrenze der Nutzdaten je Paket (F-09/DOS-02). Ist sie erreicht, endet das Paket nach der
+/// aktuellen Zeile und `nextCursor` zeigt hinter diese Zeile; der Client holt den Rest wie bei
+/// `limit` mit dem Cursor. So bleibt der Speicher je Anfrage begrenzt, auch bei Issues mit
+/// 500 000 Zeichen Beschreibung (2000 Zeilen wären sonst ~1 GB).
+const MAX_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Zeilen je Datenbankabfrage (die Seite wird komplett in den Speicher gelesen).
+const DB_CHUNK: i64 = 100;
 
 #[derive(Deserialize)]
 pub(crate) struct BootstrapQuery {
@@ -205,10 +213,11 @@ async fn run(
     let (mut idx, mut after) = cursor.map_or((0, None), |c| (c.idx, c.after));
 
     let mut lines: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
     let mut budget = limit;
-    while idx < models.len() && budget > 0 {
+    'models: while idx < models.len() && budget > 0 && bytes < MAX_PACKAGE_BYTES {
         let model = &models[idx];
-        let requested = budget;
+        let requested = budget.min(DB_CHUNK);
         let page = tx
             .outbox()
             .sync_bootstrap_page(model, after, requested)
@@ -216,6 +225,7 @@ async fn run(
         let scanned = i64::try_from(page.len()).unwrap_or(i64::MAX);
         let last = page.last().map(|r| r.id);
         for row in page {
+            let row_id = row.id;
             let visible: Vec<&String> = row.groups.iter().filter(|g| groups.contains(g)).collect();
             if visible.is_empty() {
                 continue;
@@ -226,7 +236,14 @@ async fn run(
                 map.insert("__class".into(), json!(model));
                 map.insert("syncGroups".into(), json!(visible));
             }
-            lines.push(data.to_string());
+            let line = data.to_string();
+            bytes = bytes.saturating_add(line.len() + 1);
+            lines.push(line);
+            if bytes >= MAX_PACKAGE_BYTES {
+                // Paket voll: Cursor hinter diese Zeile setzen (Reihenfolge ist `ORDER BY id`).
+                after = Some(row_id);
+                break 'models;
+            }
         }
         budget -= scanned;
         if scanned == 0 || scanned < requested {
