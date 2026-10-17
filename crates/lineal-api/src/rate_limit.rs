@@ -336,7 +336,7 @@ pub async fn ip_middleware(
     };
     // Anfragen mit Zugangsdaten: vor dem Lookup nur das hohe Sicherheitsnetz je IP; danach in
     // Stufe 2 gültig -> User-Bucket, ungültig -> strenger IP-Bucket. Brute-Force bremst
-    // `auth_failures` schon vor dem Lookup.
+    // `auth_failures` (zählt nur Fehlversuche; gültige Tokens sperrt es nie).
     if crate::middleware::auth::extract_token(req.headers()).is_some() {
         let now_ms = p.app.clock.now().timestamp_millis();
         let d = p.limiter.take(
