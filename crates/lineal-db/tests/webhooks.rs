@@ -1653,3 +1653,159 @@ async fn delivery_context_is_reevaluated_for_every_event(pool: PgPool) {
         "trashed"
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn workspace_webhook_stops_when_the_creator_loses_rights_or_is_suspended(pool: PgPool) {
+    let fx = setup(pool).await;
+    let w = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    fx.app
+        .create_issue(&alice(), issue("ENG", "vor dem Rechteverlust"))
+        .await
+        .unwrap();
+    assert_eq!(plan_all(&fx).await, 1);
+    assert_eq!(deliveries(&fx, w.id).await.len(), 1);
+
+    // Ersteller herabgestuft (Owner -> User): neue Events werden nicht mehr eingeplant (F-07).
+    sqlx::query("UPDATE \"user\" SET role = 'user' WHERE id = $1")
+        .bind(fx.data.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    fx.app
+        .create_issue(&bob(), issue("ENG", "nach der Herabstufung"))
+        .await
+        .unwrap();
+    assert_eq!(plan_all(&fx).await, 0);
+    assert_eq!(deliveries(&fx, w.id).await.len(), 1);
+
+    // Bereits eingeplante Zustellungen bzw. Wiederholungen werden beim Abholen ebenfalls verworfen.
+    sqlx::query("UPDATE \"user\" SET role = 'owner' WHERE id = $1")
+        .bind(fx.data.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(plan_all(&fx).await, 1);
+    sqlx::query("UPDATE \"user\" SET active = false WHERE id = $1")
+        .bind(fx.data.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let due = fx
+        .app
+        .claim_due_webhook_deliveries(fx.app.clock.now(), 100)
+        .await
+        .unwrap();
+    assert!(due.is_empty(), "suspended creator: nothing is delivered");
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM webhook_delivery WHERE webhook_id = $1 AND status = 'pending'",
+    )
+    .bind(w.id.0)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, 0, "discarded deliveries are not retried");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn invitation_of_a_demoted_admin_does_not_create_an_admin(pool: PgPool) {
+    let fx = setup(pool).await;
+    // Alice (Owner) lädt als Admin ein und wird danach herabgestuft: Nutzer vergeben keine Admin-Rolle.
+    let c = fx
+        .app
+        .invite_users(
+            &alice(),
+            invite(
+                &["dave@acme.example", "erin@acme.example"],
+                UserRole::Admin,
+                &[],
+            ),
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE \"user\" SET role = 'user' WHERE id = $1")
+        .bind(fx.data.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    // Erneutes Senden verlängert die Einladung des herabgestuften Einladenden nicht.
+    assert_eq!(
+        kind(fx.app.resend_invitation(&alice(), c[1].invitation.id).await),
+        ErrorKind::NotFound
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM invitation WHERE id = $1")
+        .bind(c[1].invitation.id)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "revoked");
+    // Annahme erzeugt kein Admin-Konto (und überhaupt keinen User).
+    let accept = fx
+        .app
+        .accept_invitation(AcceptInvitationInput {
+            token: c[0].token.clone(),
+            email: "dave@acme.example".into(),
+            name: None,
+            password: Some("correct horse battery".into()),
+        })
+        .await;
+    assert_eq!(kind(accept), ErrorKind::NotFound);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM \"user\" WHERE email LIKE '%@acme.example' AND email IN ('dave@acme.example', 'erin@acme.example')")
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    let audit: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE action = 'invitation.revoked' AND details->>'reason' = 'inviter_lost_admin_right'",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert!(audit >= 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn invitation_into_a_private_team_fails_after_the_inviter_was_removed(pool: PgPool) {
+    let fx = setup(pool).await;
+    sqlx::query("UPDATE team SET visibility = 'private' WHERE id = $1")
+        .bind(fx.data.web.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let c = fx
+        .app
+        .invite_users(
+            &bob(),
+            invite(&["frank@acme.example"], UserRole::User, &["WEB"]),
+        )
+        .await
+        .unwrap();
+    // Bob wird aus dem privaten Team entfernt.
+    sqlx::query("DELETE FROM team_membership WHERE team_id = $1 AND user_id = $2")
+        .bind(fx.data.web.0)
+        .bind(fx.data.bob.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let accept = fx
+        .app
+        .accept_invitation(AcceptInvitationInput {
+            token: c[0].token.clone(),
+            email: "frank@acme.example".into(),
+            name: None,
+            password: Some("correct horse battery".into()),
+        })
+        .await;
+    assert_eq!(kind(accept), ErrorKind::NotFound);
+    let members: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM team_membership m JOIN \"user\" u ON u.id = m.user_id WHERE u.email = 'frank@acme.example'",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(members, 0);
+}

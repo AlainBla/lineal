@@ -443,6 +443,10 @@ pub trait TriageRepo: Send {
     ) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Ersteller der Regel (`None`: System-Anlage oder der User wurde entfernt).
+    async fn recurring_creator(&mut self, _id: Uuid) -> AppResult<Option<UserId>> {
+        unimplemented_repo()
+    }
     /// Workspaces mit fälligen wiederkehrenden Issues (mandantenübergreifend).
     async fn orgs_with_recurring_due(&mut self, _now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         unimplemented_repo()

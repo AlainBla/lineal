@@ -466,3 +466,50 @@ async fn auto_close_state_can_be_reset_to_default(pool: PgPool) {
         .unwrap();
     assert!(t.team.auto_close_state_id.is_none());
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn recurring_issue_of_a_suspended_or_removed_creator_is_paused_not_run(pool: PgPool) {
+    let fx = setup(pool).await;
+    let tpl = template(
+        &fx,
+        "Standup",
+        json!({ "title": "Standup notes", "priority": 3 }),
+    )
+    .await;
+    let rec = fx
+        .app
+        .create_recurring_issue(&alice(), daily(&tpl))
+        .await
+        .unwrap();
+    let due = rec.next_run_at;
+    // Ersteller gesperrt: Lauf erzeugt nichts, Regel wird pausiert und der Grund vermerkt.
+    sqlx::query("UPDATE \"user\" SET active = false WHERE id = $1")
+        .bind(SeedData::acme().alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    RecurringIssuesJob.run(&fx.app, due).await.unwrap();
+    assert_eq!(count_issues(&fx, "Standup notes").await, 0);
+    let after: (bool, Option<String>) =
+        sqlx::query_as("SELECT paused, last_error FROM recurring_issue WHERE id = $1")
+            .bind(rec.id)
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert!(after.0);
+    assert!(after.1.unwrap().contains("creator_inactive"));
+
+    // Ersteller entfernt (creator_id NULL, z. B. User gelöscht): ebenfalls kein Lauf.
+    sqlx::query("UPDATE \"user\" SET active = true WHERE id = $1")
+        .bind(SeedData::acme().alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE recurring_issue SET paused = false, creator_id = NULL WHERE id = $1")
+        .bind(rec.id)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    RecurringIssuesJob.run(&fx.app, due).await.unwrap();
+    assert_eq!(count_issues(&fx, "Standup notes").await, 0);
+}

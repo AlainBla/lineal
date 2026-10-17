@@ -883,6 +883,26 @@ impl WebhookRepo for PgTx {
         Ok(res.rows_affected() > 0)
     }
 
+    async fn discard_delivery(
+        &mut self,
+        id: Uuid,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE webhook_delivery SET status = 'given_up', next_attempt_at = NULL, error = left($3, 500), \
+             updated_at = $4 WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .bind(reason)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn purge_deliveries(&mut self, before: DateTime<Utc>) -> AppResult<u64> {
         let res = sqlx::query(
             "DELETE FROM webhook_delivery WHERE created_at < $1 AND status <> 'pending'",

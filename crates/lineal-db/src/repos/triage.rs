@@ -873,6 +873,18 @@ impl TriageRepo for PgTx {
         Ok(())
     }
 
+    async fn recurring_creator(&mut self, id: Uuid) -> AppResult<Option<UserId>> {
+        let creator: Option<Option<Uuid>> = sqlx::query_scalar(
+            "SELECT creator_id FROM recurring_issue WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(creator.flatten().map(UserId))
+    }
+
     async fn orgs_with_recurring_due(&mut self, now: DateTime<Utc>) -> AppResult<Vec<OrgId>> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT organization_id FROM recurring_issue \

@@ -10,6 +10,7 @@ use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
+use crate::ports::Tx;
 use crate::ports::repos::StoredEvent;
 use crate::ports::repos::webhook::{
     DeliveryOutcome, DeliveryRecord, DueDelivery, NewDelivery, NewWebhook, WebhookPatch,
@@ -937,22 +938,29 @@ impl App {
         };
         let now = self.clock.now();
         let mut planned = 0;
+        let mut entitled: std::collections::HashMap<Uuid, bool> = std::collections::HashMap::new();
         for hook in hooks {
-            // Der Ersteller muss die Daten des Teams weiterhin sehen dürfen (aktiv, bei nicht
-            // öffentlichen Teams Mitglied bzw. Admin).
-            if let Some(t) = hook.team_id {
-                let creator = tx.users().get(hook.creator_id).await?;
-                let ok = match creator {
-                    // Stillgelegte/gelöschte Teams liefern nichts (visibility = None).
-                    Some(u) if u.active && u.status == "active" && visibility(t).is_some() => {
-                        visibility(t) == Some(TeamVisibility::Public)
-                            || tx.teams().get_membership(t, u.id).await?.is_some()
-                    }
-                    _ => false,
-                };
-                if !ok {
-                    continue;
+            // Der Ersteller muss aktiv sein und das Recht am Scope weiterhin haben (Team-Webhook:
+            // Team sichtbar/Mitglied und `createTeamWebhook`; Workspace-Webhook: `manageWebhooks`).
+            // Sonst wird nichts geplant; die Prüfung läuft bei jedem Event neu, ein Webhook liefert
+            // also nur, solange der Ersteller die Rechte hat (F-07).
+            if let Some(t) = hook.team_id
+                && visibility(t).is_none()
+            {
+                // Stillgelegte/gelöschte Teams liefern nichts (kein Rechteverlust des Erstellers).
+                continue;
+            }
+            let ok = match entitled.get(&hook.id.0) {
+                Some(v) => *v,
+                None => {
+                    let v = webhook_creator_entitled(&mut *tx, &hook).await?;
+                    entitled.insert(hook.id.0, v);
+                    v
                 }
+            };
+            if !ok {
+                tracing::warn!(webhook = %hook.id, "creator lost rights, delivery skipped");
+                continue;
             }
             let Some(visible) = visible_teams_for_hook(&hook, &teams, &visibility) else {
                 continue;
@@ -1005,7 +1013,31 @@ impl App {
             .claim_due_deliveries(now, limit, Duration::minutes(10))
             .await?;
         tx.commit().await?;
-        Ok(due)
+        // Auch Erst- und Wiederholungsversuche prüfen die Rechte des Erstellers erneut (F-07):
+        // wer sie verloren hat, bekommt nichts mehr; die Zustellung wird verworfen.
+        let mut verdict: std::collections::HashMap<Uuid, bool> = std::collections::HashMap::new();
+        let mut out = Vec::with_capacity(due.len());
+        for d in due {
+            let ok = match verdict.get(&d.webhook.id.0) {
+                Some(v) => *v,
+                None => {
+                    let mut tx = self.store.begin(d.org_id).await?;
+                    let v = webhook_creator_entitled(&mut *tx, &d.webhook).await?;
+                    verdict.insert(d.webhook.id.0, v);
+                    v
+                }
+            };
+            if ok {
+                out.push(d);
+            } else {
+                let mut tx = self.store.begin(d.org_id).await?;
+                tx.webhooks()
+                    .discard_delivery(d.id, CREATOR_RIGHTS_LOST, now)
+                    .await?;
+                tx.commit().await?;
+            }
+        }
+        Ok(out)
     }
 
     /// Entschlüsselte Signatur-Secrets: aktuelles und (24 h nach Rotation) vorheriges.
@@ -1059,6 +1091,56 @@ impl App {
             .await?;
         tx.commit().await?;
         Ok(disabled)
+    }
+}
+
+/// `disabledReason` bzw. Fehlertext, wenn der Ersteller die Rechte verloren hat.
+pub const CREATOR_RIGHTS_LOST: &str = "creator_rights_lost";
+
+/// Darf der Ersteller den Webhook heute noch anlegen? Aktiver User; Workspace-Webhook:
+/// `manageWebhooks`; Team-Webhook: Team sichtbar (öffentlich bzw. Mitglied) und `createTeamWebhook`.
+async fn webhook_creator_entitled(tx: &mut dyn Tx, hook: &WebhookRecord) -> AppResult<bool> {
+    let Some(user) = tx
+        .users()
+        .get(hook.creator_id)
+        .await?
+        .filter(|u| u.active && u.status == "active")
+    else {
+        return Ok(false);
+    };
+    let ctx = RequestCtx {
+        org_id: hook.org_id,
+        actor: if user.role == lineal_domain::enums::UserRole::App {
+            Actor::App { id: user.id }
+        } else {
+            Actor::User {
+                id: user.id,
+                role: user.role,
+            }
+        },
+        request_id: "req_webhook_creator_check".into(),
+        scopes: crate::context::Scopes::all(),
+        team_scope: None,
+        via_session: false,
+        client_ip: None,
+        credential_kind: None,
+    };
+    let snap = PolicySnapshot::load(tx, &ctx).await?;
+    match hook.team_id {
+        Some(t) => {
+            if snap
+                .require_team(&ctx, Action::CreateTeamWebhook, t)
+                .is_err()
+            {
+                return Ok(false);
+            }
+            let public = snap
+                .tree
+                .get(t)
+                .is_some_and(|x| x.visibility == TeamVisibility::Public);
+            Ok(public || tx.teams().get_membership(t, user.id).await?.is_some())
+        }
+        None => Ok(snap.require_workspace(&ctx, Action::ManageWebhooks).is_ok()),
     }
 }
 

@@ -800,6 +800,17 @@ impl App {
             .get(rec.team_id)
             .await?
             .ok_or_else(|| AppError::internal("team of recurring issue is missing"))?;
+        // Ersteller zur Ausführungszeit prüfen (F-07/VARIANT-04): aktiv und weiterhin berechtigt,
+        // Vorlagen des Teams zu verwalten – sonst Regel pausieren statt als System weiterzulaufen.
+        if let Some(reason) = self
+            .recurring_creator_rejection(&mut *tx, ctx, &rec, &team)
+            .await?
+        {
+            tx.triage().pause_recurring_run(rec.id, reason, now).await?;
+            tx.commit().await?;
+            tracing::warn!(recurring = %rec.id, reason, "recurring issue paused");
+            return Ok(Some(Uuid::nil()));
+        }
         let tz = tz_of(&team);
         let next = next_occurrence(
             &rec.frequency,
@@ -841,6 +852,43 @@ impl App {
                 Ok(Some(Uuid::nil()))
             }
         }
+    }
+
+    async fn recurring_creator_rejection(
+        &self,
+        tx: &mut dyn Tx,
+        ctx: &RequestCtx,
+        rec: &RecurringIssue,
+        team: &Team,
+    ) -> AppResult<Option<&'static str>> {
+        let Some(creator) = tx.triage().recurring_creator(rec.id).await? else {
+            return Ok(Some("creator_removed"));
+        };
+        let Some(user) = tx
+            .users()
+            .get(creator)
+            .await?
+            .filter(|u| u.active && u.status == "active")
+        else {
+            return Ok(Some("creator_inactive"));
+        };
+        let cctx = RequestCtx {
+            actor: crate::context::Actor::User {
+                id: user.id,
+                role: user.role,
+            },
+            scopes: crate::context::Scopes::all(),
+            via_session: false,
+            ..ctx.clone()
+        };
+        let snap = PolicySnapshot::load(tx, &cctx).await?;
+        if snap
+            .require_team(&cctx, Action::ManageTeamTemplates, team.id)
+            .is_err()
+        {
+            return Ok(Some("creator_lost_team_rights"));
+        }
+        Ok(None)
     }
 
     async fn create_recurring_occurrence(

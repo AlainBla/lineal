@@ -347,6 +347,16 @@ pub trait WebhookRepo: Send {
     async fn requeue_delivery(&mut self, _id: Uuid, _now: DateTime<Utc>) -> AppResult<bool> {
         unimplemented_repo()
     }
+    /// Verwirft eine Zustellung endgültig (`given_up`, kein weiterer Versuch) mit Begründung, ohne
+    /// den Fehlerzähler des Webhooks zu berühren (Ersteller hat die Rechte verloren).
+    async fn discard_delivery(
+        &mut self,
+        _id: Uuid,
+        _reason: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
     /// Löscht Zustellprotokolle, die älter als `before` sind (30 Tage Aufbewahrung).
     async fn purge_deliveries(&mut self, _before: DateTime<Utc>) -> AppResult<u64> {
         unimplemented_repo()
