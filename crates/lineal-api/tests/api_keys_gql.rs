@@ -374,3 +374,74 @@ async fn use_case_requires_session_and_keeps_team_scope(pool: sqlx::PgPool) {
         lineal_app::ErrorKind::Forbidden | lineal_app::ErrorKind::NotFound
     ));
 }
+
+/// F-31: Auflisten und Widerrufen von Keys nur per Web-Session, nie mit API-Key/OAuth-Token.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn listing_and_revoking_keys_needs_a_session(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        CredentialClass::Session,
+        CREATE,
+        json!({"i": {"label": "CI", "scopes": ["READ", "WRITE"]}}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let id = res.data.into_json().unwrap()["apiKeyCreate"]["apiKey"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rev = "mutation($id: String!) { apiKeyRevoke(id: $id) { success } }";
+    for class in [CredentialClass::ApiKey, CredentialClass::OAuth] {
+        let res = run(
+            &schema,
+            ctx_for(SeedUser::Bob),
+            class,
+            "{ apiKeys { id } }",
+            json!({}),
+        )
+        .await;
+        assert_eq!(code(&res), "forbidden");
+        let res = run(
+            &schema,
+            ctx_for(SeedUser::Bob),
+            class,
+            rev,
+            json!({"id": id}),
+        )
+        .await;
+        assert_eq!(code(&res), "forbidden");
+    }
+    // Auch das Use-Case-Gate greift (Klasse Session, aber ctx.via_session = false).
+    let mut key_ctx = ctx_for(SeedUser::Bob);
+    key_ctx.via_session = false;
+    let res = run(
+        &schema,
+        key_ctx.clone(),
+        CredentialClass::Session,
+        "{ apiKeys { id } }",
+        json!({}),
+    )
+    .await;
+    assert_eq!(code(&res), "forbidden");
+    let res = run(
+        &schema,
+        key_ctx,
+        CredentialClass::Session,
+        rev,
+        json!({"id": id}),
+    )
+    .await;
+    assert_eq!(code(&res), "forbidden");
+    // Die Session darf weiterhin widerrufen.
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Bob),
+        CredentialClass::Session,
+        rev,
+        json!({"id": id}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+}

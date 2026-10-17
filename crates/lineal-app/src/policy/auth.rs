@@ -250,6 +250,12 @@ fn is_admin(role: UserRole) -> bool {
     matches!(role, UserRole::Owner | UserRole::Admin)
 }
 
+/// Admin-Rolle **und** Token-Scope `admin`: Rechte, die nur aus der Admin-Rolle entstehen,
+/// brauchen den Scope (ein `read write`-Key eines Admins darf sie nicht ausüben).
+fn is_admin_with_scope(ctx: &RequestCtx, role: UserRole) -> bool {
+    is_admin(role) && ctx.scopes.admin
+}
+
 fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppResult<()> {
     let Some(role) = actor_role(ctx) else {
         return Ok(()); // System
@@ -287,7 +293,7 @@ fn require_workspace(ctx: &RequestCtx, action: Action, org: &OrgPolicy) -> AppRe
         ViewInitiatives => role != UserRole::Guest,
         ManageInitiatives | ViewWorkspaceOverview => role != UserRole::Guest,
         // docs/05 §4.4, docs/15 §5: Workspace-Views (geteilt, ohne Team) nur Admin/Owner.
-        ManageWorkspaceViews => is_admin(role),
+        ManageWorkspaceViews => is_admin_with_scope(ctx, role),
         ManageWorkspaceProjectLabels => {
             role != UserRole::Guest && at_least(org.label_management_role)
         }
@@ -326,7 +332,8 @@ fn require_one_team(ctx: &RequestCtx, action: Action, view: &TeamPolicyView) -> 
     }
     if action == Action::RestoreDeletedTeam {
         // Gelöschte Teams sind für Nicht-Admins unsichtbar.
-        if !is_admin(role) {
+        // Ohne Admin-Scope sind gelöschte Teams unsichtbar (wie für Nicht-Admins).
+        if !is_admin_with_scope(ctx, role) {
             return Err(team_not_found());
         }
         check_scope(ctx, action)?;
@@ -352,7 +359,7 @@ fn require_one_team(ctx: &RequestCtx, action: Action, view: &TeamPolicyView) -> 
     let ok = match rule {
         Rule::AnyAccess => true,
         Rule::Owner => view.is_team_owner,
-        Rule::Admin => is_admin(role),
+        Rule::Admin => is_admin_with_scope(ctx, role),
         Rule::MemberSettingNoGuest(key) => {
             !matches!(role, UserRole::Guest | UserRole::App)
                 && (view.is_team_owner || (view.is_member && setting_is_member(view, key)))
@@ -458,6 +465,77 @@ mod tests {
                 .is_ok()
         );
         assert!(s.require_team(&ctx, Action::AddMember, des()).is_ok());
+    }
+
+    /// F-04/F-12 (AUTHZ2-01, VARIANT-02/-03): Rechte, die nur aus der Admin-Rolle entstehen,
+    /// verlangen den Token-Scope `admin`.
+    #[test]
+    fn admin_role_rights_need_the_admin_scope() {
+        let admin_actions = [
+            Action::JoinTeam,
+            Action::AddMember,
+            Action::AddGuest,
+            Action::SetTeamOwner,
+            Action::UpdateTeamSettings,
+            Action::ChangeTeamVisibility,
+            Action::ChangeTeamKey,
+            Action::RetireTeam,
+            Action::DeleteTeam,
+            Action::CreateTeamWebhook,
+            Action::SetTeamParent,
+            Action::RestoreDeletedTeam,
+            Action::ViewTeamMetadata,
+        ];
+        // Mit Scope `admin` (Session/Key): Alice (Owner) verwaltet das private Team DES.
+        let with_scope = ctx_of(&alice_view());
+        let s = snap(alice_view());
+        for a in admin_actions {
+            assert!(
+                s.require_team(&with_scope, a, des()).is_ok(),
+                "{a:?} mit Scope"
+            );
+        }
+        // Ohne Scope `admin` (read write): wie ein gewöhnliches Nicht-Mitglied.
+        let mut rw = ctx_of(&alice_view());
+        rw.scopes = Scopes::read_write();
+        let s = snap(alice_view().with_admin_scope(false));
+        for a in admin_actions {
+            let err = kind(s.require_team(&rw, a, des()));
+            assert!(
+                matches!(err, Some(ErrorKind::NotFound | ErrorKind::Forbidden)),
+                "{a:?} ohne Scope muss scheitern, war {err:?}"
+            );
+        }
+        // Das private Team bleibt unsichtbar, auch für Metadaten.
+        assert_eq!(
+            kind(s.require_team(&rw, Action::ViewTeamMetadata, des())),
+            Some(ErrorKind::NotFound)
+        );
+        // Workspace-Views (nur Admin-Rolle) ebenfalls.
+        let org = OrgPolicy::default();
+        assert!(
+            require(
+                &with_scope,
+                Action::ManageWorkspaceViews,
+                Resource::Workspace(&org)
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            kind(require(
+                &rw,
+                Action::ManageWorkspaceViews,
+                Resource::Workspace(&org)
+            )),
+            Some(ErrorKind::Forbidden)
+        );
+        // Eigene (Owner-)Rechte über Mitgliedschaft bleiben ohne Scope erhalten.
+        let team_owner = snap(alice_view().with_admin_scope(false));
+        assert!(
+            team_owner
+                .require_team(&rw, Action::ChangeTeamKey, eng())
+                .is_ok()
+        );
     }
 
     #[test]

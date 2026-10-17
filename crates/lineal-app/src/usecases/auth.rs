@@ -435,6 +435,13 @@ impl App {
 
     /// Eigene API-Keys (neueste zuerst, inkl. widerrufener).
     pub async fn list_api_keys(&self, ctx: &RequestCtx) -> AppResult<Vec<ApiKeyRecord>> {
+        // Key-Verwaltung nur mit Web-Session: ein (gestohlener) Key soll weder Schwester-Keys
+        // enumerieren noch sie widerrufen können.
+        if !ctx.via_session && !matches!(ctx.actor, crate::context::Actor::System) {
+            return Err(AppError::forbidden(
+                "API keys can only be managed from a browser session.",
+            ));
+        }
         let user_id = resolve::user::actor_user_id(ctx)
             .ok_or_else(|| AppError::forbidden("Only users own API keys."))?;
         let mut tx = self.store.begin(ctx.org_id).await?;
@@ -443,6 +450,11 @@ impl App {
 
     /// Widerruft einen Key: der Eigentümer oder ein Admin/Owner. Wirkt sofort.
     pub async fn revoke_api_key(&self, ctx: &RequestCtx, id: ApiKeyId) -> AppResult<()> {
+        if !ctx.via_session && !matches!(ctx.actor, crate::context::Actor::System) {
+            return Err(AppError::forbidden(
+                "API keys can only be managed from a browser session.",
+            ));
+        }
         let mut tx = self.store.begin(ctx.org_id).await?;
         let key = tx.auth().get_api_key(id).await?.ok_or_else(|| {
             AppError::not_found("Could not find referenced ApiKey.")
@@ -450,7 +462,8 @@ impl App {
         })?;
         let own = resolve::user::actor_user_id(ctx) == Some(key.user_id);
         let admin = matches!(ctx.actor, crate::context::Actor::System)
-            || matches!(ctx.actor, crate::context::Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin));
+            || (ctx.scopes.admin
+                && matches!(ctx.actor, crate::context::Actor::User { role, .. } if matches!(role, UserRole::Owner | UserRole::Admin)));
         if !own && !admin {
             return Err(AppError::not_found("Could not find referenced ApiKey.")
                 .with_details(json!({ "type": "ApiKey" })));

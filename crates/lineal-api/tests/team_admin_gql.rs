@@ -256,3 +256,52 @@ async fn nesting_preview_and_nest_need_an_admin(pool: sqlx::PgPool) {
         assert!(!res.errors.is_empty(), "{q}");
     }
 }
+
+fn code(res: &async_graphql::Response) -> String {
+    let e = res.errors.first().expect("expected error");
+    let v = serde_json::to_value(e).unwrap();
+    v["extensions"]["code"].as_str().unwrap_or("").to_owned()
+}
+
+/// F-04: Ein `read write`-Key eines Owners (ohne Scope `admin`) darf keine Rechte ausüben, die
+/// nur aus der Admin-Rolle entstehen (Self-Join in private Teams, Nesting, Löschen).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn key_without_admin_scope_cannot_use_admin_role_shortcuts(pool: sqlx::PgPool) {
+    let schema = setup(pool).await;
+    let alice = SeedData::acme().alice.to_string();
+    let mut rw = ctx_for(SeedUser::Alice);
+    rw.scopes = lineal_app::Scopes::read_write();
+    rw.via_session = false;
+
+    let join = "mutation($t: String!, $u: String!) { teamMembershipCreate(teamId: $t, userId: $u) { success } }";
+    let res = run(&schema, rw.clone(), join, json!({"t": "DES", "u": alice})).await;
+    assert!(
+        matches!(code(&res).as_str(), "forbidden" | "not_found"),
+        "{:?}",
+        res.errors
+    );
+    let res = run(&schema, rw.clone(), NEST, json!({ "t": "WEB", "p": "DES" })).await;
+    assert_eq!(code(&res), "forbidden", "{:?}", res.errors);
+    let res = run(
+        &schema,
+        rw.clone(),
+        "mutation { teamDelete(id: \"DES\") { success } }",
+        json!({}),
+    )
+    .await;
+    assert!(
+        matches!(code(&res).as_str(), "forbidden" | "not_found"),
+        "{:?}",
+        res.errors
+    );
+
+    // Mit Scope `admin` (Session bzw. Key mit admin) bleibt alles erlaubt.
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        join,
+        json!({"t": "DES", "u": alice}),
+    )
+    .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+}

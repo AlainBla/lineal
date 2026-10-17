@@ -144,6 +144,9 @@ pub struct ActorView {
     pub memberships: HashMap<TeamId, bool>,
     /// Team-Beschränkung eines API-Keys (`RequestCtx::team_scope`); `None` = unbeschränkt.
     pub team_scope: Option<BTreeSet<TeamId>>,
+    /// Admin-Rechte der Rolle gelten nur, wenn der Token den Scope `admin` trägt (Sessions und
+    /// System immer). Ein `read write`-Key eines Admins handelt wie ein gewöhnliches Mitglied.
+    pub admin_scope: bool,
 }
 
 impl ActorView {
@@ -158,7 +161,14 @@ impl ActorView {
             role,
             memberships: memberships.iter().map(|m| (m.team_id, m.owner)).collect(),
             team_scope: None,
+            admin_scope: true,
         }
+    }
+
+    /// Setzt, ob der Token den Scope `admin` trägt (siehe [`ActorView::admin_scope`]).
+    pub fn with_admin_scope(mut self, admin_scope: bool) -> Self {
+        self.admin_scope = admin_scope;
+        self
     }
 
     /// Beschränkt die Sicht auf die Teams eines team-beschränkten API-Keys.
@@ -180,8 +190,10 @@ impl ActorView {
         self.memberships.contains_key(&team)
     }
 
+    /// Admin/Owner **mit wirksamem Admin-Scope**: nur dann gelten Rechte, die allein aus der
+    /// Admin-Rolle entstehen (Team-Administration, Moderation fremder Inhalte, ...).
     pub fn is_admin(&self) -> bool {
-        matches!(self.role, UserRole::Owner | UserRole::Admin)
+        matches!(self.role, UserRole::Owner | UserRole::Admin) && self.admin_scope
     }
 }
 
@@ -347,7 +359,8 @@ impl PolicySnapshot {
         };
         Ok(Self {
             actor: ActorView::new(ctx.actor, &memberships)
-                .with_team_scope(ctx.team_scope.as_deref()),
+                .with_team_scope(ctx.team_scope.as_deref())
+                .with_admin_scope(ctx.scopes.admin || matches!(ctx.actor, Actor::System)),
             tree: TeamTree::new(teams),
             org,
         })

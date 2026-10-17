@@ -744,15 +744,17 @@ impl App {
         // Löschen: Ersteller, Team-Owner oder Workspace-Admin/Owner (docs/03 §7).
         let is_creator =
             attachment.creator_id.is_some() && attachment.creator_id == actor_user(ctx);
-        let is_admin = matches!(
-            ctx.actor,
-            crate::context::Actor::System
-                | crate::context::Actor::User {
-                    role: lineal_domain::enums::UserRole::Owner
-                        | lineal_domain::enums::UserRole::Admin,
-                    ..
-                }
-        );
+        // Admin-Abkürzung nur mit Scope `admin`.
+        let is_admin = ctx.scopes.admin
+            && matches!(
+                ctx.actor,
+                crate::context::Actor::System
+                    | crate::context::Actor::User {
+                        role: lineal_domain::enums::UserRole::Owner
+                            | lineal_domain::enums::UserRole::Admin,
+                        ..
+                    }
+            );
         if !is_creator && !is_admin && !snap.view(issue.team_id)?.is_team_owner {
             return Err(AppError::forbidden(
                 "Only the creator, a team owner or an admin can delete an attachment.",

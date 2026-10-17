@@ -132,6 +132,16 @@ fn not_found() -> async_graphql::Error {
     )
 }
 
+/// Key-Verwaltung (Anlegen, Auflisten, Widerrufen) nur per Cookie-Session, nie mit API-Key/OAuth.
+fn require_session(ctx: &Context<'_>) -> async_graphql::Result<()> {
+    if ctx.data_opt::<CredentialClass>() != Some(&CredentialClass::Session) {
+        return Err(gql_err(AppError::forbidden(
+            "API keys can only be managed from a browser session.",
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct ApiKeyQuery;
 
@@ -139,6 +149,7 @@ pub struct ApiKeyQuery;
 impl ApiKeyQuery {
     /// Eigene API-Keys des Viewers (neueste zuerst, inkl. widerrufener).
     async fn api_keys(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<ApiKeyGql>> {
+        require_session(ctx)?;
         let keys = app(ctx)?
             .list_api_keys(request_ctx(ctx)?)
             .await
@@ -159,11 +170,7 @@ impl ApiKeyMutation {
         ctx: &Context<'_>,
         input: ApiKeyCreateInput,
     ) -> async_graphql::Result<ApiKeyCreatePayload> {
-        if ctx.data_opt::<CredentialClass>() != Some(&CredentialClass::Session) {
-            return Err(gql_err(AppError::forbidden(
-                "API keys can only be created from a browser session.",
-            )));
-        }
+        require_session(ctx)?;
         if input
             .team_ids
             .as_ref()
@@ -221,6 +228,7 @@ impl ApiKeyMutation {
         ctx: &Context<'_>,
         id: String,
     ) -> async_graphql::Result<ApiKeyRevokePayload> {
+        require_session(ctx)?;
         let id = Uuid::parse_str(&id)
             .map(ApiKeyId)
             .map_err(|_| not_found())?;
