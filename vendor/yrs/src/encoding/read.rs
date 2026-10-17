@@ -3,6 +3,10 @@ use std::any::type_name;
 use std::collections::TryReserveError;
 use thiserror::Error;
 
+/// Obergrenze für Vorab-Reservierungen anhand von Längenfeldern aus der Eingabe;
+/// größere Kollektionen wachsen lazy, bei zu kurzer Eingabe entsteht ein Dekodierfehler.
+pub const MAX_PREALLOC: usize = 1 << 12;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("failed to decode variable length integer")]
@@ -22,6 +26,9 @@ pub enum Error {
 
     #[error("couldn't deserialize to target type of {0}")]
     TypeMismatch(&'static str),
+
+    #[error("nesting too deep (limit: {0})")]
+    DepthLimitExceeded(usize),
 
     #[error("{0}")]
     Custom(String),
@@ -61,7 +68,7 @@ where
 impl<'a> Read for Cursor<'a> {
     /// Take a slice of the next `len` bytes and advance the position by `len`.
     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
-        if self.next + len > self.buf.len() {
+        if len > self.buf.len() - self.next {
             Err(Error::EndOfBuffer(len))
         } else {
             let slice = &self.buf[self.next..(self.next + len)];

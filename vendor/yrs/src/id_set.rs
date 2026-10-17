@@ -383,7 +383,8 @@ impl Decode for IdRange {
                 Ok(IdRange::Continuous(range))
             }
             len => {
-                let mut ranges = Vec::with_capacity(len as usize);
+                let mut ranges =
+                    Vec::with_capacity((len as usize).min(crate::encoding::read::MAX_PREALLOC));
                 let mut i = 0;
                 while i < len {
                     ranges.push(Range::decode(decoder)?);
@@ -579,7 +580,9 @@ impl<'de> Deserialize<'de> for IdSet {
             {
                 let mut bytes = match seq.size_hint() {
                     None => Vec::new(),
-                    Some(capacity) => Vec::with_capacity(capacity),
+                    Some(capacity) => {
+                        Vec::with_capacity(capacity.min(crate::encoding::read::MAX_PREALLOC))
+                    }
                 };
                 while let Some(x) = seq.next_element()? {
                     bytes.push(x);

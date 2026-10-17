@@ -23,6 +23,9 @@ pub enum Any {
     Map(Arc<HashMap<String, Any>>),
 }
 
+/// Maximale Verschachtelungstiefe von Array/Map beim Dekodieren (Schutz vor Stack-Überlauf).
+pub const MAX_ANY_DEPTH: usize = 128;
+
 impl Any {
     #[inline]
     pub fn cast<T>(self) -> Result<T, Self>
@@ -35,6 +38,10 @@ impl Any {
     }
 
     pub fn decode<R: Read>(decoder: &mut R) -> Result<Self, Error> {
+        Self::decode_nested(decoder, 0)
+    }
+
+    fn decode_nested<R: Read>(decoder: &mut R, depth: usize) -> Result<Self, Error> {
         Ok(match decoder.read_u8()? {
             // CASE 127: undefined
             127 => Any::Undefined,
@@ -59,20 +66,26 @@ impl Any {
             }
             // CASE 118: Map<string,Any>
             118 => {
+                if depth >= MAX_ANY_DEPTH {
+                    return Err(Error::DepthLimitExceeded(MAX_ANY_DEPTH));
+                }
                 let len: usize = decoder.read_var()?;
-                let mut map = HashMap::with_capacity(len);
+                let mut map = HashMap::with_capacity(len.min(crate::encoding::read::MAX_PREALLOC));
                 for _ in 0..len {
                     let key = decoder.read_string()?;
-                    map.insert(key.to_owned(), Any::decode(decoder)?);
+                    map.insert(key.to_owned(), Any::decode_nested(decoder, depth + 1)?);
                 }
                 Any::Map(Arc::new(map))
             }
             // CASE 117: Array<Any>
             117 => {
+                if depth >= MAX_ANY_DEPTH {
+                    return Err(Error::DepthLimitExceeded(MAX_ANY_DEPTH));
+                }
                 let len: usize = decoder.read_var()?;
-                let mut arr = Vec::with_capacity(len);
+                let mut arr = Vec::with_capacity(len.min(crate::encoding::read::MAX_PREALLOC));
                 for _ in 0..len {
-                    arr.push(Any::decode(decoder)?);
+                    arr.push(Any::decode_nested(decoder, depth + 1)?);
                 }
                 Any::Array(Arc::from(arr))
             }
