@@ -109,7 +109,100 @@ fn forbid_system(ctx: &RequestCtx) -> AppResult<()> {
     Ok(())
 }
 
+/// Prüft zur Ausführungszeit (Annahme/Resend), ob der ursprüngliche Einladende die Einladung heute
+/// noch so aussprechen dürfte: aktiv, Recht `inviteUsers`, bei `admin` zusätzlich `grantAdminRole`
+/// und für jedes (noch vorhandene) Team `addMember`/`addGuest`. Liefert den Ablehnungsgrund.
+///
+/// Die Prüfung am Annahme-Pfad ist robuster als das Widerrufen bei Herabstufung/Teamentfernung:
+/// sie deckt jeden Weg des Rechteverlusts ab (Rolle, Team-Owner/-Mitgliedschaft, Teamsicht,
+/// Workspace-Einstellungen), ohne dass jeder Schreibpfad daran denken muss.
+async fn inviter_rejection(
+    tx: &mut dyn crate::ports::Tx,
+    inv: &InvitationRecord,
+) -> AppResult<Option<&'static str>> {
+    let Some(user) = tx
+        .users()
+        .get(inv.inviter_id)
+        .await?
+        .filter(|u| u.active && u.status == "active")
+    else {
+        return Ok(Some("inviter_inactive"));
+    };
+    let ctx = RequestCtx {
+        org_id: inv.org_id,
+        actor: Actor::User {
+            id: user.id,
+            role: user.role,
+        },
+        request_id: "req_invitation_recheck".into(),
+        scopes: crate::context::Scopes::all(),
+        team_scope: None,
+        via_session: false,
+        client_ip: None,
+        credential_kind: None,
+    };
+    let snap = PolicySnapshot::load(tx, &ctx).await?;
+    if snap.require_workspace(&ctx, Action::InviteUsers).is_err() {
+        return Ok(Some("inviter_lost_invite_right"));
+    }
+    if inv.role == UserRole::Admin
+        && snap
+            .require_workspace(&ctx, Action::GrantAdminRole)
+            .is_err()
+    {
+        return Ok(Some("inviter_lost_admin_right"));
+    }
+    if inv.role == UserRole::Guest && !snap.org.limits.guests_enabled {
+        return Ok(Some("guests_disabled"));
+    }
+    let action = if inv.role == UserRole::Guest {
+        Action::AddGuest
+    } else {
+        Action::AddMember
+    };
+    for t in &inv.team_ids {
+        // Gelöschte/stillgelegte Teams überspringt die Annahme ohnehin.
+        if snap
+            .tree
+            .get(*t)
+            .is_none_or(|x| x.trashed || x.retired_at.is_some())
+        {
+            continue;
+        }
+        if snap.require_team(&ctx, action, *t).is_err() {
+            return Ok(Some("inviter_lost_team_right"));
+        }
+    }
+    Ok(None)
+}
+
 impl App {
+    /// Widerruft eine Einladung, deren Einladender die Rechte verloren hat (Systemkontext, Audit).
+    async fn revoke_invitation_for_reason(
+        &self,
+        mut tx: Box<dyn crate::ports::Tx>,
+        inv: &InvitationRecord,
+        reason: &str,
+    ) -> AppResult<()> {
+        let now = self.clock.now();
+        tx.webhooks()
+            .set_invitation_status(inv.id, "revoked", None, now)
+            .await?;
+        let sys = RequestCtx::system(inv.org_id, "req_invitation_recheck");
+        self.record_audit(
+            &mut *tx,
+            &sys,
+            AuditEvent::new(
+                "invitation.revoked",
+                "invitation",
+                Some(inv.id),
+                json!({ "email": inv.email, "reason": reason, "automatic": true }),
+            ),
+        )
+        .await?;
+        tx.commit().await
+    }
+
     fn invitation_mail(&self, to: &str, org_name: &str, token: &str) -> Mail {
         let link = format!(
             "{}/invite/{token}",
@@ -301,6 +394,10 @@ impl App {
                 .with_details(json!({ "status": inv.status })));
         }
         super::user::check_invite_domain(&snap.org, &inv.email, "id")?;
+        if let Some(reason) = inviter_rejection(&mut *tx, &inv).await? {
+            self.revoke_invitation_for_reason(tx, &inv, reason).await?;
+            return Err(invitation_not_found());
+        }
         let now = self.clock.now();
         let token = random_token();
         tx.webhooks()
@@ -508,6 +605,13 @@ impl App {
         if !policy.invite_domain_allowed(&inv.email)
             || required_email.is_some_and(|e| !policy.invite_domain_allowed(e))
         {
+            return Err(invitation_not_found());
+        }
+        // Rechte werden zur Annahmezeit erneut geprüft (F-06): hat der Einladende die Rolle bzw.
+        // Team-Rechte verloren oder ist er nicht mehr aktiv, wird die Einladung widerrufen
+        // (ganz ablehnen statt herabstufen – ein stilles Teilergebnis wäre nicht nachvollziehbar).
+        if let Some(reason) = inviter_rejection(&mut *tx, &inv).await? {
+            self.revoke_invitation_for_reason(tx, &inv, reason).await?;
             return Err(invitation_not_found());
         }
         let teams = tx.teams().list_all().await?;
