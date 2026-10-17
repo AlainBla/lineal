@@ -7,6 +7,10 @@
   Rust backend (GraphQL, MCP, real-time sync, CRDT) · React frontend · self-hosted with Docker
 </p>
 
+<p align="center">
+  <img src="docs/assets/screenshot-board.png" alt="Lineal board view with issues across Backlog, Todo, In Progress and Done" width="900">
+</p>
+
 ---
 
 ## Features
