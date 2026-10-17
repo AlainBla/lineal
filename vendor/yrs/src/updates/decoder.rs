@@ -477,7 +477,8 @@ impl<'a> StringDecoder<'a> {
         let buf = cursor.buf;
         let mut next = cursor.next;
         let str_bin = DecoderV2::read_buf(buf, &mut next)?;
-        let str = unsafe { std::str::from_utf8_unchecked(str_bin) };
+        // Peer-Daten nicht ungeprüft als UTF-8 deuten (sonst UB bei ungültigen Bytes).
+        let str = std::str::from_utf8(str_bin).map_err(|_| Error::UnexpectedValue)?;
         let len_decoder = UIntOptRleDecoder::new(Cursor { buf, next });
         Ok(StringDecoder {
             pos: 0,

@@ -64,3 +64,13 @@ fn moderate_nesting_still_decodes() {
     let buf = nested_any(100);
     assert!(Any::decode(&mut Cursor::new(&buf)).is_ok());
 }
+
+#[test]
+fn invalid_utf8_in_any_string_is_rejected() {
+    // Tag 119 = String, Länge 2, dann ungültige UTF-8-Bytes: muss Fehler sein, kein UB.
+    let buf = [119u8, 2, 0xff, 0xfe];
+    assert!(Any::decode(&mut Cursor::new(&buf)).is_err());
+    // Gültiger String dekodiert weiterhin.
+    let ok = [119u8, 2, b'h', b'i'];
+    assert!(Any::decode(&mut Cursor::new(&ok)).is_ok());
+}

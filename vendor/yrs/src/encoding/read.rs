@@ -141,7 +141,8 @@ pub trait Read: Sized {
     /// Read string of variable length.
     fn read_string(&mut self) -> Result<&str, Error> {
         let buf = self.read_buf()?;
-        Ok(unsafe { std::str::from_utf8_unchecked(buf) })
+        // Peer-Daten nicht ungeprüft als UTF-8 deuten (sonst UB bei ungültigen Bytes).
+        std::str::from_utf8(buf).map_err(|_| Error::UnexpectedValue)
     }
 
     /// Read float32 in big endian order
