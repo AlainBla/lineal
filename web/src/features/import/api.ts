@@ -78,6 +78,10 @@ export interface RunOptions {
   teams?: string[];
   keyMapping?: Record<string, string>;
   targetTeams?: Record<string, string>;
+  /** Übernommene Linear-Projekte (leer = kein Filter). */
+  projects?: string[];
+  /** Linear-User-ID -> Lineal-User-ID (null = automatisch zuordnen). */
+  userMapping?: Record<string, string | null>;
   /** Gesetzt bei Läufen des regelmäßigen Abgleichs. */
   syncId?: string;
   delta?: boolean;

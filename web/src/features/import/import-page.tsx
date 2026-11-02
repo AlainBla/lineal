@@ -140,16 +140,30 @@ function PlanStep({
 }) {
   const scanData = run.scan;
   const teams = scanData?.teams ?? [];
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(teams.map((t) => t.key)));
-  const [keyMap, setKeyMap] = useState<Record<string, string>>({});
-  const [delta, setDelta] = useState(false);
+  // Nach einem Probelauf ist der Lauf wieder `planned`: die damalige Auswahl steht in `options`
+  // und wird übernommen, statt alles auf die Standardwerte zurückzusetzen.
+  const prior = run.options ?? {};
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(prior.teams?.length ? prior.teams : teams.map((t) => t.key)),
+  );
+  const [keyMap, setKeyMap] = useState<Record<string, string>>(() => ({ ...prior.keyMapping }));
+  const [delta, setDelta] = useState(prior.delta ?? false);
   // Je Linear-Team: Lineal-Team, in das importiert wird (fehlt = neues Team anlegen).
-  const [targets, setTargets] = useState<Record<string, string>>({});
-  // Abgewählte Projekte (Standard: alle übernehmen).
-  const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
+  const [targets, setTargets] = useState<Record<string, string>>(() => ({
+    ...prior.targetTeams,
+  }));
+  // Abgewählte Projekte (Standard: alle übernehmen; leere Liste im Lauf = kein Filter).
+  const [skipped, setSkipped] = useState<Set<string>>(() => {
+    const kept = new Set(prior.projects ?? []);
+    return kept.size === 0 ? new Set() : new Set(projectIds(teams).filter((id) => !kept.has(id)));
+  });
   const targetTeams = useQuery({ queryKey: keys.targets, queryFn: fetchTargetTeams });
   // Linear-User-ID -> bestehender Lineal-User (wenn die E-Mail-Adressen abweichen).
-  const [userMap, setUserMap] = useState<Record<string, string>>({});
+  const [userMap, setUserMap] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(prior.userMapping ?? {}).filter((e): e is [string, string] => !!e[1]),
+    ),
+  );
   const existingUsers = useQuery({ queryKey: keys.existingUsers, queryFn: fetchExistingUsers });
   const m = useMutation({
     mutationFn: (dryRun: boolean) => {

@@ -273,6 +273,58 @@ describe("ImportPage", () => {
     expect(screen.queryByRole("button", { name: /Join imported teams/ })).not.toBeInTheDocument();
   });
 
+  it("keeps the selections of a dry run for the next start", async () => {
+    // Nach dem Probelauf ist der Lauf wieder `planned`; die Auswahl kommt aus `options`.
+    const dry = {
+      ...PLANNED,
+      dryRun: true,
+      scan: {
+        ...PLANNED.scan,
+        teams: [{ ...PLANNED.scan.teams[0], conflict: false }, PLANNED.scan.teams[1]],
+      },
+      options: {
+        teams: ["ENG"],
+        keyMapping: {},
+        targetTeams: { ENG: "kp-id" },
+        projects: ["p1"],
+        userMapping: { u2: "lu-1" },
+        delta: false,
+        dryRun: true,
+      },
+    };
+    const api = mockGraphql({
+      ImportSync: () => ({ importSync: null }),
+      ImportExistingUsers: () => ({ users: USERS }),
+      ImportRuns: () => ({ importRuns: [dry] }),
+      ImportRun: () => ({ importRun: dry }),
+      ImportTargetTeams: () => TARGETS,
+      ImportReport: () => ({
+        importReport: { infoCount: 0, warningCount: 0, errorCount: 0, entries: [] },
+      }),
+      ImportStart: () => ({ importStart: { ...dry, status: "running", dryRun: false } }),
+    });
+    await renderWithApp(<ImportPage />);
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText("Import team DES")).not.toBeChecked();
+    expect(screen.getByLabelText("Import project API v2 of ENG")).not.toBeChecked();
+    await waitFor(() => expect(screen.getByLabelText("Target for ENG")).toHaveValue("kp-id"));
+    await waitFor(() => expect(screen.getByLabelText("Map Dave to")).toHaveValue("lu-1"));
+    await user.click(screen.getByRole("button", { name: "Start import" }));
+    await waitFor(() => expect(api.of("ImportStart")).toHaveLength(1));
+    expect(api.of("ImportStart")[0]?.variables).toEqual({
+      input: {
+        runId: "run-1",
+        teams: ["ENG"],
+        keyMapping: {},
+        dryRun: false,
+        delta: false,
+        projects: ["p1"],
+        targetTeams: { ENG: "kp-id" },
+        userMapping: { u2: "lu-1" },
+      },
+    });
+  });
+
   it("shows the planned mappings and warnings of a dry run", async () => {
     const dry = {
       ...PLANNED,
