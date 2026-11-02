@@ -207,7 +207,8 @@ export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLo
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   return (
-    <div className="flex h-[4.5rem] flex-col gap-2 overflow-hidden" data-testid="issue-card-body">
+    // Höhe wächst mit dem Titel (1–2 Zeilen); längere Titel enden mit „…“ (Hover zeigt alles).
+    <div className="flex flex-col gap-2 overflow-hidden" data-testid="issue-card-body">
       <div className="flex h-4 items-center gap-2 text-xs text-muted-foreground">
         <PriorityIcon priority={issue.priority} />
         <span className="tabular-nums">{issue.identifier}</span>
@@ -222,9 +223,14 @@ export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLo
           ) : null}
         </span>
       </div>
-      <div className="flex h-5 items-center gap-2">
-        <StatusIcon type={issue.stateType} color={state?.color} className="shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm leading-snug" data-testid="card-title">
+      <div className="flex items-start gap-2">
+        <span className="flex h-5 shrink-0 items-center">
+          <StatusIcon type={issue.stateType} color={state?.color} className="shrink-0" />
+        </span>
+        <span
+          className="line-clamp-2 min-w-0 flex-1 text-sm leading-5 break-words"
+          data-testid="card-title"
+        >
           {issue.title}
         </span>
       </div>

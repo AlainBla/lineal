@@ -86,7 +86,7 @@ async function stopSampler(page: Page): Promise<Sample[]> {
   });
 }
 
-test("board: equal card heights, one-line titles and hover details", async ({ page }) => {
+test("board: card heights, titles up to two lines and hover details", async ({ page }) => {
   await login(page, "alice");
   const short = unique("Kurz");
   const long = unique(
@@ -122,16 +122,18 @@ test("board: equal card heights, one-line titles and hover details", async ({ pa
     const box = await card(page, t).boundingBox();
     heights.push(Math.round(box!.height));
   }
-  expect(new Set(heights).size, `Kartenhöhen ${heights.join(", ")}`).toBe(1);
-  // Titel einzeilig: Textbreite übersteigt die Box, sichtbar aber abgeschnitten.
+  // Kurze Titel: gleich hohe Karten; ein langer Titel nimmt genau eine Zeile mehr ein.
+  expect(heights[0], `Kartenhöhen ${heights.join(", ")}`).toBe(heights[2]);
+  expect(heights[1]! - heights[0]!, `Kartenhöhen ${heights.join(", ")}`).toBe(20);
+  // Langer Titel: höchstens zwei Zeilen, der Rest wird mit „…“ abgeschnitten.
   const titleBox = await card(page, long)
     .getByTestId("card-title")
     .evaluate((el) => ({
-      clipped: el.scrollWidth > el.clientWidth,
+      clipped: el.scrollHeight > el.clientHeight,
       h: el.getBoundingClientRect().height,
     }));
   expect(titleBox.clipped).toBe(true);
-  expect(titleBox.h).toBeLessThan(24);
+  expect(titleBox.h).toBe(40);
   // Label-Zeile bleibt einzeilig; Überlauf als „+N“.
   await expect(card(page, labelled)).toContainText("+3");
 
@@ -283,4 +285,51 @@ test("board: Hidden columns lists every hidden column with its count", async ({ 
   await shot(page, "hidden-columns-offen");
   await hidden.getByRole("button", { name: "Hide Canceled column" }).click();
   await expect(page.getByRole("region", { name: "Canceled" })).toHaveCount(0);
+});
+
+test("board: column headers stay visible while scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await login(page, "alice");
+  for (let i = 0; i < 6; i++) {
+    const id = await createIssue(page, "ENG", unique("Scroll"));
+    await setStatus(page, id, "Todo");
+  }
+  await openBoard(page);
+  const todo = page.getByRole("region", { name: "Todo" });
+  const header = todo.getByTestId("column-header");
+  const before = (await header.boundingBox())!;
+  // Das Board scrollt in seinem eigenen Container; ganz nach unten scrollen.
+  await todo.locator("a[data-issue-id]").last().scrollIntoViewIfNeeded();
+  await page.mouse.move(before.x + 100, before.y + 200);
+  await page.mouse.wheel(0, 5000);
+  await page.waitForTimeout(200);
+  const lastCard = (await todo.locator("a[data-issue-id]").last().boundingBox())!;
+  const after = (await header.boundingBox())!;
+  await shot(page, "sticky-header");
+  // Weit gescrollt (letzte Karte unten sichtbar), Kopf aber an derselben Stelle und sichtbar.
+  expect(lastCard.y + lastCard.height).toBeLessThanOrEqual(520);
+  // Kopf klebt an der Oberkante des Board-Containers (kein Spalt, durch den Karten scheinen).
+  const top = await header.evaluate((el) => {
+    // Nächster Vorfahr, der tatsächlich vertikal scrollt (der Scroll-Container des Boards).
+    let p = el.parentElement;
+    while (p && p.scrollTop === 0) p = p.parentElement;
+    return p!.getBoundingClientRect().top + parseFloat(getComputedStyle(p!).borderTopWidth);
+  });
+  expect(Math.round(after.y)).toBe(Math.round(top));
+  expect(after.y).toBeLessThanOrEqual(before.y);
+  // Auch die Köpfe kürzerer Spalten bleiben stehen, auf gleicher Höhe wie Todo.
+  for (const name of ["Backlog", "In Progress", "Done"]) {
+    const h = page.getByRole("region", { name }).getByTestId("column-header");
+    await expect(h).toBeInViewport();
+    expect(Math.round((await h.boundingBox())!.y)).toBe(Math.round(after.y));
+  }
+  // Über dem Kopf schaut keine Karte durch: das Element direkt über seiner Mitte ist der Kopf
+  // selbst oder liegt außerhalb der Spalte.
+  const peek = await header.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + 1);
+    return !!hit?.closest("a[data-issue-id]");
+  });
+  expect(peek).toBe(false);
+  await expect(header).toContainText("Todo");
 });

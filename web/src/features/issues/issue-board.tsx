@@ -128,10 +128,19 @@ function Column({
       data-column={state.id}
       className="flex w-72 shrink-0 flex-col rounded-xl bg-surface"
     >
-      <header className="flex h-9 items-center gap-2 px-3 text-sm">
+      {/* Bleibt beim Scrollen oben stehen (sticky im Scroll-Container des Boards, `-top-4` gleicht
+          dessen Padding aus; alle Spalten sind gleich hoch, damit jeder Kopf stehen bleibt); der
+          Farbbalken in Statusfarbe macht die Spalte auch weit unten eindeutig erkennbar. */}
+      <header
+        className="sticky -top-4 z-10 flex h-10 items-center gap-2 rounded-t-xl border-t-[3px] border-b border-b-border bg-surface px-3 text-sm shadow-[0_6px_8px_-6px_rgb(0_0_0/0.12)]"
+        style={{ borderTopColor: state.color ?? undefined }}
+        data-testid="column-header"
+      >
         <StatusIcon type={state.type} color={state.color} />
-        <span className="font-medium">{state.name}</span>
-        <span className="text-xs text-muted-foreground">{issues.length}</span>
+        <span className="truncate font-semibold">{state.name}</span>
+        <span className="rounded-full bg-background px-1.5 text-xs font-medium text-muted-foreground tabular-nums">
+          {issues.length}
+        </span>
         {onCreate && (
           <Button
             variant="ghost"
@@ -256,45 +265,49 @@ export function IssueBoard({
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <div className="flex h-full items-start gap-3 overflow-x-auto p-4">
-        {shownColumns.map((c) => (
-          <Column
-            key={c.state.id}
-            column={c}
-            ws={ws}
-            lookup={lookup}
-            focusedId={focusedId}
-            onFocus={onFocus}
-            onCreate={onCreateInColumn}
-            selection={selection}
-          />
-        ))}
-        {hiddenColumns.length > 0 && (
-          <aside
-            aria-label="Hidden columns"
-            className="flex w-56 shrink-0 flex-col gap-1 rounded-xl bg-surface p-2"
-          >
-            <h2 className="px-2 py-1 text-sm font-medium">Hidden columns</h2>
-            {hiddenColumns.map((c) => {
-              const open = revealed.has(c.state.id);
-              return (
-                <Button
-                  key={c.state.id}
-                  variant="ghost"
-                  size="sm"
-                  className="justify-start gap-2"
-                  aria-pressed={open}
-                  aria-label={`${open ? "Hide" : "Show"} ${c.state.name} column`}
-                  onClick={() => toggleRevealed(c.state.id)}
-                >
-                  <StatusIcon type={c.state.type} color={c.state.color} />
-                  <span className="truncate">{c.state.name}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">{c.issues.length}</span>
-                </Button>
-              );
-            })}
-          </aside>
-        )}
+      {/* Scroll-Container (beide Richtungen); die innere Zeile wächst mit der längsten Spalte
+          und streckt alle Spalten auf diese Höhe, damit jeder Spaltenkopf sticky bleibt. */}
+      <div className="h-full overflow-auto p-4">
+        <div className="flex min-h-full w-max items-stretch gap-3">
+          {shownColumns.map((c) => (
+            <Column
+              key={c.state.id}
+              column={c}
+              ws={ws}
+              lookup={lookup}
+              focusedId={focusedId}
+              onFocus={onFocus}
+              onCreate={onCreateInColumn}
+              selection={selection}
+            />
+          ))}
+          {hiddenColumns.length > 0 && (
+            <aside
+              aria-label="Hidden columns"
+              className="flex w-56 shrink-0 flex-col gap-1 self-start rounded-xl bg-surface p-2"
+            >
+              <h2 className="px-2 py-1 text-sm font-medium">Hidden columns</h2>
+              {hiddenColumns.map((c) => {
+                const open = revealed.has(c.state.id);
+                return (
+                  <Button
+                    key={c.state.id}
+                    variant="ghost"
+                    size="sm"
+                    className="justify-start gap-2"
+                    aria-pressed={open}
+                    aria-label={`${open ? "Hide" : "Show"} ${c.state.name} column`}
+                    onClick={() => toggleRevealed(c.state.id)}
+                  >
+                    <StatusIcon type={c.state.type} color={c.state.color} />
+                    <span className="truncate">{c.state.name}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{c.issues.length}</span>
+                  </Button>
+                );
+              })}
+            </aside>
+          )}
+        </div>
       </div>
       <DragOverlay dropAnimation={skipDropAnimation ? null : undefined}>
         {dragging && (
