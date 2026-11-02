@@ -335,6 +335,17 @@ fn consent_valid(
         && ct_eq(consent_nonce(app, ctx, p, exp).as_bytes(), given.as_bytes())
 }
 
+/// Gestaltung der Zustimmungsseite; per Hash in der CSP freigegeben (kein `unsafe-inline`).
+const CONSENT_CSS: &str = include_str!("consent.css");
+
+static CONSENT_CSP: std::sync::LazyLock<HeaderValue> = std::sync::LazyLock::new(|| {
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(CONSENT_CSS));
+    HeaderValue::from_str(&format!(
+        "default-src 'none'; style-src 'sha256-{hash}'; form-action 'self'; frame-ancestors 'none'"
+    ))
+    .expect("ASCII header value")
+});
+
 /// Zustimmungsseite: Client-Name ist vom Client frei gewählt und wird als unverifiziert
 /// gekennzeichnet; maßgeblich ist der angezeigte Ziel-Host der Weiterleitung.
 fn consent_page(
@@ -370,30 +381,60 @@ fn consent_page(
         esc(nonce)
     ));
     let admin_warning = if scopes.iter().any(|s| s == "admin") {
-        "<p><strong>Warning:</strong> the <code>admin</code> permission allows this application to change workspace settings.</p>"
+        "<p class=warn><strong>Warning:</strong> the <code>admin</code> permission allows this \
+         application to change workspace settings.</p>"
     } else {
         ""
     };
+    let perms: String = scopes
+        .iter()
+        .map(|s| {
+            let desc = match s.as_str() {
+                "read" => "View issues, projects, documents and comments",
+                "write" => "Create and change issues, comments and other content",
+                "admin" => "Change workspace settings",
+                _ => "",
+            };
+            format!(
+                "<li><span class=check></span><span><span class=perm-name>{}</span>\
+                 <span class=perm-desc>{desc}</span></span></li>",
+                esc(s)
+            )
+        })
+        .collect();
+    let initial = client_name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".into());
     let html = format!(
-        "<!doctype html><meta charset=utf-8><title>Authorize application</title>\
-         <h1>Authorize application</h1>\
-         <p>An application calling itself <b>{name}</b> (name not verified by Lineal) requests access to your workspace.</p>\
-         <p>After approval you will be sent to <b>{host}</b>. Only continue if you trust this site.</p>\
-         <p>Permissions: <b>{scopes}</b></p>{admin_warning}\
-         <form method=post action=\"/oauth/authorize\">{hidden}\
-         <button type=submit name=decision value=allow>Allow</button> \
-         <button type=submit name=decision value=deny>Deny</button></form>",
+        "<!doctype html><html lang=en><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width, initial-scale=1\">\
+         <title>Authorize application · Lineal</title><style>{css}</style>\
+         <main><div class=brand><span class=mark>L</span>Lineal</div>\
+         <div class=card>\
+         <div class=app><div class=avatar aria-hidden=true>{initial}</div><div>\
+         <h1>{name} wants to access your workspace</h1>\
+         <p class=sub><span class=badge>name not verified</span> chosen by the application itself</p>\
+         </div></div>\
+         <h2>Permissions</h2><ul class=perms>{perms}</ul>{admin_warning}\
+         <p class=redirect>After approval you will be sent to <b>{host}</b>. \
+         Only continue if you trust this site.</p>\
+         <form method=post action=\"/oauth/authorize\">{hidden}<div class=actions>\
+         <button class=deny type=submit name=decision value=deny>Deny</button>\
+         <button class=allow type=submit name=decision value=allow>Allow</button>\
+         </div></form></div>\
+         </main>",
+        css = CONSENT_CSS,
+        initial = esc(&initial),
         name = esc(client_name),
         host = esc(&host),
-        scopes = esc(&scopes.join(", ")),
     );
     let mut res = Html(html).into_response();
     res.headers_mut()
         .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    res.headers_mut().insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; form-action 'self'; frame-ancestors 'none'"),
-    );
+    res.headers_mut()
+        .insert(header::CONTENT_SECURITY_POLICY, CONSENT_CSP.clone());
     no_store(res)
 }
 
