@@ -68,6 +68,11 @@ services:
       # Wer per GraphQL weitere Workspaces anlegen darf: disabled (Default) | admins | all.
       LINEAL_WORKSPACE_CREATION: ${LINEAL_WORKSPACE_CREATION:-disabled}
       LINEAL_INSTANCE_ADMINS: ${LINEAL_INSTANCE_ADMINS:-}
+      # Mailversand über einen SMTP-Relay (z. B. Postfix auf dem Host: host.docker.internal);
+      # leer = Mails nur ins Log.
+      LINEAL_SMTP_HOST: ${LINEAL_SMTP_HOST:-}
+      LINEAL_SMTP_PORT: ${LINEAL_SMTP_PORT:-25}
+      LINEAL_MAIL_FROM: ${LINEAL_MAIL_FROM:-}
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       app-db: { condition: service_healthy }
@@ -80,6 +85,7 @@ services:
     build: *server-build
     image: lineal-server:latest
     command: ["serve"]
+    extra_hosts: &host-gateway ["host.docker.internal:host-gateway"]
     environment: *server-env
     volumes:
       - blobs:/data/blobs
@@ -107,6 +113,7 @@ services:
     build: *server-build
     image: lineal-server:latest
     command: ["worker"]
+    extra_hosts: *host-gateway
     environment: *server-env
     volumes:
       - blobs:/data/blobs

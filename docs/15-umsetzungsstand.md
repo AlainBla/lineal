@@ -95,6 +95,9 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 | `LINEAL_TRUSTED_PROXIES` | leer | Komma-Liste von CIDR-Bereichen; nur von dort wird `X-Forwarded-For` ausgewertet |
 | `LINEAL_WORKSPACE_CREATION` | `all` mit `LINEAL_DEV`, sonst `disabled` | wer per GraphQL `createWorkspace` weitere Workspaces anlegen darf: `disabled`, `admins`, `all`; ungültiger Wert verhindert den Start. Das CLI `create-workspace` ist ausgenommen |
 | `LINEAL_INSTANCE_ADMINS` | leer | nur für `admins`: Komma-Liste von User-UUIDs (`lineal create-workspace` gibt die ID des Owners aus). Erlaubt ist nur ein aktiver User mit Rolle Owner/Admin und dieser ID. Bewusst keine E-Mail und kein `url_key`: E-Mails legt jeder Workspace-Admin beliebig an, `url_key`s lassen sich umbenennen und neu belegen. Ungültige UUIDs verhindern den Start |
+| `LINEAL_SMTP_HOST` | leer | SMTP-Relay ohne Anmeldung und ohne TLS (z. B. Postfix auf demselben Host; im Docker-Stack `host.docker.internal`). Leer = Mails (Einladungen, E-Mail-Digest) werden nur geloggt |
+| `LINEAL_SMTP_PORT` | `25` | Port des SMTP-Relays |
+| `LINEAL_MAIL_FROM` | – | Absender, z. B. `Lineal <lineal@example.org>`; Pflicht, wenn `LINEAL_SMTP_HOST` gesetzt ist (ungültige Adresse verhindert den Start). Zustellung, Wiederholung, SPF/DKIM sind Aufgabe des Relays |
 | `LINEAL_OWNER_PASSWORD` | – | nur für `lineal create-workspace`: Passwort des Owners (sonst interaktive Abfrage ohne Echo) |
 | `LINEAL_DB_PASSWORD` | – | nur Docker-Profil `app`: Passwort der Datenbank `app-db` (Pflicht; URL-sichere Zeichen, z. B. `openssl rand -hex 24`) |
 | `LINEAL_HTTP_PORT` | `8088` | nur Docker: Host-Port des nginx |

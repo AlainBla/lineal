@@ -27,6 +27,39 @@ pub struct Config {
     pub workspace_creation: WorkspaceCreation,
     /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste von User-UUIDs) für `admins`.
     pub instance_admins: Vec<uuid::Uuid>,
+    /// SMTP-Relay (`LINEAL_SMTP_HOST`, `LINEAL_SMTP_PORT`, `LINEAL_MAIL_FROM`); `None` = Mails
+    /// nur ins Log.
+    pub smtp: Option<SmtpConfig>,
+}
+
+/// Ziel für ausgehende Mails: ein Relay ohne Anmeldung (z. B. Postfix auf dem Host).
+#[derive(Debug, Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    /// Absender, z. B. `Lineal <lineal@example.org>`.
+    pub from: String,
+}
+
+fn smtp(get: &impl Fn(&str) -> Option<String>) -> Result<Option<SmtpConfig>> {
+    let Some(host) = get("LINEAL_SMTP_HOST").filter(|h| !h.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let port = get("LINEAL_SMTP_PORT")
+        .map(|v| v.parse())
+        .transpose()
+        .context("LINEAL_SMTP_PORT must be a port number")?
+        .unwrap_or(25);
+    let from = get("LINEAL_MAIL_FROM")
+        .filter(|f| !f.trim().is_empty())
+        .context("LINEAL_MAIL_FROM must be set when LINEAL_SMTP_HOST is set")?;
+    from.parse::<lettre::message::Mailbox>()
+        .with_context(|| format!("LINEAL_MAIL_FROM: {from:?} is not a valid address"))?;
+    Ok(Some(SmtpConfig {
+        host: host.trim().to_owned(),
+        port,
+        from,
+    }))
 }
 
 fn csv(value: Option<String>) -> Vec<String> {
@@ -99,6 +132,7 @@ impl Config {
             })
             .collect::<Result<Vec<_>>>()?;
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
+        let smtp = smtp(&get)?;
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
             base_url,
@@ -114,6 +148,7 @@ impl Config {
             trusted_proxies,
             workspace_creation,
             instance_admins,
+            smtp,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())
                 .transpose()
@@ -168,6 +203,48 @@ mod tests {
             _ => None,
         };
         assert!(Config::from_lookup(with_secret).is_ok());
+    }
+
+    #[test]
+    fn smtp_is_optional_and_needs_a_sender() {
+        let with =
+            |host: Option<&'static str>, port: Option<&'static str>, from: Option<&'static str>| {
+                Config::from_lookup(move |k| match k {
+                    "LINEAL_DEV" => Some("1".into()),
+                    "LINEAL_SMTP_HOST" => host.map(Into::into),
+                    "LINEAL_SMTP_PORT" => port.map(Into::into),
+                    "LINEAL_MAIL_FROM" => from.map(Into::into),
+                    _ => None,
+                })
+            };
+        // Ohne Host: kein Versand (Log-Mailer).
+        assert!(with(None, None, None).unwrap().smtp.is_none());
+        let smtp = with(
+            Some("mail.local"),
+            None,
+            Some("Lineal <lineal@example.org>"),
+        )
+        .unwrap()
+        .smtp
+        .unwrap();
+        assert_eq!(
+            (smtp.host.as_str(), smtp.port, smtp.from.as_str()),
+            ("mail.local", 25, "Lineal <lineal@example.org>")
+        );
+        assert_eq!(
+            with(Some("mail.local"), Some("2525"), Some("lineal@example.org"))
+                .unwrap()
+                .smtp
+                .unwrap()
+                .port,
+            2525
+        );
+        assert!(
+            with(Some("mail.local"), None, None).is_err(),
+            "sender required"
+        );
+        assert!(with(Some("mail.local"), None, Some("not an address")).is_err());
+        assert!(with(Some("mail.local"), Some("x"), Some("lineal@example.org")).is_err());
     }
 
     #[test]

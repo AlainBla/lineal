@@ -37,6 +37,8 @@ chrono.workspace = true
 chrono-tz.workspace = true
 clap.workspace = true
 dotenvy.workspace = true
+# SMTP-Versand an einen Relay (Postfix auf dem Host), ohne TLS-Stack.
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1"] }
 sqlx.workspace = true
 serde_json.workspace = true
 rpassword = "7"
