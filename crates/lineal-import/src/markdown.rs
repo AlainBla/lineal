@@ -13,7 +13,8 @@ fn re(p: &str) -> Regex {
 }
 
 static ISSUE_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"<issue\b[^>]*>([^<]*)</issue>"));
-static TAG: LazyLock<Regex> = LazyLock::new(|| re(r"</?([A-Za-z][A-Za-z0-9-]*)"));
+/// Von der Bereinigung maskierte Tag-Anfänge (`\<name`, im Notfall `&lt;name`).
+static MASKED_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"(?:\\<|&lt;)/?([A-Za-z][A-Za-z0-9-]*)"));
 static IDENT: LazyLock<Regex> = LazyLock::new(|| re(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)$"));
 
 /// HTML-Elemente, die Lineal nach der Bereinigung behält/versteht; alles andere wird gemeldet.
@@ -171,12 +172,23 @@ impl RewriteCtx {
                 })
                 .into_owned();
         }
-        let unknown_tags: BTreeSet<String> = TAG
-            .captures_iter(&text)
-            .map(|c| c[1].to_lowercase())
+        let cleaned = sanitize(&text);
+        // Gemeldet wird nur, was die Bereinigung tatsächlich maskiert hat: Autolinks
+        // (`<https://…>`), Code und schon vorher maskierte Folgen bleiben unverändert.
+        let masked = |s: &str| {
+            let mut n = std::collections::BTreeMap::<String, usize>::new();
+            for c in MASKED_TAG.captures_iter(s) {
+                *n.entry(c[1].to_lowercase()).or_default() += 1;
+            }
+            n
+        };
+        let before = masked(&text);
+        let unknown_tags: BTreeSet<String> = masked(&cleaned)
+            .into_iter()
+            .filter(|(t, n)| *n > before.get(t).copied().unwrap_or(0))
+            .map(|(t, _)| t)
             .filter(|t| !KNOWN_TAGS.contains(&t.as_str()))
             .collect();
-        let cleaned = sanitize(&text);
         let (text, truncated) = truncate_chars(&cleaned, max_chars);
         Rewritten {
             text,
@@ -274,6 +286,24 @@ mod tests {
             assert!(out.unknown_tags.contains(p), "{p}");
         }
         assert!(out.text.contains("`<code-tag>`"));
+    }
+
+    #[test]
+    fn unchanged_markup_is_not_reported() {
+        // Autolinks, Code und bereits maskierte Folgen bleiben unverändert: kein Berichtseintrag.
+        let src = "Siehe <https://example.com/a?b=1>, <http://x.de> und <mailto:a@b.de>. \
+                   `<token>` inline\n\n```\n<config>\n<script>x</script>\n```\n\n\\<schon> maskiert";
+        let out = ctx().rewrite(src, 10_000);
+        assert!(
+            out.text.contains("<https://example.com/a?b=1>"),
+            "{}",
+            out.text
+        );
+        assert!(out.text.contains("<mailto:a@b.de>"), "{}", out.text);
+        assert!(out.unknown_tags.is_empty(), "{:?}", out.unknown_tags);
+        // Im selben Text zusätzlich ein echter Platzhalter: nur dieser wird gemeldet.
+        let out = ctx().rewrite(&format!("{src} und <kunde>"), 10_000);
+        assert_eq!(out.unknown_tags.into_iter().collect::<Vec<_>>(), ["kunde"]);
     }
 
     #[test]
