@@ -36,11 +36,15 @@ const PROJECT_FIELDS = `id identifier slugId name summary description icon color
   milestones { id name description targetDate sortOrder status progress issueCount completedIssueCount }
   openIssueCount createdAt updatedAt`;
 
-const INITIATIVE_FIELDS = `id identifier slugId name summary description color icon status statusType priority health
+// Listenvariante ohne Langtexte: `initiatives(first: 200)` bliebe sonst über dem
+// Komplexitätsbudget (10 000; crates/lineal-api/src/middleware/gql.rs).
+const INITIATIVE_LIST_FIELDS = `id identifier slugId name color icon status statusType priority health
   targetDate targetDateResolution startedAt completedAt owner { ${REF} } leadTeam { ${REF} } visibility
   parentInitiatives { ${REF} } subInitiatives { ${REF} } labels { ${REF} }
   projects { id identifier name status statusType health }
   healthRollup { color onTrack atRisk offTrack none } archivedAt createdAt updatedAt`;
+
+const INITIATIVE_FIELDS = `summary description ${INITIATIVE_LIST_FIELDS}`;
 
 const CYCLE_FIELDS = `id teamId number name description startsAt endsAt completedAt progress scope completedScope
   issueCount completedIssueCount scopeHistory completedScopeHistory inProgressScopeHistory
@@ -54,8 +58,11 @@ export interface ProjectsFilter {
   query?: string;
 }
 
-/** Seitengröße beim Nachladen aller Projekte (Cursor-Paginierung, B5.11). */
-const PROJECT_PAGE_SIZE = 100;
+/**
+ * Seitengröße beim Nachladen aller Projekte (Cursor-Paginierung, B5.11). 100 je Seite lagen mit
+ * PROJECT_FIELDS über dem Komplexitätsbudget (10 000; crates/lineal-api/src/middleware/gql.rs).
+ */
+const PROJECT_PAGE_SIZE = 50;
 
 export function useProjects(f: ProjectsFilter = {}) {
   return useQuery({
@@ -246,7 +253,7 @@ export function useInitiatives() {
     queryFn: async ({ signal }) =>
       (
         await gqlRequest<{ initiatives: Initiative[] }>(
-          `query PlanningInitiatives { initiatives(first: 200) { ${INITIATIVE_FIELDS} } }`,
+          `query PlanningInitiatives { initiatives(first: 200) { ${INITIATIVE_LIST_FIELDS} } }`,
           undefined,
           { signal },
         )

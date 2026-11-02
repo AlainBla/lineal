@@ -485,15 +485,40 @@ mod tests {
             );
             assert!(c > 2_000, "{f}: {c}");
         }
-        // Die Web-Projektliste (PROJECT_FIELDS, 100 je Seite) bleibt klar im Budget.
-        let q = "{ projectsPage(first: 100) { nodes { id identifier slugId name summary description icon \
-                 status { id name type color } health progress leadTeam { id name key } \
-                 teams { id name key } lead { id name key } members { id name key } \
-                 labels { id name key } initiatives { id name key } \
-                 milestones { id name description targetDate sortOrder status progress } \
-                 createdAt } }";
-        let ui = cost_of(&format!("{q} }}"), json!({}));
-        assert!(ui < 10_000, "{ui}");
+        // Planungslisten der Web-UI (Roadmap, Projekte, Initiativen) bleiben im Budget. Die
+        // Feldlisten sind Kopien aus web/src/features/planning/queries.ts (PROJECT_FIELDS,
+        // INITIATIVE_LIST_FIELDS, PROJECT_PAGE_SIZE) und müssen bei Änderungen dort mitgezogen
+        // werden; eine veraltete Kopie hat 100 Projekte je Seite (10 241) durchgelassen.
+        let r = "id name key";
+        let project_fields = format!(
+            "id identifier slugId name summary description icon color priority \
+             status {{ id name type color }} health progress scope completedScope issueCount \
+             completedIssueCount startDate startDateResolution targetDate targetDateResolution \
+             startedAt completedAt archivedAt leadTeam {{ {r} }} teams {{ {r} }} lead {{ {r} }} \
+             members {{ {r} }} labels {{ {r} }} initiatives {{ {r} }} \
+             milestones {{ id name description targetDate sortOrder status progress issueCount \
+             completedIssueCount }} openIssueCount createdAt updatedAt"
+        );
+        let projects = cost_of(
+            &format!(
+                "query($first: Int, $after: String) {{ projectsPage(first: $first, after: $after) \
+                 {{ nodes {{ {project_fields} }} pageInfo {{ hasNextPage endCursor }} }} }}"
+            ),
+            json!({ "first": 50, "after": null }),
+        );
+        assert!(projects < 10_000, "{projects}");
+        let initiative_fields = format!(
+            "id identifier slugId name color icon status statusType priority health \
+             targetDate targetDateResolution startedAt completedAt owner {{ {r} }} \
+             leadTeam {{ {r} }} visibility parentInitiatives {{ {r} }} subInitiatives {{ {r} }} \
+             labels {{ {r} }} projects {{ id identifier name status statusType health }} \
+             healthRollup {{ color onTrack atRisk offTrack none }} archivedAt createdAt updatedAt"
+        );
+        let initiatives = cost_of(
+            &format!("{{ initiatives(first: 200) {{ {initiative_fields} }} }}"),
+            json!({}),
+        );
+        assert!(initiatives < 10_000, "{initiatives}");
     }
 
     #[test]
