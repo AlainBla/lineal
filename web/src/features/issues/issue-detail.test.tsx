@@ -1,4 +1,4 @@
-import { within, screen, waitFor } from "@testing-library/react";
+import { act, within, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -547,5 +547,55 @@ describe("Issue-Detail", () => {
     });
     await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
     expect(await screen.findByText("Parent issue was deleted")).toBeInTheDocument();
+  });
+
+  it("LIN-13: Kopfzeile zeigt Kennung und Titel (mit Tooltip) und folgt Titeländerungen", async () => {
+    mockGraphql(handlers());
+    const client = newClient();
+    await renderWithApp(page(), client, "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    const nav = screen.getByRole("navigation", { name: "Issue breadcrumb" });
+    expect(within(nav).getByText("ENG-120")).toBeInTheDocument();
+    const t = within(nav).getByText("Checkout überarbeiten");
+    expect(t).toHaveAttribute("title", "Checkout überarbeiten");
+    act(() => {
+      client.setQueryData(keys.issue("ENG-120"), { ...ISSUE, title: "Neuer Titel" });
+    });
+    expect(await within(nav).findByText("Neuer Titel")).toHaveAttribute("title", "Neuer Titel");
+  });
+
+  it("LIN-13: Titel in der Kopfzeile erscheint erst, wenn das große Titelfeld aus dem Blick scrollt", async () => {
+    const observers: { cb: IntersectionObserverCallback }[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(cb: IntersectionObserverCallback) {
+          observers.push({ cb });
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+      await screen.findByLabelText("Title");
+      const header = screen.getByTestId("header-title");
+      const fire = (isIntersecting: boolean) =>
+        act(() => {
+          for (const o of observers)
+            o.cb([{ isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver);
+        });
+      expect(header).toHaveAttribute("aria-hidden", "true");
+      fire(true);
+      expect(header).toHaveAttribute("aria-hidden", "true");
+      fire(false);
+      expect(header).toHaveAttribute("aria-hidden", "false");
+      fire(true);
+      expect(header).toHaveAttribute("aria-hidden", "true");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

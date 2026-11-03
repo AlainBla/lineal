@@ -195,10 +195,13 @@ function TitleField({
   issue,
   actions,
   readOnly = false,
+  onInView,
 }: {
   issue: Issue;
   actions: IssueActions;
   readOnly?: boolean;
+  /** Meldet, ob das große Titelfeld im sichtbaren Bereich liegt (für den Kopfzeilentitel). */
+  onInView?: (inView: boolean) => void;
 }) {
   const [value, setValue] = useState(issue.title);
   const [syncedTitle, setSyncedTitle] = useState(issue.title);
@@ -218,6 +221,16 @@ function TitleField({
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [value]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onInView || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1];
+      if (last) onInView(last.isIntersecting);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [onInView]);
   const commit = () => {
     const t = value.trim();
     if (t === "") setValue(issue.title);
@@ -286,6 +299,11 @@ function useEscapeBlur() {
 }
 
 function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
+  // Ohne IntersectionObserver (Tests/jsdom) steht der Titel immer in der Kopfzeile.
+  const [showHeaderTitle, setShowHeaderTitle] = useState(
+    typeof IntersectionObserver === "undefined",
+  );
+  const onTitleInView = useCallback((inView: boolean) => setShowHeaderTitle(!inView), []);
   const meta = useTeamMeta(issue.teamId);
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
@@ -411,10 +429,13 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4 text-sm">
         <nav
           aria-label="Issue breadcrumb"
-          className="flex items-center gap-1.5 text-muted-foreground"
+          className="flex min-w-0 items-center gap-1.5 text-muted-foreground"
         >
           {teamKey ? (
-            <Link to={teamPaths(ws, teamKey).all as "/"} className="hover:text-foreground">
+            <Link
+              to={teamPaths(ws, teamKey).all as "/"}
+              className="max-w-24 shrink-0 truncate hover:text-foreground sm:max-w-40"
+            >
               {meta.data?.team.name}
             </Link>
           ) : meta.isError ? (
@@ -423,9 +444,19 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             <Skeleton className="h-3 w-16" />
           )}
           <span aria-hidden>›</span>
-          <span className="text-foreground">{issue.identifier}</span>
+          <span className="shrink-0 text-foreground">{issue.identifier}</span>
+          <span
+            data-testid="header-title"
+            title={issue.title}
+            aria-hidden={!showHeaderTitle}
+            className={`min-w-0 truncate text-foreground transition-opacity duration-[var(--duration-fast)] ${
+              showHeaderTitle ? "opacity-100" : "pointer-events-none opacity-0"
+            }`}
+          >
+            {issue.title}
+          </span>
         </nav>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => copy(issue.identifier, "Issue ID")}>
             <Copy /> Copy ID
           </Button>
@@ -458,6 +489,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               issue={issue}
               actions={actions}
               readOnly={readOnly}
+              onInView={onTitleInView}
             />
             <DescriptionEditor
               key={`desc-${issue.id}`}
