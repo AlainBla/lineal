@@ -202,6 +202,7 @@ pub(crate) enum Step {
     Projects,
     Milestones,
     Issues,
+    IssueTexts,
     IssueParents,
     IssueRelations,
     Comments,
@@ -219,7 +220,7 @@ pub(crate) enum Step {
 }
 
 impl Step {
-    pub const ALL: [Step; 27] = [
+    pub const ALL: [Step; 28] = [
         Self::Users,
         Self::Teams,
         Self::Memberships,
@@ -233,6 +234,7 @@ impl Step {
         Self::Projects,
         Self::Milestones,
         Self::Issues,
+        Self::IssueTexts,
         Self::IssueParents,
         Self::IssueRelations,
         Self::Comments,
@@ -258,7 +260,7 @@ impl Step {
             | Self::ProjectLabels
             | Self::Templates => 2,
             Self::Cycles | Self::Initiatives | Self::Projects | Self::Milestones => 3,
-            Self::Issues | Self::IssueParents | Self::IssueRelations => 4,
+            Self::Issues | Self::IssueTexts | Self::IssueParents | Self::IssueRelations => 4,
             Self::Comments | Self::IssueHistory | Self::IssueSubscriptions => 5,
             Self::Attachments | Self::EmbeddedFiles => 6,
             Self::Documents
@@ -285,6 +287,7 @@ impl Step {
             Self::Projects => "Projects",
             Self::Milestones => "Milestones",
             Self::Issues => "Issues",
+            Self::IssueTexts => "IssueTexts",
             Self::IssueParents => "IssueParents",
             Self::IssueRelations => "IssueRelations",
             Self::Comments => "Comments",
@@ -1162,6 +1165,13 @@ impl Session<'_, '_> {
             .await?
             .map(|o| o.url_key)
             .unwrap_or_default();
+        // Neu vergebene Nummern früherer Läufe; die dieses Laufs ergänzt `step_issue_texts`.
+        rewrite.number_map = tx
+            .imports()
+            .linear_identifier_map()
+            .await?
+            .into_iter()
+            .collect();
         drop(tx);
         self.rewrite = rewrite;
         self.users_by_username = users;

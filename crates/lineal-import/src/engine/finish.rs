@@ -83,6 +83,7 @@ impl Session<'_, '_> {
             Step::Projects => self.step_projects(cursor).await,
             Step::Milestones => self.step_milestones(cursor).await,
             Step::Issues => self.step_issues(cursor).await,
+            Step::IssueTexts => self.step_issue_texts(cursor).await,
             Step::IssueParents => self.step_issue_parents().await,
             Step::IssueRelations => self.step_relations(cursor).await,
             Step::Comments => self.step_comments(cursor).await,

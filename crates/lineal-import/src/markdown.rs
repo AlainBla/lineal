@@ -90,6 +90,8 @@ pub struct RewriteCtx {
     pub asset_prefix: String,
     /// Linear-Benutzername (klein) -> Lineal-`display_name`.
     pub users: HashMap<String, String>,
+    /// Linear-Kennung (`ENG-12`) -> Lineal-Kennung, wo die Nummer beim Import neu vergeben wurde.
+    pub number_map: HashMap<String, String>,
 }
 
 /// Ergebnis des Umschreibens.
@@ -104,6 +106,9 @@ pub struct Rewritten {
 
 impl RewriteCtx {
     fn map_identifier(&self, ident: &str) -> String {
+        if let Some(mapped) = self.number_map.get(&ident.trim().to_uppercase()) {
+            return mapped.clone();
+        }
         match IDENT.captures(ident.trim()) {
             Some(c) => {
                 let key = c[1].to_uppercase();
@@ -122,6 +127,16 @@ impl RewriteCtx {
             std::borrow::Cow::Borrowed(md)
         } else {
             std::borrow::Cow::Owned(md.replace(self.asset_prefix.as_str(), "removed-asset-link:"))
+        };
+        // Kennungen im Fließtext (`ENG-12`): Team-Key und neu vergebene Nummer. Kennungen in Links
+        // und `<issue>`-Elementen übernehmen die Schritte darunter (je Vorkommen genau einmal).
+        let md = if self.number_map.is_empty() && self.key_map.is_empty() {
+            md
+        } else {
+            std::borrow::Cow::Owned(remap_identifiers(&md, true, |ident| {
+                let mapped = self.map_identifier(ident);
+                (mapped != ident).then_some(mapped)
+            }))
         };
         let mut text = ISSUE_TAG
             .replace_all(&md, |c: &Captures| self.map_identifier(&c[1]))
@@ -198,6 +213,119 @@ impl RewriteCtx {
     }
 }
 
+static BARE_IDENT: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Z][A-Z0-9]*-[0-9]+"));
+
+/// Ersetzt Issue-Kennungen (`ENG-12`) außerhalb von Code (Inline-Code und Codeblöcke) in einem
+/// Durchgang: jedes Vorkommen wird höchstens einmal abgebildet. `in_prose_only` lässt Kennungen
+/// in URL-Pfaden (`…/issue/ENG-12`) und direkt hinter `>` (Inhalt von `<issue>`-Elementen) aus.
+pub fn remap_identifiers(
+    text: &str,
+    in_prose_only: bool,
+    map: impl Fn(&str) -> Option<String>,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut fence: Option<String> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start_matches(' ');
+        let marker: String = trimmed
+            .chars()
+            .take_while(|c| *c == '`' || *c == '~')
+            .collect();
+        if line.len() - trimmed.len() <= 3
+            && marker.len() >= 3
+            && marker
+                .chars()
+                .all(|c| c == marker.chars().next().unwrap_or('`'))
+        {
+            match &fence {
+                Some(open) if marker.starts_with(open.as_str()) => fence = None,
+                None => fence = Some(marker),
+                _ => {}
+            }
+            out.push_str(line);
+            continue;
+        }
+        if fence.is_some() {
+            out.push_str(line);
+            continue;
+        }
+        remap_line(line, in_prose_only, &map, &mut out);
+    }
+    out
+}
+
+/// Eine Zeile außerhalb eines Codeblocks: Inline-Code (Backtick-Läufe gleicher Länge) bleibt.
+fn remap_line(
+    line: &str,
+    in_prose_only: bool,
+    map: &impl Fn(&str) -> Option<String>,
+    out: &mut String,
+) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut plain_start = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let run_start = i;
+        while i < bytes.len() && bytes[i] == b'`' {
+            i += 1;
+        }
+        let run = &line[run_start..i];
+        // Schließender Lauf gleicher Länge?
+        let mut j = i;
+        let mut close = None;
+        while j < bytes.len() {
+            if bytes[j] == b'`' {
+                let s = j;
+                while j < bytes.len() && bytes[j] == b'`' {
+                    j += 1;
+                }
+                if j - s == run.len() {
+                    close = Some(j);
+                    break;
+                }
+            } else {
+                j += 1;
+            }
+        }
+        if let Some(end) = close {
+            remap_plain(&line[plain_start..run_start], in_prose_only, map, out);
+            out.push_str(&line[run_start..end]);
+            i = end;
+            plain_start = end;
+        }
+    }
+    remap_plain(&line[plain_start..], in_prose_only, map, out);
+}
+
+fn remap_plain(
+    s: &str,
+    in_prose_only: bool,
+    map: &impl Fn(&str) -> Option<String>,
+    out: &mut String,
+) {
+    let mut last = 0;
+    for m in BARE_IDENT.find_iter(s) {
+        let before = s[..m.start()].chars().next_back();
+        let after = s[m.end()..].chars().next();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        let blocked_before = before
+            .is_some_and(|c| word(c) || c == '-' || (in_prose_only && (c == '/' || c == '>')));
+        if blocked_before || after.is_some_and(word) {
+            continue;
+        }
+        if let Some(mapped) = map(m.as_str()) {
+            out.push_str(&s[last..m.start()]);
+            out.push_str(&mapped);
+            last = m.end();
+        }
+    }
+    out.push_str(&s[last..]);
+}
+
 /// Kürzt auf `max` Zeichen (nicht Bytes).
 pub fn truncate_chars(s: &str, max: usize) -> (String, bool) {
     if s.chars().count() <= max {
@@ -218,7 +346,46 @@ mod tests {
             target_ws: "acme".into(),
             key_map: HashMap::from([("ENG".to_owned(), "ENGX".to_owned())]),
             users: HashMap::from([("bob".to_owned(), "bob.b".to_owned())]),
+            number_map: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn renumbered_identifiers_are_mapped_once_in_text_links_and_tags() {
+        let mut c = ctx();
+        // ENG-1 wurde zu ENGX-12, ENG-12 zu ENGX-40: keine Kette (ENG-1 darf nie ENGX-40 werden).
+        c.number_map = HashMap::from([
+            ("ENG-1".to_owned(), "ENGX-12".to_owned()),
+            ("ENG-12".to_owned(), "ENGX-40".to_owned()),
+        ]);
+        let out = c.rewrite(
+            "Siehe ENG-1 und [ENG-12](https://linear.app/acme/issue/ENG-12/slug), \
+             <issue id=\"a\" href=\"https://linear.app/acme/issue/ENG-1/x\">ENG-1</issue>, ENG-2, \
+             `ENG-1` und ENG-1a.\n```\nENG-1\n```\nENG-1-Retry",
+            10_000,
+        );
+        assert_eq!(
+            out.text,
+            "Siehe ENGX-12 und [ENGX-40](https://lineal.example.com/acme/issue/ENGX-40), \
+             ENGX-12, ENGX-2, `ENG-1` und ENG-1a.\n```\nENG-1\n```\nENGX-12-Retry"
+        );
+    }
+
+    #[test]
+    fn remap_identifiers_maps_every_occurrence_once_outside_code() {
+        let map = HashMap::from([
+            ("KOL-1".to_owned(), "KOL-7".to_owned()),
+            ("KOL-7".to_owned(), "KOL-9".to_owned()),
+        ]);
+        let out = remap_identifiers(
+            "KOL-1 [KOL-1](https://x/ws/issue/KOL-1) KOL-7 ``KOL-1`` XKOL-1 RUSTSEC-2026-0373",
+            false,
+            |i| map.get(i).cloned(),
+        );
+        assert_eq!(
+            out,
+            "KOL-7 [KOL-7](https://x/ws/issue/KOL-7) KOL-9 ``KOL-1`` XKOL-1 RUSTSEC-2026-0373"
+        );
     }
 
     #[test]

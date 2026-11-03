@@ -778,6 +778,66 @@ impl ImportRepo for PgTx {
         }
     }
 
+    async fn issue_number_taken(&mut self, team_id: Uuid, number: i64) -> AppResult<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM issue WHERE organization_id = $1 AND team_id = $2 \
+               AND number = $3)",
+        )
+        .bind(self.org.0)
+        .bind(team_id)
+        .bind(number)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn issue_team(&mut self, issue_id: Uuid) -> AppResult<Option<Uuid>> {
+        sqlx::query_scalar("SELECT team_id FROM issue WHERE organization_id = $1 AND id = $2")
+            .bind(self.org.0)
+            .bind(issue_id)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)
+    }
+
+    async fn linear_identifier_map(&mut self) -> AppResult<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT ON (src) src, identifier FROM ( \
+               SELECT upper(substring(a.title FROM '^Linear: ([A-Za-z][A-Za-z0-9]*-[0-9]+)$')) AS src, \
+                      i.identifier, a.created_at \
+               FROM attachment a JOIN issue i ON i.organization_id = a.organization_id AND i.id = a.issue_id \
+               WHERE a.organization_id = $1 AND a.source_type = 'linear' \
+                 AND a.title ~ '^Linear: [A-Za-z][A-Za-z0-9]*-[0-9]+$') m \
+             WHERE src <> identifier ORDER BY src, created_at DESC",
+        )
+        .bind(self.org.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn issue_texts_of_run(
+        &mut self,
+        run_id: Uuid,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> AppResult<Vec<(Uuid, String, Option<String>)>> {
+        sqlx::query_as(
+            "SELECT i.id, i.title, i.description FROM import_mapping m \
+             JOIN issue i ON i.organization_id = m.organization_id AND i.id = m.target_id \
+             WHERE m.organization_id = $1 AND m.import_run_id = $2 AND m.source_type = 'Issue' \
+               AND ($3::uuid IS NULL OR i.id > $3) \
+             ORDER BY i.id LIMIT $4",
+        )
+        .bind(self.org.0)
+        .bind(run_id)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn finalize_import_counters(&mut self, team_ids: &[Uuid]) -> AppResult<()> {
         sqlx::query(
             "UPDATE team t SET \

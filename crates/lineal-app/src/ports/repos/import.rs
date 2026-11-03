@@ -473,6 +473,36 @@ pub trait ImportRepo: Send {
         nyi()
     }
 
+    /// Ist die Nummer im Team schon vergeben (auch im Papierkorb; wie der Unique-Index)?
+    async fn issue_number_taken(&mut self, team_id: Uuid, number: i64) -> AppResult<bool> {
+        let _ = (team_id, number);
+        nyi()
+    }
+
+    /// Team eines Issues (für Teamwechsel beim Abgleich).
+    async fn issue_team(&mut self, issue_id: Uuid) -> AppResult<Option<Uuid>> {
+        let _ = issue_id;
+        nyi()
+    }
+
+    /// Linear-Kennung → heutige Lineal-Kennung für Issues, deren Kennung beim Import neu vergeben
+    /// wurde (Quelle: Anhang `Linear: KEY-N`). Nur abweichende Paare.
+    async fn linear_identifier_map(&mut self) -> AppResult<Vec<(String, String)>> {
+        nyi()
+    }
+
+    /// Issues, die der Lauf geschrieben hat (Mapping mit dieser `import_run_id`), mit Titel und
+    /// Beschreibung; seitenweise nach `id`.
+    async fn issue_texts_of_run(
+        &mut self,
+        run_id: Uuid,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> AppResult<Vec<(Uuid, String, Option<String>)>> {
+        let _ = (run_id, after, limit);
+        nyi()
+    }
+
     /// Setzt `team.import_locked_until` (`None` hebt die Sperre auf).
     async fn set_team_import_lock(
         &mut self,

@@ -17,6 +17,7 @@ use crate::app::App;
 use crate::context::{Actor, RequestCtx, Scopes};
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot, require_workspace};
+use crate::ports::Tx;
 use crate::ports::repos::import::{
     ImportRun, ImportRunUpdate, ImportSyncRow, ImportTable, NewImportRun,
 };
@@ -423,6 +424,13 @@ impl App {
                 .last_removal_check_at
                 .is_none_or(|t| now - t >= Duration::hours(REMOVAL_CHECK_EVERY_HOURS));
         let teams = sync.teams.clone();
+        let mut target_teams: BTreeMap<String, Uuid> =
+            serde_json::from_value(sync.target_teams.clone()).unwrap_or_default();
+        if target_teams.is_empty() {
+            // Ein Abgleich ohne eigene Zielteams setzt die Zuordnung des Imports fort, der die Teams
+            // in bestehende Lineal-Teams übernommen hat (sonst behandelte er sie als eigene Teams).
+            target_teams = inherited_target_teams(tx.as_mut(), &teams).await?;
+        }
         let input = ImportStartInput {
             run_id: Uuid::nil(),
             teams: teams.clone(),
@@ -431,7 +439,7 @@ impl App {
             dry_run: false,
             delta: true,
             projects: sync.projects.clone(),
-            target_teams: serde_json::from_value(sync.target_teams.clone()).unwrap_or_default(),
+            target_teams,
         };
         let mut options = options_json(&input, &teams, updated_after, Some(starter.0));
         if let Some(o) = options.as_object_mut() {
@@ -729,6 +737,27 @@ fn actor_user(ctx: &RequestCtx) -> Option<Uuid> {
         Actor::User { id, .. } | Actor::App { id } => Some(id.0),
         Actor::System => None,
     }
+}
+
+/// Zielteams des jüngsten abgeschlossenen (echten) Imports, beschränkt auf die abgeglichenen Teams.
+async fn inherited_target_teams(
+    tx: &mut dyn Tx,
+    teams: &[String],
+) -> AppResult<BTreeMap<String, Uuid>> {
+    let runs = tx.imports().list_import_runs(100).await?;
+    let found = runs
+        .iter()
+        .filter(|r| r.status == "completed" && r.options["dryRun"] != json!(true))
+        .find_map(|r| {
+            serde_json::from_value::<BTreeMap<String, Uuid>>(r.options["targetTeams"].clone())
+                .ok()
+                .filter(|m| !m.is_empty())
+        })
+        .unwrap_or_default();
+    Ok(found
+        .into_iter()
+        .filter(|(key, _)| teams.is_empty() || teams.contains(key))
+        .collect())
 }
 
 #[cfg(test)]

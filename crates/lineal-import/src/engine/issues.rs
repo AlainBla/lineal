@@ -17,6 +17,15 @@ const LINK_TYPE: &str = "IssueParentLink";
 
 impl Session<'_, '_> {
     pub(crate) async fn step_issues(&mut self, cursor: Option<String>) -> HResult<()> {
+        // Beschreibungen entstehen hier ohne Nummern-Abbildung: welche Nummern dieser Lauf neu
+        // vergibt, steht erst am Ende fest. `step_issue_texts` bildet sie danach genau einmal ab.
+        let number_map = std::mem::take(&mut self.rewrite.number_map);
+        let result = self.issue_pages(cursor).await;
+        self.rewrite.number_map = number_map;
+        result
+    }
+
+    async fn issue_pages(&mut self, cursor: Option<String>) -> HResult<()> {
         let mut cursor = cursor;
         loop {
             let page = self.fetch(SourceEntity::Issues, cursor).await?;
@@ -33,6 +42,79 @@ impl Session<'_, '_> {
             match next {
                 Some(c) => cursor = Some(c),
                 None => return Ok(()),
+            }
+        }
+    }
+
+    /// Verweise in Titel und Beschreibung der in diesem Lauf geschriebenen Issues auf die neu
+    /// vergebenen Nummern abbilden (vollständige Abbildung aus der Datenbank, ein Durchgang je
+    /// Text; Fortsetzung über die zuletzt bearbeitete Issue-ID).
+    pub(crate) async fn step_issue_texts(&mut self, cursor: Option<String>) -> HResult<()> {
+        self.begin_unit().await?;
+        let full = self.tx()?.imports().linear_identifier_map().await?;
+        self.end_unit(None).await?;
+        self.rewrite.number_map = full.into_iter().collect();
+        if self.dry || self.rewrite.number_map.is_empty() {
+            return Ok(());
+        }
+        // Im Text steht nach dem Issue-Schritt schon der Lineal-Team-Key, aber noch die
+        // Linear-Nummer: Abbildung daher nach Ziel-Key.
+        let by_target: std::collections::HashMap<String, String> = self
+            .rewrite
+            .number_map
+            .iter()
+            .map(|(src, dst)| {
+                let (key, num) = src.rsplit_once('-').unwrap_or((src.as_str(), ""));
+                let key = self.rewrite.key_map.get(key).map_or(key, String::as_str);
+                (format!("{key}-{num}"), dst.clone())
+            })
+            .collect();
+        // Beschreibungen tragen schon den Ziel-Key, Titel (ohne Markdown-Umschreibung) noch den
+        // Linear-Key.
+        let remap = |t: &str| {
+            crate::markdown::remap_identifiers(t, false, |ident| by_target.get(ident).cloned())
+        };
+        let source_map = self.rewrite.number_map.clone();
+        let remap_title = |t: &str| {
+            crate::markdown::remap_identifiers(t, false, |ident| source_map.get(ident).cloned())
+        };
+        let run_id = self.run.id;
+        let mut after: Option<Uuid> = cursor.as_deref().and_then(|c| c.parse().ok());
+        loop {
+            self.begin_unit().await?;
+            let page = self
+                .tx()?
+                .imports()
+                .issue_texts_of_run(run_id, after, 200)
+                .await?;
+            for (id, title, description) in &page {
+                let new_title = remap_title(title);
+                if &new_title != title {
+                    self.tx()?
+                        .imports()
+                        .set_row_text(ImportTable::Issue, "title", *id, &new_title)
+                        .await?;
+                }
+                if let Some(d) = description {
+                    let new = remap(d);
+                    if &new != d {
+                        self.tx()?
+                            .imports()
+                            .set_row_text(ImportTable::Issue, "description", *id, &new)
+                            .await?;
+                    }
+                }
+            }
+            after = page.last().map(|p| p.0);
+            let done = page.len() < 200;
+            let cp = if done {
+                None
+            } else {
+                Some(self.cp(Step::IssueTexts, after.map(|a| a.to_string())))
+            };
+            self.end_unit(cp).await?;
+            if done {
+                return Ok(());
             }
         }
     }
@@ -70,25 +152,15 @@ impl Session<'_, '_> {
                     .and_then(|i| i.rsplit('-').next()?.parse().ok())
             })
             .filter(|x| *x > 0 && *x < i32::MAX as i64);
-        // Bestehendes Zielteam: neue Nummern aus dem Zähler des Teams (die Linear-Nummer würde mit
-        // vorhandenen Issues kollidieren); bereits importierte Issues behalten ihre Nummer.
+        // Nummer: die aus Linear, solange sie im Zielteam frei ist (auch beim Import in ein
+        // bestehendes Team), sonst die nächste über allen vorhandenen. Bereits importierte Issues
+        // behalten ihre Nummer, außer sie wechseln das Team. Neu vergebene Nummern hält der Anhang
+        // `Linear: KEY-N` fest; daraus bildet `step_issue_texts` die Verweise im Text ab.
         let into_existing = self.target_by_source.contains_key(team_src);
-        let number = if into_existing {
-            if self.mapping("Issue", &src).await?.is_none() {
-                let first = self
-                    .tx()?
-                    .teams()
-                    .allocate_issue_numbers(TeamId(team), 1)
-                    .await?;
-                Some(i64::from(first))
-            } else {
-                None
-            }
-        } else {
-            Some(
-                linear_number
-                    .ok_or_else(|| AppError::invalid_request("issue without a valid number"))?,
-            )
+        let mapped = self.mapping("Issue", &src).await?;
+        let number = match mapped {
+            Some(m) if self.tx()?.imports().issue_team(m.target_id).await? == Some(team) => None,
+            _ => Some(self.issue_number(team, linear_number).await?),
         };
         if n.ref_id("delegate").is_some() && self.reported_tags.insert("delegate".into()) {
             self.note(
@@ -215,7 +287,8 @@ impl Session<'_, '_> {
         if !up.wrote() {
             return Ok(());
         }
-        if into_existing && up.outcome == Outcome::Created {
+        let renumbered = number.is_some() && number != linear_number;
+        if up.outcome == Outcome::Created && (into_existing || renumbered) {
             self.linear_identifier_link(n, team_src, up.id, created)
                 .await?;
         }
@@ -351,6 +424,20 @@ impl Session<'_, '_> {
     /// Import in ein bestehendes Team: die Linear-Kennung (`KOL-12`) bleibt auffindbar, als Alias
     /// (löst im Suchfeld/Links auf, sofern sie nicht mit dem Key des Zielteams übereinstimmt) und
     /// immer als Anhang `Linear: KOL-12` mit Link in den Quell-Workspace.
+    /// Linear-Nummer, wenn im Team frei; sonst die nächste über dem Maximum (der Zähler kann
+    /// hinter bereits übernommenen Linear-Nummern zurückliegen).
+    async fn issue_number(&mut self, team: Uuid, linear: Option<i64>) -> AppResult<i64> {
+        if let Some(n) = linear
+            && !self.tx()?.imports().issue_number_taken(team, n).await?
+        {
+            return Ok(n);
+        }
+        let tx = self.tx()?;
+        tx.imports().finalize_import_counters(&[team]).await?;
+        let first = tx.teams().allocate_issue_numbers(TeamId(team), 1).await?;
+        Ok(i64::from(first))
+    }
+
     async fn linear_identifier_link(
         &mut self,
         n: N<'_>,

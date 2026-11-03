@@ -11,6 +11,7 @@ use lineal_app::usecases::issue::CreateIssueInput;
 use lineal_app::usecases::team::CreateTeamInput;
 use lineal_import::engine::{EngineConfig, RunOutcome};
 use lineal_import::{FakeSource, fixtures};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -413,34 +414,43 @@ async fn import_into_an_existing_team_maps_statuses_and_labels_and_renumbers(poo
             .await,
         0
     );
-    // Neue Nummern ab 3, keine Kollision, Linear-Kennung als Alias und Anhang.
-    let in_projects = src
+    // Nummern: die aus Linear, wo sie im Zielteam frei sind; belegte (1, 2 gehören den beiden
+    // vorhandenen Issues) über dem Maximum neu vergeben. Linear-Kennung als Alias und Anhang.
+    let imported: Vec<i64> = src
         .entity(lineal_import::SourceEntity::Issues)
         .iter()
         .filter(|i| {
             i["team"]["id"] == "t-kol"
                 && (i["project"]["id"] == "p-5" || i["project"]["id"] == "p-6")
         })
-        .count() as i64;
+        .map(|i| i["number"].as_i64().unwrap())
+        .collect();
+    let in_projects = imported.len() as i64;
     assert!(in_projects > 10);
+    let collisions = imported.iter().filter(|n| **n <= 2).count() as i64;
     assert_eq!(
         e.count("SELECT count(*) FROM issue WHERE team_id IS NOT NULL")
             .await,
         2 + in_projects
     );
     assert_eq!(
-        e.count("SELECT min(number) FROM issue WHERE title LIKE 'Aufgabe %'")
-            .await,
-        3
+        e.count(
+            "SELECT count(*) FROM attachment a JOIN issue i ON i.id = a.issue_id \
+             WHERE a.title = 'Linear: KOL-' || i.number"
+        )
+        .await,
+        in_projects - collisions,
+        "free Linear numbers are kept"
     );
+    let max_linear = imported.iter().copied().max().unwrap();
     assert_eq!(
         e.count("SELECT max(number) FROM issue").await,
-        2 + in_projects
+        max_linear.max(2) + collisions
     );
     assert_eq!(
         e.count("SELECT last_issue_number FROM team WHERE key = 'KP'")
             .await,
-        2 + in_projects
+        e.count("SELECT max(number) FROM issue").await
     );
     // Die Linear-Kennung löst auf (Alias), und der Anhang trägt den Link.
     let linear_ident: String = sqlx::query_scalar(
@@ -498,7 +508,8 @@ async fn import_into_an_existing_team_maps_statuses_and_labels_and_renumbers(poo
     );
     assert_eq!(
         e.count("SELECT max(number) FROM issue").await,
-        2 + in_projects
+        max_linear.max(2) + collisions,
+        "delta keeps the numbers"
     );
     assert_eq!(
         e.count("SELECT count(*) FROM issue WHERE title = 'Neu betitelt'")
@@ -884,5 +895,92 @@ async fn people_are_matched_only_to_active_users_and_created_as_plain_placeholde
         e.count("SELECT count(*) FROM \"user\" WHERE status = 'imported' AND active")
             .await,
         0
+    );
+}
+
+#[sqlx::test(migrator = "lineal_db::MIGRATOR")]
+async fn renumbered_issues_are_remapped_in_texts_of_the_same_run(pool: PgPool) {
+    let e = env(pool).await;
+    let team = existing_team(&e, "KP").await;
+    // KP-1 existiert schon: Linear KOL-1 muss eine neue Nummer bekommen.
+    e.app
+        .create_issue(
+            &e.alice_ctx(),
+            CreateIssueInput {
+                team: "KP".into(),
+                title: Some("Vorhanden".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let src = source();
+    let kol = |n: i64| format!("i-kol-{n}");
+    let imported: Vec<Value> = src
+        .entity(lineal_import::SourceEntity::Issues)
+        .into_iter()
+        .filter(|i| i["team"]["id"] == "t-kol" && i["project"]["id"] == "p-5")
+        .collect();
+    let other = imported
+        .iter()
+        .map(|i| i["number"].as_i64().unwrap())
+        .find(|n| *n > 1)
+        .unwrap();
+    assert!(src.patch(
+        lineal_import::SourceEntity::Issues,
+        &kol(1),
+        &json!({ "project": { "id": "p-5" }, "projectMilestone": null }),
+    ));
+    assert!(src.patch(
+        lineal_import::SourceEntity::Issues,
+        &kol(other),
+        &json!({
+            "title": "Folgt aus KOL-1",
+            "description": "Siehe KOL-1 und [KOL-1](https://linear.app/acme/issue/KOL-1/x), \
+                            nicht `KOL-1`; KOL-{other} bleibt."
+                .replace("{other}", &other.to_string()),
+        }),
+    ));
+    let planned = e.scan(&src).await;
+    let input = ImportStartInput {
+        teams: vec!["KOL".into()],
+        projects: vec!["p-5".into()],
+        target_teams: BTreeMap::from([("KOL".to_owned(), team)]),
+        ..Default::default()
+    };
+    e.start(planned.id, input).await;
+    let out = e
+        .engine(&src, EngineConfig::default())
+        .run(e.org, planned.id)
+        .await
+        .unwrap();
+    assert_eq!(out, RunOutcome::Completed);
+    let moved: String = sqlx::query_scalar(
+        "SELECT i.identifier FROM attachment a JOIN issue i ON i.id = a.issue_id \
+         WHERE a.title = 'Linear: KOL-1'",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_ne!(moved, "KP-1", "the taken number is not reused");
+    let (title, description): (String, String) =
+        sqlx::query_as("SELECT title, description FROM issue WHERE identifier = $1")
+            .bind(format!("KP-{other}"))
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(title, format!("Folgt aus {moved}"));
+    assert!(
+        description.starts_with(&format!("Siehe {moved} und [{moved}](")),
+        "{description}"
+    );
+    assert!(
+        description.contains(&format!("/issue/{moved})")),
+        "{description}"
+    );
+    assert!(description.contains("nicht `KOL-1`"), "{description}");
+    assert!(
+        description.contains(&format!("KP-{other} bleibt")),
+        "{description}"
     );
 }
