@@ -37,6 +37,7 @@ import {
   getUiState,
 } from "@/app/ui-state";
 import { buildTeamTree, flattenTeamTree, useSidebarData } from "@/app/use-sidebar-data";
+import { focusSearchTarget, isSearchTargetFocused } from "@/lib/search-target";
 import { setTheme } from "@/lib/theme";
 
 /**
@@ -92,6 +93,20 @@ export function buildGlobalActions(args: {
       keys: "/",
       icon: Search,
       perform: () => go(w.search),
+    },
+    {
+      id: "search.focus",
+      title: "Focus search",
+      section: "General",
+      keys: "mod+f",
+      icon: Search,
+      keywords: ["find"],
+      // Zweiter Druck bei fokussiertem Suchfeld: nicht abfangen, damit die Browsersuche greift.
+      shouldHandle: () => !isSearchTargetFocused(),
+      // Ohne Suchfeld auf der Seite: Suche öffnen; die Suchseite fokussiert ihr Feld selbst (autoFocus).
+      perform: () => {
+        if (!focusSearchTarget()) go(w.search);
+      },
     },
     {
       id: "issue.create",

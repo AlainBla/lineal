@@ -32,6 +32,8 @@ export interface Action extends Command {
   allowInModal?: boolean;
   /** Nur im Command-Menü sichtbar, wenn wahr (Default: immer). */
   enabled?: boolean;
+  /** Liefert `false`, wenn das Tastenereignis nicht abgefangen werden soll (Browser-Default bleibt). */
+  shouldHandle?: () => boolean;
 }
 
 type Listener = () => void;
@@ -128,7 +130,11 @@ export function useActions(
           context: a.context,
           allowInModal: a.allowInModal,
           description: a.title,
-          run: () => ref.current.find((x) => x.id === a.id)?.perform(),
+          run: () => {
+            const cur = ref.current.find((x) => x.id === a.id);
+            if (cur?.shouldHandle && !cur.shouldHandle()) return false;
+            cur?.perform();
+          },
         }),
       );
     }
