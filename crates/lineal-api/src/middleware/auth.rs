@@ -119,7 +119,7 @@ pub async fn lookup_principal(app: &App, token: &str) -> AppResult<Option<Princi
     }
     let mut tx = app.store.begin_system().await?;
     tx.auth()
-        .find_principal_by_token_hash(&hash_token(token))
+        .find_principal_by_token_hash(&hash_token(token), app.clock.now())
         .await
 }
 

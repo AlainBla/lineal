@@ -67,16 +67,21 @@ const KEY_COLS: &str = "id, user_id, label, key_prefix, scopes, team_ids, expire
 
 #[async_trait]
 impl AuthRepo for PgTx {
-    async fn find_principal_by_token_hash(&mut self, hash: &str) -> AppResult<Option<Principal>> {
+    async fn find_principal_by_token_hash(
+        &mut self,
+        hash: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<Principal>> {
         // 1. Web-Session
         let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
             "SELECT s.organization_id, u.id, u.role FROM user_session s \
              JOIN \"user\" u ON u.organization_id = s.organization_id AND u.id = s.user_id \
              JOIN organization o ON o.id = s.organization_id AND o.archived_at IS NULL \
              WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.archived_at IS NULL \
-               AND s.expires_at > now() AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
+               AND s.expires_at > $2 AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
+        .bind(now)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -101,9 +106,10 @@ impl AuthRepo for PgTx {
              JOIN \"user\" u ON u.organization_id = k.organization_id AND u.id = k.user_id \
              JOIN organization o ON o.id = k.organization_id AND o.archived_at IS NULL \
              WHERE k.key_hash = $1 AND k.revoked_at IS NULL AND k.archived_at IS NULL \
-               AND (k.expires_at IS NULL OR k.expires_at > now()) AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
+               AND (k.expires_at IS NULL OR k.expires_at > $2) AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
+        .bind(now)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
@@ -125,9 +131,10 @@ impl AuthRepo for PgTx {
              JOIN \"user\" u ON u.organization_id = t.organization_id AND u.id = t.user_id \
              JOIN organization o ON o.id = t.organization_id AND o.archived_at IS NULL \
              WHERE t.access_token_hash = $1 AND t.revoked_at IS NULL AND t.archived_at IS NULL \
-               AND t.access_expires_at > now() AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
+               AND t.access_expires_at > $2 AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
         )
         .bind(hash)
+        .bind(now)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;

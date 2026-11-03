@@ -49,7 +49,7 @@ pub async fn authenticate(app: &App, headers: &HeaderMap) -> Result<RequestCtx, 
         .map_err(AuthFailure::Internal)?;
     let principal = tx
         .auth()
-        .find_principal_by_token_hash(&hash)
+        .find_principal_by_token_hash(&hash, app.clock.now())
         .await
         .map_err(AuthFailure::Internal)?
         .ok_or(AuthFailure::Invalid)?;

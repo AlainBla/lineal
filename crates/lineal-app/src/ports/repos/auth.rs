@@ -105,8 +105,13 @@ pub struct ApiKeyRecord {
 pub trait AuthRepo: Send {
     /// Sucht den Aufrufer zu einem SHA-256-Token-Hash (hex) in Sessions, API-Keys und
     /// OAuth-Access-Tokens. Läuft mandantenübergreifend (typisch unter `begin_system`).
-    /// Abgelaufene/widerrufene Tokens und deaktivierte User liefern `None`.
-    async fn find_principal_by_token_hash(&mut self, hash: &str) -> AppResult<Option<Principal>>;
+    /// Abgelaufene/widerrufene Tokens und deaktivierte User liefern `None`. `now` ist die Zeit der
+    /// Anwendung (dieselbe Uhr, mit der die Ablaufzeiten gesetzt werden).
+    async fn find_principal_by_token_hash(
+        &mut self,
+        hash: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<Principal>>;
 
     /// Login-Kandidaten zu einer E-Mail (optional eingegrenzt auf einen Workspace-`urlKey`).
     /// Mandantenübergreifend; nur unter `begin_system` aufrufen.

@@ -155,7 +155,11 @@ impl AuditRepo for FakeTx {
 
 #[async_trait]
 impl AuthRepo for FakeTx {
-    async fn find_principal_by_token_hash(&mut self, hash: &str) -> AppResult<Option<Principal>> {
+    async fn find_principal_by_token_hash(
+        &mut self,
+        hash: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Option<Principal>> {
         Ok(lock(&self.state.principals).get(hash).cloned())
     }
 }
@@ -411,12 +415,15 @@ mod tests {
         let store = FakeStore::new().with_principal("h1", principal.clone());
         let mut tx = store.begin_system().await.unwrap();
         assert_eq!(
-            tx.auth().find_principal_by_token_hash("h1").await.unwrap(),
+            tx.auth()
+                .find_principal_by_token_hash("h1", Utc::now())
+                .await
+                .unwrap(),
             Some(principal)
         );
         assert_eq!(
             tx.auth()
-                .find_principal_by_token_hash("nope")
+                .find_principal_by_token_hash("nope", Utc::now())
                 .await
                 .unwrap(),
             None

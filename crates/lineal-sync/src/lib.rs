@@ -352,7 +352,9 @@ async fn lookup(
     token_hash: &str,
 ) -> Result<Option<lineal_app::ports::repos::Principal>, AppError> {
     let mut tx = app.store.begin_system().await?;
-    tx.auth().find_principal_by_token_hash(token_hash).await
+    tx.auth()
+        .find_principal_by_token_hash(token_hash, app.clock.now())
+        .await
 }
 
 /// Prüft das Token einer laufenden Verbindung erneut (Widerruf, Ablauf, Suspendierung,

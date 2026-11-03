@@ -265,7 +265,10 @@ impl App {
     ) -> AppResult<bool> {
         let hash = hash_token(token);
         let mut tx = self.store.begin_system().await?;
-        let principal = tx.auth().find_principal_by_token_hash(&hash).await?;
+        let principal = tx
+            .auth()
+            .find_principal_by_token_hash(&hash, self.clock.now())
+            .await?;
         let revoked = tx.auth().revoke_session(&hash, self.clock.now()).await?;
         if let (
             true,
@@ -299,7 +302,7 @@ impl App {
     pub async fn principal_for_token(&self, token: &str) -> AppResult<Principal> {
         let mut tx = self.store.begin_system().await?;
         tx.auth()
-            .find_principal_by_token_hash(&hash_token(token))
+            .find_principal_by_token_hash(&hash_token(token), self.clock.now())
             .await?
             .ok_or_else(|| AppError::unauthenticated("Invalid or expired token."))
     }

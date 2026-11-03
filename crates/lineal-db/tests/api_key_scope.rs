@@ -28,7 +28,7 @@ async fn ctx_of_key(app: &App, key: &str) -> RequestCtx {
     let mut tx = app.store.begin_system().await.unwrap();
     let p = tx
         .auth()
-        .find_principal_by_token_hash(&hash_token(key))
+        .find_principal_by_token_hash(&hash_token(key), chrono::Utc::now())
         .await
         .unwrap()
         .expect("key resolves");

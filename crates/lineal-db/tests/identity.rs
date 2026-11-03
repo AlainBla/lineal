@@ -890,7 +890,7 @@ async fn login_logout_and_enumeration_resistance(pool: PgPool) {
         let mut tx = app.store.begin_system().await.unwrap();
         let _ = tx
             .auth()
-            .find_principal_by_token_hash(&hash_token(&login2.token))
+            .find_principal_by_token_hash(&hash_token(&login2.token), chrono::Utc::now())
             .await
             .unwrap();
         (0, 1)
@@ -914,7 +914,7 @@ async fn principal_lookup_rejects_dead_tokens_and_clamps_scopes(pool: PgPool) {
         async move {
             let mut tx = store.begin_system().await.unwrap();
             tx.auth()
-                .find_principal_by_token_hash(&hash_token(&token))
+                .find_principal_by_token_hash(&hash_token(&token), chrono::Utc::now())
                 .await
                 .unwrap()
         }
