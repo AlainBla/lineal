@@ -103,9 +103,9 @@ export function buildGlobalActions(args: {
       keywords: ["find"],
       // Zweiter Druck bei fokussiertem Suchfeld: nicht abfangen, damit die Browsersuche greift.
       shouldHandle: () => !isSearchTargetFocused(),
-      // Ohne Suchfeld auf der Seite: Suche öffnen; die Suchseite fokussiert ihr Feld selbst (autoFocus).
+      // Fokussiert das Suchfeld in der Topbar (filtert Listen live, sonst Enter → Command-Menü).
       perform: () => {
-        if (!focusSearchTarget()) go(w.search);
+        focusSearchTarget();
       },
     },
     {

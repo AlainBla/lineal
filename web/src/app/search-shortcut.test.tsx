@@ -62,11 +62,11 @@ describe("Cmd/Ctrl+F", () => {
     expect(go).not.toHaveBeenCalled();
   });
 
-  it("opens search when the page has no search input", () => {
+  it("never navigates to the search page, even without a search input", () => {
     render(<Harness reg={reg} cmds={cmds} />);
     const e = press({ ctrlKey: true });
     expect(e.defaultPrevented).toBe(true);
-    expect(go).toHaveBeenCalledWith("/acme/search");
+    expect(go).not.toHaveBeenCalled();
   });
 
   it("does not intercept a second press while the input is focused", () => {

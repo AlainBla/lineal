@@ -1,3 +1,4 @@
+import { useQuickFiltered } from "@/lib/quick-filter";
 import { Link } from "@tanstack/react-router";
 import { Columns3, List } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -93,10 +94,11 @@ function MyIssuesList({
   const [request, setRequest] = useState<PickerRequest | null>(null);
   const closePicker = useCallback(() => setRequest(null), []);
 
-  const issues = useMemo(() => {
+  const allIssues = useMemo(() => {
     const all = query.data?.issues ?? [];
     return tab === "assigned" ? filterAssigned(all) : all;
   }, [query.data, tab]);
+  const issues = useQuickFiltered(allIssues);
   const groups = useMemo(() => groupByStateType(issues), [issues]);
   const teamIds = useMemo(() => [...new Set(issues.map((i) => i.teamId))].sort(), [issues]);
   const metas = useTeamMetas(teamIds);
@@ -160,7 +162,7 @@ function MyIssuesList({
 
   if (query.isLoading) return <ListSkeleton />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
-  if (issues.length === 0) return <EmptyState {...EMPTY[tab]} />;
+  if (allIssues.length === 0) return <EmptyState {...EMPTY[tab]} />;
 
   if (layout === "board") {
     return (

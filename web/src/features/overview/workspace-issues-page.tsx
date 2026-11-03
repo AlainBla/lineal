@@ -1,3 +1,4 @@
+import { applyQuickFilter, useQuickFilter, useQuickFilterCount } from "@/lib/quick-filter";
 import { useEffect, useMemo, useState } from "react";
 
 import { useIssueActions } from "@/features/issues/issue-actions";
@@ -47,17 +48,22 @@ export function WorkspaceIssuesPage({ ws }: { ws: string }) {
     document.title = "Issues · Lineal";
   }, []);
 
+  const quickFilter = useQuickFilter();
   const sections = useMemo(
     () =>
       ordered.flatMap(({ team, depth }, i) => {
         const meta = metas[i];
-        const own = (issues.data?.issues ?? []).filter((x) => x.teamId === team.id);
+        const own = applyQuickFilter(
+          (issues.data?.issues ?? []).filter((x) => x.teamId === team.id),
+          quickFilter,
+        );
         if (!meta || own.length === 0) return [];
         return [{ team, depth, groups: groupByState(meta.states, own, "all"), count: own.length }];
       }),
-    [ordered, metas, issues.data],
+    [ordered, metas, issues.data, quickFilter],
   );
   const all = useMemo(() => sections.flatMap((s) => s.groups.flatMap((g) => g.issues)), [sections]);
+  useQuickFilterCount(all.length);
   const focused: Issue | null = all.find((i) => i.id === focusedId) ?? null;
   useFocusNav([all.map((i) => i.id)], focused?.id ?? null, setFocusedId);
   useIssueShortcuts({ context: "list", target: focused, open: setRequest, actions });

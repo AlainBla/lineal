@@ -134,7 +134,6 @@ export function SearchPage({
             placeholder="Search issues, projects, documents…"
             className="pl-8"
             autoFocus
-            data-search-target
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />

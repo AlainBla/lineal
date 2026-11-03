@@ -1,5 +1,6 @@
+import { useQuickFiltered } from "@/lib/quick-filter";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { teamPaths } from "@/app/nav";
 import { DocumentsSection } from "@/features/docs/documents-section";
@@ -100,6 +101,8 @@ export function CyclePage({
   const issues = useScopedIssues(cycle ? { cycleId: cycle.id } : null);
   const meta = useTeamMeta(teamKey);
   const lookup = useIssueLookup([meta.data]);
+  const cycleIssues = useMemo(() => issues.data?.issues ?? [], [issues.data]);
+  const shownIssues = useQuickFiltered(cycleIssues);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const p = teamPaths(ws, teamKey);
   // „C“ legt im Cycle-Kontext an (B4.15).
@@ -132,7 +135,7 @@ export function CyclePage({
         }
       />
     );
-  const groups = meta.data ? groupByState(meta.data.states, issues.data?.issues ?? [], "all") : [];
+  const groups = meta.data ? groupByState(meta.data.states, shownIssues, "all") : [];
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader

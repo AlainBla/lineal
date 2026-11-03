@@ -1,3 +1,4 @@
+import { applyQuickFilter, useQuickFilter, useQuickFilterCount } from "@/lib/quick-filter";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -152,8 +153,10 @@ export function IssueView({
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
 
+  const quickFilter = useQuickFilter();
   const { groups, hidden, flat } = useMemo(() => {
-    const { visible, hidden } = applyVisibility(q.data?.issues ?? [], options);
+    const { visible: all, hidden } = applyVisibility(q.data?.issues ?? [], options);
+    const visible = applyQuickFilter(all, quickFilter);
     const sorted = sortIssues(visible, options, {
       assignee: (id) => lookup.assigneeName(id),
       statePosition: (id) => lookup.state(id)?.position,
@@ -185,7 +188,8 @@ export function IssueView({
     }
     groups = applySubGrouping(groups, options.subGrouping, names);
     return { groups, hidden, flat: flatIssues(groups) };
-  }, [q.data, options, teams.data, metas, lookup, emptyGroups]);
+  }, [q.data, options, teams.data, metas, lookup, emptyGroups, quickFilter]);
+  useQuickFilterCount(flat.length);
 
   const focused: Issue | null = flat.find((i) => i.id === focusedId) ?? null;
   useFocusNav([flat.map((i) => i.id)], focused?.id ?? null, setFocusedId);

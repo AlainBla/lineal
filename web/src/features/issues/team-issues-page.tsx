@@ -1,3 +1,4 @@
+import { useQuickFiltered } from "@/lib/quick-filter";
 import { Link } from "@tanstack/react-router";
 import { Columns3, List, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -105,7 +106,7 @@ export function TeamIssuesPage({
     () => applyVisibility(filterByView(issues.data?.issues ?? [], view), controls.options),
     [issues.data, view, controls.options],
   );
-  const visible = shown.visible;
+  const visible = useQuickFiltered(shown.visible);
   const ordered = controls.options.ordering !== "manual";
   // Sortierkontext (Assignee-Name, Status-Position) für alle Sortierungen und Gruppierungen.
   const sortCtx = useMemo<SortContext>(
