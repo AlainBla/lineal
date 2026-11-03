@@ -7,10 +7,19 @@ import type { IssueLabel, WorkflowState } from "@/gql/graphql";
 import type { TeamMeta } from "./queries";
 import { useKnownUsers, userName } from "./users";
 
+export interface ProjectChip {
+  id: string;
+  name: string;
+  color: string | null;
+  icon: string | null;
+}
+
 export interface IssueLookup {
   state: (id: string) => WorkflowState | undefined;
   label: (id: string) => IssueLabel | undefined;
   projectName: (id: string | null) => string | null;
+  /** Name, Farbe und Emoji-Symbol eines Projekts (Project-Chip der Zeile/Karte). */
+  project: (id: string | null) => ProjectChip | null;
   /** Name eines Projekt-Meilensteins (F.07). */
   milestoneName: (id: string | null) => string | null;
   assigneeName: (id: string | null) => string | null;
@@ -27,7 +36,17 @@ export function useIssueLookup(metas: Array<TeamMeta | undefined>): IssueLookup 
     const all = metas.filter((m): m is TeamMeta => !!m);
     const states = new Map(all.flatMap((m) => m.states.map((s) => [s.id, s] as const)));
     const labels = new Map(all.flatMap((m) => m.labels.map((l) => [l.id, l] as const)));
-    const projects = new Map(all.flatMap((m) => m.projects.map((p) => [p.id, p.name] as const)));
+    const projects = new Map(
+      all.flatMap((m) =>
+        m.projects.map(
+          (p) =>
+            [
+              p.id,
+              { id: p.id, name: p.name, color: p.color ?? null, icon: p.icon ?? null },
+            ] as const,
+        ),
+      ),
+    );
     const milestones = new Map(
       all.flatMap((m) =>
         m.projects.flatMap((p) => (p.milestones ?? []).map((ms) => [ms.id, ms.name] as const)),
@@ -40,7 +59,8 @@ export function useIssueLookup(metas: Array<TeamMeta | undefined>): IssueLookup 
     return {
       state: (id) => states.get(id),
       label: (id) => labels.get(id),
-      projectName: (id) => (id ? (projects.get(id) ?? null) : null),
+      projectName: (id) => (id ? (projects.get(id)?.name ?? null) : null),
+      project: (id) => (id ? (projects.get(id) ?? null) : null),
       assigneeName: (id) => userName(id, users, me),
       milestoneName: (id) => (id ? (milestones.get(id) ?? null) : null),
       cycleName: (id) => (id ? (cycles.get(id) ?? null) : null),

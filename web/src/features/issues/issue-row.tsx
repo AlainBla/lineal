@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
+import { EntityIcon } from "@/components/entity-icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import type { Issue } from "@/gql/graphql";
@@ -90,6 +91,43 @@ function LabelChips({
   );
 }
 
+/** Projekt-Chip (Symbol bzw. Farbpunkt + gekürzter Name); nichts, wenn das Issue kein Projekt hat. */
+export function ProjectChip({
+  issue,
+  lookup,
+  className,
+}: {
+  issue: Issue;
+  lookup: IssueLookup;
+  className?: string;
+}) {
+  const project = lookup.project(issue.projectId);
+  if (!project) return null;
+  return (
+    <span
+      data-testid="project-chip"
+      title={`Project: ${project.name}`}
+      className={cn(
+        "inline-flex max-w-32 min-w-0 shrink-0 items-center gap-1 rounded-full border border-border px-1.5 text-xs text-muted-foreground",
+        className,
+      )}
+    >
+      <EntityIcon
+        icon={project.icon}
+        className="text-[11px]"
+        fallback={
+          <span
+            aria-hidden
+            className="size-2 shrink-0 rounded-full"
+            style={{ backgroundColor: project.color ?? "var(--color-muted-foreground)" }}
+          />
+        }
+      />
+      <span className="truncate">{project.name}</span>
+    </span>
+  );
+}
+
 /** Zeile der Listenansicht: Priority, ID, Status, Titel, Labels, Projekt, Assignee, Datum (docs/08 §2.1). */
 export function IssueRow({
   issue,
@@ -143,6 +181,9 @@ export function IssueRow({
           <LabelChips issue={issue} lookup={lookup} />
         </span>
       )}
+      {show("project") && (
+        <ProjectChip issue={issue} lookup={lookup} className="hidden md:inline-flex" />
+      )}
       {cycle && <span className="hidden text-xs text-muted-foreground lg:inline">{cycle}</span>}
       {show("links") && issue.linkCount > 0 && (
         <span className="text-xs text-muted-foreground" title="Links">
@@ -159,10 +200,16 @@ export function IssueRow({
           {shortDay(issue.dueDate)}
         </span>
       )}
-      {(show("milestone") ? project : null) && (
+      {show("milestone") && (show("project") ? milestone : project) && (
         <span className="hidden max-w-32 truncate text-xs text-muted-foreground lg:inline">
-          {project}
-          {milestone && <span title="Milestone"> · {milestone}</span>}
+          {/* Mit Project-Chip steht der Projektname dort schon; sonst wie bisher „Projekt · Meilenstein“. */}
+          {!show("project") && project}
+          {milestone && (
+            <span title="Milestone">
+              {show("project") ? "" : " · "}
+              {milestone}
+            </span>
+          )}
         </span>
       )}
       {estimate && <span className="text-xs text-muted-foreground">{estimate}</span>}
@@ -203,7 +250,15 @@ export function IssueRow({
  * Inhalt einer Board-Karte. Feste Höhe, damit alle Karten gleich hoch sind: Titel einzeilig mit
  * Ellipsis, Label-Zeile einzeilig (Überlauf als „+N“); Vollständiges zeigt `IssueCardHover`.
  */
-export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLookup }) {
+export function IssueCardBody({
+  issue,
+  lookup,
+  display = DEFAULT_PROPERTIES,
+}: {
+  issue: Issue;
+  lookup: IssueLookup;
+  display?: readonly DisplayProperty[];
+}) {
   const state = lookup.state(issue.stateId);
   const assignee = lookup.assigneeName(issue.assigneeId);
   return (
@@ -235,6 +290,9 @@ export function IssueCardBody({ issue, lookup }: { issue: Issue; lookup: IssueLo
         </span>
       </div>
       <div className="flex h-5 flex-nowrap items-center gap-1 overflow-hidden">
+        {display.includes("project") && (
+          <ProjectChip issue={issue} lookup={lookup} className="max-w-[45%]" />
+        )}
         <LabelChips issue={issue} lookup={lookup} max={2} nowrap />
       </div>
     </div>

@@ -16,6 +16,7 @@ import { ChevronDown, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { DisplayProperty } from "@/features/views/display-options";
 import { cn } from "@/lib/cn";
 
 import { StatusIcon } from "./icons";
@@ -34,6 +35,8 @@ interface ListProps {
   /** „+“ im Gruppenkopf: Issue mit Gruppenstatus anlegen. */
   onCreateInGroup?: (stateId: string) => void;
   selection?: Selection;
+  /** Sichtbare Eigenschaften der Zeilen (Display properties). */
+  display?: readonly DisplayProperty[];
   /**
    * Drag & Drop zum Umsortieren (nur bei manueller Sortierung, docs/05 §2.5): innerhalb der Gruppe
    * ändert es `sortOrder`, in eine andere Gruppe zusätzlich den Status.
@@ -78,6 +81,7 @@ export function IssueList({
   onFocus,
   onCreateInGroup,
   selection,
+  display,
   onDrop,
 }: ListProps) {
   const [dragging, setDragging] = useState<Issue | null>(null);
@@ -155,6 +159,7 @@ export function IssueList({
                           focused={focusedId === issue.id}
                           onFocus={onFocus}
                           selection={selection}
+                          display={display}
                         />
                       </SortableRow>
                     ))}
@@ -170,6 +175,7 @@ export function IssueList({
                       focused={focusedId === issue.id}
                       onFocus={onFocus}
                       selection={selection}
+                      display={display}
                     />
                   </div>
                 ))

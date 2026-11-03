@@ -13,6 +13,7 @@ const lookup: IssueLookup = {
   state: () => undefined,
   label: () => undefined,
   projectName: () => null,
+  project: () => null,
   milestoneName: () => null,
   assigneeName: () => null,
   cycleName: () => null,
@@ -46,5 +47,27 @@ describe("Verweildauer im Status auf der Board-Karte", () => {
     const hover = await screen.findByTestId("card-hover");
     expect(within(hover).getByText("In status since")).toBeInTheDocument();
     expect(within(hover).getByText("12 Oct (5d)")).toBeInTheDocument();
+  });
+});
+
+describe("Project-Chip (LIN-5)", () => {
+  const withProject: IssueLookup = {
+    ...lookup,
+    project: (id) =>
+      id === "p1" ? { id: "p1", name: "Apollo Landing", color: "#ff0000", icon: null } : null,
+  };
+
+  it("zeigt den Projektnamen auf der Karte, wenn das Issue ein Projekt hat", () => {
+    render(<IssueCardBody issue={{ ...issue, projectId: "p1" }} lookup={withProject} />);
+    expect(screen.getByTestId("project-chip")).toHaveTextContent("Apollo Landing");
+  });
+
+  it("zeigt nichts ohne Projekt oder bei abgewählter Eigenschaft", () => {
+    const { rerender } = render(<IssueCardBody issue={issue} lookup={withProject} />);
+    expect(screen.queryByTestId("project-chip")).toBeNull();
+    rerender(
+      <IssueCardBody issue={{ ...issue, projectId: "p1" }} lookup={withProject} display={["id"]} />,
+    );
+    expect(screen.queryByTestId("project-chip")).toBeNull();
   });
 });

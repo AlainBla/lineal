@@ -101,7 +101,7 @@ const PROJECT_ORDERING: [&str; 9] = [
 ];
 
 /// Anzeige-Eigenschaften der Issue-Zeile (docs/05 §2.1 „Display properties“).
-pub const DISPLAY_PROPERTIES: [&str; 14] = [
+pub const DISPLAY_PROPERTIES: [&str; 15] = [
     "id",
     "status",
     "assignee",
@@ -111,6 +111,7 @@ pub const DISPLAY_PROPERTIES: [&str; 14] = [
     "milestone",
     "cycle",
     "labels",
+    "project",
     "links",
     "timeInStatus",
     "created",
@@ -119,7 +120,7 @@ pub const DISPLAY_PROPERTIES: [&str; 14] = [
 ];
 
 /// Voreingestellte Anzeige-Eigenschaften.
-const DEFAULT_DISPLAY_PROPERTIES: [&str; 8] = [
+const DEFAULT_DISPLAY_PROPERTIES: [&str; 9] = [
     "id",
     "status",
     "assignee",
@@ -127,6 +128,7 @@ const DEFAULT_DISPLAY_PROPERTIES: [&str; 8] = [
     "dueDate",
     "milestone",
     "labels",
+    "project",
     "updated",
 ];
 
@@ -341,6 +343,18 @@ mod tests {
             None
         ));
         assert!(!ok(json!({"displayProperties": "id"}), Kind::Issues, None));
+        // `project` ist Anzeige-Eigenschaft und Standard (LIN-5).
+        assert!(ok(
+            json!({"displayProperties": ["id", "project"]}),
+            Kind::Issues,
+            None
+        ));
+        let defaults = system_defaults(None, Kind::Issues);
+        assert!(
+            defaults["displayProperties"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == "project"))
+        );
         assert!(!ok(json!({"showSubIssues": "yes"}), Kind::Issues, None));
         // `focus` und `importance` nur in My Issues.
         assert!(!ok(json!({"grouping": "focus"}), Kind::Issues, None));

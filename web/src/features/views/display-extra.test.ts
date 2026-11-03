@@ -25,6 +25,20 @@ const names = {
   milestone: (id: string | null) => (id === "m-1" ? "Beta" : null),
 };
 
+describe("Display property Project (LIN-5)", () => {
+  it("ist Standard; gespeicherte Auswahl ohne project blendet es aus", () => {
+    expect(DEFAULT_DISPLAY.displayProperties).toContain("project");
+    expect(mergeDisplay(null).displayProperties).toContain("project");
+    expect(mergeDisplay({ displayProperties: ["id", "project"] }).displayProperties).toEqual([
+      "id",
+      "project",
+    ]);
+    expect(mergeDisplay({ displayProperties: ["id", "labels"] }).displayProperties).not.toContain(
+      "project",
+    );
+  });
+});
+
 describe("Anzeigeoptionen: Untergruppierung, Verschachtelung, Display properties", () => {
   it("mergeDisplay übernimmt gültige Werte und verwirft ungültige", () => {
     const o = mergeDisplay({

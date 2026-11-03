@@ -259,6 +259,7 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInColumn={create}
         selection={selection}
+        display={controls.options.displayProperties}
         // Ohne manuelle Sortierung ändert nur ein Statuswechsel die Kartenposition.
         movesCard={(patch) => patch.stateId !== undefined || !ordered}
         onDrop={({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)}
@@ -272,6 +273,7 @@ export function TeamIssuesPage({
         lookup={lookup}
         focusedId={focused?.id ?? null}
         onFocus={setFocusedId}
+        display={controls.options.displayProperties}
       />
     );
   } else {
@@ -284,6 +286,7 @@ export function TeamIssuesPage({
         onFocus={setFocusedId}
         onCreateInGroup={create}
         selection={selection}
+        display={controls.options.displayProperties}
         onDrop={
           controls.options.ordering === "manual"
             ? ({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)

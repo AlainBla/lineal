@@ -58,6 +58,7 @@ const PROPERTY_LABEL: Record<DisplayProperty, string> = {
   milestone: "Milestone",
   cycle: "Cycle",
   labels: "Labels",
+  project: "Project",
   links: "Links",
   timeInStatus: "Time in status",
   created: "Created",

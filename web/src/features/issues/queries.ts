@@ -93,6 +93,9 @@ export interface TeamMeta {
   cycles: Cycle[];
   projects: Array<
     Pick<Project, "id" | "identifier" | "name" | "color"> & {
+      /** Emoji-Kurzcode des Projekts; fehlt in älteren Mocks. */
+      icon?: string | null;
+    } & {
       /** Meilensteine des Projekts (F.07); fehlt in älteren Mocks. */
       milestones?: Array<Pick<ProjectMilestone, "id" | "name" | "targetDate" | "sortOrder">>;
     }
@@ -104,7 +107,7 @@ const TEAM_META_QUERY = `query TeamMeta($team: String!) {
   workflowStates(teamId: $team) { id teamId name type color position isDefault }
   issueLabels(teamId: $team, includeGroups: true) { id name color teamId parentId isGroup groupType }
   cycles(teamId: $team) { id teamId number name startsAt endsAt isActive isNext isPast }
-  projects(team: $team) { id identifier name color milestones { id name targetDate sortOrder } }
+  projects(team: $team) { id identifier name color icon milestones { id name targetDate sortOrder } }
 }`;
 
 export async function fetchTeamMeta(team: string, signal?: AbortSignal): Promise<TeamMeta> {

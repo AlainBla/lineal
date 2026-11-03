@@ -21,6 +21,8 @@ import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 import { useShortcuts } from "@/lib/shortcuts";
 
+import type { DisplayProperty } from "@/features/views/display-options";
+
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { IssueCardBody, IssueCardHover, SelectBox } from "./issue-row";
@@ -37,6 +39,8 @@ interface BoardProps {
   onDrop: (result: DropResult & { issue: Issue }) => void;
   onCreateInColumn?: (stateId: string) => void;
   selection?: Selection;
+  /** Sichtbare Eigenschaften der Karten (Display properties). */
+  display?: readonly DisplayProperty[];
   /**
    * Verschiebt der Drop die Karte sichtbar (Statuswechsel, bei manueller Sortierung auch
    * Umsortieren)? Dann entfällt die Rückflug-Animation; sonst fliegt die Karte an ihren Platz zurück.
@@ -51,6 +55,7 @@ function Card({
   focused,
   onFocus,
   selection,
+  display,
 }: {
   issue: Issue;
   ws: string;
@@ -58,6 +63,7 @@ function Card({
   focused: boolean;
   onFocus: (id: string) => void;
   selection?: Selection;
+  display?: readonly DisplayProperty[];
 }) {
   const selected = selection?.has(issue.id) ?? false;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -90,7 +96,7 @@ function Card({
           <SelectBox issue={issue} selection={selection} />
         </span>
       )}
-      <IssueCardBody issue={issue} lookup={lookup} />
+      <IssueCardBody issue={issue} lookup={lookup} display={display} />
     </Link>
   );
   // Während des Ziehens keine Hover-Details.
@@ -111,6 +117,7 @@ function Column({
   onFocus,
   onCreate,
   selection,
+  display,
 }: {
   column: BoardColumn;
   ws: string;
@@ -119,6 +126,7 @@ function Column({
   onFocus: (id: string) => void;
   onCreate?: (stateId: string) => void;
   selection?: Selection;
+  display?: readonly DisplayProperty[];
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: COLUMN_PREFIX + column.state.id });
   const { state, issues } = column;
@@ -170,6 +178,7 @@ function Column({
               focused={focusedId === issue.id}
               onFocus={onFocus}
               selection={selection}
+              display={display}
             />
           ))}
         </SortableContext>
@@ -191,6 +200,7 @@ export function IssueBoard({
   onDrop,
   onCreateInColumn,
   selection,
+  display,
   movesCard = () => true,
 }: BoardProps) {
   const [dragging, setDragging] = useState<Issue | null>(null);
@@ -279,6 +289,7 @@ export function IssueBoard({
               onFocus={onFocus}
               onCreate={onCreateInColumn}
               selection={selection}
+              display={display}
             />
           ))}
           {hiddenColumns.length > 0 && (
@@ -312,7 +323,7 @@ export function IssueBoard({
       <DragOverlay dropAnimation={skipDropAnimation ? null : undefined}>
         {dragging && (
           <div className="rounded-lg border border-border-strong bg-card p-2.5 shadow-popover">
-            <IssueCardBody issue={dragging} lookup={lookup} />
+            <IssueCardBody issue={dragging} lookup={lookup} display={display} />
           </div>
         )}
       </DragOverlay>

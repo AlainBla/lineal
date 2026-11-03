@@ -25,7 +25,8 @@ export type Ordering =
   | "linkCount"
   | "timeInStatus"
   | "manual";
-export type CompletedWindow = "all" | "pastDay" | "pastWeek" | "pastTwoWeeks" | "pastMonth" | "none";
+export type CompletedWindow =
+  "all" | "pastDay" | "pastWeek" | "pastTwoWeeks" | "pastMonth" | "none";
 export type NestedSubIssues = "showAll" | "showMatching" | "hide";
 
 /** Anzeige-Eigenschaften der Issue-Zeile (docs/05 §2.1); Schlüssel wie am Server. */
@@ -39,6 +40,7 @@ export const DISPLAY_PROPERTIES = [
   "milestone",
   "cycle",
   "labels",
+  "project",
   "links",
   "timeInStatus",
   "created",
@@ -53,6 +55,7 @@ export const DEFAULT_PROPERTIES: DisplayProperty[] = [
   "dueDate",
   "milestone",
   "labels",
+  "project",
   "updated",
 ];
 

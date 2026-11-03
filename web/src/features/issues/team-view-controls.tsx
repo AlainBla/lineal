@@ -14,6 +14,7 @@ import {
   type IssueGroup,
   mergeDisplay,
   type DisplayOptions,
+  type DisplayProperty,
 } from "@/features/views/display-options";
 import { FilterBar } from "@/features/views/filter-bar";
 import { buildFilter, type Filter, type FilterChip } from "@/features/views/filter-model";
@@ -138,12 +139,14 @@ export function GroupedIssueList({
   lookup,
   focusedId,
   onFocus,
+  display,
 }: {
   groups: IssueGroup[];
   ws: string;
   lookup: IssueLookup;
   focusedId: string | null;
   onFocus: (id: string) => void;
+  display?: readonly DisplayProperty[];
 }) {
   return (
     <div role="list" aria-label="Issues">
@@ -161,6 +164,7 @@ export function GroupedIssueList({
               lookup={lookup}
               focused={focusedId === issue.id}
               onFocus={onFocus}
+              display={display}
             />
           ))}
         </section>
