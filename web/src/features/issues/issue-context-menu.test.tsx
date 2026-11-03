@@ -301,6 +301,13 @@ describe("Kontextmenü auf Tickets", () => {
         issue: ISSUES.find((i) => i.identifier === v.id) ?? ISSUES[2],
       }),
       IssueRelationCreate: () => ({ issueRelationCreate: { success: true } }),
+      IssuePickerSearch: () => ({
+        searchIssues: {
+          nodes: ["a", "b", "c", "d"].map((id, n) => ({
+            issue: { id, identifier: `ENG-${n + 1}`, title: `T${n + 1}`, stateType: "started" },
+          })),
+        },
+      }),
     };
 
     async function addRelation(item: RegExp, target: string, openOn = "Erstes Ticket") {
@@ -308,8 +315,8 @@ describe("Kontextmenü auf Tickets", () => {
       const menu = await openMenu(openOn);
       await user.click(within(menu).getByRole("menuitem", { name: /^Relations/ }));
       fireEvent.click(await screen.findByRole("menuitem", { name: item }));
-      await user.type(await screen.findByLabelText("Issue identifier"), target);
-      await user.click(screen.getByRole("button", { name: "Add relation" }));
+      await user.type(await screen.findByLabelText("Search issues"), target);
+      await user.click(await screen.findByRole("option", { name: new RegExp(`${target}(?!\\d)`) }));
     }
 
     it.each([
@@ -324,24 +331,27 @@ describe("Kontextmenü auf Tickets", () => {
       await addRelation(item, "ENG-4");
       await waitFor(() => expect(gql.of("IssueRelationCreate")).toHaveLength(1));
       expect(gql.of("IssueRelationCreate")[0]!.variables).toEqual({ input });
-      await waitFor(() => expect(screen.queryByLabelText("Issue identifier")).toBeNull());
+      await waitFor(() => expect(screen.queryByLabelText("Search issues")).toBeNull());
     });
 
-    it("Mehrfachauswahl: eine Relation je Issue, Selbstbezug übersprungen, kein Duplicate", async () => {
+    it("Mehrfachauswahl: eine Relation je Issue, Auswahl per Pfeiltasten + Enter, kein Duplicate", async () => {
       const gql = mockGraphql(relHandlers);
       await renderWithApp(page());
       await screen.findByText("Erstes Ticket");
       const user = userEvent.setup();
       await user.click(screen.getByRole("checkbox", { name: "Select ENG-1" }));
       await user.click(screen.getByRole("checkbox", { name: "Select ENG-2" }));
-      await user.click(screen.getByRole("checkbox", { name: "Select ENG-4" }));
       const menu = await openMenu("Zweites");
       await user.click(within(menu).getByRole("menuitem", { name: /^Relations/ }));
       await screen.findByRole("menuitem", { name: /^Blocks…/ });
       expect(screen.queryByRole("menuitem", { name: /duplicate/ })).toBeNull();
       fireEvent.click(screen.getByRole("menuitem", { name: /^Blocks…/ }));
-      await user.type(await screen.findByLabelText("Issue identifier"), "ENG-4");
-      await user.click(screen.getByRole("button", { name: "Add relation" }));
+      await user.type(await screen.findByLabelText("Search issues"), "ENG");
+      // Ausgewählte Tickets (ENG-1, ENG-2) fehlen in den Treffern.
+      await screen.findByRole("option", { name: /ENG-4/ });
+      expect(screen.queryByRole("option", { name: /ENG-1(?!\d)/ })).toBeNull();
+      expect(screen.queryByRole("option", { name: /ENG-2(?!\d)/ })).toBeNull();
+      await user.keyboard("{ArrowDown}{ArrowUp}{ArrowDown}{Enter}");
       await waitFor(() => expect(gql.of("IssueRelationCreate")).toHaveLength(2));
       const inputs = gql
         .of("IssueRelationCreate")

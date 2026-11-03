@@ -417,6 +417,21 @@ describe("Issue-Detail", () => {
           history: [],
         },
       }),
+      IssuePickerSearch: () => ({
+        searchIssues: {
+          nodes: [
+            { issue: { id: "i1", identifier: "ENG-120", title: "Dieses", stateType: "started" } },
+            {
+              issue: {
+                id: "i9",
+                identifier: "ENG-132",
+                title: "Anderes Issue",
+                stateType: "started",
+              },
+            },
+          ],
+        },
+      }),
       IssueRelationCreate: () => {
         blocks = [{ id: "i9", identifier: "ENG-132", title: "Anderes Issue" }];
         return { issueRelationCreate: { success: true } };
@@ -426,9 +441,12 @@ describe("Issue-Detail", () => {
     await screen.findByLabelText("Title");
     await userEvent.keyboard("m");
     await userEvent.keyboard("x");
-    const input = await screen.findByLabelText("Issue identifier");
+    const input = await screen.findByLabelText("Search issues");
     await userEvent.type(input, "ENG-132");
-    await userEvent.click(screen.getByRole("button", { name: "Add relation" }));
+    // Das aktuelle Ticket (ENG-120) ist ausgeblendet; Enter wählt den ersten Treffer.
+    await screen.findByRole("option", { name: /ENG-132/ });
+    expect(screen.queryByRole("option", { name: /ENG-120/ })).toBeNull();
+    await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(gql.of("IssueRelationCreate")).toHaveLength(1));
     expect(gql.of("IssueRelationCreate")[0]!.variables).toEqual({
       input: { issueId: "i1", relatedIssueId: "i9", type: "blocks" },
