@@ -70,3 +70,192 @@
 .inline-comment-active {
   background-color: rgb(250 204 21 / 0.5);
 }
+
+/*
+ * Formatierter Text (Beschreibungen, Kommentare, Dokumente) im Stil von Linear: Abstände zwischen
+ * Blöcken, Tabellen mit Rahmen und Kopfzeile, sichtbare Links.
+ */
+.lineal-prose .ProseMirror {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+.lineal-prose .ProseMirror > :first-child {
+  margin-top: 0;
+}
+.lineal-prose .ProseMirror p {
+  margin: 0.5rem 0;
+}
+.lineal-prose .ProseMirror h1,
+.lineal-prose .ProseMirror h2,
+.lineal-prose .ProseMirror h3,
+.lineal-prose .ProseMirror h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.5rem 0 0.5rem;
+}
+.lineal-prose .ProseMirror h1 {
+  font-size: 1.375rem;
+}
+.lineal-prose .ProseMirror h2 {
+  font-size: 1.1875rem;
+}
+.lineal-prose .ProseMirror h3 {
+  font-size: 1.0625rem;
+  margin-top: 1.25rem;
+}
+.lineal-prose .ProseMirror h4 {
+  font-size: 1rem;
+  margin-top: 1rem;
+}
+.lineal-prose .ProseMirror ul,
+.lineal-prose .ProseMirror ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+.lineal-prose .ProseMirror ul {
+  list-style: disc;
+}
+.lineal-prose .ProseMirror ol {
+  list-style: decimal;
+}
+.lineal-prose .ProseMirror li > p {
+  margin: 0.125rem 0;
+}
+.lineal-prose .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.25rem;
+}
+.lineal-prose .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.lineal-prose .ProseMirror ul[data-type="taskList"] li > label {
+  margin-top: 0.3rem;
+}
+.lineal-prose .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+.lineal-prose .ProseMirror blockquote {
+  margin: 0.75rem 0;
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.875rem;
+  color: var(--muted-foreground);
+}
+.lineal-prose .ProseMirror hr {
+  margin: 1.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+}
+.lineal-prose .ProseMirror code {
+  border-radius: 0.25rem;
+  background: var(--surface-active);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.lineal-prose .ProseMirror pre {
+  margin: 0.75rem 0;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.625rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.lineal-prose .ProseMirror pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.lineal-prose .ProseMirror a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.lineal-prose .ProseMirror a:hover {
+  text-decoration-color: currentColor;
+}
+/* Tabellen: Rahmen, abgesetzte Kopfzeile, linksbündig; breite Tabellen scrollen horizontal. */
+.lineal-prose .ProseMirror .tableWrapper {
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+.lineal-prose .ProseMirror table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.375rem;
+  table-layout: auto;
+  overflow: hidden;
+}
+.lineal-prose .ProseMirror th,
+.lineal-prose .ProseMirror td {
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  min-width: 4rem;
+}
+.lineal-prose .ProseMirror tr > :last-child {
+  border-right: 0;
+}
+.lineal-prose .ProseMirror tr:last-child > td {
+  border-bottom: 0;
+}
+.lineal-prose .ProseMirror th {
+  background: var(--surface-active);
+  font-weight: 500;
+}
+.lineal-prose .ProseMirror th > p,
+.lineal-prose .ProseMirror td > p {
+  margin: 0;
+}
+.lineal-prose .ProseMirror p.is-editor-empty:first-child::before {
+  pointer-events: none;
+  float: left;
+  height: 0;
+  color: var(--subtle-foreground);
+  content: attr(data-placeholder);
+}
+
+/* Ticket-Chips (issue-refs.ts): Status-Icon, Kennung, Titel als ein zusammenhängendes Kästchen. */
+.lineal-prose .issue-ref {
+  background: var(--surface-active);
+  color: var(--foreground);
+  text-decoration: none;
+  cursor: pointer;
+  padding: 0.125rem 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.lineal-prose a .issue-ref,
+.lineal-prose .ProseMirror a:has(.issue-ref-id) {
+  color: var(--foreground);
+  text-decoration: none;
+}
+.lineal-prose .issue-ref-start {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -0.125rem;
+  border-radius: 0.3rem 0 0 0.3rem;
+  padding: 0.125rem 0.3rem 0.125rem 0.35rem;
+}
+.lineal-prose .issue-ref-id {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.lineal-prose .issue-ref-title {
+  border-radius: 0 0.3rem 0.3rem 0;
+  padding-left: 0.35rem;
+  padding-right: 0.4rem;
+}
+.lineal-prose .issue-ref:hover,
+.lineal-prose .issue-ref:hover ~ .issue-ref {
+  background: var(--surface-hover);
+}

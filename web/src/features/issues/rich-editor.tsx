@@ -11,10 +11,12 @@ import { Markdown } from "@tiptap/markdown";
 import Mention from "@tiptap/extension-mention";
 import Placeholder from "@tiptap/extension-placeholder";
 import { TableKit } from "@tiptap/extension-table";
+import { QueryClientContext } from "@tanstack/react-query";
+import { useRouter } from "@tanstack/react-router";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import type { EditorView } from "@tiptap/pm/view";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 
 import {
   InlineComments,
@@ -26,6 +28,9 @@ import type { CollabProvider } from "@/features/collab/provider";
 import { cn } from "@/lib/cn";
 
 import { isAssetUrl, isImageFile, resolveAssetUrl } from "./assets";
+import { issueRefStore } from "./issue-ref-store";
+import { IssueRefs, issueRefsKey } from "./issue-refs";
+import { type LinkNavigator, linkTarget, openLink } from "./open-link";
 import type { KnownUser } from "./users";
 
 /**
@@ -125,6 +130,14 @@ export function RichEditor({
   uploadImage,
   onUploadError,
 }: RichEditorProps) {
+  const router = useRouter({ warn: false });
+  const routerRef = useRef<LinkNavigator | undefined>(router);
+  useEffect(() => {
+    routerRef.current = router;
+  }, [router]);
+  // Ticket-Chips brauchen den Query-Cache; ohne Provider (isolierte Tests) bleibt der Text schlicht.
+  const queryClient = useContext(QueryClientContext);
+  const refStore = queryClient ? issueRefStore(queryClient) : null;
   const usersRef = useRef(users);
   const submitRef = useRef(onSubmit);
   const blurRef = useRef(onBlur);
@@ -171,7 +184,7 @@ export function RichEditor({
       StarterKit.configure({
         // Kein `protocols`: http/https/mailto sind linkify-Standard; eigene Protokolle würden bei jeder
         // Editor-Instanz neu registriert (Konsolenwarnung "linkifyjs: already initialized", B2.13).
-        link: { openOnClick: false },
+        link: { openOnClick: false, HTMLAttributes: { rel: "noopener noreferrer", target: null } },
         // Mit Collaboration übernimmt Yjs Undo/Redo (sonst Konflikt mit dem History-Plugin).
         ...(collab ? { undoRedo: false as const } : {}),
       }),
@@ -199,6 +212,18 @@ export function RichEditor({
           ]
         : []),
       Placeholder.configure({ placeholder: placeholder ?? "" }),
+      ...(refStore
+        ? [
+            IssueRefs.configure({
+              getKeys: () => refStore.keys(),
+              lookup: (identifier) => refStore.lookup(identifier),
+              hrefFor: (identifier) => {
+                const ws = window.location.pathname.split("/")[1] ?? "";
+                return `/${ws}/issue/${identifier}`;
+              },
+            }),
+          ]
+        : []),
       Mention.extend({
         renderMarkdown: (node) => `@${node.attrs?.label ?? node.attrs?.id ?? ""}`,
         // Die Refs werden erst in Editor-Callbacks gelesen, nie beim Rendern.
@@ -273,6 +298,26 @@ export function RichEditor({
         void insertImages(view, files, at ?? view.state.selection.from);
         return true;
       },
+      handleDOMEvents: {
+        // Links öffnen wie in Linear: Klick folgt dem Link (intern ohne Neuladen), Strg/Cmd- oder
+        // Mittelklick in einem neuen Tab.
+        click: (_view, event) => {
+          if (event.button !== 0) return false;
+          const href = linkTarget(event.target);
+          if (!href) return false;
+          if (!openLink(href, routerRef.current, { newTab: event.ctrlKey || event.metaKey }))
+            return false;
+          event.preventDefault();
+          return true;
+        },
+        auxclick: (_view, event) => {
+          if (event.button !== 1) return false;
+          const href = linkTarget(event.target);
+          if (!href || !openLink(href, undefined, { newTab: true })) return false;
+          event.preventDefault();
+          return true;
+        },
+      },
       handleKeyDown: (_view, event) => {
         if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && submitRef.current) {
           event.preventDefault();
@@ -301,13 +346,16 @@ export function RichEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, marksKey]);
 
+  // Nachgeladene Tickets/Teams: Chips neu zeichnen.
+  useEffect(() => {
+    if (!editor || !refStore) return;
+    return refStore.subscribe(() => {
+      if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(issueRefsKey, true));
+    });
+  }, [editor, refStore]);
+
   return (
-    <div
-      className={cn(
-        "relative text-sm leading-relaxed [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-surface-active [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:text-lg [&_.ProseMirror_h1]:font-semibold [&_.ProseMirror_h2]:text-base [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5 [&_.ProseMirror_p]:my-1 [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0 [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-subtle-foreground [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_pre]:rounded-md [&_.ProseMirror_pre]:bg-surface [&_.ProseMirror_pre]:p-2 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5",
-        className,
-      )}
-    >
+    <div className={cn("lineal-prose relative", className)}>
       <EditorContent editor={editor} />
       {inline && selBox && editor && (
         <button
