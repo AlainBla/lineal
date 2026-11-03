@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ import {
 } from "@/features/issues/test-fixtures";
 import { clearToasts } from "@/features/issues/toast-store";
 
+import { clearQuickFilter, setQuickFilter } from "@/lib/quick-filter";
 import { sortTriage, TriagePage } from "./triage-page";
 import { snoozePresets } from "./triage-dialogs";
 
@@ -159,5 +160,25 @@ describe("Triage-Ansicht (F.02)", () => {
     mockGraphql(handlers({ TriageIssues: () => ({ triageIssues: [] }) }));
     await renderWithApp(<TriagePage ws="acme" teamKey="ENG" />, newClient());
     expect(await screen.findByText("Triage is empty")).toBeInTheDocument();
+  });
+
+  it("filtert die Liste mit dem Schnellfilter", async () => {
+    clearQuickFilter();
+    mockGraphql(handlers());
+    await renderWithApp(<TriagePage ws="acme" teamKey="ENG" />, newClient());
+    const list = await screen.findByRole("list", { name: "Triage issues" });
+    expect(within(list).getAllByRole("button")).toHaveLength(2);
+    act(() => setQuickFilter("neuer"));
+    await waitFor(() => {
+      const rows = within(screen.getByRole("list", { name: "Triage issues" })).getAllByRole(
+        "button",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toHaveTextContent("ENG-9");
+    });
+    act(() => setQuickFilter("zzz"));
+    expect(await screen.findByText("No matching issues")).toBeInTheDocument();
+    act(() => clearQuickFilter());
+    expect(await screen.findByRole("list", { name: "Triage issues" })).toBeInTheDocument();
   });
 });

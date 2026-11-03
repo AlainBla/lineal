@@ -14,6 +14,7 @@ import {
   TEAM_META,
 } from "@/features/issues/test-fixtures";
 import { clearQuickFilter, matchesQuickFilter } from "@/lib/quick-filter";
+import { focusSearchTarget } from "@/lib/search-target";
 import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 
 describe("matchesQuickFilter", () => {
@@ -133,5 +134,50 @@ describe("Topbar-Suchfeld", () => {
     expect(getUiState().commandMenuOpen).toBe(true);
     expect(getUiState().commandMenuQuery).toBe("hello");
     expect(box()).toHaveValue("");
+  });
+});
+
+describe("Topbar-Suchfeld auf schmalen Fenstern", () => {
+  const field = () => box().closest("label")!;
+
+  it("is collapsed behind a magnifier button that expands and focuses the input", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(<Topbar />, newClient(), "/acme/settings");
+    expect(field()).toHaveClass("hidden", "sm:flex");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(field()).toHaveClass("flex");
+    expect(field()).not.toHaveClass("hidden");
+    expect(box()).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
+  });
+
+  it("Cmd/Ctrl+F expands and focuses the collapsed input", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(<Topbar />, newClient(), "/acme/settings");
+    expect(field()).toHaveClass("hidden");
+    act(() => {
+      focusSearchTarget();
+    });
+    expect(field()).not.toHaveClass("hidden");
+    expect(box()).toHaveFocus();
+  });
+
+  it("Esc clears and collapses; blur with empty text collapses, with text stays open", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(<Topbar />, newClient(), "/acme/settings");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.keyboard("abc{Escape}");
+    expect(box()).toHaveValue("");
+    expect(field()).toHaveClass("hidden");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.keyboard("abc");
+    await user.tab();
+    expect(field()).not.toHaveClass("hidden");
+    await user.clear(box());
+    box().focus();
+    await user.tab();
+    expect(field()).toHaveClass("hidden");
   });
 });

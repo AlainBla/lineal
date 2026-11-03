@@ -10,6 +10,7 @@ import { NotFound } from "@/components/not-found";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 import { useShortcutContext } from "@/lib/shortcuts";
+import { useQuickFiltered } from "@/lib/quick-filter";
 import { useTeamMeta } from "@/features/issues/hooks";
 import { Avatar, PriorityIcon } from "@/features/issues/icons";
 import { IssueDetailPage } from "@/features/issues/issue-detail";
@@ -67,7 +68,8 @@ export function TriagePage({ ws, teamKey }: { ws: string; teamKey: string }) {
   });
   const metas = useMemo(() => [meta.data], [meta.data]);
   const lookup = useIssueLookup(metas);
-  const issues = useMemo(() => sortTriage(list.data ?? []), [list.data]);
+  const allIssues = useMemo(() => sortTriage(list.data ?? []), [list.data]);
+  const issues = useQuickFiltered(allIssues);
   const selected = issues.find((i) => i.id === selectedId) ?? issues[0] ?? null;
 
   useEffect(() => {
@@ -192,6 +194,10 @@ export function TriagePage({ ws, teamKey }: { ws: string; teamKey: string }) {
         }}
       />
     );
+  } else if (allIssues.length > 0 && issues.length === 0) {
+    left = (
+      <EmptyState title="No matching issues" description="No triage issue matches the search." />
+    );
   } else if (issues.length === 0) {
     left = (
       <EmptyState
@@ -254,7 +260,7 @@ export function TriagePage({ ws, teamKey }: { ws: string; teamKey: string }) {
         </span>
         <h1 className="font-medium">Triage</h1>
         <span className="text-xs text-muted-foreground" aria-label="Issues in triage">
-          {issues.filter((i) => !isSnoozed(i)).length}
+          {allIssues.filter((i) => !isSnoozed(i)).length}
         </span>
         {onTriage && <span className="text-xs text-muted-foreground">On triage: {onTriage}</span>}
         <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">

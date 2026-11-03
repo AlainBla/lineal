@@ -5,6 +5,9 @@
  */
 export const SEARCH_TARGET_ATTR = "data-search-target";
 
+/** Bitte an die Topbar, das (auf schmalen Fenstern eingeklappte) Suchfeld aufzuklappen und zu fokussieren. */
+export const OPEN_SEARCH_EVENT = "lineal:open-search";
+
 function findSearchTarget(root: ParentNode): HTMLInputElement | HTMLTextAreaElement | null {
   const nodes = root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
     `[${SEARCH_TARGET_ATTR}]`,
@@ -24,6 +27,7 @@ export function isSearchTargetFocused(root: Document = document): boolean {
 
 /** Fokussiert das erste sichtbare Suchfeld der Seite; `false`, wenn die Seite keins hat. */
 export function focusSearchTarget(root: Document = document): boolean {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
   const el = findSearchTarget(root);
   if (!el) return false;
   el.focus();
