@@ -52,6 +52,7 @@ import { useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { copyText, issueUrl, useIssueOps } from "./issue-extra-shortcuts";
 import { duePresets, type RelationChoice } from "./model";
+import { fetchBranchName } from "./queries";
 import { RelationDialog } from "./relation-dialog";
 import { IssuePickerHost, type PickerKind, type PickerRequest } from "./picker-host";
 
@@ -156,6 +157,11 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
 
   const copyAll = (what: string, text: (i: Issue) => string) => () =>
     copyText(targets.map(text).join("\n"), multi ? `${what}s` : what);
+
+  const copyBranchNames = async () => {
+    const names = await Promise.all(targets.map(fetchBranchName));
+    copyText(names.join("\n"), multi ? "Branch names" : "Branch name");
+  };
 
   return (
     <DropdownMenu open modal onOpenChange={(o) => !o && closeIssueMenu()}>
@@ -305,7 +311,7 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
           />
           <MenuItem
             label="Git branch name"
-            onSelect={copyAll("Branch name", (i) => i.branchName)}
+            onSelect={() => void copyBranchNames()}
           />
         </SubmenuItem>
         {!multi && (

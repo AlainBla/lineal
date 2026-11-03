@@ -440,3 +440,20 @@ export async function fetchTeams(signal?: AbortSignal): Promise<TeamRef[]> {
   );
   return res.teams;
 }
+
+/**
+ * Aktueller Branchname eines Tickets vom Server. `Issue.branchName` wird je Betrachter serverseitig aus
+ * Titel/Kennung berechnet; Live-Sync-Patches (Änderungen anderer Benutzer) aktualisieren das Feld nicht.
+ * Fällt bei Fehlern auf den gecachten Wert zurück.
+ */
+export async function fetchBranchName(issue: Pick<Issue, "id" | "branchName">): Promise<string> {
+  try {
+    const res = await gqlRequest<{ issue: Pick<Issue, "branchName"> | null }, { id: string }>(
+      `query IssueBranchName($id: String!) { issue(id: $id) { branchName } }`,
+      { id: issue.id },
+    );
+    return res.issue?.branchName || issue.branchName;
+  } catch {
+    return issue.branchName;
+  }
+}

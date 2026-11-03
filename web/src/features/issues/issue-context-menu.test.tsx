@@ -180,6 +180,24 @@ describe("Kontextmenü auf Tickets", () => {
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("alice/eng-1"));
   });
 
+  it("Branchname wird frisch vom Server geholt, wenn ein anderer Benutzer den Titel geändert hat", async () => {
+    // Der Cache (Live-Sync-Patch) kennt nur den alten Branchnamen `alice/eng-1`.
+    const gql = mockGraphql({
+      ...base,
+      IssueBranchName: () => ({ issue: { branchName: "alice/eng-1-neuer-titel" } }),
+    });
+    window.history.pushState({}, "", "/acme/team/ENG/all");
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Copy/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Git branch name/ }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("alice/eng-1-neuer-titel"));
+    expect(gql.of("IssueBranchName")[0]!.variables).toEqual({ id: "a" });
+  });
+
   it("Löschen fragt nach und sendet erst nach Bestätigung", async () => {
     const gql = mockGraphql({
       ...base,
