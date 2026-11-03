@@ -11,6 +11,7 @@ import {
 import type { InlineMark } from "@/features/collab/inline-comments";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { type CollabSession, useCollab } from "@/features/collab/use-collab";
+import { EntityIcon } from "@/components/entity-icon";
 import { Input } from "@/components/ui/input";
 import { useRemindAction } from "@/features/inbox/remind";
 import { relativeTime } from "@/features/issues/model";
@@ -195,6 +196,7 @@ function Editor({
         {doc.trashed && <TrashButton doc={doc} />}
         {showSettings && <DocumentSettingsPanel doc={doc} docRef={docRef} />}
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-6">
+          <EntityIcon icon={doc.icon} className="self-start text-4xl" />
           <Input
             aria-label="Document title"
             value={title}

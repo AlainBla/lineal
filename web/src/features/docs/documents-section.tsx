@@ -8,6 +8,7 @@ import { FileText, Plus, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 
 import { useSession } from "@/app/auth";
+import { EntityIcon } from "@/components/entity-icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/features/issues/error-text";
@@ -155,7 +156,11 @@ export function DocumentsSection({
       <ul className="divide-y divide-border">
         {(q.data ?? []).map((d) => (
           <li key={d.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-            <FileText className="size-4 text-muted-foreground" aria-hidden />
+            <EntityIcon
+              icon={d.icon}
+              className="w-4 text-sm"
+              fallback={<FileText className="size-4 text-muted-foreground" aria-hidden />}
+            />
             {showTrash ? (
               <span className="min-w-0 flex-1 truncate">{d.title}</span>
             ) : (
@@ -163,7 +168,6 @@ export function DocumentsSection({
                 to={`/${ws}/document/${d.slugId}` as "/"}
                 className="min-w-0 flex-1 truncate hover:underline"
               >
-                {d.icon ? `${d.icon} ` : ""}
                 {d.title}
               </Link>
             )}

@@ -96,7 +96,7 @@ export function DocumentSettingsPanel({ doc, docRef }: { doc: Document; docRef: 
           id="doc-icon"
           value={icon}
           onChange={(e) => setIconText(e.target.value)}
-          placeholder="Icon name"
+          placeholder="Emoji or :shortcode:"
           className="h-8 max-w-48"
           maxLength={64}
         />

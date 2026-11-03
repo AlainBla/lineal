@@ -26,8 +26,10 @@ import {
 } from "@/features/collab/inline-comments";
 import type { CollabProvider } from "@/features/collab/provider";
 import { cn } from "@/lib/cn";
+import type { EmojiEntry } from "@/lib/emoji";
 
 import { isAssetUrl, isImageFile, resolveAssetUrl } from "./assets";
+import { EmojiInput } from "./emoji-input";
 import { issueRefStore } from "./issue-ref-store";
 import { IssueRefs, issueRefsKey } from "./issue-refs";
 import { type LinkNavigator, linkTarget, openLink } from "./open-link";
@@ -107,11 +109,19 @@ export interface RichEditorProps {
   onUploadError?: (error: unknown) => void;
 }
 
+/** Eintrag der Vorschlagsliste (Personen für `@`, Emojis für `:`). */
+interface SuggestItem {
+  id: string;
+  label: string;
+}
+
 interface Suggestion {
-  items: KnownUser[];
+  items: SuggestItem[];
   index: number;
   rect: DOMRect | null;
-  select: (u: KnownUser) => void;
+  select: (item: SuggestItem) => void;
+  /** Zugänglicher Name der Liste. */
+  label: string;
 }
 
 export function RichEditor({
@@ -179,6 +189,24 @@ export function RichEditor({
     }
   };
 
+  // Tastatur in der Vorschlagsliste (Mentions und Emojis teilen sich die Liste).
+  const suggestKeyDown = ({ event }: { event: KeyboardEvent }) => {
+    const s = suggestionRef.current;
+    if (!s || s.items.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setSug({ ...s, index: (s.index + step + s.items.length) % s.items.length });
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      const item = s.items[s.index];
+      if (item) s.select(item);
+      return true;
+    }
+    return false;
+  };
+  const onExit = () => setSug(null);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -244,32 +272,37 @@ export function RichEditor({
               command: (p: { id: string; label: string }) => void;
             }) =>
               setSug({
-                items: props.items,
+                items: props.items.map((u) => ({ id: u.id, label: u.name })),
                 index: 0,
                 rect: props.clientRect?.() ?? null,
-                select: (u) => props.command({ id: u.id, label: u.name }),
+                select: (u) => props.command({ id: u.id, label: u.label }),
+                label: "Mention suggestions",
               });
-            return {
-              onStart: apply,
-              onUpdate: apply,
-              onKeyDown: ({ event }) => {
-                const s = suggestionRef.current;
-                if (!s || s.items.length === 0) return false;
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  const step = event.key === "ArrowDown" ? 1 : -1;
-                  setSug({ ...s, index: (s.index + step + s.items.length) % s.items.length });
-                  return true;
-                }
-                if (event.key === "Enter" || event.key === "Tab") {
-                  const u = s.items[s.index];
-                  if (u) s.select(u);
-                  return true;
-                }
-                return false;
-              },
-              onExit: () => setSug(null),
-            };
+            return { onStart: apply, onUpdate: apply, onKeyDown: suggestKeyDown, onExit };
           },
+        },
+      }),
+      EmojiInput.configure({
+        render: () => {
+          const apply = (props: {
+            items: EmojiEntry[];
+            clientRect?: (() => DOMRect | null) | null;
+            command: (e: EmojiEntry) => void;
+          }) =>
+            setSug({
+              items: props.items.map((e) => ({
+                id: e.emoji,
+                label: `${e.emoji}  :${e.names[0]}:`,
+              })),
+              index: 0,
+              rect: props.clientRect?.() ?? null,
+              select: (item) => {
+                const e = props.items.find((x) => x.emoji === item.id);
+                if (e) props.command(e);
+              },
+              label: "Emoji suggestions",
+            });
+          return { onStart: apply, onUpdate: apply, onKeyDown: suggestKeyDown, onExit };
         },
       }),
     ],
@@ -377,16 +410,16 @@ export function RichEditor({
       {suggestion && suggestion.items.length > 0 && (
         <ul
           role="listbox"
-          aria-label="Mention suggestions"
+          aria-label={suggestion.label}
           className="fixed z-[70] min-w-40 rounded-md border border-border-strong bg-popover p-1 shadow-popover"
           style={{
             left: suggestion.rect?.left ?? 0,
             top: (suggestion.rect?.bottom ?? 0) + 4,
           }}
         >
-          {suggestion.items.map((u, i) => (
+          {suggestion.items.map((item, i) => (
             <li
-              key={u.id}
+              key={item.id}
               role="option"
               aria-selected={i === suggestion.index}
               className={cn(
@@ -395,10 +428,10 @@ export function RichEditor({
               )}
               onMouseDown={(e) => {
                 e.preventDefault();
-                suggestion.select(u);
+                suggestion.select(item);
               }}
             >
-              {u.name}
+              {item.label}
             </li>
           ))}
         </ul>

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import { setUiState } from "@/app/ui-state";
+import { EntityIcon } from "@/components/entity-icon";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 
@@ -70,7 +71,14 @@ function TeamRowItem({
         </Link>
         <p className="text-xs text-muted-foreground">
           {team.key}
-          {team.icon ? ` · icon ${team.icon}` : ""}
+          {team.icon ? (
+            <>
+              {" · "}
+              <EntityIcon icon={team.icon} fallback={`icon ${team.icon}`} />
+            </>
+          ) : (
+            ""
+          )}
           {parentName ? ` · in ${parentName}` : ""}
         </p>
       </div>
