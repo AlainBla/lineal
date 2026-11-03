@@ -10,6 +10,7 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
 use lineal_app::usecases::attachment::LinkAttachmentInput;
+use lineal_app::usecases::branch_name::{git_branch_name, slug};
 use lineal_app::usecases::issue::{
     CreateIssueInput, DescriptionEdit, IssueDetail, IssueView, ListIssuesInput, RelationChanges,
     RelationsView, UpdateIssueInput,
@@ -69,21 +70,6 @@ fn ts(t: Option<DateTime<Utc>>) -> Value {
     t.map_or(Value::Null, |t| Value::String(ts_millis(t)))
 }
 
-fn slug(title: &str) -> String {
-    let mut out = String::new();
-    for c in title.to_lowercase().chars() {
-        if c.is_alphanumeric() {
-            out.push(c);
-        } else if !out.ends_with('-') && !out.is_empty() {
-            out.push('-');
-        }
-        if out.len() >= 50 {
-            break;
-        }
-    }
-    out.trim_matches('-').to_owned()
-}
-
 /// Vollständige Feldmenge eines Issues; der Aufrufer wählt aus.
 fn issue_map(
     v: &IssueView,
@@ -118,7 +104,7 @@ fn issue_map(
     );
     m.insert(
         "gitBranchName".into(),
-        json!(format!("{handle}/{}-{slug}", i.identifier.to_lowercase())),
+        json!(git_branch_name(handle, &i.identifier, &i.title)),
     );
     m.insert("createdAt".into(), ts(Some(i.created_at)));
     m.insert("updatedAt".into(), ts(Some(i.updated_at)));
@@ -225,10 +211,7 @@ fn detail_json(
 }
 
 async fn caller_handle(app: &App, ctx: &RequestCtx) -> String {
-    match app.get_user(ctx, "me").await {
-        Ok(u) => u.user.display_name,
-        Err(_) => "lineal".into(),
-    }
+    app.branch_handle(ctx).await
 }
 
 async fn base_url(app: &App, ctx: &RequestCtx) -> AppResult<String> {

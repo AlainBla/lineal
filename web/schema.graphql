@@ -1031,6 +1031,11 @@ type Issue {
 	"""
 	linkCount: Int!
 	"""
+	Git-Branchname für den Aufrufer (`<handle>/<kennung>-<titel-slug>`), identisch zu MCP
+	`gitBranchName`.
+	"""
+	branchName: String!
+	"""
 	Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
 	"""
 	children(first: Int): [Issue!]!

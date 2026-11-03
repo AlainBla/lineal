@@ -5,6 +5,7 @@ pub mod attachment;
 pub mod audit;
 pub mod auth;
 pub mod automation;
+pub mod branch_name;
 pub mod comment;
 pub mod cycle;
 pub mod document;

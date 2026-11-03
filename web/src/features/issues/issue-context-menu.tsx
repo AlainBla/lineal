@@ -51,7 +51,7 @@ import { closeIssueMenu, useIssueMenuRequest, type IssueMenuRequest } from "./co
 import { useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { copyText, issueUrl, useIssueOps } from "./issue-extra-shortcuts";
-import { branchName, duePresets, type RelationChoice } from "./model";
+import { duePresets, type RelationChoice } from "./model";
 import { RelationDialog } from "./relation-dialog";
 import { IssuePickerHost, type PickerKind, type PickerRequest } from "./picker-host";
 
@@ -305,7 +305,7 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
           />
           <MenuItem
             label="Git branch name"
-            onSelect={copyAll("Branch name", (i) => branchName(i.identifier, i.title))}
+            onSelect={copyAll("Branch name", (i) => i.branchName)}
           />
         </SubmenuItem>
         {!multi && (

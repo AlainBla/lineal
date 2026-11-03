@@ -356,7 +356,11 @@ async fn run(
 ) -> Response {
     // Frisches Request-Budget für `Issue.children/relations/history` (nie wiederverwendet).
     let mut response = schema
-        .execute(request.data(crate::context::DetailBudget::default()))
+        .execute(
+            request
+                .data(crate::context::DetailBudget::default())
+                .data(crate::context::ViewerBranchHandle::default()),
+        )
         .await;
     let bad_request = finish_errors(&mut response, request_id);
     let status = if bad_request {

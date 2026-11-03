@@ -435,3 +435,70 @@ async fn detail_fields_are_budgeted_per_request(pool: sqlx::PgPool) {
         .await;
     assert_eq!(code(&bare), "invalid_request");
 }
+
+/// `Issue.branchName` (GraphQL) und `gitBranchName` (MCP) kommen aus derselben Funktion und
+/// stimmen für denselben Aufrufer und dasselbe Issue überein.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn branch_name_matches_mcp_git_branch_name(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = test_app(Arc::new(store));
+    let schema = build_schema(app.clone());
+
+    for (who, title) in [
+        (SeedUser::Alice, "Zugriff für Dirk: Größe & Übersicht"),
+        (SeedUser::Bob, "Login schlägt fehl"),
+    ] {
+        let created = data(
+            run(
+                &schema,
+                who,
+                &format!(
+                    r#"mutation {{ issueCreate(input: {{teamId: "ENG", title: "{title}"}}) {{
+                        issue {{ identifier }} }} }}"#
+                ),
+            )
+            .await,
+        );
+        let identifier = created["issueCreate"]["issue"]["identifier"]
+            .as_str()
+            .unwrap();
+        let gql = data(
+            run(
+                &schema,
+                who,
+                &format!(r#"{{ issue(id: "{identifier}") {{ branchName }} }}"#),
+            )
+            .await,
+        );
+        let mcp = lineal_mcp::dispatch::dispatch(
+            &app,
+            &ctx_for(who),
+            "get_issue",
+            json!({ "id": identifier }),
+        )
+        .await
+        .expect("known tool")
+        .unwrap();
+        let branch = gql["issue"]["branchName"].as_str().unwrap();
+        assert_eq!(branch, mcp["gitBranchName"].as_str().unwrap());
+        assert!(branch.contains('/'), "{branch}");
+    }
+
+    // Das Präfix ist pro Aufrufer: Alice und Bob sehen verschiedene Präfixe.
+    let q = r#"{ issues(first: 5) { nodes { branchName } } }"#;
+    let a = data(run(&schema, SeedUser::Alice, q).await);
+    let b = data(run(&schema, SeedUser::Bob, q).await);
+    let prefix = |v: &Value| {
+        v["issues"]["nodes"][0]["branchName"]
+            .as_str()
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_ne!(prefix(&a), prefix(&b));
+}

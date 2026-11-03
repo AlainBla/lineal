@@ -21,7 +21,7 @@ export const ISSUE_FIELDS = `
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
   labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed
   slaType slaStartedAt slaBreachesAt createdAt updatedAt
-  stateEnteredAt snoozedUntilAt startedTriageAt linkCount
+  stateEnteredAt snoozedUntilAt startedTriageAt linkCount branchName
 `;
 
 const COMMENT_FIELDS = `

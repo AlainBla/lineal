@@ -431,11 +431,6 @@ export function relationGroups(r: IssueRelations): Array<{ label: string; items:
 /** Pfad zum Issue-Detail (docs/08 §1.3). */
 export const issuePath = (ws: string, identifier: string) => `/${ws}/issue/${identifier}`;
 
-/** Git-Branchname wie in Linear: `eng-12-titel-als-slug` (Kennung klein, Titel-Slug). */
-export function branchName(identifier: string, title: string): string {
-  return `${identifier.toLowerCase()}-${slugify(title)}`;
-}
-
 const pad = (n: number) => String(n).padStart(2, "0");
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 

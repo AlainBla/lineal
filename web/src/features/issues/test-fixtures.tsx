@@ -102,6 +102,7 @@ export function makeIssue(over: Partial<Issue> & Pick<Issue, "id" | "identifier"
     startedTriageAt: null,
     triagedAt: null,
     linkCount: 0,
+    branchName: `alice/${over.identifier.toLowerCase()}`,
     attachments: [],
     ...over,
   };

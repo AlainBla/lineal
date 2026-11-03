@@ -155,6 +155,17 @@ pub struct IssueHistoryEntry {
 
 #[async_graphql::ComplexObject]
 impl IssueGql {
+    /// Git-Branchname für den Aufrufer (`<handle>/<kennung>-<titel-slug>`), identisch zu MCP
+    /// `gitBranchName`.
+    async fn branch_name(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
+        let handle = crate::context::branch_handle(ctx).await?;
+        Ok(lineal_app::usecases::branch_name::git_branch_name(
+            &handle,
+            &self.identifier,
+            &self.title,
+        ))
+    }
+
     /// Direkte Sub-Issues (teamübergreifend, nur sichtbare), höchstens `first` (Default 50, max 100).
     async fn children(
         &self,

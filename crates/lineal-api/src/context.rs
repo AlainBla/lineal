@@ -53,6 +53,20 @@ pub fn charge_detail_field(ctx: &Context<'_>) -> async_graphql::Result<()> {
     }
 }
 
+/// Branch-Präfix des Aufrufers, pro Request höchstens einmal geladen (`Issue.branchName` in Listen).
+#[derive(Debug, Default)]
+pub struct ViewerBranchHandle(tokio::sync::OnceCell<String>);
+
+/// Branch-Präfix des Aufrufers; mit `ViewerBranchHandle` in den Context-Daten einmal pro Request,
+/// sonst bei jedem Aufruf neu aufgelöst.
+pub async fn branch_handle(ctx: &Context<'_>) -> async_graphql::Result<String> {
+    let (app, rc) = (app(ctx)?, request_ctx(ctx)?);
+    match ctx.data_opt::<ViewerBranchHandle>() {
+        Some(cell) => Ok(cell.0.get_or_init(|| app.branch_handle(rc)).await.clone()),
+        None => Ok(app.branch_handle(rc).await),
+    }
+}
+
 /// Herkunft einer Änderung im Verlauf: Cookie-Session = Web-App (`user`), API-Key und
 /// OAuth-Token = `api` (docs/01, B3.18).
 pub fn history_source(ctx: &RequestCtx) -> lineal_app::ports::repos::issue::HistorySource {

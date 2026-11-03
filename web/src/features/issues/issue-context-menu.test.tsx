@@ -7,7 +7,7 @@ import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 
 import { closeIssueMenu } from "./context-menu-store";
 import { IssueContextMenuHost } from "./issue-context-menu";
-import { branchName, duePresets } from "./model";
+import { duePresets } from "./model";
 import { TeamIssuesPage } from "./team-issues-page";
 import { makeIssue, mockGraphql, renderWithApp, TEAM_META } from "./test-fixtures";
 import { clearToasts } from "./toast-store";
@@ -176,8 +176,8 @@ describe("Kontextmenü auf Tickets", () => {
     await copy("Title");
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("Erstes Ticket"));
     await copy("Git branch name");
-    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("eng-1-erstes-ticket"));
-    expect(branchName("ENG-1", "Erstes Ticket")).toBe("eng-1-erstes-ticket");
+    // Der Branchname kommt unverändert vom Server (`Issue.branchName`, identisch zu MCP).
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("alice/eng-1"));
   });
 
   it("Löschen fragt nach und sendet erst nach Bestätigung", async () => {
