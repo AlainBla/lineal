@@ -926,3 +926,100 @@ async fn favorites_sync_only_to_their_owner(pool: PgPool) {
         assert_eq!(r.groups, vec![format!("user:{}", e.d.bob.0)]);
     }
 }
+
+/// LIN-17: Erwähnt jemand ein Issue (Beschreibung oder Kommentar), bekommt das erwähnte Issue
+/// eine `U`-Aktion (`mentionedIn` geändert) in den Gruppen seines Teams, auch wenn es selbst nicht
+/// bearbeitet wurde; Entfernen der Erwähnung (Text ändern, Kommentar löschen) meldet es erneut.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn mentions_notify_the_mentioned_issue_without_editing_it(pool: PgPool) {
+    use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
+    use lineal_app::usecases::issue::{CreateIssueInput, DescriptionEdit, UpdateIssueInput};
+
+    let e = env(pool).await;
+    let bob = ctx_for(SeedUser::Bob);
+    let new_issue = |title: &str| CreateIssueInput {
+        team: "ENG".into(),
+        title: Some(title.into()),
+        ..Default::default()
+    };
+    let target = e
+        .app
+        .create_issue(&ctx_for(SeedUser::Alice), new_issue("Ziel"))
+        .await
+        .unwrap()
+        .issue;
+    let source = e
+        .app
+        .create_issue(&bob, new_issue("Quelle"))
+        .await
+        .unwrap()
+        .issue;
+
+    // `U`-Aktionen des Ziel-Issues im Sync-Log (nach Verteilen der Outbox).
+    async fn target_updates(e: &Env, id: IssueId) -> Vec<SyncActionRow> {
+        drain_outbox_into_sync(e).await;
+        e.log()
+            .await
+            .into_iter()
+            .filter(|r| r.model_id == id.0 && r.action == "U" && r.model_name == "Issue")
+            .collect()
+    }
+    assert!(target_updates(&e, target.id).await.is_empty());
+
+    let set_description = |text: &str| UpdateIssueInput {
+        id: source.identifier.clone(),
+        description: Some(DescriptionEdit::Set(text.into())),
+        ..Default::default()
+    };
+
+    // 1. Beschreibung erwähnt das Ziel.
+    e.app
+        .update_issue(
+            &bob,
+            set_description(&format!("vgl. {}", target.identifier)),
+        )
+        .await
+        .unwrap();
+    let rows = target_updates(&e, target.id).await;
+    assert_eq!(rows.len(), 1, "neue Erwähnung meldet das Ziel");
+    assert_eq!(rows[0].groups, vec![team(e.d.eng)]);
+    assert!(!rows[0].data.to_string().contains("Quelle"));
+
+    // 2. Gleiche Erwähnung erneut gespeichert: Rückverweise unverändert, kein weiteres Event.
+    e.app
+        .update_issue(
+            &bob,
+            set_description(&format!("noch immer {}", target.identifier)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(target_updates(&e, target.id).await.len(), 1);
+
+    // 3. Erwähnung entfernt.
+    e.app
+        .update_issue(&bob, set_description("nichts mehr"))
+        .await
+        .unwrap();
+    assert_eq!(target_updates(&e, target.id).await.len(), 2);
+
+    // 4. Kommentar erwähnt das Ziel, dann wird er gelöscht.
+    let comment = e
+        .app
+        .create_comment(
+            &bob,
+            CreateCommentInput {
+                parent: Some(ParentSpec::Issue(source.identifier.clone())),
+                reply_to: None,
+                body: format!("siehe {}", target.identifier),
+                quoted_text: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(target_updates(&e, target.id).await.len(), 3);
+    e.app
+        .delete_comment(&bob, &comment.view.comment.id.0.to_string())
+        .await
+        .unwrap();
+    assert_eq!(target_updates(&e, target.id).await.len(), 4);
+}

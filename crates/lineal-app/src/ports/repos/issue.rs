@@ -372,19 +372,20 @@ pub trait IssueRepo: Send {
 
     // --- Rückverweise (LIN-12) ---
     /// Ersetzt die Erwähnungen einer Quelle (`comment` = `None`: Beschreibung von `source`)
-    /// durch genau `targets`.
+    /// durch genau `targets`. Liefert die Ziel-Issues, deren Rückverweise sich dadurch geändert
+    /// haben (neu hinzugekommen oder entfallen).
     async fn replace_mentions(
         &mut self,
         _source: IssueId,
         _comment: Option<CommentId>,
         _targets: &[IssueId],
         _now: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<Vec<IssueId>> {
         unimplemented_repo()
     }
-    /// Entfernt alle Erwähnungen, die von diesem Kommentar ausgehen.
-    async fn delete_mentions_of_comment(&mut self, _comment: CommentId) -> AppResult<()> {
-        Ok(())
+    /// Entfernt alle Erwähnungen, die von diesem Kommentar ausgehen; liefert deren Ziel-Issues.
+    async fn delete_mentions_of_comment(&mut self, _comment: CommentId) -> AppResult<Vec<IssueId>> {
+        Ok(Vec::new())
     }
     /// Alle Erwähnungen des Issues, älteste zuerst (ohne Sichtbarkeitsprüfung).
     async fn mentions_of(&mut self, _target: IssueId) -> AppResult<Vec<IssueMentionRow>> {

@@ -137,6 +137,13 @@ fn plan(ev: &StoredEvent) -> Vec<Plan> {
         | E::IssueSlaSet { issue_id }
         | E::IssueSlaHighRisk { issue_id }
         | E::IssueSlaBreached { issue_id } => model("Issue", issue_id.0, Updated),
+        E::IssueMentionsChanged { issue_id } => vec![Plan::Model {
+            model: "Issue",
+            id: issue_id.0,
+            op: Updated,
+            known_groups: vec![],
+            changed: vec!["mentionedIn".into()],
+        }],
         E::IssueRelationCreated { relation_id, .. } => vec![
             Plan::Model {
                 model: "IssueRelation",

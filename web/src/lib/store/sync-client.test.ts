@@ -182,6 +182,22 @@ describe("SyncClient", () => {
     client.stop();
   });
 
+  it("lädt die Details (u. a. „Mentioned in“) neu, wenn der Server das erwähnte Issue als geändert meldet", () => {
+    const client = make(memoryStorage(10));
+    client.start();
+    sockets[0]!.open();
+    sockets[0]!.push({ type: "hello", lastSyncId: 10, resumed: true });
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    // Ein anderer Nutzer erwähnt ENG-1 in seinem Ticket: das Ziel kommt als `U` ohne eigene Änderung.
+    sockets[0]!.push({
+      type: "sync",
+      lastSyncId: 11,
+      actions: [{ id: 11, action: "U", modelName: "Issue", modelId: "i1", data: { id: "i1" } }],
+    });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["issue-detail"] });
+    client.stop();
+  });
+
   it("Backoff verdoppelt sich bis zur Obergrenze und startet nach hello neu", () => {
     const client = make(memoryStorage(1));
     client.start();

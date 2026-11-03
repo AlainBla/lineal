@@ -991,7 +991,8 @@ impl App {
         tx.comments()
             .remove(comment.id, placeholder, self.clock.now())
             .await?;
-        tx.issues().delete_mentions_of_comment(comment.id).await?;
+        let dropped = tx.issues().delete_mentions_of_comment(comment.id).await?;
+        super::issue::mentions::emit_mentions_changed(&mut *tx, ctx, &dropped).await?;
         tx.outbox()
             .push(NewEvent::from_ctx(
                 DomainEvent::CommentRemoved {

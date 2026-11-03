@@ -148,9 +148,30 @@ pub(crate) async fn record_issue_mentions(
             targets.push(other.id);
         }
     }
-    tx.issues()
+    let changed = tx
+        .issues()
         .replace_mentions(issue.id, comment, &targets, now)
-        .await
+        .await?;
+    emit_mentions_changed(tx, ctx, &changed).await
+}
+
+/// Meldet dem Sync-Strom (LIN-17), dass sich die Rückverweise dieser Issues geändert haben; die
+/// Auslieferung prüft wie bei jedem Issue-Event die Sichtbarkeit der Empfänger, das Ereignis
+/// enthält nur die Issue-ID.
+pub(crate) async fn emit_mentions_changed(
+    tx: &mut dyn Tx,
+    ctx: &crate::context::RequestCtx,
+    targets: &[lineal_domain::ids::IssueId],
+) -> AppResult<()> {
+    for id in targets {
+        tx.outbox()
+            .push(crate::ports::repos::outbox::NewEvent::from_ctx(
+                lineal_domain::events::DomainEvent::IssueMentionsChanged { issue_id: *id },
+                ctx,
+            ))
+            .await?;
+    }
+    Ok(())
 }
 
 /// Ein Rückverweis: das erwähnende Issue und ob die Erwähnung aus der Beschreibung

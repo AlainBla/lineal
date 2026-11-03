@@ -1074,19 +1074,27 @@ impl IssueRepo for PgTx {
         comment: Option<CommentId>,
         targets: &[IssueId],
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
-        sqlx::query(
+    ) -> AppResult<Vec<IssueId>> {
+        let old: Vec<(Uuid,)> = sqlx::query_as(
             "DELETE FROM issue_mention WHERE organization_id = $1 AND source_issue_id = $2 \
-             AND source_comment_id IS NOT DISTINCT FROM $3::uuid",
+             AND source_comment_id IS NOT DISTINCT FROM $3::uuid RETURNING target_issue_id",
         )
         .bind(self.org.0)
         .bind(source.0)
         .bind(comment.map(|c| c.0))
-        .execute(&mut *self.tx)
+        .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
+        let old: Vec<IssueId> = old.into_iter().map(|(t,)| IssueId(t)).collect();
+        let mut changed: Vec<IssueId> = old
+            .iter()
+            .filter(|t| !targets.contains(t))
+            .chain(targets.iter().filter(|t| !old.contains(t)))
+            .copied()
+            .collect();
+        changed.dedup();
         if targets.is_empty() {
-            return Ok(());
+            return Ok(changed);
         }
         let ids: Vec<Uuid> = targets.iter().map(|t| t.0).collect();
         sqlx::query(
@@ -1102,19 +1110,20 @@ impl IssueRepo for PgTx {
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(())
+        Ok(changed)
     }
 
-    async fn delete_mentions_of_comment(&mut self, comment: CommentId) -> AppResult<()> {
-        sqlx::query(
-            "DELETE FROM issue_mention WHERE organization_id = $1 AND source_comment_id = $2",
+    async fn delete_mentions_of_comment(&mut self, comment: CommentId) -> AppResult<Vec<IssueId>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "DELETE FROM issue_mention WHERE organization_id = $1 AND source_comment_id = $2 \
+             RETURNING target_issue_id",
         )
         .bind(self.org.0)
         .bind(comment.0)
-        .execute(&mut *self.tx)
+        .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(())
+        Ok(rows.into_iter().map(|(t,)| IssueId(t)).collect())
     }
 
     async fn mentions_of(&mut self, target: IssueId) -> AppResult<Vec<IssueMentionRow>> {

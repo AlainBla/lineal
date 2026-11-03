@@ -198,6 +198,8 @@ domain_events! {
     IssueSlaSet { issue_id: IssueId },
     IssueSlaHighRisk { issue_id: IssueId },
     IssueSlaBreached { issue_id: IssueId },
+    /// Die Rückverweise („Mentioned in“) dieses Issues haben sich geändert (LIN-17); nur Sync.
+    IssueMentionsChanged { issue_id: IssueId },
     OAuthAuthorizationRevoked { client_id: String },
     // --- vom Orchestrator vor Welle 2 ergänzt ---
     WorkflowStateCreated { state_id: StateId, team_id: TeamId },
