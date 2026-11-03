@@ -130,7 +130,21 @@ describe("Triage-Ansicht (F.02)", () => {
   it("markiert als Duplikat und snoozt", async () => {
     const gql = mockGraphql(
       handlers({
-        IssueDetail: () => ({ issue: makeIssue({ id: "d1", identifier: "ENG-1" }) }),
+        IssuePickerSearch: () => ({
+          searchIssues: {
+            nodes: [
+              {
+                issue: {
+                  id: "t1",
+                  identifier: "ENG-7",
+                  title: "Alter Eingang",
+                  stateType: "triage",
+                },
+              },
+              { issue: { id: "d1", identifier: "ENG-1", title: "Original", stateType: "started" } },
+            ],
+          },
+        }),
         IssueTriageDuplicate: () => ({ issueTriageDuplicate: { success: true, issue: OLD } }),
         IssueTriageSnooze: () => ({ issueTriageSnooze: { success: true, issue: OLD } }),
       }),
@@ -139,7 +153,13 @@ describe("Triage-Ansicht (F.02)", () => {
     await screen.findByRole("list", { name: "Triage issues" });
     await userEvent.click(screen.getByRole("button", { name: /Mark as duplicate/ }));
     let dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Issue identifier"), "ENG-1");
+    const submitBtn = within(dialog).getByRole("button", { name: "Mark as duplicate" });
+    expect(submitBtn).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole("combobox"), "orig");
+    const option = await within(dialog).findByRole("option", { name: /ENG-1/ });
+    expect(within(dialog).queryByRole("option", { name: /ENG-7/ })).toBeNull();
+    await userEvent.click(option);
+    expect(within(dialog).getByRole("button", { name: "Change" })).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Mark as duplicate" }));
     await waitFor(() => expect(gql.of("IssueTriageDuplicate")).toHaveLength(1));
     expect(gql.of("IssueTriageDuplicate")[0]!.variables).toMatchObject({

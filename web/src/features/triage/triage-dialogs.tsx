@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import type { Issue, WorkflowState } from "@/gql/graphql";
 import { PRIORITIES } from "@/features/issues/model";
-import { fetchIssue } from "@/features/issues/queries";
+import { IssuePicker, type IssueCandidate } from "@/features/issues/issue-picker";
 import { errorMessage } from "@/features/issues/toast-store";
 import { useShortcutContext } from "@/lib/shortcuts";
 
@@ -108,7 +108,7 @@ function TriageForm({
   const [comment, setComment] = useState("");
   const [stateId, setStateId] = useState("");
   const [priority, setPriority] = useState("");
-  const [ref, setRef] = useState("");
+  const [target, setTarget] = useState<IssueCandidate | null>(null);
   const [preset, setPreset] = useState("tomorrow");
   const [custom, setCustom] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -131,17 +131,15 @@ function TriageForm({
       } else if (kind === "decline") {
         await onSubmit({ kind, comment: text });
       } else if (kind === "duplicate") {
-        const target = ref.trim();
         if (!target) {
-          setError("Enter an issue identifier such as ENG-12.");
+          setError("Select the original issue.");
           return;
         }
-        const other = await fetchIssue(target);
-        if (other.id === issue.id) {
+        if (target.id === issue.id) {
           setError("An issue cannot be a duplicate of itself.");
           return;
         }
-        await onSubmit({ kind, duplicateOfId: other.id, comment: text });
+        await onSubmit({ kind, duplicateOfId: target.id, comment: text });
       } else {
         let at: Date | undefined;
         if (preset === "custom") {
@@ -207,13 +205,35 @@ function TriageForm({
         </>
       )}
       {kind === "duplicate" && (
-        <Input
-          autoFocus
-          aria-label="Issue identifier"
-          placeholder="Duplicate of, e.g. ENG-12"
-          value={ref}
-          onChange={(e) => setRef(e.target.value)}
-        />
+        <div className="flex flex-col gap-2">
+          {target ? (
+            <div className="flex items-center gap-2 rounded-md border border-border-strong px-2 py-1.5 text-sm">
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {target.identifier}
+              </span>
+              <span className="truncate">{target.title}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="ml-auto"
+                onClick={() => setTarget(null)}
+              >
+                Change
+              </Button>
+            </div>
+          ) : (
+            <IssuePicker
+              exclude={[issue.id]}
+              disabled={busy}
+              invalid={error !== null}
+              onPick={(c) => {
+                setTarget(c);
+                setError(null);
+              }}
+            />
+          )}
+        </div>
       )}
       {kind === "snooze" && (
         <div role="radiogroup" aria-label="Snooze until" className="flex flex-col gap-1.5">
@@ -266,7 +286,7 @@ function TriageForm({
         </Button>
         <Button
           type="submit"
-          disabled={busy}
+          disabled={busy || (kind === "duplicate" && !target)}
           variant={kind === "decline" ? "destructive" : "default"}
         >
           {kind === "snooze" ? "Snooze" : kind === "duplicate" ? "Mark as duplicate" : TITLE[kind]}
