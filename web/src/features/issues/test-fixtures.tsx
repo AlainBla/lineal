@@ -68,6 +68,7 @@ export function makeIssue(over: Partial<Issue> & Pick<Issue, "id" | "identifier"
     children: [],
     relations: { blocks: [], blockedBy: [], relatedTo: [], duplicateOf: null, duplicates: [] },
     history: [],
+    mentionedIn: [],
     subscribed: false,
     previousIdentifiers: [],
     title: `Issue ${over.identifier}`,

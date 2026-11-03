@@ -114,40 +114,87 @@ pub fn extract_identifiers(text: &str) -> BTreeSet<String> {
     out
 }
 
-/// Legt für neu erwähnte Issue-Kennungen `related`-Relationen zu `issue` an (nur sichtbare,
-/// beschreibbare Gegenstücke, keine Duplikate; docs/03 §4.2). `old_text` = bisheriger Text:
-/// nur Kennungen, die dort noch nicht standen, zählen.
+/// Hält die Rückverweise („Mentioned in“, docs/03 §4.2) einer Quelle aktuell: ersetzt die
+/// gespeicherten Erwähnungen der Beschreibung von `issue` (`comment` = `None`) bzw. des
+/// Kommentars durch die in `text` genannten Kennungen (Code ausgenommen). Es entstehen keine
+/// Relationen. Nur Issues, die der Akteur sehen darf, werden verknüpft; Unbekanntes, das Issue
+/// selbst und Papierkorb-Issues werden übergangen. Sichtbarkeit für Leser prüft die Leseseite.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn link_issue_mentions(
+pub(crate) async fn record_issue_mentions(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     ctx: &crate::context::RequestCtx,
-    ids: &dyn crate::ports::IdGen,
     now: chrono::DateTime<chrono::Utc>,
     source: crate::ports::repos::issue::HistorySource,
     issue: &crate::ports::repos::issue::Issue,
-    new_text: &str,
-    old_text: Option<&str>,
+    comment: Option<lineal_domain::ids::CommentId>,
+    text: &str,
 ) -> AppResult<()> {
     // Importierte Texte verweisen auf Kennungen des Quellsystems, nicht auf lokale Issues.
     if source == crate::ports::repos::issue::HistorySource::Import {
         return Ok(());
     }
-    let before = old_text.map(extract_identifiers).unwrap_or_default();
-    let env = super::relations::Env {
-        ctx,
-        snap,
-        ids,
-        now,
-        source,
-    };
-    for ident in extract_identifiers(new_text) {
-        if before.contains(&ident) || ident.eq_ignore_ascii_case(&issue.identifier) {
+    let mut targets: Vec<lineal_domain::ids::IssueId> = Vec::new();
+    for ident in extract_identifiers(&strip_code(text)) {
+        if ident.eq_ignore_ascii_case(&issue.identifier) {
             continue;
         }
-        super::relations::link_mention(tx, &env, issue, &ident).await?;
+        let other = match crate::resolve::issue::resolve_in(tx, snap, ctx, &ident).await {
+            Ok(o) => o,
+            Err(e) if e.kind == crate::error::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if other.id != issue.id && !other.trashed && !targets.contains(&other.id) {
+            targets.push(other.id);
+        }
     }
-    Ok(())
+    tx.issues()
+        .replace_mentions(issue.id, comment, &targets, now)
+        .await
+}
+
+/// Ein Rückverweis: das erwähnende Issue und ob die Erwähnung aus der Beschreibung
+/// (`comment_id` = `None`) oder einem Kommentar stammt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MentionedIn {
+    pub issue: super::relations::RelatedIssue,
+    pub comment_id: Option<uuid::Uuid>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Rückverweise auf `target`, nur aus Quellen, die der Akteur sehen darf (Issue sichtbar und nicht
+/// im Papierkorb, Kommentar nicht gelöscht).
+pub(super) async fn mentioned_in(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    ctx: &crate::context::RequestCtx,
+    target: lineal_domain::ids::IssueId,
+) -> AppResult<Vec<MentionedIn>> {
+    let mut out = Vec::new();
+    for row in tx.issues().mentions_of(target).await? {
+        let Some(src) = tx.issues().get(row.source_issue_id, false).await? else {
+            continue;
+        };
+        if src.trashed || !crate::resolve::issue::can_see(tx, snap, ctx, &src).await? {
+            continue;
+        }
+        if let Some(cid) = row.source_comment_id {
+            match tx.comments().get(cid).await? {
+                Some(c) if c.deleted_at.is_none() => {}
+                _ => continue,
+            }
+        }
+        out.push(MentionedIn {
+            issue: super::relations::RelatedIssue {
+                uuid: src.id.0,
+                identifier: src.identifier.clone(),
+                title: src.title.clone(),
+            },
+            comment_id: row.source_comment_id.map(|c| c.0),
+            created_at: row.created_at,
+        });
+    }
+    Ok(out)
 }
 
 /// Wählt die Treffer für einen `@handle`: zuerst der Anzeigename (`display`, ohne Beachtung der

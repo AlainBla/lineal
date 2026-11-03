@@ -363,6 +363,47 @@ describe("Issue-Detail", () => {
     expect(router.state.location.pathname).toBe("/acme/issue/ENG-120/x");
   });
 
+  it("zeigt „Mentioned in“ mit Quelle und blendet den Abschnitt ohne Rückverweise aus", async () => {
+    mockGraphql(
+      handlers({
+        mentionedIn: [
+          {
+            id: "i7",
+            identifier: "ENG-140",
+            title: "Beschreibt ENG-120",
+            source: "description",
+            commentId: null,
+            createdAt: "2026-10-03T08:00:00Z",
+          },
+          {
+            id: "i8",
+            identifier: "WEB-9",
+            title: "Kommentiert ENG-120",
+            source: "comment",
+            commentId: "c9",
+            createdAt: "2026-10-04T08:00:00Z",
+          },
+        ],
+      }),
+    );
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const sec = await screen.findByRole("region", { name: "Mentioned in" });
+    expect(within(sec).getByText("Beschreibt ENG-120")).toBeInTheDocument();
+    expect(within(sec).getByText("in the description")).toBeInTheDocument();
+    expect(within(sec).getByText("in a comment")).toBeInTheDocument();
+    const link = within(sec).getByText("Kommentiert ENG-120").closest("a");
+    expect(link?.getAttribute("href")).toContain("WEB-9");
+  });
+
+  it("blendet „Mentioned in“ ohne Rückverweise aus", async () => {
+    const gql = mockGraphql(handlers({ mentionedIn: [] }));
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    await waitFor(() => expect(gql.of("IssueExtras").length).toBeGreaterThanOrEqual(1));
+    await screen.findByRole("region", { name: "Related issues" });
+    expect(screen.queryByRole("region", { name: "Mentioned in" })).toBeNull();
+  });
+
   it("legt eine Relation „blocking“ über den Dialog an", async () => {
     let blocks: Array<{ id: string; identifier: string; title: string }> = [];
     const h = handlers();

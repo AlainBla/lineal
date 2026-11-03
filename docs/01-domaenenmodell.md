@@ -830,7 +830,7 @@ Gerichtete Beziehung zwischen zwei Issues. `blocks` von A nach B heißt „A blo
 | `issueId` | UUID | ja | — | Quell-Issue | FK → Issue; Index |
 | `relatedIssueId` | UUID | ja | — | Ziel-Issue | FK → Issue; Index |
 | `type` | Enum(`blocks`,`related`,`duplicate`,`similar`) | ja | — | Art der Beziehung | |
-| `creatorId` | UUID | nein | aufrufender User | Ersteller (`null` bei automatisch angelegten `related` aus Erwähnungen) | FK → User |
+| `creatorId` | UUID | nein | aufrufender User | Ersteller | FK → User |
 
 **Invarianten**
 

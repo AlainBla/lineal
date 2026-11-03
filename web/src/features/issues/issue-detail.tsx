@@ -27,6 +27,7 @@ import { useIssueLookup } from "./issue-lookup";
 import { issuePath, RELATION_CHOICES, slugify, type RelationChoice } from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { PropertySidebar } from "./property-sidebar";
+import { MentionedInSection } from "./mentioned-in";
 import { RelationsSection } from "./relations";
 import { RichEditor } from "./rich-editor";
 import { ErrorState, isNotFound } from "./states";
@@ -511,6 +512,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
               dialog={relationDialog}
               onDialog={setRelationDialog}
             />
+            <MentionedInSection issue={issue} ws={ws} />
             <div className="rounded-lg border border-border">
               <DocumentsSection ws={ws} scope={{ issueId: issue.id }} teamId={issue.teamId} />
             </div>

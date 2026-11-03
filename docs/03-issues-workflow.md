@@ -218,7 +218,7 @@ function createIssue(input, actor):
     issue.sortOrder = topOf(team, issue.state)
     if data.slaBreachesAt == null: evaluateSlaRules(issue, trigger = "create")   // 11
     subscribe(creator, assignee, mentionedUsers(description))
-    createRelationsFromMentions(issue)            // 4.1
+    recordMentionBacklinks(issue)                 // 4.1 (keine Relation)
     insert issue; insert IssueHistory(kind = "created")
     if issue.state.type == "triage": runTriageResponsibility(issue)   // 10.6
     notify (nach Commit): issueAssignedToYou, issueMention, issueAddedToTriage, issuePriorityUrgent, issueCreated (Team-Abos)
@@ -240,7 +240,7 @@ Ein Teamwechsel (`team`) wird in [02-teams-rechte.md](02-teams-rechte.md) beschr
 | Feld | Validierung | Seiteneffekte | History-Eintrag | Notification |
 |---|---|---|---|---|
 | `title` | nicht leer, ≤ 255 Zeichen | Suchindex aktualisieren | `fromTitle`/`toTitle` | – |
-| `description` | Markdown ≤ 500 000 Zeichen (**Festlegung**); Patch-Anker eindeutig | neue Mentions → Subscribe + `related`-Relationen (4.1); Versionsstand und Snapshot in `DocumentContent`/`DocumentContentHistory` ([06-dokumente-templates.md](06-dokumente-templates.md) §1.3) | `updatedDescription = true`, `descriptionUpdatedBy` | `issueMention` an neu erwähnte User |
+| `description` | Markdown ≤ 500 000 Zeichen (**Festlegung**); Patch-Anker eindeutig | neue Mentions → Subscribe; Issue-Kennungen → Rückverweise (4.1, keine Relation); Versionsstand und Snapshot in `DocumentContent`/`DocumentContentHistory` ([06-dokumente-templates.md](06-dokumente-templates.md) §1.3) | `updatedDescription = true`, `descriptionUpdatedBy` | `issueMention` an neu erwähnte User |
 | `state` | Status des eigenen Teams, nicht archiviert; nicht `duplicate` direkt (1.6) | `applyStateChange` (Zeitstempel, Sortierung, Parent/Child-Automation, SLA-Abschluss) | `fromState`/`toState` | `issueStatusChanged` an Subscriber; `issueReopened` bei geschlossen → offen; Ersteller bei `completed` |
 | `priority` | Ganzzahl 0–4 | SLA-Regeln neu auswerten (11.2); `prioritySortOrder` beibehalten | `fromPriority`/`toPriority` | `issuePriorityUrgent` an Assignee, wenn neuer Wert `1` |
 | `estimate` | Wert der Team-Skala (2.5) oder `null`; `0` nur bei `issueEstimationAllowZero` | Cycle-/Projekt-Fortschritt neu berechnen | `fromEstimate`/`toEstimate` | – |
@@ -317,7 +317,7 @@ Erwähnungen werden beim Speichern von `description` und Kommentaren aus dem Mar
 | Syntax | Ziel | Wirkung |
 |---|---|---|
 | `@displayName` (z. B. `@alice`) | User | Subscribe (Issue bzw. Thread), Notification `issueMention` bzw. `issueCommentMention` |
-| `ENG-123` bzw. Issue-URL | Issue | Link; legt eine `related`-Relation an (4.1), falls noch keine Relation zwischen beiden besteht |
+| `ENG-123` bzw. Issue-URL | Issue | Link; erscheint als Rückverweis „Mentioned in“ am erwähnten Issue (4.1); legt **keine** Relation an |
 | Projekt-, Dokument-URL | Projekt/Dokument | nur Link |
 
 Notifications entstehen nur für **neu hinzugekommene** Mentions (Differenz alte/neue Mention-Menge), nicht bei jedem Speichern. User ohne Zugriff auf das Issue werden verlinkt, aber nicht benachrichtigt.
@@ -404,7 +404,11 @@ Weitere Regeln:
 - Relationen sind team-übergreifend erlaubt; der Aufrufer muss beide Issues sehen dürfen.
 - Doppeltes Anlegen ist idempotent (keine Fehlermeldung, kein History-Eintrag).
 - Eine `blocks`-Relation, deren Blocker geschlossen ist, bleibt gespeichert; die UI zeigt sie dann unter „Related“ an, und die Subscriber des blockierten Issues erhalten `issueUnblocked`.
-- Wird ein Issue in `description` oder einem Kommentar erwähnt, wird automatisch eine `related`-Relation angelegt, sofern noch keine Relation zwischen beiden besteht. Entfernen der Erwähnung entfernt die Relation **nicht**.
+- **Erwähnungen sind keine Relationen (LIN-12).** Wird ein Issue (`ENG-123`, auch als Teil einer Issue-URL) in `description` oder einem Kommentar erwähnt, entsteht **keine** `related`-Relation mehr (beiläufige Nennungen und Beispiele erzeugten sonst falsche Beziehungen). Stattdessen zeigt das erwähnte Issue die Liste „Mentioned in“ (GraphQL `Issue.mentionedIn`): Kennung und Titel des erwähnenden Issues und ob die Erwähnung aus der Beschreibung oder einem Kommentar stammt; Klick führt zum erwähnenden Issue.
+  - **Speicherung:** Tabelle `issue_mention(source_issue_id, source_comment_id NULL, target_issue_id, …)`. Gewählt statt Berechnung zur Lesezeit, weil `search_vector` eine workspace-abhängige Konfiguration/Stemming nutzt und `ENG-123` darin in Teiltoken zerfällt – eine exakte Suche wäre ein Scan mit Nachfilterung. Die Zeilen einer Quelle werden beim Speichern der Beschreibung bzw. des Kommentars **ersetzt** (Entfernen der Erwähnung entfernt den Rückverweis), beim Löschen eines Kommentars entfernt und mit Quell-/Ziel-Issue per Cascade gelöscht. Die Migration trägt den Bestand näherungsweise nach.
+  - **Extraktion:** wie `extract_identifiers` (Wortgrenzen, höchstens 20 je Text), Code (Inline und Fenced) wird ignoriert; das Issue selbst, Unbekanntes, für den Autor Unsichtbares und Papierkorb-Issues werden übergangen. Importe (`source = import`) legen keine Rückverweise an.
+  - **Sichtbarkeit:** beim Lesen werden nur Quellen geliefert, die der Aufrufer sehen darf (Issue sichtbar bzw. geteilt, nicht im Papierkorb, Kommentar nicht gelöscht).
+  - Bereits früher automatisch angelegte `related`-Relationen bleiben bestehen (sie sind nicht von manuell angelegten unterscheidbar) und lassen sich wie jede Relation entfernen.
 - Append-Semantik in API/MCP: `blocks`, `blockedBy`, `relatedTo` fügen nur hinzu; entfernt wird über `removeBlocks`, `removeBlockedBy`, `removeRelatedTo` (siehe [07-mcp-server.md](07-mcp-server.md)).
 
 ### 4.2 History und Benachrichtigungen

@@ -11,6 +11,7 @@ mod relations;
 
 pub use batch::{BatchFailure, BatchPatch, BatchResult, BatchUpdateInput, MAX_BATCH};
 pub use fields::{ISSUE_GRAPH_LOCK, MAX_SUB_ISSUE_DEPTH};
+pub use mentions::MentionedIn;
 pub use relations::{RelatedIssue, RelationChanges, RelationsView};
 
 use crate::app::App;
@@ -740,18 +741,8 @@ impl App {
                 .await?;
         }
         if let Some(d) = &stored.description {
-            Box::pin(mentions::link_issue_mentions(
-                tx,
-                &snap,
-                ctx,
-                self.ids.as_ref(),
-                now,
-                input.source,
-                &stored,
-                d,
-                None,
-            ))
-            .await?;
+            mentions::record_issue_mentions(tx, &snap, ctx, now, input.source, &stored, None, d)
+                .await?;
         }
         emit(
             tx,
@@ -1162,18 +1153,8 @@ impl App {
                     .subscribe(self.ids.new_uuid(), saved.id, *u, "mention", now)
                     .await?;
             }
-            Box::pin(mentions::link_issue_mentions(
-                tx,
-                &snap,
-                ctx,
-                self.ids.as_ref(),
-                now,
-                input.source,
-                &saved,
-                &text,
-                old.description.as_deref(),
-            ))
-            .await?;
+            mentions::record_issue_mentions(tx, &snap, ctx, now, input.source, &saved, None, &text)
+                .await?;
         }
         if saved.assignee_id != old.assignee_id
             && let Some(a) = saved.assignee_id
@@ -1339,6 +1320,19 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
         relations::view(&mut *tx, &snap, ctx, issue.id).await
+    }
+
+    /// Rückverweise („Mentioned in“): sichtbare Issues, in deren Beschreibung oder Kommentaren
+    /// dieses Issue erwähnt wird (docs/03 §4.2), älteste Erwähnung zuerst.
+    pub async fn issue_mentioned_in(
+        &self,
+        ctx: &RequestCtx,
+        reference: &str,
+    ) -> AppResult<Vec<MentionedIn>> {
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
+        let issue = resolve::issue::resolve_in(&mut *tx, &snap, ctx, reference).await?;
+        mentions::mentioned_in(&mut *tx, &snap, ctx, issue.id).await
     }
 
     /// Aktivitätsverlauf eines Issues, älteste zuerst.

@@ -502,3 +502,46 @@ async fn branch_name_matches_mcp_git_branch_name(pool: sqlx::PgPool) {
     };
     assert_ne!(prefix(&a), prefix(&b));
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_mentioned_in_lists_backlinks_without_relations(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let schema = build_schema(test_app(Arc::new(store)));
+    for title in ["Ziel", "Quelle"] {
+        data(
+            run(
+                &schema,
+                SeedUser::Alice,
+                &format!(
+                    r#"mutation {{ issueCreate(input: {{teamId: "ENG", title: "{title}"}}) {{ success }} }}"#
+                ),
+            )
+            .await,
+        );
+    }
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"mutation { issueUpdate(id: "ENG-2", input: {description: "vgl. ENG-1"}) { success } }"#,
+        )
+        .await,
+    );
+    let d = data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"{ issue(id: "ENG-1") { relations { relatedTo { id } }
+                 mentionedIn { identifier title source commentId } } }"#,
+        )
+        .await,
+    );
+    assert_eq!(d["issue"]["relations"]["relatedTo"], json!([]));
+    assert_eq!(
+        d["issue"]["mentionedIn"],
+        json!([{ "identifier": "ENG-2", "title": "Quelle", "source": "description", "commentId": null }])
+    );
+}

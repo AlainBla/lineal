@@ -2078,7 +2078,7 @@ sequenceDiagram
 4. Agent: `list_issues` mit `assignee: "me"`, `team: "ENG"`, `state: "started"` → Bobs laufende Issues, darunter `ENG-132`.
 5. Agent: `get_issue` `ENG-132` → Beschreibung, Relationen (`blockedBy DES-42`), Kommentare.
 6. Agent: `save_issue` ohne `id`: `team: "WEB"`, `title: "Fehlermeldung bei leerem Warenkorb fehlt"`, `description` (Markdown), `labels: ["Bug"]`, `priority: 2`, `relatedTo: ["ENG-132"]` → `WEB-58` (Bob ist Mitglied von `WEB`, daher keine Triage).
-7. Agent: `save_comment` mit `issueId: "ENG-132"`, `body: "Beim Testen gefunden: WEB-58"` → Kommentar erscheint in der Web-App mit Quelle „via MCP“; die Erwähnung legt zusätzlich eine `related`-Relation an, sofern noch keine besteht.
+7. Agent: `save_comment` mit `issueId: "ENG-132"`, `body: "Beim Testen gefunden: WEB-58"` → Kommentar erscheint in der Web-App mit Quelle „via MCP“; WEB-58 zeigt den Kommentar unter „Mentioned in“ (keine Relation).
 8. Agent: `save_issue` mit `id: "WEB-58"`, `state: "started"`, `assignee: "me"` → erster `started`-Status von `WEB` (Kategoriename als Referenz, [00 §2](00-konventionen.md#2-identifikatoren)).
 9. Bob sieht alle Änderungen live in der Web-App (Sync), mit sich selbst als Akteur und dem Hinweis „via MCP“. In Settings → Account → Security & access kann er die Autorisierung widerrufen.
 

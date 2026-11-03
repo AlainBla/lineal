@@ -807,17 +807,16 @@ impl App {
         if let ParentRef::Issue(issue_id) = parent
             && let Some(issue) = tx.issues().get(issue_id, false).await?
         {
-            Box::pin(super::issue::mentions::link_issue_mentions(
+            super::issue::mentions::record_issue_mentions(
                 &mut *tx,
                 &snap,
                 ctx,
-                self.ids.as_ref(),
                 now,
                 crate::ports::repos::issue::HistorySource::User,
                 &issue,
+                Some(comment.id),
                 &comment.body,
-                None,
-            ))
+            )
             .await?;
         }
         tx.outbox()
@@ -929,17 +928,16 @@ impl App {
         if let ParentRef::Issue(issue_id) = updated.parent
             && let Some(issue) = tx.issues().get(issue_id, false).await?
         {
-            Box::pin(super::issue::mentions::link_issue_mentions(
+            super::issue::mentions::record_issue_mentions(
                 &mut *tx,
                 &snap,
                 ctx,
-                self.ids.as_ref(),
                 self.clock.now(),
                 crate::ports::repos::issue::HistorySource::User,
                 &issue,
+                Some(updated.id),
                 &updated.body,
-                Some(&comment.body),
-            ))
+            )
             .await?;
         }
         tx.outbox()
@@ -993,6 +991,7 @@ impl App {
         tx.comments()
             .remove(comment.id, placeholder, self.clock.now())
             .await?;
+        tx.issues().delete_mentions_of_comment(comment.id).await?;
         tx.outbox()
             .push(NewEvent::from_ctx(
                 DomainEvent::CommentRemoved {

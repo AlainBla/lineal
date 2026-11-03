@@ -136,6 +136,19 @@ pub struct IssueRelations {
     pub duplicates: Vec<RelatedIssue>,
 }
 
+/// Rückverweis: ein Issue, das dieses Issue in Beschreibung oder Kommentar erwähnt.
+#[derive(SimpleObject)]
+pub struct IssueMention {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+    /// `description` oder `comment`.
+    pub source: String,
+    /// Der erwähnende Kommentar (nur bei `source = comment`).
+    pub comment_id: Option<String>,
+    pub created_at: String,
+}
+
 /// Ein Eintrag der Aktivitätshistorie.
 #[derive(SimpleObject)]
 pub struct IssueHistoryEntry {
@@ -209,6 +222,31 @@ impl IssueGql {
             duplicate_of: r.duplicate_of.map(Into::into),
             duplicates: list(r.duplicates),
         })
+    }
+
+    /// Rückverweise: sichtbare Issues, die dieses Issue erwähnen (legen keine Relation an).
+    async fn mentioned_in(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<IssueMention>> {
+        charge_detail_field(ctx)?;
+        let list = app(ctx)?
+            .issue_mentioned_in(request_ctx(ctx)?, &self.id)
+            .await
+            .map_err(gql_err)?;
+        Ok(list
+            .into_iter()
+            .map(|m| IssueMention {
+                id: m.issue.uuid.to_string(),
+                identifier: m.issue.identifier,
+                title: m.issue.title,
+                source: if m.comment_id.is_some() {
+                    "comment"
+                } else {
+                    "description"
+                }
+                .into(),
+                comment_id: m.comment_id.map(|c| c.to_string()),
+                created_at: m.created_at.to_rfc3339(),
+            })
+            .collect())
     }
 
     /// Anhänge und Links des Issues (Uploads mit frisch signierter Download-URL).

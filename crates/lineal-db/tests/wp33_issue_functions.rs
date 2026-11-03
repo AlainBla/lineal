@@ -336,115 +336,161 @@ async fn bulk_move_with_and_without_sub_issues(pool: PgPool) {
     assert!(c.view.previous_identifiers.contains(&child));
 }
 
+async fn set_description(app: &App, ctx: &RequestCtx, id: &str, text: &str) {
+    app.update_issue(
+        ctx,
+        UpdateIssueInput {
+            id: id.to_owned(),
+            description: Some(DescriptionEdit::Set(text.to_owned())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn mentioned_in(app: &App, ctx: &RequestCtx, id: &str) -> Vec<(String, bool)> {
+    app.issue_mentioned_in(ctx, id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.issue.identifier, m.comment_id.is_some()))
+        .collect()
+}
+
 #[sqlx::test(migrations = "./migrations")]
-async fn issue_mentions_create_related_relations_without_leaks(pool: PgPool) {
+async fn issue_mentions_create_backlinks_not_relations(pool: PgPool) {
     let (app, _) = setup(pool).await;
     let a = issue(&app, &alice(), "ENG", "Eins").await;
     let b = issue(&app, &alice(), "ENG", "Zwei").await;
-    let c = issue(&app, &alice(), "ENG", "Drei").await;
     let secret = issue(&app, &bob(), "DES", "Geheim").await;
-    app.update_issue(
+    set_description(
+        &app,
         &alice(),
-        UpdateIssueInput {
-            id: b.clone(),
-            description: Some(DescriptionEdit::Set(format!(
-                "Siehe {a} und {secret} sowie ENG-4711."
-            ))),
-            ..Default::default()
-        },
+        &b,
+        &format!("Siehe {a} und {secret} sowie ENG-4711."),
     )
-    .await
-    .unwrap();
-    let d = app.get_issue(&alice(), &a).await.unwrap();
-    assert_eq!(d.relations.related_to.len(), 1);
-    assert_eq!(d.relations.related_to[0].identifier, b);
-    let db = app.get_issue(&alice(), &b).await.unwrap();
-    assert_eq!(db.relations.related_to.len(), 1, "nur das sichtbare Issue");
-    // Bob sieht DES-1 weiterhin ohne Relation zu ENG-2.
+    .await;
+    // Keine Relation, weder auf dem erwähnten noch auf dem erwähnenden Issue.
+    let da = app.get_issue(&alice(), &a).await.unwrap();
+    assert!(da.relations.related_to.is_empty());
+    assert!(
+        app.get_issue(&alice(), &b)
+            .await
+            .unwrap()
+            .relations
+            .related_to
+            .is_empty()
+    );
+    // Rückverweis aus der Beschreibung.
+    assert_eq!(
+        mentioned_in(&app, &alice(), &a).await,
+        vec![(b.clone(), false)]
+    );
+    // Selbstreferenz erzeugt nichts.
+    set_description(&app, &alice(), &a, &format!("ich bin {a}")).await;
+    assert!(mentioned_in(&app, &alice(), &a).await.len() == 1);
+    // Code-Spans zählen nicht.
+    let c = issue(&app, &alice(), "ENG", "Drei").await;
+    set_description(&app, &alice(), &c, &format!("`{a}` und\n```\n{b}\n```\n")).await;
+    assert_eq!(
+        mentioned_in(&app, &alice(), &a).await,
+        vec![(b.clone(), false)]
+    );
+    // Entfernen der Erwähnung entfernt den Rückverweis.
+    set_description(&app, &alice(), &b, "nichts mehr").await;
+    assert!(mentioned_in(&app, &alice(), &a).await.is_empty());
+    // Bob sieht DES nicht in der anderen Richtung: ein Issue aus ENG, das DES erwähnt, ist
+    // für Bob unsichtbar.
+    set_description(&app, &alice(), &b, &format!("wieder {secret}")).await;
     let ds = app.get_issue(&bob(), &secret).await.unwrap();
     assert!(ds.relations.related_to.is_empty());
-    // Bestehende Relation wird nicht überschrieben.
-    app.update_issue(
-        &alice(),
-        UpdateIssueInput {
-            id: c.clone(),
-            relations: RelationChanges {
-                blocks: vec![a.clone()],
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn comment_mentions_are_backlinks_and_follow_edit_and_delete(pool: PgPool) {
+    let (app, _) = setup(pool).await;
+    let a = issue(&app, &alice(), "ENG", "Eins").await;
+    let d = issue(&app, &alice(), "ENG", "Vier").await;
+    let made = app
+        .create_comment(
+            &alice(),
+            CreateCommentInput {
+                parent: Some(ParentSpec::Issue(d.clone())),
+                body: format!("Doppelt zu {a}?"),
                 ..Default::default()
             },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    app.update_issue(
-        &alice(),
-        UpdateIssueInput {
-            id: c.clone(),
-            description: Some(DescriptionEdit::Set(format!("wie {a}"))),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let dc = app.get_issue(&alice(), &c).await.unwrap();
-    assert!(dc.relations.related_to.is_empty());
-    assert_eq!(dc.relations.blocks.len(), 1);
-    // Entfernen der Erwähnung entfernt die Relation nicht.
-    app.update_issue(
-        &alice(),
-        UpdateIssueInput {
-            id: b.clone(),
-            description: Some(DescriptionEdit::Set("nichts mehr".into())),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(
+        )
+        .await
+        .unwrap();
+    assert!(
         app.get_issue(&alice(), &a)
             .await
             .unwrap()
             .relations
             .related_to
-            .len(),
-        1
+            .is_empty()
     );
-    // Kommentare erzeugen ebenfalls Relationen.
-    let d = issue(&app, &alice(), "ENG", "Vier").await;
-    app.create_comment(
-        &alice(),
-        CreateCommentInput {
-            parent: Some(ParentSpec::Issue(d.clone())),
-            body: format!("Doppelt zu {c}?"),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let dd = app.get_issue(&alice(), &d).await.unwrap();
-    assert_eq!(dd.relations.related_to.len(), 1);
-    assert_eq!(dd.relations.related_to[0].identifier, c);
+    assert_eq!(
+        mentioned_in(&app, &alice(), &a).await,
+        vec![(d.clone(), true)]
+    );
+    let cid = made.view.comment.id.0.to_string();
+    app.update_comment(&alice(), &cid, "doch nicht")
+        .await
+        .unwrap();
+    assert!(mentioned_in(&app, &alice(), &a).await.is_empty());
+    app.update_comment(&alice(), &cid, &format!("wieder {a}"))
+        .await
+        .unwrap();
+    assert_eq!(mentioned_in(&app, &alice(), &a).await.len(), 1);
+    app.delete_comment(&alice(), &cid).await.unwrap();
+    assert!(mentioned_in(&app, &alice(), &a).await.is_empty());
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn comment_mention_links_issues_for_members_with_edit_right(pool: PgPool) {
+async fn backlinks_hide_sources_the_viewer_cannot_see_and_skip_imports(pool: PgPool) {
     let (app, _) = setup(pool).await;
-    let a = issue(&app, &alice(), "WEB", "Eins").await;
-    let b = issue(&app, &alice(), "WEB", "Zwei").await;
-    // Carol ist Gast mit Mitgliedschaft in WEB und darf dort bearbeiten: Relation entsteht.
+    let a = issue(&app, &alice(), "ENG", "Eins").await;
+    let secret = issue(&app, &bob(), "DES", "Geheim").await;
+    // Bob (sieht ENG) erwähnt ENG-Issue aus DES heraus: Alice sieht DES nicht.
     app.create_comment(
-        &ctx_for(SeedUser::Carol),
+        &ctx_for(SeedUser::Bob),
         CreateCommentInput {
-            parent: Some(ParentSpec::Issue(a.clone())),
-            body: format!("siehe {b}"),
+            parent: Some(ParentSpec::Issue(secret.clone())),
+            body: format!("siehe {a}"),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let d = app.get_issue(&alice(), &a).await.unwrap();
-    assert_eq!(d.relations.related_to.len(), 1);
+    assert!(mentioned_in(&app, &alice(), &a).await.is_empty());
+    assert_eq!(
+        mentioned_in(&app, &bob(), &a).await,
+        vec![(secret.clone(), true)]
+    );
+    // Import-Quelle: Texte verweisen auf das Quellsystem, es entstehen keine Rückverweise.
+    let imp = app
+        .create_issue(
+            &alice(),
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Importiert".into()),
+                description: Some(format!("alt: {a}")),
+                source: lineal_app::ports::repos::issue::HistorySource::Import,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .issue
+        .identifier;
+    assert!(
+        !mentioned_in(&app, &alice(), &a)
+            .await
+            .iter()
+            .any(|(i, _)| *i == imp)
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use lineal_domain::enums::{Priority, RelationType, SlaType, StateType};
 use lineal_domain::ids::{
-    CycleId, IssueId, IssueRelationId, LabelId, MilestoneId, OrgId, ProjectId, StateId, TeamId,
-    UserId,
+    CommentId, CycleId, IssueId, IssueRelationId, LabelId, MilestoneId, OrgId, ProjectId, StateId,
+    TeamId, UserId,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -370,6 +370,27 @@ pub trait IssueRepo: Send {
         unimplemented_repo()
     }
 
+    // --- Rückverweise (LIN-12) ---
+    /// Ersetzt die Erwähnungen einer Quelle (`comment` = `None`: Beschreibung von `source`)
+    /// durch genau `targets`.
+    async fn replace_mentions(
+        &mut self,
+        _source: IssueId,
+        _comment: Option<CommentId>,
+        _targets: &[IssueId],
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Entfernt alle Erwähnungen, die von diesem Kommentar ausgehen.
+    async fn delete_mentions_of_comment(&mut self, _comment: CommentId) -> AppResult<()> {
+        Ok(())
+    }
+    /// Alle Erwähnungen des Issues, älteste zuerst (ohne Sichtbarkeitsprüfung).
+    async fn mentions_of(&mut self, _target: IssueId) -> AppResult<Vec<IssueMentionRow>> {
+        unimplemented_repo()
+    }
+
     // --- Aliase (Teamwechsel) ---
     async fn insert_alias(
         &mut self,
@@ -467,4 +488,12 @@ pub trait IssueRepo: Send {
     ) -> AppResult<()> {
         unimplemented_repo()
     }
+}
+
+/// Eine gespeicherte Erwähnung eines Issues in einem anderen Issue oder Kommentar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueMentionRow {
+    pub source_issue_id: IssueId,
+    pub source_comment_id: Option<CommentId>,
+    pub created_at: DateTime<Utc>,
 }

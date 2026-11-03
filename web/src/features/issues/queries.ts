@@ -139,10 +139,10 @@ export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Iss
   return res.issue;
 }
 
-/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 5). */
+/** Nachladefelder der Detailansicht; je Request höchstens 10 solcher Felder (hier 6). */
 export type IssueExtras = Pick<
   Issue,
-  "children" | "relations" | "history" | "subscribed" | "attachments"
+  "children" | "relations" | "history" | "subscribed" | "attachments" | "mentionedIn"
 >;
 
 const RELATED = "id identifier title";
@@ -157,6 +157,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
     }
     history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
     attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
+    mentionedIn { id identifier title source commentId createdAt }
   }
 }`;
 

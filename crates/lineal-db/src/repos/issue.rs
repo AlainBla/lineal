@@ -6,15 +6,15 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::IssueRepo;
 use lineal_app::ports::repos::issue::{
-    CycleLookup, HistoryEntry, HistorySource, Issue, IssueExtras, IssueListFilter, IssueShare,
-    MilestoneLookup, ProjectLookup, Relation,
+    CycleLookup, HistoryEntry, HistorySource, Issue, IssueExtras, IssueListFilter, IssueMentionRow,
+    IssueShare, MilestoneLookup, ProjectLookup, Relation,
 };
 use lineal_app::ports::repos::user::{OrderBy, Page, PageCursor, PageRequest};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::enums::{Priority, RelationType, SlaType, StateType};
 use lineal_domain::ids::{
-    CycleId, IssueId, IssueRelationId, LabelId, MilestoneId, OrgId, ProjectId, StateId, TeamId,
-    UserId,
+    CommentId, CycleId, IssueId, IssueRelationId, LabelId, MilestoneId, OrgId, ProjectId, StateId,
+    TeamId, UserId,
 };
 use sqlx::{Postgres, QueryBuilder};
 use std::collections::HashMap;
@@ -1066,6 +1066,75 @@ impl IssueRepo for PgTx {
             .await
             .map_err(db_err)?;
         Ok(res.rows_affected() > 0)
+    }
+
+    async fn replace_mentions(
+        &mut self,
+        source: IssueId,
+        comment: Option<CommentId>,
+        targets: &[IssueId],
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "DELETE FROM issue_mention WHERE organization_id = $1 AND source_issue_id = $2 \
+             AND source_comment_id IS NOT DISTINCT FROM $3::uuid",
+        )
+        .bind(self.org.0)
+        .bind(source.0)
+        .bind(comment.map(|c| c.0))
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<Uuid> = targets.iter().map(|t| t.0).collect();
+        sqlx::query(
+            "INSERT INTO issue_mention (organization_id, source_issue_id, source_comment_id, \
+             target_issue_id, created_at) SELECT $1, $2, $3::uuid, t, $5 FROM unnest($4::uuid[]) AS t \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(self.org.0)
+        .bind(source.0)
+        .bind(comment.map(|c| c.0))
+        .bind(&ids)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn delete_mentions_of_comment(&mut self, comment: CommentId) -> AppResult<()> {
+        sqlx::query(
+            "DELETE FROM issue_mention WHERE organization_id = $1 AND source_comment_id = $2",
+        )
+        .bind(self.org.0)
+        .bind(comment.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn mentions_of(&mut self, target: IssueId) -> AppResult<Vec<IssueMentionRow>> {
+        let rows: Vec<(Uuid, Option<Uuid>, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT source_issue_id, source_comment_id, created_at FROM issue_mention \
+             WHERE organization_id = $1 AND target_issue_id = $2 ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(target.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(s, c, created_at)| IssueMentionRow {
+                source_issue_id: IssueId(s),
+                source_comment_id: c.map(CommentId),
+                created_at,
+            })
+            .collect())
     }
 
     async fn insert_alias(

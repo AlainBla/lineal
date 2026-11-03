@@ -1044,6 +1044,10 @@ type Issue {
 	"""
 	relations: IssueRelations!
 	"""
+	Rückverweise: sichtbare Issues, die dieses Issue erwähnen (legen keine Relation an).
+	"""
+	mentionedIn: [IssueMention!]!
+	"""
 	Anhänge und Links des Issues (Uploads mit frisch signierter Download-URL).
 	"""
 	attachments: [Attachment!]!
@@ -1221,6 +1225,24 @@ input IssueLabelUpdateInput {
 	parentId: String
 	isGroup: Boolean
 	groupType: String
+}
+
+"""
+Rückverweis: ein Issue, das dieses Issue in Beschreibung oder Kommentar erwähnt.
+"""
+type IssueMention {
+	id: String!
+	identifier: String!
+	title: String!
+	"""
+	`description` oder `comment`.
+	"""
+	source: String!
+	"""
+	Der erwähnende Kommentar (nur bei `source = comment`).
+	"""
+	commentId: String
+	createdAt: String!
 }
 
 type IssuePayload {
