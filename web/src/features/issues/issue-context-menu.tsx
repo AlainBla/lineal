@@ -24,6 +24,7 @@ import {
   UserCheck,
   FolderKanban,
   CornerRightUp,
+  Link2,
 } from "lucide-react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
@@ -50,7 +51,8 @@ import { closeIssueMenu, useIssueMenuRequest, type IssueMenuRequest } from "./co
 import { useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { copyText, issueUrl, useIssueOps } from "./issue-extra-shortcuts";
-import { branchName, duePresets } from "./model";
+import { branchName, duePresets, type RelationChoice } from "./model";
+import { RelationDialog } from "./relation-dialog";
 import { IssuePickerHost, type PickerKind, type PickerRequest } from "./picker-host";
 
 function MenuItem({
@@ -120,9 +122,10 @@ interface MenuProps {
   after: (then?: () => void, defer?: boolean) => void;
   onPicker: (kind: PickerKind) => void;
   onBulk: (kind: BulkKind) => void;
+  onRelation: (choice: RelationChoice) => void;
 }
 
-function IssueMenu({ req, actions, ops, after, onPicker, onBulk }: MenuProps) {
+function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: MenuProps) {
   const { issue, targets } = req;
   const multi = targets.length > 1;
   const meta = useTeamMeta(issue.teamId);
@@ -269,6 +272,21 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk }: MenuProps) {
         )}
 
         <DropdownMenuSeparator />
+        <SubmenuItem icon={<Link2 />} label="Relations">
+          <MenuItem label="Blocks…" onSelect={() => after(() => onRelation("blocking"), true)} />
+          <MenuItem
+            label="Blocked by…"
+            onSelect={() => after(() => onRelation("blocked-by"), true)}
+          />
+          <MenuItem label="Related to…" onSelect={() => after(() => onRelation("related"), true)} />
+          {!multi && (
+            <MenuItem
+              label="Mark as duplicate of…"
+              onSelect={() => after(() => onRelation("duplicate"), true)}
+            />
+          )}
+        </SubmenuItem>
+
         <SubmenuItem icon={<Copy />} label="Copy">
           <MenuItem
             label="ID"
@@ -342,6 +360,9 @@ export function IssueContextMenuHost() {
     issues: Issue[];
     clear?: () => void;
   } | null>(null);
+  const [relation, setRelation] = useState<{ choice: RelationChoice; issues: Issue[] } | null>(
+    null,
+  );
   const closePicker = useCallback(() => setPicker(null), []);
   const noop = useCallback(() => undefined, []);
 
@@ -379,6 +400,7 @@ export function IssueContextMenuHost() {
           ops={ops}
           after={after}
           onPicker={(kind) => setPicker({ kind, issue: req.issue })}
+          onRelation={(choice) => setRelation({ choice, issues: req.targets })}
           onBulk={(kind) =>
             setBulk({
               kind,
@@ -389,6 +411,14 @@ export function IssueContextMenuHost() {
         />
       )}
       <IssuePickerHost request={picker} onClose={closePicker} />
+      {relation && (
+        <RelationDialog
+          issues={relation.issues}
+          choice={relation.choice}
+          onChoice={(choice) => setRelation((r) => r && { ...r, choice })}
+          onClose={() => setRelation(null)}
+        />
+      )}
       <BulkActions
         hideBar
         issues={bulk?.issues ?? []}
