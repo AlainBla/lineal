@@ -26,13 +26,10 @@ pub struct DetailBudget(std::sync::atomic::AtomicU32);
 impl DetailBudget {
     /// Verbraucht einen Aufruf; `false`, wenn das Budget erschöpft ist (atomar).
     pub fn take(&self) -> bool {
-        self.0
-            .fetch_update(
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-                |n| (n < DETAIL_FIELD_LIMIT).then_some(n + 1),
-            )
-            .is_ok()
+        // Zählt auch abgelehnte Aufrufe mit; ein Überlauf ist bei der Größenbegrenzung der
+        // Anfragen ausgeschlossen. (Ersetzt `fetch_update`, das neuere Toolchains als veraltet
+        // melden, ohne `try_update` vorauszusetzen.)
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < DETAIL_FIELD_LIMIT
     }
 }
 
