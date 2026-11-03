@@ -51,6 +51,8 @@ import { Hint } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 
+import { CollapsibleSection } from "./sidebar-section";
+
 export const SIDEBAR_WIDTH = 240;
 
 function Badge({ children, label }: { children: ReactNode; label: string }) {
@@ -388,71 +390,72 @@ export function Sidebar({
             </li>
           </ul>
 
-          <SectionLabel>Workspace</SectionLabel>
-          <ul className="flex flex-col gap-px">
-            {!guest && (
+          <CollapsibleSection id="workspace" label="Workspace">
+            <ul className="flex flex-col gap-px">
+              {!guest && (
+                <li>
+                  <NavLink to={p.overview}>
+                    <LayoutDashboard />
+                    Overview
+                  </NavLink>
+                </li>
+              )}
               <li>
-                <NavLink to={p.overview}>
-                  <LayoutDashboard />
-                  Overview
+                <NavLink to={p.issues}>
+                  <Layers />
+                  Issues
                 </NavLink>
               </li>
-            )}
-            <li>
-              <NavLink to={p.issues}>
-                <Layers />
-                Issues
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to={p.projects}>
-                <Box />
-                Projects
-              </NavLink>
-            </li>
-            {!guest && (
               <li>
-                <NavLink to={p.initiatives}>
-                  <Target />
-                  Initiatives
+                <NavLink to={p.projects}>
+                  <Box />
+                  Projects
                 </NavLink>
               </li>
-            )}
-            <li>
-              <NavLink to={p.roadmap}>
-                <GanttChart />
-                Roadmap
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to={p.views}>
-                <Layers />
-                Views
-              </NavLink>
-            </li>
-            {!guest && (
+              {!guest && (
+                <li>
+                  <NavLink to={p.initiatives}>
+                    <Target />
+                    Initiatives
+                  </NavLink>
+                </li>
+              )}
               <li>
-                <NavLink to={p.workload}>
-                  <Gauge />
-                  Workload
+                <NavLink to={p.roadmap}>
+                  <GanttChart />
+                  Roadmap
                 </NavLink>
               </li>
-            )}
-            {!guest && (
               <li>
-                <NavLink to={p.cycles}>
-                  <RefreshCw />
-                  Cycles
+                <NavLink to={p.views}>
+                  <Layers />
+                  Views
                 </NavLink>
               </li>
-            )}
-            <li>
-              <NavLink to={p.trash}>
-                <Trash2 />
-                Recently deleted
-              </NavLink>
-            </li>
-          </ul>
+              {!guest && (
+                <li>
+                  <NavLink to={p.workload}>
+                    <Gauge />
+                    Workload
+                  </NavLink>
+                </li>
+              )}
+              {!guest && (
+                <li>
+                  <NavLink to={p.cycles}>
+                    <RefreshCw />
+                    Cycles
+                  </NavLink>
+                </li>
+              )}
+              <li>
+                <NavLink to={p.trash}>
+                  <Trash2 />
+                  Recently deleted
+                </NavLink>
+              </li>
+            </ul>
+          </CollapsibleSection>
 
           <FavoritesSection ws={ws} />
 

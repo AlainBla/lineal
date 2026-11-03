@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { useSession } from "@/app/auth";
 import { teamPaths } from "@/app/nav";
+import { CollapsibleSection } from "@/app/sidebar-section";
 import { useIssue } from "@/features/issues/hooks";
 import type { Favorite } from "@/gql/graphql";
 
@@ -221,10 +222,7 @@ export function FavoritesSection({ ws }: { ws: string }) {
   };
 
   return (
-    <section aria-label="Favorites">
-      <h2 className="px-2 pt-4 pb-1 text-xs font-medium text-subtle-foreground select-none">
-        Favorites
-      </h2>
+    <CollapsibleSection id="favorites" label="Favorites">
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -255,6 +253,6 @@ export function FavoritesSection({ ws }: { ws: string }) {
           </ul>
         </SortableContext>
       </DndContext>
-    </section>
+    </CollapsibleSection>
   );
 }
