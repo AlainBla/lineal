@@ -713,7 +713,7 @@ Anzeigeoptionen bestimmen, **wie** die Treffermenge einer Liste dargestellt wird
 | Ordering | `ordering` | Issues: `manual`, `title`, `status`, `priority`, `assignee`, `estimate`, `updatedAt`, `createdAt`, `dueDate`, `linkCount`, `timeInStatus`, `importance`; Projekte: `manual`, `name`, `status`, `priority`, `updatedAt`, `createdAt`, `healthUpdatedAt`, `startDate`, `targetDate` | Board: `manual`; List: `priority`; My Issues: `importance` | `importance` nur My Issues |
 | Direction | `orderDirection` | `asc`, `desc` | je Feld: `priority`/`status` aufsteigend nach Wichtigkeit, Datumsfelder `desc`, `title` `asc` | nicht bei `manual` |
 | Order completed by recency | `orderCompletedByRecency` | Boolean | `false` | erledigte Issues innerhalb ihrer Gruppe nach `completedAt` absteigend |
-| Completed issues | `showCompletedIssues` | `all`, `pastDay`, `pastWeek`, `pastMonth`, `currentCycle`, `none` | „All issues“: `all`; My Issues: `pastDay`; Cycle-Views: `all` | nur Views, deren Filter erledigte Issues zulässt |
+| Completed issues | `showCompletedIssues` | `all`, `pastDay`, `pastWeek`, `pastTwoWeeks`, `pastMonth`, `currentCycle`, `none` | „All issues“: `all`; My Issues: `pastDay`; Cycle-Views: `all` | nur Views, deren Filter erledigte Issues zulässt |
 | Show sub-issues | `showSubIssues` | Boolean | `true` | Issue-Listen |
 | Nested sub-issues | `nestedSubIssues` | `showAll`, `showMatching`, `hide` | `hide` | Projekt-Issue-Views |
 | Show empty groups (List) / Show empty columns, Show empty rows (Board) | `showEmptyGroups`, `showEmptySubGroups` | Boolean | `false` | List, Board |
@@ -744,7 +744,7 @@ Einschränkungen: **Triage** und **Inbox** erlauben nur Ordering (kein Grouping,
     "ordering": { "type": "string" },
     "orderDirection": { "enum": ["asc", "desc"] },
     "orderCompletedByRecency": { "type": "boolean" },
-    "showCompletedIssues": { "enum": ["all", "pastDay", "pastWeek", "pastMonth", "currentCycle", "none"] },
+    "showCompletedIssues": { "enum": ["all", "pastDay", "pastWeek", "pastTwoWeeks", "pastMonth", "currentCycle", "none"] },
     "showSubIssues": { "type": "boolean" },
     "nestedSubIssues": { "enum": ["showAll", "showMatching", "hide"] },
     "showEmptyGroups": { "type": "boolean" },
@@ -875,7 +875,7 @@ Manuelles Umsortieren per Drag & Drop oder Tastatur (`Alt ↑`/`Alt ↓`, `Alt �
 | Wert | Bedingung für geschlossene Issues |
 |---|---|
 | `all` | alle |
-| `pastDay` / `pastWeek` / `pastMonth` | `coalesce(completedAt, canceledAt) >= now − P1D / P1W / P1M` |
+| `pastDay` / `pastWeek` / `pastTwoWeeks` / `pastMonth` | `coalesce(completedAt, canceledAt) >= now − P1D / P1W / P2W / P1M` |
 | `currentCycle` | Issue ist im aktiven Cycle seines Teams |
 | `none` | keine |
 

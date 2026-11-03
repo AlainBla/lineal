@@ -379,3 +379,47 @@ async fn favorites_reorder_subscriptions_and_owner_transfer(pool: sqlx::PgPool) 
         .unwrap();
     assert_eq!(bobs, vec![true], "owner keeps subscription");
 }
+
+/// Regression LIN-2: Das Frontend speichert die Anzeigeoptionen der Team-Seiten Active/Backlog/All
+/// mit genau diesen Variablen (`viewType` + Team-UUID); sie müssen dauerhaft ankommen. Früher
+/// sandte es `activeIssues`/`backlog`/`allIssues`, die der Server als unbekannte Ansicht abweist.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn team_view_preferences_persist_per_user(pool: sqlx::PgPool) {
+    let (app, _pool) = setup(pool).await;
+    let d = SeedData::acme();
+    let alice = ctx_for(SeedUser::Alice);
+    let bob = ctx_for(SeedUser::Bob);
+    let team = d.eng.0.to_string();
+    let update = "mutation ViewPrefsUpdate($customViewId: String, $viewType: String, $teamId: String, $projectId: String, $preferences: JSON!) {
+        viewPreferencesUpdate(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId, preferences: $preferences) { hasPersonal }
+    }";
+    let read = "query ViewPrefs($customViewId: String, $viewType: String, $teamId: String, $projectId: String) {
+        viewPreferences(customViewId: $customViewId, viewType: $viewType, teamId: $teamId, projectId: $projectId) { values hasPersonal hasDefault }
+    }";
+    for view_type in ["teamActive", "teamBacklog", "teamAll"] {
+        let vars = json!({"viewType": view_type, "teamId": team});
+        let mut with_prefs = vars.clone();
+        with_prefs["preferences"] = json!({"showCompletedIssues": "pastTwoWeeks"});
+        let r = data(run(&app, alice.clone(), update, with_prefs).await);
+        assert_eq!(r["viewPreferencesUpdate"]["hasPersonal"], true);
+        let r = data(run(&app, alice.clone(), read, vars.clone()).await);
+        assert_eq!(r["viewPreferences"]["hasPersonal"], true, "{view_type}");
+        assert_eq!(
+            r["viewPreferences"]["values"]["showCompletedIssues"], "pastTwoWeeks",
+            "{view_type}"
+        );
+        // Pro Nutzer: Bob sieht weiter den Standard.
+        let r = data(run(&app, bob.clone(), read, vars).await);
+        assert_eq!(r["viewPreferences"]["hasPersonal"], false);
+        assert_eq!(r["viewPreferences"]["values"]["showCompletedIssues"], "all");
+    }
+    // Die alten Namen sind keine Ansichtstypen.
+    let res = run(
+        &app,
+        alice,
+        update,
+        json!({"viewType": "allIssues", "teamId": team, "preferences": {"grouping": "priority"}}),
+    )
+    .await;
+    assert_eq!(code(&res), "invalid_request");
+}

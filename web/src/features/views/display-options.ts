@@ -25,7 +25,7 @@ export type Ordering =
   | "linkCount"
   | "timeInStatus"
   | "manual";
-export type CompletedWindow = "all" | "pastDay" | "pastWeek" | "pastMonth" | "none";
+export type CompletedWindow = "all" | "pastDay" | "pastWeek" | "pastTwoWeeks" | "pastMonth" | "none";
 export type NestedSubIssues = "showAll" | "showMatching" | "hide";
 
 /** Anzeige-Eigenschaften der Issue-Zeile (docs/05 §2.1); Schlüssel wie am Server. */
@@ -110,6 +110,7 @@ export const COMPLETED_WINDOWS: CompletedWindow[] = [
   "all",
   "pastDay",
   "pastWeek",
+  "pastTwoWeeks",
   "pastMonth",
   "none",
 ];
@@ -163,6 +164,7 @@ const WINDOW_MS: Record<CompletedWindow, number> = {
   none: 0,
   pastDay: 24 * 3600_000,
   pastWeek: 7 * 24 * 3600_000,
+  pastTwoWeeks: 14 * 24 * 3600_000,
   pastMonth: 30 * 24 * 3600_000,
 };
 

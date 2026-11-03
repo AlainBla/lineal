@@ -15478,7 +15478,7 @@ function compileVirtual(alias, key, v, ctx):
 <tr>
 <td>Completed issues</td>
 <td><code>showCompletedIssues</code></td>
-<td><code>all</code>, <code>pastDay</code>, <code>pastWeek</code>, <code>pastMonth</code>, <code>currentCycle</code>, <code>none</code></td>
+<td><code>all</code>, <code>pastDay</code>, <code>pastWeek</code>, <code>pastTwoWeeks</code>, <code>pastMonth</code>, <code>currentCycle</code>, <code>none</code></td>
 <td>„All issues“: <code>all</code>; My Issues: <code>pastDay</code>; Cycle-Views: <code>all</code></td>
 <td>nur Views, deren Filter erledigte Issues zulässt</td>
 </tr>
@@ -15564,7 +15564,7 @@ function compileVirtual(alias, key, v, ctx):
     &quot;ordering&quot;: { &quot;type&quot;: &quot;string&quot; },
     &quot;orderDirection&quot;: { &quot;enum&quot;: [&quot;asc&quot;, &quot;desc&quot;] },
     &quot;orderCompletedByRecency&quot;: { &quot;type&quot;: &quot;boolean&quot; },
-    &quot;showCompletedIssues&quot;: { &quot;enum&quot;: [&quot;all&quot;, &quot;pastDay&quot;, &quot;pastWeek&quot;, &quot;pastMonth&quot;, &quot;currentCycle&quot;, &quot;none&quot;] },
+    &quot;showCompletedIssues&quot;: { &quot;enum&quot;: [&quot;all&quot;, &quot;pastDay&quot;, &quot;pastWeek&quot;, &quot;pastTwoWeeks&quot;, &quot;pastMonth&quot;, &quot;currentCycle&quot;, &quot;none&quot;] },
     &quot;showSubIssues&quot;: { &quot;type&quot;: &quot;boolean&quot; },
     &quot;nestedSubIssues&quot;: { &quot;enum&quot;: [&quot;showAll&quot;, &quot;showMatching&quot;, &quot;hide&quot;] },
     &quot;showEmptyGroups&quot;: { &quot;type&quot;: &quot;boolean&quot; },
@@ -15834,7 +15834,7 @@ function compileVirtual(alias, key, v, ctx):
 <td>alle</td>
 </tr>
 <tr>
-<td><code>pastDay</code> / <code>pastWeek</code> / <code>pastMonth</code></td>
+<td><code>pastDay</code> / <code>pastWeek</code> / <code>pastTwoWeeks</code> / <code>pastMonth</code></td>
 <td><code>coalesce(completedAt, canceledAt) &gt;= now − P1D / P1W / P1M</code></td>
 </tr>
 <tr>
@@ -28717,7 +28717,7 @@ type Query {
   previewTeamNesting(teamId: String!, parentId: String!): TeamNestingPreview!
 }
 
-enum CompletedIssuesFilter { all pastDay pastWeek pastMonth currentCycle none }
+enum CompletedIssuesFilter { all pastDay pastWeek pastTwoWeeks pastMonth currentCycle none }
 
 &quot;Knoten der *SearchConnection: Entität plus Trefferausschnitte (05 §5.4).&quot;
 type IssueSearchResult { issue: Issue!  highlights: [SearchHighlight!]! }

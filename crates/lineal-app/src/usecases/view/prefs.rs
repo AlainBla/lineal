@@ -230,7 +230,15 @@ pub fn validate_patch(
             "orderDirection" => matches!(v.as_str(), Some("asc" | "desc")),
             "showCompletedIssues" => matches!(
                 v.as_str(),
-                Some("all" | "pastDay" | "pastWeek" | "pastMonth" | "currentCycle" | "none")
+                Some(
+                    "all"
+                        | "pastDay"
+                        | "pastWeek"
+                        | "pastTwoWeeks"
+                        | "pastMonth"
+                        | "currentCycle"
+                        | "none"
+                )
             ),
             "nestedSubIssues" => matches!(v.as_str(), Some("showAll" | "showMatching" | "hide")),
             "showClosedProjects" => matches!(
@@ -360,6 +368,32 @@ mod tests {
         // Projekt-Gruppierungen gelten nicht für Issues.
         assert!(!ok(json!({"grouping": "health"}), Kind::Issues, None));
         assert!(ok(json!({"grouping": "health"}), Kind::Projects, None));
+    }
+
+    #[test]
+    fn completed_issues_window_accepts_past_two_weeks() {
+        for v in [
+            "all",
+            "pastDay",
+            "pastWeek",
+            "pastTwoWeeks",
+            "pastMonth",
+            "currentCycle",
+            "none",
+        ] {
+            assert!(
+                validate_patch(&json!({"showCompletedIssues": v}), Kind::Issues, None).is_ok(),
+                "{v}"
+            );
+        }
+        assert!(
+            validate_patch(
+                &json!({"showCompletedIssues": "pastYear"}),
+                Kind::Issues,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]

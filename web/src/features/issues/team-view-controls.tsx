@@ -29,9 +29,11 @@ import { useFilterSources } from "@/features/views/use-filter-sources";
 import type { TeamView } from "./model";
 
 const VIEW_TYPE: Record<TeamView, string> = {
-  active: "activeIssues",
-  backlog: "backlog",
-  all: "allIssues",
+  // Müssen den kanonischen Ansichtstypen des Servers entsprechen (`VIEW_TYPES` in prefs.rs);
+  // andere Namen lehnt `viewPreferences(Update)` mit „unknown view type“ ab.
+  active: "teamActive",
+  backlog: "teamBacklog",
+  all: "teamAll",
 };
 
 export interface TeamViewControlsState {

@@ -4,6 +4,8 @@ import { makeIssue } from "@/features/issues/test-fixtures";
 
 import {
   applySubGrouping,
+  applyVisibility,
+  COMPLETED_WINDOWS,
   DEFAULT_DISPLAY,
   flatIssues,
   groupIssues,
@@ -127,5 +129,37 @@ describe("Neue Filterkategorien (docs/05 §1.5)", () => {
     ).toEqual({
       or: [{ hasBlockedByRelations: { eq: true } }, { hasBlockingRelations: { eq: true } }],
     });
+  });
+});
+
+describe("Completed issues: Past 2 weeks", () => {
+  const now = Date.parse("2026-03-31T12:00:00Z");
+  const done = (id: string, completedAt: string) =>
+    makeIssue({ id, identifier: id, stateId: "s-done", stateType: "completed", completedAt });
+
+  it("steht zwischen Past week und Past month und wird gespeichert/gelesen", () => {
+    expect(COMPLETED_WINDOWS.indexOf("pastTwoWeeks")).toBe(
+      COMPLETED_WINDOWS.indexOf("pastWeek") + 1,
+    );
+    expect(COMPLETED_WINDOWS.indexOf("pastMonth")).toBe(
+      COMPLETED_WINDOWS.indexOf("pastTwoWeeks") + 1,
+    );
+    expect(mergeDisplay({ showCompletedIssues: "pastTwoWeeks" }).showCompletedIssues).toBe(
+      "pastTwoWeeks",
+    );
+  });
+
+  it("blendet erledigte Issues älter als 14 Tage aus", () => {
+    const issues = [
+      done("d10", "2026-03-21T12:00:00Z"),
+      done("d13", "2026-03-18T12:00:00Z"),
+      done("d15", "2026-03-16T12:00:00Z"),
+    ];
+    const { visible } = applyVisibility(
+      issues,
+      { ...DEFAULT_DISPLAY, showCompletedIssues: "pastTwoWeeks" },
+      now,
+    );
+    expect(visible.map((i) => i.id)).toEqual(["d10", "d13"]);
   });
 });

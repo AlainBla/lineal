@@ -85,7 +85,7 @@ describe("Team-Seiten: Filterleiste und Display options (F.18)", () => {
     expect(within(list).getByRole("region", { name: "No priority" })).toBeInTheDocument();
     await waitFor(() => expect(gql.of("ViewPrefsUpdate")).toHaveLength(1));
     expect(gql.of("ViewPrefsUpdate")[0]!.variables).toMatchObject({
-      viewType: "allIssues",
+      viewType: "teamAll",
       teamId: TEAM_META.team.id,
       preferences: { grouping: "priority" },
     });
@@ -97,6 +97,23 @@ describe("Team-Seiten: Filterleiste und Display options (F.18)", () => {
     await waitFor(() => expect(screen.queryByText("Zweites")).toBeNull());
     expect(screen.getByText(/1 issues hidden by display options/)).toBeInTheDocument();
   });
+
+  it.each([
+    ["active", "teamActive"],
+    ["backlog", "teamBacklog"],
+    ["all", "teamAll"],
+  ] as const)(
+    "LIN-2: Anzeigeoptionen der Ansicht %s werden unter dem Servertyp %s gelesen",
+    async (view, viewType) => {
+      const gql = mockGraphql(base);
+      await renderWithApp(<TeamIssuesPage ws="acme" teamKey="ENG" view={view} />, newClient());
+      await waitFor(() => expect(gql.of("ViewPrefs").length).toBeGreaterThan(0));
+      expect(gql.of("ViewPrefs")[0]!.variables).toMatchObject({
+        viewType,
+        teamId: TEAM_META.team.id,
+      });
+    },
+  );
 
   it("Standarddarstellung bleibt: Gruppen nach Status, ohne Filter aus dem Team-Cache", async () => {
     const gql = mockGraphql(base);

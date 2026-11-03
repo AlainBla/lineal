@@ -41,6 +41,7 @@ const LABEL: Record<string, string> = {
   all: "All",
   pastDay: "Past day",
   pastWeek: "Past week",
+  pastTwoWeeks: "Past 2 weeks",
   pastMonth: "Past month",
   showAll: "Show all",
   showMatching: "Show matching",

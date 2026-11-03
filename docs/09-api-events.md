@@ -159,7 +159,7 @@ type Query {
   previewTeamNesting(teamId: String!, parentId: String!): TeamNestingPreview!
 }
 
-enum CompletedIssuesFilter { all pastDay pastWeek pastMonth currentCycle none }
+enum CompletedIssuesFilter { all pastDay pastWeek pastTwoWeeks pastMonth currentCycle none }
 
 "Knoten der *SearchConnection: Entität plus Trefferausschnitte (05 §5.4)."
 type IssueSearchResult { issue: Issue!  highlights: [SearchHighlight!]! }
