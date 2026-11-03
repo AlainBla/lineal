@@ -3,8 +3,10 @@
  * Alle Zugriffe der Komponenten laufen über diese Datei (WP15 ersetzt die Datenquellen dahinter).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { ISSUE_FIELDS, type IssueList } from "@/features/issues/queries";
+import { errorMessage, showToast } from "@/features/issues/toast-store";
 import type {
   CustomView,
   CustomViewConnection,
@@ -202,9 +204,34 @@ export interface PrefTarget {
   projectId?: string;
 }
 
+/** Meldet einen fehlgeschlagenen Zugriff auf Anzeigeoptionen: Konsole plus Toast (Servermeldung als Text). */
+function reportPrefsError(title: string, err: unknown): void {
+  console.error(title, err);
+  showToast({ message: `${title}: ${errorMessage(err)}`, tone: "error" });
+}
+
+/** Ziele, für die der Ladefehler schon gemeldet wurde (ein Toast pro Ziel, bis wieder erfolgreich geladen wurde). */
+const loadErrorReported = new Set<string>();
+
 export function usePreferences(t: PrefTarget | null) {
+  const targetKey = JSON.stringify(t);
+  const query = usePreferencesQuery(t, targetKey);
+  const { isError, error } = query;
+  useEffect(() => {
+    if (!isError) {
+      loadErrorReported.delete(targetKey);
+      return;
+    }
+    if (loadErrorReported.has(targetKey)) return;
+    loadErrorReported.add(targetKey);
+    reportPrefsError("Display options could not be loaded, using defaults", error);
+  }, [isError, error, targetKey]);
+  return query;
+}
+
+function usePreferencesQuery(t: PrefTarget | null, targetKey: string) {
   return useQuery({
-    queryKey: viewKeys.prefs(JSON.stringify(t)),
+    queryKey: viewKeys.prefs(targetKey),
     enabled: !!t,
     queryFn: async ({ signal }) =>
       (
@@ -243,7 +270,10 @@ export function useUpdatePreferences(t: PrefTarget | null) {
       }
       return { prev };
     },
-    onError: (_e, _p, ctx) => ctx?.prev && qc.setQueryData(key, ctx.prev),
+    onError: (e, _p, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+      reportPrefsError("Display options could not be saved", e);
+    },
     onSettled: () => void qc.invalidateQueries({ queryKey: key }),
   });
 }
@@ -259,6 +289,7 @@ export function useResetPreferences(t: PrefTarget | null) {
         { ...t },
       ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["views", "prefs"] }),
+    onError: (e) => reportPrefsError("Display options could not be reset", e),
   });
 }
 
@@ -274,6 +305,7 @@ export function useSetDefaultPreferences(t: PrefTarget | null) {
         { ...t },
       ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["views", "prefs"] }),
+    onError: (e) => reportPrefsError("Display options could not be set as default", e),
   });
 }
 
