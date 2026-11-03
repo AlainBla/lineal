@@ -1,11 +1,11 @@
-/** Hell/dunkel-Umschaltung. Dunkel ist der Default; `system` folgt `prefers-color-scheme`. */
+/** Hell/dunkel-Umschaltung. `system` ist der Default (ohne gespeicherte Wahl); es folgt `prefers-color-scheme`. */
 import { useSyncExternalStore } from "react";
 
 export type ThemePreference = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
 
 export const THEME_STORAGE_KEY = "lineal-theme";
-export const DEFAULT_THEME: ThemePreference = "dark";
+export const DEFAULT_THEME: ThemePreference = "system";
 
 export function isThemePreference(v: unknown): v is ThemePreference {
   return v === "dark" || v === "light" || v === "system";

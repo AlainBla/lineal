@@ -397,7 +397,7 @@ describe("AccountAppearancePage", () => {
       "/acme/settings/account/appearance",
     );
     const user = userEvent.setup();
-    expect(screen.getByLabelText(/^Dark/)).toBeChecked();
+    expect(screen.getByLabelText(/^System/)).toBeChecked();
     await user.click(screen.getByLabelText(/^Light/));
     expect(getTheme()).toBe("light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);

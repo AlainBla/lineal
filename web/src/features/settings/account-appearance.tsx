@@ -7,8 +7,8 @@ import { Section, SettingsShell } from "./ui";
 
 const OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string; hint: string }> = [
   { value: "light", label: "Light", hint: "Bright background." },
-  { value: "dark", label: "Dark", hint: "Dark background (default)." },
-  { value: "system", label: "System", hint: "Follow the setting of your device." },
+  { value: "dark", label: "Dark", hint: "Dark background." },
+  { value: "system", label: "System", hint: "Follow the setting of your device (default)." },
 ];
 
 export function AccountAppearancePage({ ws }: { ws: string }) {
