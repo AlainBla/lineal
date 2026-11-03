@@ -30,6 +30,7 @@ import { useSelectAll } from "./use-select-all";
 import { GroupedIssueList, TeamViewControls, useTeamViewControls } from "./team-view-controls";
 import { BoardSkeleton, EmptyState, ErrorState, isNotFound, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
+import { useRememberedFocus } from "./use-remembered-focus";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
 
 type Layout = "list" | "board";
@@ -73,7 +74,7 @@ export function TeamIssuesPage({
   const issues = controls.active ? filteredIssues : baseIssues;
   const actions = useIssueActions();
   const [layout, setLayoutState] = useState<Layout>(() => readLayout(teamKey, view));
-  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useRememberedFocus();
   const [request, setRequest] = useState<PickerRequest | null>(null);
   const [bulkRequest, setBulkRequest] = useState<BulkKind | null>(null);
 

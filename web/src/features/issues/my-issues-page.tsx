@@ -21,6 +21,7 @@ import { filterAssigned, groupByStateType, STATE_TYPE_LABEL, type BoardColumn } 
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { EmptyState, ErrorState, ListSkeleton } from "./states";
 import { useFocusNav } from "./use-focus-nav";
+import { useRememberedFocus } from "./use-remembered-focus";
 import { useIssueShortcuts } from "./use-issue-shortcuts";
 
 export type MyIssuesTab = "assigned" | "created" | "subscribed";
@@ -88,7 +89,7 @@ function MyIssuesList({
   const created = useMyCreated();
   const query = tab === "assigned" ? assigned : created;
   const actions = useIssueActions();
-  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useRememberedFocus();
   const [request, setRequest] = useState<PickerRequest | null>(null);
   const closePicker = useCallback(() => setRequest(null), []);
 

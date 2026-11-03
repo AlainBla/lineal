@@ -10,6 +10,7 @@ import { PRIORITIES } from "@/features/issues/model";
 import { IssuePickerHost, type PickerRequest } from "@/features/issues/picker-host";
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import { useFocusNav } from "@/features/issues/use-focus-nav";
+import { useRememberedFocus } from "@/features/issues/use-remembered-focus";
 import { useIssueShortcuts } from "@/features/issues/use-issue-shortcuts";
 import type { CustomView, Issue } from "@/gql/graphql";
 import { GraphQLRequestError } from "@/lib/graphql";
@@ -105,7 +106,7 @@ export function IssueView({
   const updateView = useUpdateView();
   const [local, setLocal] = useState<Partial<DisplayOptions>>({});
   const [saveOpen, setSaveOpen] = useState(false);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useRememberedFocus();
   const [request, setRequest] = useState<PickerRequest | null>(null);
 
   const target: PrefTarget | null = view ? { customViewId: view.id } : (prefsTarget ?? null);

@@ -315,6 +315,54 @@ describe("Issue-Detail", () => {
     expect(title).toHaveValue("Checkout überarbeitens");
   });
 
+  it("Esc führt per Router-Verlauf zurück zur Liste, von der das Issue geöffnet wurde (LIN-4)", async () => {
+    mockGraphql(handlers());
+    const { router } = await renderWithApp(page(), newClient(), "/acme/team/ENG/all");
+    await router.navigate({ to: "/acme/issue/ENG-120/x" as "/" });
+    await screen.findByLabelText("Title");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/team/ENG/all"));
+  });
+
+  it("Esc ohne Verlauf (direkter Aufruf) landet in der Team-Liste", async () => {
+    mockGraphql(handlers());
+    const { router } = await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect(screen.getAllByText("Engineering").length).toBeGreaterThanOrEqual(2),
+    );
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/team/ENG/all"));
+  });
+
+  it("Esc im Titelfeld und im Editor verlässt nur das Feld; erst das zweite Esc navigiert", async () => {
+    mockGraphql(handlers());
+    const { router } = await renderWithApp(page(), newClient(), "/acme/team/ENG/all");
+    await router.navigate({ to: "/acme/issue/ENG-120/x" as "/" });
+    const title = await screen.findByLabelText("Title");
+    for (const field of [title, screen.getByLabelText("Description")]) {
+      await userEvent.click(field);
+      expect(field).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(field).not.toHaveFocus();
+      expect(router.state.location.pathname).toBe("/acme/issue/ENG-120/x");
+    }
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/acme/team/ENG/all"));
+  });
+
+  it("Esc schließt einen offenen Picker, ohne zu navigieren", async () => {
+    mockGraphql(handlers());
+    const { router } = await renderWithApp(page(), newClient(), "/acme/team/ENG/all");
+    await router.navigate({ to: "/acme/issue/ENG-120/x" as "/" });
+    await screen.findByLabelText("Title");
+    await userEvent.keyboard("s");
+    expect(await screen.findByPlaceholderText("Change status…")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByPlaceholderText("Change status…")).toBeNull());
+    expect(router.state.location.pathname).toBe("/acme/issue/ENG-120/x");
+  });
+
   it("legt eine Relation „blocking“ über den Dialog an", async () => {
     let blocks: Array<{ id: string; identifier: string; title: string }> = [];
     const h = handlers();

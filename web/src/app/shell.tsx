@@ -103,7 +103,12 @@ export function Shell({ session, children }: { session: Session; children: React
       <Sidebar session={session} onLogout={onLogout} overlay={narrow} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
-        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
+        <main
+          id="main"
+          data-scroll-restoration-id="main"
+          tabIndex={-1}
+          className="min-h-0 flex-1 overflow-y-auto outline-none"
+        >
           {children}
         </main>
       </div>

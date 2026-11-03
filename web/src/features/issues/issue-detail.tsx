@@ -1,10 +1,10 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { Copy, Link as LinkIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useActions } from "@/app/commands";
 import { useSession } from "@/app/auth";
-import { teamPaths } from "@/app/nav";
+import { teamPaths, workspacePaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
 import { NotFound } from "@/components/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -242,6 +242,8 @@ function TitleField({
           } else if (e.key === "Escape") {
             setValue(issue.title);
             setConflict(null);
+            // Verbraucht: sonst würde der globale „Zurück“-Shortcut im selben Tastendruck greifen.
+            e.preventDefault();
             e.currentTarget.blur();
           }
         }}
@@ -265,6 +267,24 @@ function copy(text: string, what: string) {
     .catch(() => showToast({ message: `Could not copy ${what.toLowerCase()}`, tone: "error" }));
 }
 
+const OVERLAY_SELECTOR =
+  '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[data-radix-popper-content-wrapper]';
+
+/** Erstes Esc in Eingabefeld/Editor verlässt nur das Feld; das zweite Esc löst „Zurück“ aus. */
+function useEscapeBlur() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      const editable = t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName);
+      if (editable) t.blur();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+}
+
 function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const meta = useTeamMeta(issue.teamId);
   const metas = useMemo(() => [meta.data], [meta.data]);
@@ -286,6 +306,9 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const [dueOpen, setDueOpen] = useState(false);
   const closePicker = useCallback(() => setRequest(null), []);
   useShortcutContext("issue");
+  const router = useRouter();
+  const teamKey = meta.data?.team.key;
+  useEscapeBlur();
 
   useIssueShortcuts({
     context: "issue",
@@ -294,6 +317,23 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
     actions,
   });
   useActions([
+    {
+      id: "issue.back",
+      title: "Back to list",
+      section: "Issues",
+      keys: "escape",
+      context: "issue",
+      perform: () => {
+        // Offene Menüs/Popover/Dialoge schließen sich selbst; Esc soll dann nicht zusätzlich navigieren.
+        if (document.querySelector(OVERLAY_SELECTOR)) return;
+        if (router.history.canGoBack()) router.history.back();
+        else
+          void navigate({
+            to: (teamKey ? teamPaths(ws, teamKey).all : workspacePaths(ws).issues) as "/",
+            replace: true,
+          });
+      },
+    },
     {
       id: "issue.rename",
       title: "Rename issue",
@@ -364,7 +404,6 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
     })),
   ]);
 
-  const teamKey = meta.data?.team.key;
   const identifierUrl = `${window.location.origin}${issuePath(ws, issue.identifier)}`;
 
   return (

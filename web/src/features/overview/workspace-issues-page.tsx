@@ -9,6 +9,7 @@ import { IssuePickerHost, type PickerRequest } from "@/features/issues/picker-ho
 import { EmptyState, ErrorState, ListSkeleton } from "@/features/issues/states";
 import { useIssueShortcuts } from "@/features/issues/use-issue-shortcuts";
 import { useFocusNav } from "@/features/issues/use-focus-nav";
+import { useRememberedFocus } from "@/features/issues/use-remembered-focus";
 import type { Issue } from "@/gql/graphql";
 
 import { useWorkspaceIssues } from "./queries";
@@ -39,7 +40,7 @@ export function WorkspaceIssuesPage({ ws }: { ws: string }) {
   const metas = useTeamMetas(ordered.map((o) => o.team.key));
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
-  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useRememberedFocus();
   const [request, setRequest] = useState<PickerRequest | null>(null);
 
   useEffect(() => {

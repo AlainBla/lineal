@@ -6,7 +6,12 @@ import { Providers } from "@/app/providers";
 import { routeTree } from "./routeTree.gen";
 import "./index.css";
 
-const router = createRouter({ routeTree });
+// Zurück aus einem Issue (Esc/Browser-Zurück) stellt die Scrollposition der Liste wieder her (#main).
+const router = createRouter({
+  routeTree,
+  scrollRestoration: true,
+  scrollToTopSelectors: ["#main"],
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
