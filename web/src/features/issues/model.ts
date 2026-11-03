@@ -430,3 +430,26 @@ export function relationGroups(r: IssueRelations): Array<{ label: string; items:
 
 /** Pfad zum Issue-Detail (docs/08 §1.3). */
 export const issuePath = (ws: string, identifier: string) => `/${ws}/issue/${identifier}`;
+
+/** Git-Branchname wie in Linear: `eng-12-titel-als-slug` (Kennung klein, Titel-Slug). */
+export function branchName(identifier: string, title: string): string {
+  return `${identifier.toLowerCase()}-${slugify(title)}`;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** Fälligkeits-Voreinstellungen: morgen, Ende der Woche (Freitag), in einer / zwei Wochen. */
+export function duePresets(now: Date): Array<{ id: string; label: string; date: string }> {
+  const day = (offset: number) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+    return ymd(d);
+  };
+  const toFriday = (5 - now.getDay() + 7) % 7 || 7;
+  return [
+    { id: "tomorrow", label: "Tomorrow", date: day(1) },
+    { id: "end-of-week", label: "End of this week", date: day(toFriday) },
+    { id: "in-1-week", label: "In one week", date: day(7) },
+    { id: "in-2-weeks", label: "In two weeks", date: day(14) },
+  ];
+}

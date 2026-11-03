@@ -5,6 +5,8 @@
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import type { Issue } from "@/gql/graphql";
+
 /** Bereich zwischen Anker und Ziel (beide inklusive) in der Anzeigereihenfolge. */
 export function rangeBetween(ordered: string[], anchor: string | null, to: string): string[] {
   const end = ordered.indexOf(to);
@@ -30,6 +32,8 @@ export interface ClickMods {
 export interface Selection {
   selected: ReadonlySet<string>;
   size: number;
+  /** Ausgewählte Issues (leer, wenn `useSelection` ohne Issue-Liste aufgerufen wurde). */
+  issues: readonly Issue[];
   has: (id: string) => boolean;
   toggle: (id: string) => void;
   /** Bereich vom zuletzt gewählten Issue bis `id` hinzufügen. */
@@ -44,7 +48,9 @@ export interface Selection {
   handleClick: (id: string, mods: ClickMods) => boolean;
 }
 
-export function useSelection(orderedIds: string[]): Selection {
+const NO_ISSUES: readonly Issue[] = [];
+
+export function useSelection(orderedIds: string[], all: readonly Issue[] = NO_ISSUES): Selection {
   const [raw, setRaw] = useState<ReadonlySet<string>>(new Set());
   const anchor = useRef<string | null>(null);
   const present = useMemo(() => new Set(orderedIds), [orderedIds]);
@@ -74,6 +80,7 @@ export function useSelection(orderedIds: string[]): Selection {
     setRaw(new Set(orderedIds));
   }, [orderedIds]);
   const size = selected.size;
+  const issues = useMemo(() => all.filter((i) => selected.has(i.id)), [all, selected]);
   const handleClick = useCallback(
     (id: string, mods: ClickMods) => {
       if (mods.shiftKey) {
@@ -92,6 +99,7 @@ export function useSelection(orderedIds: string[]): Selection {
     () => ({
       selected,
       size,
+      issues,
       has: (id) => selected.has(id),
       toggle,
       extendTo,
@@ -99,6 +107,6 @@ export function useSelection(orderedIds: string[]): Selection {
       selectAll,
       handleClick,
     }),
-    [selected, size, toggle, extendTo, clear, selectAll, handleClick],
+    [selected, size, issues, toggle, extendTo, clear, selectAll, handleClick],
   );
 }

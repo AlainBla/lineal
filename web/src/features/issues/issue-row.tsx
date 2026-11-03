@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import type { Issue } from "@/gql/graphql";
 import { DEFAULT_PROPERTIES, type DisplayProperty } from "@/features/views/display-options";
 
+import { issueMenuHandlers } from "./context-menu-store";
 import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { estimateLabel, issuePath, priorityLabel, relativeTime } from "./model";
@@ -158,6 +159,7 @@ export function IssueRow({
       onClick={(e) => {
         if (selection?.handleClick(issue.id, e)) e.preventDefault();
       }}
+      {...issueMenuHandlers(issue, selection)}
       className={cn(
         "group flex h-9 items-center gap-3 border-b border-border px-4 text-sm outline-none hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none",
         focused && "bg-surface-hover",

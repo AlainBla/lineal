@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { useIssueActions } from "@/features/issues/issue-actions";
 import { useIssueLookup } from "@/features/issues/issue-lookup";
+import { issueMenuHandlers } from "@/features/issues/context-menu-store";
 import { IssueCardBody, IssueCardHover, IssueRow } from "@/features/issues/issue-row";
 import { PRIORITIES } from "@/features/issues/model";
 import { IssuePickerHost, type PickerRequest } from "@/features/issues/picker-host";
@@ -263,6 +264,7 @@ export function IssueView({
                 <a
                   href={`/${ws}/issue/${issue.identifier}`}
                   data-issue-id={issue.id}
+                  {...issueMenuHandlers(issue)}
                   className="rounded-lg border border-border bg-card p-2.5 text-sm hover:border-border-strong"
                 >
                   <IssueCardBody issue={issue} lookup={lookup} />

@@ -156,7 +156,10 @@ export function TeamIssuesPage({
   // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben) verwerfen.
   const focused: Issue | null = visible.find((i) => i.id === focusedId) ?? null;
   useFocusNav(layout === "board" ? grid : [grid.flat()], focused?.id ?? null, setFocusedId);
-  const selection = useSelection(useMemo(() => grid.flat(), [grid]));
+  const selection = useSelection(
+    useMemo(() => grid.flat(), [grid]),
+    visible,
+  );
   const selectedIssues = useMemo(
     () => visible.filter((i) => selection.has(i.id)),
     [visible, selection],

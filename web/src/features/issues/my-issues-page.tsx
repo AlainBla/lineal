@@ -112,7 +112,10 @@ function MyIssuesList({
   );
   const focused: Issue | null = issues.find((i) => i.id === focusedId) ?? null;
   useFocusNav(grid, focused?.id ?? null, setFocusedId);
-  const selection = useSelection(useMemo(() => grid.flat(), [grid]));
+  const selection = useSelection(
+    useMemo(() => grid.flat(), [grid]),
+    issues,
+  );
   const selectedIssues = useMemo(
     () => issues.filter((i) => selection.has(i.id)),
     [issues, selection],

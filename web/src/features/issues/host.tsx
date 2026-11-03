@@ -11,6 +11,7 @@ import {
   openCreateIssue,
   purgeForeignDrafts,
 } from "./create-store";
+import { IssueContextMenuHost } from "./issue-context-menu";
 import { useIssueGlobalShortcuts } from "./global-shortcuts";
 import { Toaster } from "./toaster";
 
@@ -41,6 +42,7 @@ export function IssuesHost() {
   return (
     <>
       <CreateIssueModal />
+      <IssueContextMenuHost />
       <Toaster />
     </>
   );

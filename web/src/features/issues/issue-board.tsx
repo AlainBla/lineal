@@ -25,6 +25,7 @@ import type { DisplayProperty } from "@/features/views/display-options";
 
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
+import { issueMenuHandlers } from "./context-menu-store";
 import { IssueCardBody, IssueCardHover, SelectBox } from "./issue-row";
 import { applyDrop, COLUMN_PREFIX, issuePath, type BoardColumn, type DropResult } from "./model";
 import type { Selection } from "./selection";
@@ -69,6 +70,7 @@ function Card({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: issue.id,
   });
+  const menu = issueMenuHandlers(issue, selection);
   const link = (
     <Link
       ref={setNodeRef}
@@ -82,6 +84,11 @@ function Card({
       onFocus={() => onFocus(issue.id)}
       onClick={(e) => {
         if (selection?.handleClick(issue.id, e)) e.preventDefault();
+      }}
+      onContextMenu={menu.onContextMenu}
+      onKeyDown={(e) => {
+        menu.onKeyDown(e);
+        if (!e.defaultPrevented) listeners?.onKeyDown?.(e);
       }}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(

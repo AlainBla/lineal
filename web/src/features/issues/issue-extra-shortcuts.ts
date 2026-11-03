@@ -36,17 +36,13 @@ function currentWorkspace(): string {
   return /^\/([^/]+)/.exec(window.location.pathname)?.[1] ?? "";
 }
 
-export function useIssueExtraShortcuts({
-  context,
-  target,
-}: {
-  context: Extract<ShortcutContext, "list" | "issue">;
-  target: Issue | null;
-}): void {
-  const qc = useQueryClient();
+/** Favorit und Abo eines Issues umschalten (Kürzel `Alt F`/`⇧ S` und Kontextmenü). */
+export function useIssueOps(target: Issue | null) {
   const favorites = useFavorites();
   const fav = useToggleFavorite();
-  const enabled = target !== null;
+  const isFavorite = (favorites.data ?? []).some(
+    (f) => f.type === "issue" && f.targetId === target?.id,
+  );
 
   const toggleFavorite = () => {
     if (!target) return;
@@ -88,6 +84,19 @@ export function useIssueExtraShortcuts({
       showToast({ message: errorMessage(e, "Could not change the subscription."), tone: "error" });
     }
   };
+  return { toggleFavorite, toggleSubscription, isFavorite };
+}
+
+export function useIssueExtraShortcuts({
+  context,
+  target,
+}: {
+  context: Extract<ShortcutContext, "list" | "issue">;
+  target: Issue | null;
+}): void {
+  const qc = useQueryClient();
+  const { toggleFavorite, toggleSubscription } = useIssueOps(target);
+  const enabled = target !== null;
 
   const deleteIssue = async () => {
     if (!target) return;

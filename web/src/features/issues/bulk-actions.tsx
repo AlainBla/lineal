@@ -34,9 +34,10 @@ import { errorMessage, showToast } from "./toast-store";
 import { inverseBulk, recordUndo } from "./undo";
 import { useKnownUsers } from "./users";
 
-export type BulkKind = Exclude<PickerKind, "due" | "parent"> | "labels-remove" | "delete";
+export type BulkKind =
+  Exclude<PickerKind, "due" | "parent"> | "labels-remove" | "delete" | "archive";
 
-const TITLES: Record<Exclude<BulkKind, "delete" | "team">, string> = {
+const TITLES: Record<Exclude<BulkKind, "delete" | "archive" | "team">, string> = {
   status: "Change status…",
   assignee: "Assign to…",
   priority: "Set priority…",
@@ -55,9 +56,20 @@ interface Props {
   /** Offener Picker bzw. Dialog (gesteuert vom Screen, damit Tastenkürzel ihn öffnen können). */
   request: BulkKind | null;
   onRequest: (kind: BulkKind | null) => void;
+  /** Ohne Aktionsleiste (Kontextmenü): nur Picker und Dialoge, gesteuert über `request`. */
+  hideBar?: boolean;
 }
 
-export function BulkActions({ issues, onClear, request, onRequest }: Props) {
+/** Führt `run` einmal beim Einhängen aus (Archivieren aus dem Kontextmenü, ohne Bestätigung). */
+function RunOnMount({ run }: { run: () => void }) {
+  useEffect(() => {
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- genau einmal je Anfrage
+  }, []);
+  return null;
+}
+
+export function BulkActions({ issues, onClear, request, onRequest, hideBar = false }: Props) {
   const batch = useBatchUpdate();
   const update = useUpdateIssue();
   const session = useSession();
@@ -116,7 +128,7 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
   const states = meta.data?.states ?? [];
   const allLabels = meta.data?.labels ?? [];
   const usedLabels = new Set(issues.flatMap((i) => i.labelIds));
-  const common = (kind: Exclude<BulkKind, "delete" | "team">) => ({
+  const common = (kind: Exclude<BulkKind, "delete" | "archive" | "team">) => ({
     open: request === kind,
     onOpenChange: (o: boolean) => !o && onRequest(null),
     title: TITLES[kind],
@@ -140,52 +152,55 @@ export function BulkActions({ issues, onClear, request, onRequest }: Props) {
 
   return (
     <>
-      <div
-        role="toolbar"
-        aria-label="Bulk actions"
-        className="pointer-events-auto fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border-strong bg-popover px-2 py-1.5 text-sm shadow-popover"
-      >
-        <span className="px-2 font-medium" aria-live="polite">
-          {issues.length} selected
-        </span>
-        {barButton("status", "Status", needsTeam)}
-        {barButton("priority", "Priority")}
-        {barButton("assignee", "Assignee")}
-        {barButton("labels", "Add label", needsTeam)}
-        {barButton("labels-remove", "Remove label", needsTeam)}
-        {barButton("project", "Project", needsTeam)}
-        {barButton("milestone", "Milestone", needsTeam || !sharedProject)}
-        {barButton("cycle", "Cycle", needsTeam)}
-        {!estimatesOff && barButton("estimate", "Estimate", needsTeam)}
-        {barButton("team", "Move")}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Bulk archive"
-          title="Archive"
-          onClick={() => run({ archive: true })}
+      {!hideBar && (
+        <div
+          role="toolbar"
+          aria-label="Bulk actions"
+          className="pointer-events-auto fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border-strong bg-popover px-2 py-1.5 text-sm shadow-popover"
         >
-          <Archive />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Bulk delete"
-          title="Delete"
-          onClick={() => onRequest("delete")}
-        >
-          <Trash2 />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Clear selection"
-          title="Clear selection (Esc)"
-          onClick={onClear}
-        >
-          <X />
-        </Button>
-      </div>
+          <span className="px-2 font-medium" aria-live="polite">
+            {issues.length} selected
+          </span>
+          {barButton("status", "Status", needsTeam)}
+          {barButton("priority", "Priority")}
+          {barButton("assignee", "Assignee")}
+          {barButton("labels", "Add label", needsTeam)}
+          {barButton("labels-remove", "Remove label", needsTeam)}
+          {barButton("project", "Project", needsTeam)}
+          {barButton("milestone", "Milestone", needsTeam || !sharedProject)}
+          {barButton("cycle", "Cycle", needsTeam)}
+          {!estimatesOff && barButton("estimate", "Estimate", needsTeam)}
+          {barButton("team", "Move")}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Bulk archive"
+            title="Archive"
+            onClick={() => run({ archive: true })}
+          >
+            <Archive />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Bulk delete"
+            title="Delete"
+            onClick={() => onRequest("delete")}
+          >
+            <Trash2 />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Clear selection"
+            title="Clear selection (Esc)"
+            onClick={onClear}
+          >
+            <X />
+          </Button>
+        </div>
+      )}
+      {request === "archive" && <RunOnMount run={() => run({ archive: true })} />}
 
       <PropertyPicker
         {...common("status")}
