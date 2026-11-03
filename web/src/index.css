@@ -159,15 +159,117 @@
   border-radius: 0.375rem;
   border: 1px solid var(--border);
   background: var(--surface);
-  padding: 0.625rem 0.75rem;
+  padding: 0.75rem 1rem;
   overflow-x: auto;
+  white-space: pre;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
-  line-height: 1.5;
+  line-height: 1.55;
+  tab-size: 4;
 }
 .lineal-prose .ProseMirror pre code {
   background: none;
   padding: 0;
   font-size: inherit;
+  white-space: inherit;
+}
+/* Kopieren-Knopf: Widget direkt vor dem Block, Höhe 0, Knopf oben rechts im Block. */
+.lineal-prose .ProseMirror .code-copy-anchor {
+  display: flow-root;
+  position: relative;
+  height: 0;
+  margin: 0.75rem 0 -0.75rem;
+  user-select: none;
+}
+.lineal-prose .ProseMirror .code-copy-btn {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  z-index: 1;
+  opacity: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--surface-active);
+  padding: 0.1rem 0.4rem;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.lineal-prose .ProseMirror .code-copy-btn:hover {
+  color: var(--foreground);
+}
+.lineal-prose .ProseMirror .code-copy-anchor:hover .code-copy-btn,
+.lineal-prose .ProseMirror .code-copy-anchor:has(+ pre:hover) .code-copy-btn,
+.lineal-prose .ProseMirror .code-copy-btn:focus-visible {
+  opacity: 1;
+}
+/* Syntaxfarben (highlight.js-Klassen aus lowlight), hell/dunkel. */
+.lineal-prose {
+  --hl-keyword: oklch(0.5 0.2 300);
+  --hl-string: oklch(0.5 0.14 150);
+  --hl-number: oklch(0.55 0.17 50);
+  --hl-comment: oklch(0.6 0.01 265);
+  --hl-title: oklch(0.5 0.17 255);
+  --hl-attr: oklch(0.52 0.14 200);
+  --hl-meta: oklch(0.55 0.15 20);
+}
+.dark .lineal-prose {
+  --hl-keyword: oklch(0.78 0.14 300);
+  --hl-string: oklch(0.8 0.13 150);
+  --hl-number: oklch(0.8 0.13 60);
+  --hl-comment: oklch(0.65 0.01 265);
+  --hl-title: oklch(0.78 0.12 255);
+  --hl-attr: oklch(0.8 0.11 200);
+  --hl-meta: oklch(0.78 0.12 20);
+}
+.lineal-prose .ProseMirror .hljs-keyword,
+.lineal-prose .ProseMirror .hljs-doctag,
+.lineal-prose .ProseMirror .hljs-selector-tag,
+.lineal-prose .ProseMirror .hljs-literal,
+.lineal-prose .ProseMirror .hljs-built_in {
+  color: var(--hl-keyword);
+}
+.lineal-prose .ProseMirror .hljs-string,
+.lineal-prose .ProseMirror .hljs-regexp,
+.lineal-prose .ProseMirror .hljs-addition,
+.lineal-prose .ProseMirror .hljs-template-variable {
+  color: var(--hl-string);
+}
+.lineal-prose .ProseMirror .hljs-number,
+.lineal-prose .ProseMirror .hljs-symbol,
+.lineal-prose .ProseMirror .hljs-bullet,
+.lineal-prose .ProseMirror .hljs-variable {
+  color: var(--hl-number);
+}
+.lineal-prose .ProseMirror .hljs-comment,
+.lineal-prose .ProseMirror .hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.lineal-prose .ProseMirror .hljs-title,
+.lineal-prose .ProseMirror .hljs-section,
+.lineal-prose .ProseMirror .hljs-type {
+  color: var(--hl-title);
+}
+.lineal-prose .ProseMirror .hljs-attr,
+.lineal-prose .ProseMirror .hljs-attribute,
+.lineal-prose .ProseMirror .hljs-property,
+.lineal-prose .ProseMirror .hljs-name,
+.lineal-prose .ProseMirror .hljs-selector-class,
+.lineal-prose .ProseMirror .hljs-selector-id {
+  color: var(--hl-attr);
+}
+.lineal-prose .ProseMirror .hljs-meta,
+.lineal-prose .ProseMirror .hljs-deletion {
+  color: var(--hl-meta);
+}
+.lineal-prose .ProseMirror .hljs-emphasis {
+  font-style: italic;
+}
+.lineal-prose .ProseMirror .hljs-strong {
+  font-weight: 600;
 }
 .lineal-prose .ProseMirror a {
   color: var(--primary);

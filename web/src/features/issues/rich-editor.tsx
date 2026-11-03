@@ -29,6 +29,7 @@ import { cn } from "@/lib/cn";
 import type { EmojiEntry } from "@/lib/emoji";
 
 import { isAssetUrl, isImageFile, resolveAssetUrl } from "./assets";
+import { CodeCopyButton, HighlightedCodeBlock } from "./code-block";
 import { EmojiInput } from "./emoji-input";
 import { issueRefStore } from "./issue-ref-store";
 import { IssueRefs, issueRefsKey } from "./issue-refs";
@@ -210,6 +211,8 @@ export function RichEditor({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
+        // Ersetzt durch HighlightedCodeBlock (gleicher Node-Name `codeBlock`, nur Dekorationen).
+        codeBlock: false,
         // Kein `protocols`: http/https/mailto sind linkify-Standard; eigene Protokolle würden bei jeder
         // Editor-Instanz neu registriert (Konsolenwarnung "linkifyjs: already initialized", B2.13).
         link: { openOnClick: false, HTMLAttributes: { rel: "noopener noreferrer", target: null } },
@@ -217,6 +220,8 @@ export function RichEditor({
         ...(collab ? { undoRedo: false as const } : {}),
       }),
       Markdown,
+      HighlightedCodeBlock,
+      CodeCopyButton,
       // Tabellen, Aufgabenlisten und Bilder gehören zum Schema des Servers (collab/pm.rs): ohne sie
       // würde y-prosemirror sie beim Öffnen verwerfen und den Inhalt zurückschreiben (B2.02).
       TableKit.configure({ table: { resizable: false } }),
