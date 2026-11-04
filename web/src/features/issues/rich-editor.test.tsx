@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as Y from "yjs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,6 +7,8 @@ import "@/app/test-polyfills";
 
 import { CollabProvider } from "@/features/collab/provider";
 
+import { ImageLightbox } from "./image-lightbox";
+import { closeLightbox } from "./image-lightbox-store";
 import { RichEditor } from "./rich-editor";
 
 // ProseMirror misst Textbereiche; jsdom liefert dafür keine Geometrie.
@@ -41,6 +44,36 @@ describe("RichEditor (TipTap)", () => {
     expect(box.querySelectorAll("th, td")).toHaveLength(4);
     expect(box.querySelectorAll('ul[data-type="taskList"] li')).toHaveLength(2);
     expect(box.querySelector("img")?.getAttribute("src")).toBe("https://acme.example/logo.png");
+  });
+
+  it("bietet an Bildern „vergrößern“ (Lightbox) und „herunterladen“ an (LIN-21)", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <RichEditor value="![Logo](https://acme.example/logo.png)" ariaLabel="Description" />
+        <ImageLightbox />
+      </>,
+    );
+    const box = await screen.findByRole("textbox", { name: "Description" });
+    const enlarge = await within(box).findByRole("button", { name: "Enlarge image" });
+    expect(within(box).getByRole("button", { name: "Download image" })).toBeInTheDocument();
+
+    await user.click(enlarge);
+    const dialog = await screen.findByRole("dialog", { name: "Logo" });
+    expect(within(dialog).getByRole("img", { name: "Logo" })).toHaveAttribute(
+      "src",
+      "https://acme.example/logo.png",
+    );
+
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    closeLightbox();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(await within(box).findByRole("button", { name: "Download image" }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    const a = click.mock.contexts.at(-1) as HTMLAnchorElement;
+    expect(a.getAttribute("href")).toBe("https://acme.example/logo.png");
+    expect(a.download).toBe("Logo");
+    click.mockRestore();
   });
 
   it("verwirft beim Öffnen im Collab-Modus keine Server-Knoten (Tabelle, Aufgabe, Bild)", async () => {

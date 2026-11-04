@@ -65,4 +65,36 @@ test("F.08: pasted image appears in the description via a signed URL, upload sho
   });
   const attachments = page.getByRole("region", { name: "Attachments" });
   await expect(attachments.getByRole("link", { name: "notiz.txt" })).toBeVisible();
+
+  // LIN-21: Icons oben rechts am Bild – vergrößern (Lightbox) und herunterladen.
+  await reloaded.hover();
+  await page.getByRole("button", { name: "Enlarge image" }).click();
+  const lightbox = page.getByRole("dialog", { name: "pixel.png" });
+  const big = lightbox.getByRole("img", { name: "pixel.png" });
+  await expect(big).toHaveAttribute("src", /^\/files\//);
+  await expect.poll(() => big.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  await page.keyboard.press("Escape");
+  await expect(lightbox).toBeHidden();
+  await reloaded.hover();
+  const inlineDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download image" }).click();
+  expect((await inlineDownload).suggestedFilename()).toBe("pixel.png");
+
+  // Bild-Anhang: Klick öffnet die Lightbox, beim Hover gibt es einen Download.
+  await page.getByTestId("attachment-input").setInputFiles({
+    name: "shot.png",
+    mimeType: "image/png",
+    buffer: PNG,
+  });
+  const shot = attachments.getByRole("link", { name: "shot.png" });
+  await shot.click();
+  const shotBox = page.getByRole("dialog", { name: "shot.png" });
+  await expect(shotBox.getByRole("img", { name: "shot.png" })).toBeVisible();
+  // Klick neben das Bild schließt.
+  await page.mouse.click(5, 5);
+  await expect(shotBox).toBeHidden();
+  await shot.hover();
+  const attDownload = page.waitForEvent("download");
+  await attachments.getByRole("button", { name: "Download shot.png" }).click();
+  expect((await attDownload).suggestedFilename()).toBe("shot.png");
 });

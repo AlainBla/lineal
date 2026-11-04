@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "@/app/test-polyfills";
 
 import { AttachmentsSection, formatBytes } from "./attachments";
+import { ImageLightbox } from "./image-lightbox";
 import { makeIssue, mockGraphql, renderWithApp } from "./test-fixtures";
 
 const ISSUE = makeIssue({ id: "i1", identifier: "ENG-1" });
@@ -92,5 +93,56 @@ describe("Anhänge (F.08)", () => {
     // Button-Weg: der versteckte Datei-Input.
     await userEvent.upload(screen.getByTestId("attachment-input"), file);
     await waitFor(() => expect(gql.of("AttachmentCreate")).toHaveLength(2));
+  });
+  it("öffnet Bild-Anhänge zuerst groß und bietet einen Download an (LIN-21)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a2",
+          title: "shot.png",
+          contentType: "image/png",
+          url: "http://localhost:8080/files/img",
+        },
+      ]),
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const base = globalThis.fetch as unknown as (...a: unknown[]) => Promise<Response>;
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/files/img") return base(input, init);
+      fetched.push(String(input));
+      return new Response(new Blob(["png"], { type: "image/png" }), { status: 200 });
+    });
+    await renderWithApp(
+      <>
+        <AttachmentsSection issue={ISSUE} />
+        <ImageLightbox />
+      </>,
+    );
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    await userEvent.click(await within(region).findByRole("button", { name: "Download shot.png" }));
+    // Über einen Blob, damit der Dateiname nicht der Speicherschlüssel des Servers ist.
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(fetched).toEqual(["/files/img"]);
+    const a = click.mock.contexts.at(-1) as HTMLAnchorElement;
+    expect(a.getAttribute("href")).toMatch(/^blob:/);
+    expect(a.download).toBe("shot.png");
+    click.mockRestore();
+
+    await userEvent.click(await within(region).findByRole("link", { name: "shot.png" }));
+    const dialog = await screen.findByRole("dialog", { name: "shot.png" });
+    expect(within(dialog).getByRole("img", { name: "shot.png" })).toHaveAttribute(
+      "src",
+      "/files/img",
+    );
+  });
+
+  it("bietet bei Nicht-Bildern keinen eigenen Download-Knopf", async () => {
+    mockGraphql(handlers([ATT]));
+    await renderWithApp(<AttachmentsSection issue={ISSUE} />);
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    await within(region).findByRole("link", { name: "spec.pdf" });
+    expect(within(region).queryByRole("button", { name: "Download spec.pdf" })).toBeNull();
   });
 });

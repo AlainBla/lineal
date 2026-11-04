@@ -13,11 +13,12 @@ import {
 } from "./create-store";
 import { IssueContextMenuHost } from "./issue-context-menu";
 import { useIssueGlobalShortcuts } from "./global-shortcuts";
+import { ImageLightbox } from "./image-lightbox";
 import { Toaster } from "./toaster";
 
 /**
  * Globale Überlagerungen der Issue-Screens: Create-Issue-Modal (öffnet über `createIssueOpen`, Taste `c`)
- * und Toasts. Wird einmal in der Shell eingehängt.
+ * Toasts und die Bild-Lightbox. Wird einmal in der Shell eingehängt.
  */
 export function IssuesHost() {
   // Nach Session-Ablauf und erneutem Login: Create-Modal mit dem erhaltenen Entwurf wieder öffnen.
@@ -44,6 +45,7 @@ export function IssuesHost() {
       <CreateIssueModal />
       <IssueContextMenuHost />
       <Toaster />
+      <ImageLightbox />
     </>
   );
 }

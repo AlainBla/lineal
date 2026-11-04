@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileText, Paperclip, Trash2, Upload } from "lucide-react";
+import { Download, FileText, Image as ImageIcon, Paperclip, Trash2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ export function safeHref(url: string): string | undefined {
   }
 }
 import { useIssueExtras } from "./hooks";
+import { downloadUrl, openLightbox } from "./image-lightbox-store";
 import { createAttachment, deleteAttachment, keys } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
 
@@ -136,37 +137,69 @@ export function AttachmentsSection({
         </p>
       ) : (
         <ul className="flex flex-col gap-0.5">
-          {attachments.map((a) => (
-            <li key={a.id} className="group flex items-center gap-2 text-sm">
-              {a.sourceType === "upload" ? (
-                <FileText className="size-3.5 text-muted-foreground" aria-hidden />
-              ) : (
-                <Paperclip className="size-3.5 text-muted-foreground" aria-hidden />
-              )}
-              <a
-                href={a.sourceType === "upload" ? sameOrigin(a.url) : safeHref(a.url)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="min-w-0 truncate hover:underline"
-              >
-                {a.title}
-              </a>
-              {a.size != null && (
-                <span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span>
-              )}
-              {!readOnly && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="ml-auto size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  aria-label={`Remove attachment ${a.title}`}
-                  onClick={() => remove.mutate(a.id)}
+          {attachments.map((a) => {
+            const href = a.sourceType === "upload" ? sameOrigin(a.url) : safeHref(a.url);
+            // Hochgeladene Bilder (same-origin, CSP `img-src 'self'`) öffnen zuerst groß (LIN-21).
+            const image =
+              a.sourceType === "upload" && !!href && !!a.contentType?.startsWith("image/");
+            return (
+              <li key={a.id} className="group flex items-center gap-2 text-sm">
+                {image ? (
+                  <ImageIcon className="size-3.5 text-muted-foreground" aria-hidden />
+                ) : a.sourceType === "upload" ? (
+                  <FileText className="size-3.5 text-muted-foreground" aria-hidden />
+                ) : (
+                  <Paperclip className="size-3.5 text-muted-foreground" aria-hidden />
+                )}
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="min-w-0 truncate hover:underline"
+                  onClick={
+                    image
+                      ? (e) => {
+                          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                          e.preventDefault();
+                          openLightbox({ src: href, alt: a.title, filename: a.title });
+                        }
+                      : undefined
+                  }
                 >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              )}
-            </li>
-          ))}
+                  {a.title}
+                </a>
+                {a.size != null && (
+                  <span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span>
+                )}
+                {image && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="ml-auto size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                    aria-label={`Download ${a.title}`}
+                    title="Download"
+                    onClick={() => void downloadUrl(href, a.title)}
+                  >
+                    <Download className="size-3.5" />
+                  </Button>
+                )}
+                {!readOnly && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                      !image && "ml-auto",
+                    )}
+                    aria-label={`Remove attachment ${a.title}`}
+                    onClick={() => remove.mutate(a.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

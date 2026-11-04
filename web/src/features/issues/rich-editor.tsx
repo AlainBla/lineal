@@ -32,19 +32,48 @@ import { isAssetUrl, isImageFile, resolveAssetUrl } from "./assets";
 import { CodeCopyButton, HighlightedCodeBlock } from "./code-block";
 import { EmojiInput } from "./emoji-input";
 import { issueRefStore } from "./issue-ref-store";
+import { downloadUrl, openLightbox } from "./image-lightbox-store";
 import { IssueRefs, issueRefsKey } from "./issue-refs";
 import { type LinkNavigator, linkTarget, openLink } from "./open-link";
 import type { KnownUser } from "./users";
 
+const ICON_ATTRS =
+  'xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+/** Lucide `Maximize2` und `Download` als statisches SVG (Node-Views rendern ohne React). */
+const ICON_EXPAND = `<svg ${ICON_ATTRS}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/></svg>`;
+const ICON_DOWNLOAD = `<svg ${ICON_ATTRS}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`;
+
+function imageAction(label: string, icon: string, run: () => void): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "image-action-btn";
+  btn.innerHTML = icon;
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  // Fokus und Auswahl im Editor nicht verändern.
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  });
+  return btn;
+}
+
 /**
  * Bild-Node, dessen Markdown-Quelle die dauerhafte `assetUrl` bleibt; im DOM zeigt `<img>` die erst
  * beim Anzeigen aufgelöste, signierte same-origin URL (nie gespeichert, CSP `img-src 'self'`).
+ * Oben rechts bieten zwei Icons „vergrößern“ (Lightbox) und „herunterladen“ an (LIN-21).
  */
 const AssetImage = Image.extend({
   addNodeView() {
     return ({ node }) => {
+      const dom = document.createElement("span");
+      dom.className = "image-frame";
       const img = document.createElement("img");
+      let attrs = { src: node.attrs.src as string | null, alt: node.attrs.alt as string | null };
       const apply = (src: string | null, alt: string | null) => {
+        attrs = { src, alt };
         img.alt = alt ?? "";
         img.dataset.src = src ?? "";
         if (src && isAssetUrl(src)) {
@@ -56,15 +85,40 @@ const AssetImage = Image.extend({
           img.src = src;
         }
       };
-      apply(node.attrs.src as string | null, node.attrs.alt as string | null);
-      img.className = "my-1 max-h-96 max-w-full rounded-md";
+      apply(attrs.src, attrs.alt);
+      img.className = "max-h-96 max-w-full rounded-md";
+      // Beim Klick neu auflösen: die signierte URL im `<img>` kann inzwischen abgelaufen sein.
+      const viewUrl = async () => {
+        const { src } = attrs;
+        if (!src) return null;
+        return isAssetUrl(src) ? resolveAssetUrl(src) : src;
+      };
+      const actions = document.createElement("span");
+      actions.className = "image-actions";
+      actions.contentEditable = "false";
+      actions.append(
+        imageAction("Enlarge image", ICON_EXPAND, () => {
+          void viewUrl().then((url) => {
+            if (url)
+              openLightbox({ src: url, alt: attrs.alt ?? "", filename: attrs.alt ?? undefined });
+          });
+        }),
+        imageAction("Download image", ICON_DOWNLOAD, () => {
+          void viewUrl().then((url) => {
+            if (url) void downloadUrl(url, attrs.alt ?? undefined);
+          });
+        }),
+      );
+      dom.append(img, actions);
       return {
-        dom: img,
+        dom,
         update: (updated) => {
           if (updated.type !== node.type) return false;
           apply(updated.attrs.src as string | null, updated.attrs.alt as string | null);
           return true;
         },
+        stopEvent: (event) => event.target instanceof Node && actions.contains(event.target),
+        ignoreMutation: (m) => m.type !== "selection",
       };
     };
   },

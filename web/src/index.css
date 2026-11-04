@@ -205,6 +205,54 @@
 .lineal-prose .ProseMirror .code-copy-btn:focus-visible {
   opacity: 1;
 }
+/* Bilder im Editor: Icons „vergrößern“/„herunterladen“ oben rechts, sichtbar beim Hover (LIN-21). */
+.ProseMirror .image-frame {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+  /* Platz für beide Icons, auch bei sehr kleinen Bildern (sonst ragen sie aus dem Rahmen). */
+  min-width: 3.75rem;
+  min-height: 2.25rem;
+  margin: 0.25rem 0;
+  vertical-align: bottom;
+}
+.ProseMirror .image-frame > img {
+  display: block;
+}
+.ProseMirror .image-actions {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  user-select: none;
+  transition: opacity var(--duration-fast, 120ms);
+}
+.ProseMirror .image-frame:hover .image-actions,
+.ProseMirror .image-actions:focus-within {
+  opacity: 1;
+}
+.ProseMirror .image-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: color-mix(in oklch, var(--background) 90%, transparent);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.ProseMirror .image-action-btn:hover {
+  color: var(--foreground);
+}
+.ProseMirror .image-action-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
 /* Syntaxfarben (highlight.js-Klassen aus lowlight), hell/dunkel. */
 .lineal-prose {
   --hl-keyword: oklch(0.5 0.2 300);
