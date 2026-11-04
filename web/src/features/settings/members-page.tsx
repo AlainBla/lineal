@@ -26,6 +26,7 @@ import {
   usePlaceholderMerge,
   type AdminMember,
 } from "./members-queries";
+import { BotsSection } from "./bots-section";
 import { useSecuritySettings } from "./security-queries";
 import { MAX_EMAILS, parseEmails } from "./invite-emails";
 import { workspaceSettingsNav } from "./nav";
@@ -625,6 +626,7 @@ export function MembersSettingsPage({ ws }: { ws: string }) {
         </Section>
       )}
       {session && <InvitationsSection session={session} />}
+      {admin && <BotsSection />}
     </SettingsShell>
   );
 }

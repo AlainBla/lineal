@@ -21,7 +21,7 @@ import { useShortcutContext } from "@/lib/shortcuts";
 import { workspaceSettingsNav } from "./nav";
 import { Field, Section, SettingsShell } from "./ui";
 
-const KEY_FIELDS = `id label keyPrefix scopes teams { id key name } createdAt lastUsedAt expiresAt revokedAt`;
+export const KEY_FIELDS = `id label keyPrefix scopes teams { id key name } createdAt lastUsedAt expiresAt revokedAt`;
 const API_KEYS_KEY = ["settings", "api-keys"] as const;
 export const MAX_LABEL_LENGTH = 100;
 
@@ -79,6 +79,43 @@ export function useRevokeApiKey() {
   });
 }
 
+/** Bots (LIN-22): Keys, die als Bot handeln; Verwaltung nur für Workspace-Admins. */
+export const BOTS_KEY = ["settings", "bots"] as const;
+
+export function useCreateBotApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (v: { botId: string; input: NewKeyInput }) =>
+      (
+        await gqlRequest<
+          { botApiKeyCreate: { token: string; apiKey: ApiKey } },
+          { botId: string; input: NewKeyInput }
+        >(
+          `mutation SettingsBotApiKeyCreate($botId: String!, $input: ApiKeyCreateInput!) {
+            botApiKeyCreate(botId: $botId, input: $input) { success token apiKey { ${KEY_FIELDS} } }
+          }`,
+          v,
+        )
+      ).botApiKeyCreate,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: BOTS_KEY }),
+  });
+}
+
+export function useRevokeBotApiKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { botId: string; id: string }) =>
+      gqlRequest(
+        `mutation SettingsBotApiKeyRevoke($botId: String!, $id: String!) {
+          botApiKeyRevoke(botId: $botId, id: $id) { success }
+        }`,
+        v,
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: BOTS_KEY }),
+  });
+}
+
 function copyToken(token: string) {
   void navigator.clipboard
     ?.writeText(token)
@@ -100,9 +137,25 @@ export function endOfDayIso(date: string): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-function NewKeyDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Ziel eines Keys: ohne `bot` der eigene Key, sonst ein Key, der als dieser Bot handelt. */
+export interface KeyOwnerBot {
+  id: string;
+  name: string;
+}
+
+export function NewKeyDialog({
+  open,
+  onClose,
+  bot,
+}: {
+  open: boolean;
+  onClose: () => void;
+  bot?: KeyOwnerBot;
+}) {
   const session = useSession();
-  const create = useCreateApiKey();
+  const own = useCreateApiKey();
+  const forBot = useCreateBotApiKey();
+  const create = bot ? forBot : own;
   const [label, setLabel] = useState("");
   const [write, setWrite] = useState(false);
   const [teamIds, setTeamIds] = useState<string[]>([]);
@@ -131,20 +184,24 @@ function NewKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
             onSubmit={(e) => {
               e.preventDefault();
               if (!valid) return;
-              create.mutate(
-                {
-                  label: trimmed,
-                  scopes: write ? ["READ", "WRITE"] : ["READ"],
-                  ...(teamIds.length > 0 ? { teamIds } : {}),
-                  ...(endOfDayIso(expires) ? { expiresAt: endOfDayIso(expires) } : {}),
-                },
-                { onSuccess: (r) => setToken(r.token) },
-              );
+              const input: NewKeyInput = {
+                label: trimmed,
+                scopes: write ? ["READ", "WRITE"] : ["READ"],
+                ...(teamIds.length > 0 ? { teamIds } : {}),
+                ...(endOfDayIso(expires) ? { expiresAt: endOfDayIso(expires) } : {}),
+              };
+              const onSuccess = (r: { token: string }) => setToken(r.token);
+              if (bot) forBot.mutate({ botId: bot.id, input }, { onSuccess });
+              else own.mutate(input, { onSuccess });
             }}
           >
-            <DialogTitle className="text-base font-semibold">New API key</DialogTitle>
+            <DialogTitle className="text-base font-semibold">
+              {bot ? `New API key for ${bot.name}` : "New API key"}
+            </DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground">
-              Keys act as you. Choose the least access the integration needs.
+              {bot
+                ? `Keys act as ${bot.name}. Choose the least access the integration needs.`
+                : "Keys act as you. Choose the least access the integration needs."}
             </DialogDescription>
             <Field label="Label">
               <Input
@@ -173,7 +230,9 @@ function NewKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
             </fieldset>
             <fieldset className="flex flex-col gap-1 text-sm">
               <legend className="text-xs text-muted-foreground">
-                Teams (none selected = all your teams)
+                {bot
+                  ? "Teams (none selected = all teams the bot can see)"
+                  : "Teams (none selected = all your teams)"}
               </legend>
               {(session?.teams ?? []).map((t) => (
                 <label key={t.id} className="flex items-center gap-2">
@@ -250,8 +309,18 @@ function NewKeyDialog({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
-function RevokeDialog({ apiKey, onClose }: { apiKey: ApiKey | null; onClose: () => void }) {
-  const revoke = useRevokeApiKey();
+export function RevokeDialog({
+  apiKey,
+  onClose,
+  bot,
+}: {
+  apiKey: ApiKey | null;
+  onClose: () => void;
+  bot?: KeyOwnerBot;
+}) {
+  const own = useRevokeApiKey();
+  const forBot = useRevokeBotApiKey();
+  const revoke = bot ? forBot : own;
   useShortcutContext("modal", apiKey !== null);
   return (
     <Dialog open={apiKey !== null} onOpenChange={(o) => !o && onClose()}>
@@ -273,15 +342,15 @@ function RevokeDialog({ apiKey, onClose }: { apiKey: ApiKey | null; onClose: () 
             <Button
               type="button"
               disabled={revoke.isPending}
-              onClick={() =>
-                apiKey &&
-                revoke.mutate(apiKey.id, {
-                  onSuccess: () => {
-                    showToast({ message: "API key revoked" });
-                    onClose();
-                  },
-                })
-              }
+              onClick={() => {
+                if (!apiKey) return;
+                const onSuccess = () => {
+                  showToast({ message: "API key revoked" });
+                  onClose();
+                };
+                if (bot) forBot.mutate({ botId: bot.id, id: apiKey.id }, { onSuccess });
+                else own.mutate(apiKey.id, { onSuccess });
+              }}
             >
               Revoke key
             </Button>
@@ -298,7 +367,7 @@ function keyStatus(k: ApiKey): string {
   return "Active";
 }
 
-function KeyRow({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke: () => void }) {
+export function KeyRow({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke: () => void }) {
   const status = keyStatus(apiKey);
   const scopes = apiKey.scopes.join(", ");
   return (
