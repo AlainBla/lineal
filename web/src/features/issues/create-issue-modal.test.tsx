@@ -490,7 +490,7 @@ describe("Create-Issue-Modal", () => {
     const created: Array<Record<string, unknown>> = [];
     mockGraphql({
       ...handlers((i) => created.push(i)),
-      ParentSearch: () => ({
+      IssuePickerSearch: () => ({
         searchIssues: {
           nodes: [
             { issue: { id: "p1", identifier: "ENG-2", title: "Epic", stateType: "started" } },
@@ -509,7 +509,7 @@ describe("Create-Issue-Modal", () => {
     await userEvent.click(within(dueDialog).getByRole("button", { name: /save/i }));
     await userEvent.click(await screen.findByRole("button", { name: "Parent: none" }));
     await userEvent.type(await screen.findByLabelText("Search issues"), "Epic");
-    await userEvent.click(await screen.findByRole("button", { name: /ENG-2/ }));
+    await userEvent.click(await screen.findByRole("option", { name: /ENG-2/ }));
     await userEvent.click(screen.getByRole("button", { name: /Create issue/ }));
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]).toMatchObject({ dueDate: "2026-12-24", parentId: "p1" });

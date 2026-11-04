@@ -16,12 +16,15 @@ function actions(): IssueActions {
 }
 
 describe("Parent setzen (F.11)", () => {
-  it("sucht ein Issue und setzt es als Parent (ohne das Issue selbst)", async () => {
+  it("sucht ein Issue und setzt es per Tastatur als Parent (ohne Issue und Kinder)", async () => {
     const gql = mockGraphql({
-      ParentSearch: () => ({
+      IssueExtras: () => ({ issue: { id: "i1", children: [makeIssue({ id: "c1", identifier: "ENG-9" })] } }),
+      IssuePickerSearch: () => ({
         searchIssues: {
           nodes: [
             { issue: { id: "i1", identifier: "ENG-5", title: "Kind", stateType: "unstarted" } },
+            { issue: { id: "c1", identifier: "ENG-9", title: "Enkel", stateType: "unstarted" } },
+            { issue: { id: "x1", identifier: "ENG-1", title: "Andere", stateType: "started" } },
             { issue: { id: "p1", identifier: "ENG-2", title: "Epic", stateType: "started" } },
           ],
         },
@@ -30,12 +33,35 @@ describe("Parent setzen (F.11)", () => {
     const a = actions();
     const onClose = vi.fn();
     await renderWithApp(<ParentDialog issue={ISSUE} actions={a} onClose={onClose} />);
+    await waitFor(() => expect(gql.of("IssueExtras").length).toBeGreaterThan(0));
     await userEvent.type(screen.getByLabelText("Search issues"), "Epic");
-    await userEvent.click(await screen.findByRole("button", { name: /ENG-2/ }));
+    await screen.findByRole("option", { name: /ENG-2/ });
     expect(screen.queryByText("ENG-5")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("ENG-9")).toBeNull());
+    await userEvent.keyboard("{ArrowDown}{Enter}");
     expect(a.setParent).toHaveBeenCalledWith(ISSUE, "p1");
     expect(onClose).toHaveBeenCalled();
-    expect(gql.of("ParentSearch")[0]!.variables).toMatchObject({ term: "Epic" });
+    expect(gql.of("IssuePickerSearch")[0]!.variables).toMatchObject({ term: "Epic" });
+  });
+
+  it("blendet weitere Issues der Mehrfachauswahl aus", async () => {
+    mockGraphql({
+      IssueExtras: () => ({ issue: { id: "i1", children: [] } }),
+      IssuePickerSearch: () => ({
+        searchIssues: {
+          nodes: [
+            { issue: { id: "s2", identifier: "ENG-6", title: "Zweites", stateType: "unstarted" } },
+            { issue: { id: "p1", identifier: "ENG-2", title: "Epic", stateType: "started" } },
+          ],
+        },
+      }),
+    });
+    await renderWithApp(
+      <ParentDialog issue={ISSUE} actions={actions()} alsoExclude={["s2"]} onClose={() => {}} />,
+    );
+    await userEvent.type(screen.getByLabelText("Search issues"), "E");
+    await screen.findByRole("option", { name: /ENG-2/ });
+    expect(screen.queryByText("ENG-6")).toBeNull();
   });
 
   it("entfernt den bestehenden Parent", async () => {
