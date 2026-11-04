@@ -47,28 +47,55 @@ const EXT: Record<string, string> = {
   "image/avif": "avif",
 };
 
-/** Dateiname mit Endung: Alt-Texte von Bildern tragen oft keine. */
-export function downloadName(name: string | undefined, type: string): string {
-  const base = (name ?? "").trim().replace(/[\\/:*?"<>|]+/g, "_") || "image";
-  const ext = EXT[type.split(";")[0]!.trim().toLowerCase()];
-  return ext && !/\.[a-z0-9]{2,5}$/i.test(base) ? `${base}.${ext}` : base;
+/** Endung zu einem erlaubten Bildtyp, sonst `undefined`. */
+export function imageExtension(type: string): string | undefined {
+  return EXT[type.split(";")[0]!.trim().toLowerCase()];
 }
 
 /**
- * Lädt eine (same-origin) URL unter dem gegebenen Dateinamen herunter. Über einen Blob, weil der
- * Server per `Content-Disposition` sonst den Speicherschlüssel als Namen vorgibt; schlägt das
- * Laden fehl, bleibt der direkte Link.
+ * Dateiname für einen Bild-Download: die Endung kommt immer aus dem tatsächlichen Inhaltstyp
+ * (ein Alt-Text wie „rechnung.exe“ wird zu „rechnung.png“); Steuer- und Bidi-Zeichen fliegen raus.
+ */
+export function downloadName(name: string | undefined, ext: string): string {
+  const clean = (name ?? "")
+    .replace(/\p{C}/gu, "")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .trim();
+  const base = clean.replace(/\.[^.]*$/, "").trim() || "image";
+  return `${base}.${ext}`;
+}
+
+/** Nur http(s)-URLs des eigenen Ursprungs (Assets, signierte `/files/…`). */
+function sameOriginHref(url: string): string | null {
+  try {
+    const u = new URL(url, window.location.origin);
+    if (u.origin !== window.location.origin) return null;
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lädt ein Bild des eigenen Ursprungs herunter. Über einen Blob, weil der Server per
+ * `Content-Disposition` sonst den Speicherschlüssel als Namen vorgibt. Ist der Inhalt kein
+ * erlaubter Bildtyp oder schlägt das Laden fehl, gilt der direkte Link mit dem Namen des Servers.
+ * Fremde oder nicht-http(s)-URLs werden ignoriert.
  */
 export async function downloadUrl(url: string, filename?: string): Promise<void> {
+  const href = sameOriginHref(url);
+  if (!href) return;
   try {
-    const res = await fetch(url);
+    const res = await fetch(href);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
-    const href = URL.createObjectURL(blob);
-    clickLink(href, downloadName(filename, blob.type));
-    setTimeout(() => URL.revokeObjectURL(href), 10_000);
+    const ext = imageExtension(blob.type);
+    if (!ext) throw new Error("not an image");
+    const objectUrl = URL.createObjectURL(blob);
+    clickLink(objectUrl, downloadName(filename, ext));
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
   } catch {
-    clickLink(url, filename ?? "");
+    clickLink(href, "");
   }
 }
 

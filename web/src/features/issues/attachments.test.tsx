@@ -110,9 +110,9 @@ describe("Anhänge (F.08)", () => {
     const base = globalThis.fetch as unknown as (...a: unknown[]) => Promise<Response>;
     const fetched: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) !== "/files/img") return base(input, init);
-      fetched.push(String(input));
-      return new Response(new Blob(["png"], { type: "image/png" }), { status: 200 });
+      if (!String(input).endsWith("/files/img")) return base(input, init);
+      fetched.push(new URL(String(input)).pathname);
+      return new Response("png", { status: 200, headers: { "content-type": "image/png" } });
     });
     await renderWithApp(
       <>

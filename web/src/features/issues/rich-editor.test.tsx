@@ -68,11 +68,9 @@ describe("RichEditor (TipTap)", () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     closeLightbox();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Fremde Bilder lädt der Download-Knopf nicht (nur der eigene Ursprung).
     await user.click(await within(box).findByRole("button", { name: "Download image" }));
-    await waitFor(() => expect(click).toHaveBeenCalled());
-    const a = click.mock.contexts.at(-1) as HTMLAnchorElement;
-    expect(a.getAttribute("href")).toBe("https://acme.example/logo.png");
-    expect(a.download).toBe("Logo");
+    expect(click).not.toHaveBeenCalled();
     click.mockRestore();
   });
 
