@@ -185,6 +185,58 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
         json!({ "images": [] })
     );
 
+    // LIN-23: get_issue listet hochgeladene Anhänge (Default und `fields`), mit IDs für
+    // get_attachment/delete_attachment; ein anderer Nutzer sieht sie ebenso.
+    let link = call(
+        &env,
+        SeedUser::Bob,
+        "save_issue",
+        json!({ "id": ident, "links": [{ "url": "https://example.org/spec", "title": "Spec" }] }),
+    )
+    .await
+    .unwrap();
+    assert!(link.get("attachments").is_none());
+    let issue_json = call(&env, SeedUser::Alice, "get_issue", json!({ "id": ident }))
+        .await
+        .unwrap();
+    let list = issue_json["attachments"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "{list:?}");
+    let up = list
+        .iter()
+        .find(|a| a["id"] == att["id"])
+        .expect("upload listed");
+    assert_eq!(up["title"], "Login page");
+    assert_eq!(up["contentType"], "image/png");
+    assert_eq!(up["size"], 48213);
+    assert_eq!(up["creator"]["name"], "Bob Example");
+    assert!(up["createdAt"].is_string());
+    assert!(up["expiresAt"].is_string());
+    assert!(up["url"].as_str().unwrap().starts_with("mem://get/"));
+    let ext = list
+        .iter()
+        .find(|a| a["title"] == "Spec")
+        .expect("link listed");
+    assert_eq!(ext["url"], "https://example.org/spec");
+    assert_eq!(ext["expiresAt"], Value::Null);
+    let sel = call(
+        &env,
+        SeedUser::Alice,
+        "get_issue",
+        json!({ "id": ident, "fields": ["attachments"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sel["attachments"].as_array().unwrap().len(), 2);
+    let sel = call(
+        &env,
+        SeedUser::Alice,
+        "get_issue",
+        json!({ "id": ident, "fields": ["title"] }),
+    )
+    .await
+    .unwrap();
+    assert!(sel.get("attachments").is_none());
+
     // Der Anhang taucht in Kommentaren nicht auf, Bilder im Body werden nur für Body-Uploads signiert
     // (Issue-Anhänge sind über get_attachment erreichbar) – Delete zuletzt
     let del = call(
@@ -220,6 +272,10 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
         ),
         ErrorKind::NotFound
     );
+    let after = call(&env, SeedUser::Alice, "get_issue", json!({ "id": ident }))
+        .await
+        .unwrap();
+    assert_eq!(after["attachments"].as_array().unwrap().len(), 1);
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

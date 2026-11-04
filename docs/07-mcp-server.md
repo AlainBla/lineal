@@ -889,7 +889,7 @@ Feldübersicht (gilt für `list_issues`, `get_issue`, `save_issue`):
 | `parentId` | String? | ja | Kennung des Eltern-Issues |
 | `team`, `teamId` | String, UUID | ja | |
 | `cycleId` | UUID? | ja | |
-| `attachments`, `documents`, `stateHistory` | Array | nur `get_issue` | |
+| `attachments`, `documents`, `stateHistory` | Array | nur `get_issue` | `attachments`: alle Issue-Anhänge (Links und hochgeladene Dateien), Form wie `get_attachment` mit `format: "url"`; Upload-URLs signiert bis `expiresAt` (LIN-23). In Kommentaren eingebettete Dateien stehen nicht hier, sondern in `list_comments` |
 | `relations` | Objekt | nur `get_issue` mit `includeRelations` | |
 | `customerNeeds`, `releases` | `[]` | nein | Out of Scope |
 
@@ -1207,7 +1207,7 @@ Feldübersicht (gilt für `list_issues`, `get_issue`, `save_issue`):
   "slaStartedAt": null, "slaMediumRiskAt": null, "slaHighRiskAt": null, "slaBreachesAt": null,
   "status": "In Progress", "statusType": "started", "labels": ["Bug", "Frontend"],
   "attachments": [
-    { "id": "f00d…-att", "title": "screenshot.png", "subtitle": null, "url": "https://uploads.lineal.example/acme/f00d…?sig=…", "contentType": "image/png", "createdAt": "2026-10-10T07:16:00.000Z" }
+    { "id": "f00d…-att", "issue": "ENG-124", "title": "screenshot.png", "subtitle": null, "url": "https://uploads.lineal.example/acme/f00d…?sig=…", "contentType": "image/png", "size": 48213, "createdAt": "2026-10-10T07:16:00.000Z", "creator": { "id": "a11c…-alice", "name": "Alice Example" }, "expiresAt": "2026-10-10T08:07:00.000Z" }
   ],
   "documents": [ { "id": "d0c1…-doc", "title": "Analyse SSO-Fehler", "url": "https://lineal.example/acme/document/analyse-sso-fehler-4a1b2c3d4e5f" } ],
   "stateHistory": [

@@ -173,9 +173,10 @@ fn detail_json(
     handle: &str,
     args: &Value,
     include_relations: bool,
+    attachments: Vec<Value>,
 ) -> AppResult<Value> {
     let mut full = issue_map(&d.view, base_url, handle, false)?;
-    full.insert("attachments".into(), json!([]));
+    full.insert("attachments".into(), Value::Array(attachments));
     full.insert("documents".into(), json!([]));
     full.insert(
         "stateHistory".into(),
@@ -606,7 +607,26 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 .get("includeRelations")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            detail_json(&detail, &base, &handle, &args, include_relations)
+            // Anhänge (Links und hochgeladene Dateien) nur laden, wenn sie ausgegeben werden.
+            let requested = parse_fields(&args);
+            let attachments =
+                if requested.is_empty() || requested.iter().any(|f| f == "attachments") {
+                    app.list_issue_attachments(ctx, &detail.view.issue.identifier)
+                        .await?
+                        .iter()
+                        .map(super::attachments::issue_attachment_json)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            detail_json(
+                &detail,
+                &base,
+                &handle,
+                &args,
+                include_relations,
+                attachments,
+            )
         }
         "save_issue" => {
             let relation_params = [
@@ -669,7 +689,14 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                 relations,
                 state_history: vec![],
             };
-            let mut out = detail_json(&detail, &base, &handle, &json!({}), relation_params)?;
+            let mut out = detail_json(
+                &detail,
+                &base,
+                &handle,
+                &json!({}),
+                relation_params,
+                Vec::new(),
+            )?;
             if let Some(o) = out.as_object_mut() {
                 o.remove("attachments");
                 o.remove("documents");

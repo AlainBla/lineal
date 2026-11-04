@@ -30,6 +30,16 @@ fn attachment_json(v: &AttachmentView) -> Value {
     })
 }
 
+/// Eintrag in `get_issue.attachments` (LIN-23): Metadaten wie bei `get_attachment` mit
+/// `format: "url"`; Upload-URLs sind signiert und laufen nach `expiresAt` ab.
+pub(crate) fn issue_attachment_json(v: &AttachmentView) -> Value {
+    let mut out = attachment_json(v);
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("expiresAt".into(), json!(v.expires_at.map(ts)));
+    }
+    out
+}
+
 /// Bild-URLs aus Markdown (`![alt](url "title")`) und HTML (`<img src="url">`), in Reihenfolge.
 pub(crate) fn image_urls(markdown: &str) -> Vec<String> {
     let mut found: Vec<(usize, String)> = Vec::new();
