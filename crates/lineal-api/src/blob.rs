@@ -466,6 +466,38 @@ fn inline_safe(content_type: &str) -> bool {
     )
 }
 
+/// Dateiendung zum Content-Type (für Downloads ohne Endung im Speicher-Key, LIN-23):
+/// Clients wie Messenger entscheiden über die Vorschau oft anhand der Endung.
+fn extension_for(content_type: &str) -> Option<&'static str> {
+    Some(match essence(content_type).as_str() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        "text/markdown" => "md",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        "application/zip" => "zip",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        _ => return None,
+    })
+}
+
+/// Dateiname für `Content-Disposition`: letzter Key-Teil, bereinigt, ggf. mit Endung.
+fn download_filename(key: &str, content_type: &str) -> String {
+    let name = filename_of(key);
+    match extension_for(content_type) {
+        Some(ext) if !name.contains('.') => format!("{name}.{ext}"),
+        _ => name,
+    }
+}
+
 fn filename_of(key: &str) -> String {
     let name = key.rsplit('/').next().unwrap_or("file");
     let clean: String = name
@@ -511,7 +543,7 @@ pub async fn download(
         } else {
             "attachment"
         },
-        filename_of(&meta.key)
+        download_filename(&meta.key, &meta.content_type)
     );
     let mut res = Body::from_stream(tokio_util::io::ReaderStream::new(file)).into_response();
     let h = res.headers_mut();
@@ -651,6 +683,10 @@ mod tests {
         assert!(!data.to_string_lossy().contains(".."));
         assert!(meta.to_string_lossy().ends_with(".json"));
         assert_eq!(filename_of("a/b/../ev il.html"), "ev_il.html");
+        assert_eq!(download_filename("org/x/01a1-uuid", "image/png"), "01a1-uuid.png");
+        assert_eq!(download_filename("org/x/01a1-uuid", "IMAGE/JPEG; q=1"), "01a1-uuid.jpg");
+        assert_eq!(download_filename("org/x/report.pdf", "image/png"), "report.pdf");
+        assert_eq!(download_filename("org/x/blob", "application/x-unknown"), "blob");
     }
 
     #[tokio::test]
