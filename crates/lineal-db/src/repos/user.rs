@@ -177,6 +177,10 @@ impl UserRepo for PgTx {
                 }
             }
         }
+        if let Some(role) = filter.role {
+            qb.push(" AND u.role = ");
+            qb.push_bind(role.as_str());
+        }
         if let Some(team) = filter.team_id {
             qb.push(
                 " AND EXISTS (SELECT 1 FROM team_membership m WHERE m.organization_id = u.organization_id \

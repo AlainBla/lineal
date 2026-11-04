@@ -112,6 +112,8 @@ pub struct UserFilter {
     pub in_any_team: Option<Vec<TeamId>>,
     /// Auch suspendierte User liefern (nur für die Admin-Mitgliederliste).
     pub include_suspended: bool,
+    /// Nur User mit dieser Rolle (z. B. Bots, Rolle `app`).
+    pub role: Option<UserRole>,
 }
 
 /// Persistenzzugriff des Bereichs `user`.

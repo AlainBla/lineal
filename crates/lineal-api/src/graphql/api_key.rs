@@ -75,7 +75,7 @@ pub struct ApiKeyRevokePayload {
     pub success: bool,
 }
 
-fn to_gql(rec: ApiKeyRecord, teams: &HashMap<Uuid, ApiKeyTeamGql>) -> ApiKeyGql {
+pub(super) fn to_gql(rec: ApiKeyRecord, teams: &HashMap<Uuid, ApiKeyTeamGql>) -> ApiKeyGql {
     ApiKeyGql {
         id: rec.id.to_string(),
         label: rec.label,
@@ -94,7 +94,9 @@ fn to_gql(rec: ApiKeyRecord, teams: &HashMap<Uuid, ApiKeyTeamGql>) -> ApiKeyGql 
 }
 
 /// Für den Viewer sichtbare Teams (inkl. stillgelegter) nach ID.
-async fn visible_teams(ctx: &Context<'_>) -> async_graphql::Result<HashMap<Uuid, ApiKeyTeamGql>> {
+pub(super) async fn visible_teams(
+    ctx: &Context<'_>,
+) -> async_graphql::Result<HashMap<Uuid, ApiKeyTeamGql>> {
     let page = app(ctx)?
         .list_teams(
             request_ctx(ctx)?,
@@ -133,13 +135,56 @@ fn not_found() -> async_graphql::Error {
 }
 
 /// Key-Verwaltung (Anlegen, Auflisten, Widerrufen) nur per Cookie-Session, nie mit API-Key/OAuth.
-fn require_session(ctx: &Context<'_>) -> async_graphql::Result<()> {
+pub(super) fn require_session(ctx: &Context<'_>) -> async_graphql::Result<()> {
     if ctx.data_opt::<CredentialClass>() != Some(&CredentialClass::Session) {
         return Err(gql_err(AppError::forbidden(
             "API keys can only be managed from a browser session.",
         )));
     }
     Ok(())
+}
+
+/// Prüft und übersetzt die GraphQL-Eingabe (Teamzahl, `expiresAt`, Scopes).
+pub(super) fn parse_create_input(
+    input: ApiKeyCreateInput,
+) -> async_graphql::Result<CreateApiKeyInput> {
+    if input
+        .team_ids
+        .as_ref()
+        .is_some_and(|t| t.len() > MAX_KEY_TEAMS)
+    {
+        return Err(gql_err(
+            AppError::invalid_request("too many teams")
+                .with_details(serde_json::json!({ "field": "teamIds" })),
+        ));
+    }
+    let expires_at = match &input.expires_at {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|_| {
+                    gql_err(
+                        AppError::invalid_request("expiresAt must be an ISO-8601 timestamp")
+                            .with_details(serde_json::json!({ "field": "expiresAt" })),
+                    )
+                })?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+    let scopes = input
+        .scopes
+        .iter()
+        .map(|s| match s {
+            ApiKeyScopeGql::Read => "read".to_owned(),
+            ApiKeyScopeGql::Write => "write".to_owned(),
+        })
+        .collect();
+    Ok(CreateApiKeyInput {
+        label: input.label,
+        scopes,
+        teams: input.team_ids,
+        expires_at,
+    })
 }
 
 #[derive(Default)]
@@ -171,47 +216,9 @@ impl ApiKeyMutation {
         input: ApiKeyCreateInput,
     ) -> async_graphql::Result<ApiKeyCreatePayload> {
         require_session(ctx)?;
-        if input
-            .team_ids
-            .as_ref()
-            .is_some_and(|t| t.len() > MAX_KEY_TEAMS)
-        {
-            return Err(gql_err(
-                AppError::invalid_request("too many teams")
-                    .with_details(serde_json::json!({ "field": "teamIds" })),
-            ));
-        }
-        let expires_at = match &input.expires_at {
-            Some(s) => Some(
-                DateTime::parse_from_rfc3339(s)
-                    .map_err(|_| {
-                        gql_err(
-                            AppError::invalid_request("expiresAt must be an ISO-8601 timestamp")
-                                .with_details(serde_json::json!({ "field": "expiresAt" })),
-                        )
-                    })?
-                    .with_timezone(&Utc),
-            ),
-            None => None,
-        };
-        let scopes = input
-            .scopes
-            .iter()
-            .map(|s| match s {
-                ApiKeyScopeGql::Read => "read".to_owned(),
-                ApiKeyScopeGql::Write => "write".to_owned(),
-            })
-            .collect();
+        let input = parse_create_input(input)?;
         let created = app(ctx)?
-            .create_api_key(
-                request_ctx(ctx)?,
-                CreateApiKeyInput {
-                    label: input.label,
-                    scopes,
-                    teams: input.team_ids,
-                    expires_at,
-                },
-            )
+            .create_api_key(request_ctx(ctx)?, input)
             .await
             .map_err(gql_err)?;
         let teams = visible_teams(ctx).await?;

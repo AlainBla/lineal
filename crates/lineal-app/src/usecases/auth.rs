@@ -11,6 +11,7 @@ use crate::context::Actor;
 use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
+use crate::ports::Tx;
 use crate::ports::repos::Principal;
 use crate::ports::repos::auth::LoginCandidate;
 use crate::ports::repos::auth::{ApiKeyRecord, NewApiKey, NewSession};
@@ -117,6 +118,11 @@ impl App {
         }
         for c in &candidates {
             let verdict: Result<(), &'static str> = match &c.password_hash {
+                // Bots (Rolle `app`) handeln nur per API-Key, nie per Browser-Login (LIN-22).
+                Some(_) if c.role == UserRole::App => {
+                    self.burn_verify(&input.password);
+                    Err("app_user")
+                }
                 Some(h) => {
                     if !self.hasher.verify(&input.password, h).unwrap_or(false) {
                         Err("invalid_password")
@@ -332,6 +338,24 @@ impl App {
                 "Token scope does not allow write operations.",
             ));
         }
+        let created = self
+            .mint_api_key(&mut *tx, &snap, ctx, user_id, input, snap.actor.is_admin())
+            .await?;
+        tx.commit().await?;
+        Ok(created)
+    }
+
+    /// Legt einen Key für `user_id` an (gemeinsam für eigene Keys und Bot-Keys). Scopes und
+    /// Teams dürfen die des aufrufenden Tokens nicht übersteigen; `admin` nur mit `allow_admin`.
+    pub(crate) async fn mint_api_key(
+        &self,
+        tx: &mut dyn Tx,
+        snap: &PolicySnapshot,
+        ctx: &RequestCtx,
+        user_id: UserId,
+        input: CreateApiKeyInput,
+        allow_admin: bool,
+    ) -> AppResult<CreatedApiKey> {
         let label =
             lineal_domain::rules::text::validate_single_line_name("label", &input.label, 100)?;
         let mut scopes = vec!["read".to_string()];
@@ -339,7 +363,7 @@ impl App {
             match s.as_str() {
                 "read" => {}
                 "write" if ctx.scopes.write => scopes.push("write".into()),
-                "admin" if ctx.scopes.admin && snap.actor.is_admin() => scopes.push("admin".into()),
+                "admin" if ctx.scopes.admin && allow_admin => scopes.push("admin".into()),
                 "write" | "admin" => {
                     return Err(AppError::forbidden(
                         "The key cannot have more scopes than your own token",
@@ -360,7 +384,7 @@ impl App {
                 let mut ids = Vec::new();
                 for r in refs {
                     ids.push(
-                        resolve::team::resolve_in(&mut *tx, &snap, r, Visibility::Content)
+                        resolve::team::resolve_in(&mut *tx, snap, r, Visibility::Content)
                             .await?
                             .id,
                     );
@@ -432,7 +456,6 @@ impl App {
             ),
         )
         .await?;
-        tx.commit().await?;
         Ok(CreatedApiKey { record, key })
     }
 

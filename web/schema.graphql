@@ -162,6 +162,48 @@ type AuditLogPageInfo {
 	endCursor: String
 }
 
+"""
+`Bot`: ein User mit Rolle `app`.
+"""
+type Bot {
+	id: String!
+	name: String!
+	displayName: String!
+	email: String!
+	"""
+	`false` = suspendiert (Keys wirken dann nicht).
+	"""
+	active: Boolean!
+	createdAt: String!
+	"""
+	Neueste zuerst, inkl. widerrufener.
+	"""
+	apiKeys: [ApiKey!]!
+}
+
+type BotApiKeyCreatePayload {
+	success: Boolean!
+	apiKey: ApiKey!
+	"""
+	Klartext-Token, nur in dieser Antwort.
+	"""
+	token: String!
+}
+
+type BotApiKeyRevokePayload {
+	success: Boolean!
+}
+
+input BotCreateInput {
+	name: String!
+	email: String!
+}
+
+type BotCreatePayload {
+	success: Boolean!
+	bot: Bot!
+}
+
 input ChannelSettingInput {
 	category: String!
 	channel: String!
@@ -1745,6 +1787,18 @@ type Mutation {
 	"""
 	apiKeyRevoke(id: String!): ApiKeyRevokePayload!
 	"""
+	Legt einen Bot an (Rolle `app`, ohne Passwort und ohne E-Mail-Benachrichtigungen).
+	"""
+	botCreate(input: BotCreateInput!): BotCreatePayload!
+	"""
+	Legt einen API-Key für den Bot an (Scopes `read`/`write`).
+	"""
+	botApiKeyCreate(botId: String!, input: ApiKeyCreateInput!): BotApiKeyCreatePayload!
+	"""
+	Widerruft einen Key des Bots (Keys anderer User → `not_found`).
+	"""
+	botApiKeyRevoke(botId: String!, id: String!): BotApiKeyRevokePayload!
+	"""
 	Ändert das eigene Profil.
 	"""
 	viewerUpdate(input: ViewerUpdateInput!): ViewerPayload!
@@ -2448,6 +2502,10 @@ type Query {
 	Eigene API-Keys des Viewers (neueste zuerst, inkl. widerrufener).
 	"""
 	apiKeys: [ApiKey!]!
+	"""
+	Alle Bots des Workspace (inkl. suspendierter), nur für Admins.
+	"""
+	bots: [Bot!]!
 	"""
 	Audit-Log des Workspaces, neueste zuerst. Nur Owner/Admin mit Scope `admin`.
 	"""

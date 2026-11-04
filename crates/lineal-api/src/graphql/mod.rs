@@ -4,6 +4,7 @@
 pub mod account;
 pub mod api_key;
 pub mod audit;
+pub mod bot;
 pub mod comment;
 pub mod cycle;
 pub mod document;
@@ -30,6 +31,7 @@ use std::sync::Arc;
 use account::{AccountMutation, AccountQuery};
 use api_key::{ApiKeyMutation, ApiKeyQuery};
 use audit::AuditQuery;
+use bot::{BotMutation, BotQuery};
 use comment::{CommentMutation, CommentQuery};
 use cycle::{CycleMutation, CycleQuery};
 use document::{DocumentMutation, DocumentQuery};
@@ -70,6 +72,7 @@ pub struct QueryRoot(
     WebhookQuery,
     ImportQuery,
     ApiKeyQuery,
+    BotQuery,
     AuditQuery,
     AccountQuery,
     TeamExtraQuery,
@@ -96,6 +99,7 @@ pub struct MutationRoot(
     WebhookMutation,
     ImportMutation,
     ApiKeyMutation,
+    BotMutation,
     AccountMutation,
     TeamExtraMutation,
 );
