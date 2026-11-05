@@ -69,6 +69,10 @@ export interface DisplayOptions {
   showSubIssues: boolean;
   showCompletedIssues: CompletedWindow;
   showEmptyGroups: boolean;
+  /** Board: leere Status unter „Hidden columns“ statt als Spalte (LIN-24). */
+  hideEmptyColumns: boolean;
+  /** Board: versteckte Status. `null` = nie gesetzt, dann gelten Canceled/Duplicate als versteckt. */
+  hiddenGroups: string[] | null;
   nestedSubIssues: NestedSubIssues;
   displayProperties: DisplayProperty[];
 }
@@ -82,6 +86,8 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   showSubIssues: true,
   showCompletedIssues: "all",
   showEmptyGroups: false,
+  hideEmptyColumns: false,
+  hiddenGroups: null,
   nestedSubIssues: "hide",
   displayProperties: DEFAULT_PROPERTIES,
 };
@@ -142,6 +148,10 @@ export function mergeDisplay(saved: Record<string, unknown> | null | undefined):
   }
   if (typeof saved.showSubIssues === "boolean") out.showSubIssues = saved.showSubIssues;
   if (typeof saved.showEmptyGroups === "boolean") out.showEmptyGroups = saved.showEmptyGroups;
+  if (typeof saved.hideEmptyColumns === "boolean") out.hideEmptyColumns = saved.hideEmptyColumns;
+  if (Array.isArray(saved.hiddenGroups)) {
+    out.hiddenGroups = saved.hiddenGroups.filter((g): g is string => typeof g === "string");
+  }
   return out;
 }
 
@@ -157,6 +167,8 @@ export function isCustomDisplay(o: DisplayOptions): boolean {
     o.showSubIssues !== d.showSubIssues ||
     o.showCompletedIssues !== d.showCompletedIssues ||
     o.showEmptyGroups !== d.showEmptyGroups ||
+    o.hideEmptyColumns !== d.hideEmptyColumns ||
+    o.hiddenGroups !== d.hiddenGroups ||
     o.nestedSubIssues !== d.nestedSubIssues ||
     o.displayProperties.join() !== d.displayProperties.join()
   );

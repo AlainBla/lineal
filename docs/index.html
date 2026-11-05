@@ -3627,7 +3627,7 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <td>UUID</td>
 <td>nein</td>
 <td>aufrufender User</td>
-<td>Ersteller (<code>null</code> bei automatisch angelegten <code>related</code> aus Erwähnungen)</td>
+<td>Ersteller</td>
 <td>FK → User</td>
 </tr>
 </tbody>
@@ -8734,7 +8734,7 @@ function stats(issues):
 </table>
 <p>Wirkung: <code>retiredAt = now</code>. Team, Einstellungen und Issues werden <strong>read-only</strong>: jede schreibende Aktion auf das Team oder seine Issues liefert <code>forbidden</code> mit <code>details.reason = "team_retired"</code> (Ausnahme: <code>restoreTeam</code>, <code>deleteTeam</code>). Keine neuen Issues, keine neuen Mitglieder (<code>teamMembershipCreate</code> lehnt ab), das Team ist kein Ziel für Teamwechsel. Das Team verschwindet aus Sidebar und Team-Pickern, bleibt aber über Suche, Links und <code>includeArchived</code>-ähnliche Filter (<code>retiredAt</code>-Filter) lesbar. Cycle-Job und Auto-Close überspringen das Team; Auto-Archive läuft weiter (Festlegung Lineal). Projekte, deren <strong>sämtliche</strong> Teams retired sind, werden read-only.</p>
 <p><strong>Restore.</strong> <code>retiredAt = null</code>; alles wird wieder schreibbar. Bei einem Sub-Team muss der Parent aktiv sein, sonst <code>invalid_request</code>.</p>
-<p><strong>Löschen.</strong> Recht wie Retire. Das Team bekommt <code>archivedAt = now</code> und <code>deletionScheduledAt = now + trashRetentionDays</code>. Es ist für alle Nicht-Admins sofort unsichtbar (<code>not_found</code>), seine Issues verschwinden aus allen Listen, der Suche und den Inboxen. Aktive Sub-Teams müssen vorher behandelt werden: Parameter <code>handleSubTeams = unnest | delete</code> (Festlegung Lineal), sonst <code>invalid_request</code>. Projekte, an denen nur dieses Team beteiligt ist, wandern mit in den Papierkorb; bei Multi-Team-Projekten wird das Team entfernt (Abschnitt 8.3), wobei ein neues Lead-Team gewählt wird (das beteiligte Team mit den meisten Issues im Projekt, bei Gleichstand das älteste). Während der Frist kann ein Workspace-<code>admin</code>/<code>owner</code> das Team in „Recently deleted teams“ wiederherstellen (<code>teamUnarchive</code>); Projekte aus dem Papierkorb kommen mit zurück, entfernte Multi-Team-Zuordnungen nicht. Nach Ablauf löscht ein Job Team, Issues, Status, Labels, Cycles, Templates und Mitgliedschaften endgültig. Die Keys des Teams werden erst dann frei.</p>
+<p><strong>Löschen.</strong> Recht wie Retire. Das Team bekommt <code>archivedAt = now</code> und <code>deletionScheduledAt = now + trashRetentionDays</code>. Es ist für alle Nicht-Admins sofort unsichtbar (<code>not_found</code>), seine Issues verschwinden aus allen Listen, der Suche und den Inboxen. Aktive Sub-Teams müssen vorher behandelt werden: Parameter <code>handleSubTeams = unnest | delete</code> (Festlegung Lineal), sonst <code>invalid_request</code>. Projekte, an denen nur dieses Team beteiligt ist, wandern mit in den Papierkorb; bei Multi-Team-Projekten wird das Team entfernt (Abschnitt 8.3), wobei ein neues Lead-Team gewählt wird (das beteiligte Team mit den meisten Issues im Projekt, bei Gleichstand das älteste). Während der Frist kann ein Workspace-<code>admin</code>/<code>owner</code> das Team in „Recently deleted teams“ wiederherstellen (<code>teamUnarchive</code>); Projekte aus dem Papierkorb kommen mit zurück, entfernte Multi-Team-Zuordnungen nicht. Nach Ablauf löscht ein Job Team, Issues, Status, Labels, Cycles, Templates und Mitgliedschaften endgültig; Initiativen mit diesem Lead-Team werden mit gelöscht (Festlegung Lineal: sie werden nie „geöffnet“, denn eine Initiative ohne Lead-Team ist für alle Nicht-Gäste sichtbar). Die Keys des Teams werden erst dann frei.</p>
 <hr />
 <h2 id="ch-02-teams-rechte-3-sub-teams">3. Sub-Teams</h2>
 <h3 id="ch-02-teams-rechte-3-1-hierarchie">3.1 Hierarchie</h3>
@@ -10608,7 +10608,7 @@ function createIssue(input, user):
     issue.sortOrder = topOf(team, issue.state)
     if data.slaBreachesAt == null: evaluateSlaRules(issue, trigger = &quot;create&quot;)   // 11
     subscribe(creator, assignee, mentionedUsers(description))
-    createRelationsFromMentions(issue)            // 4.1
+    recordMentionBacklinks(issue)                 // 4.1 (keine Relation)
     insert issue; insert IssueHistory(kind = &quot;created&quot;)
     if issue.state.type == &quot;triage&quot;: runTriageResponsibility(issue)   // 10.6
     notify (nach Commit): issueAssignedToYou, issueMention, issueAddedToTriage, issuePriorityUrgent, issueCreated (Team-Abos)
@@ -10641,7 +10641,7 @@ function createIssue(input, user):
 <tr>
 <td><code>description</code></td>
 <td>Markdown ≤ 500 000 Zeichen (<strong>Festlegung</strong>); Patch-Anker eindeutig</td>
-<td>neue Mentions → Subscribe + <code>related</code>-Relationen (4.1); Versionsstand und Snapshot in <code>DocumentContent</code>/<code>DocumentContentHistory</code> (<a href="#ch-06-dokumente-templates">06-dokumente-templates.md</a> §1.3)</td>
+<td>neue Mentions → Subscribe; Issue-Kennungen → Rückverweise (4.1, keine Relation); Versionsstand und Snapshot in <code>DocumentContent</code>/<code>DocumentContentHistory</code> (<a href="#ch-06-dokumente-templates">06-dokumente-templates.md</a> §1.3)</td>
 <td><code>updatedDescription = true</code>, <code>descriptionUpdatedBy</code></td>
 <td><code>issueMention</code> an neu erwähnte User</td>
 </tr>
@@ -10840,7 +10840,7 @@ function createIssue(input, user):
 <tr>
 <td><code>ENG-123</code> bzw. Issue-URL</td>
 <td>Issue</td>
-<td>Link; legt eine <code>related</code>-Relation an (4.1), falls noch keine Relation zwischen beiden besteht</td>
+<td>Link; erscheint als Rückverweis „Mentioned in“ am erwähnten Issue (4.1); legt <strong>keine</strong> Relation an</td>
 </tr>
 <tr>
 <td>Projekt-, Dokument-URL</td>
@@ -10991,7 +10991,12 @@ function createIssue(input, user):
 <li>Relationen sind team-übergreifend erlaubt; der Aufrufer muss beide Issues sehen dürfen.</li>
 <li>Doppeltes Anlegen ist idempotent (keine Fehlermeldung, kein History-Eintrag).</li>
 <li>Eine <code>blocks</code>-Relation, deren Blocker geschlossen ist, bleibt gespeichert; die UI zeigt sie dann unter „Related“ an, und die Subscriber des blockierten Issues erhalten <code>issueUnblocked</code>.</li>
-<li>Wird ein Issue in <code>description</code> oder einem Kommentar erwähnt, wird automatisch eine <code>related</code>-Relation angelegt, sofern noch keine Relation zwischen beiden besteht. Entfernen der Erwähnung entfernt die Relation <strong>nicht</strong>.</li>
+<li><strong>Erwähnungen sind keine Relationen (LIN-12).</strong> Wird ein Issue (<code>ENG-123</code>, auch als Teil einer Issue-URL) in <code>description</code> oder einem Kommentar erwähnt, entsteht <strong>keine</strong> <code>related</code>-Relation mehr (beiläufige Nennungen und Beispiele erzeugten sonst falsche Beziehungen). Stattdessen zeigt das erwähnte Issue die Liste „Mentioned in“ (GraphQL <code>Issue.mentionedIn</code>): Kennung und Titel des erwähnenden Issues und ob die Erwähnung aus der Beschreibung oder einem Kommentar stammt; Klick führt zum erwähnenden Issue.</li>
+<li><strong>Speicherung:</strong> Tabelle <code>issue_mention(source_issue_id, source_comment_id NULL, target_issue_id, …)</code>. Gewählt statt Berechnung zur Lesezeit, weil <code>search_vector</code> eine workspace-abhängige Konfiguration/Stemming nutzt und <code>ENG-123</code> darin in Teiltoken zerfällt – eine exakte Suche wäre ein Scan mit Nachfilterung. Die Zeilen einer Quelle werden beim Speichern der Beschreibung bzw. des Kommentars <strong>ersetzt</strong> (Entfernen der Erwähnung entfernt den Rückverweis), beim Löschen eines Kommentars entfernt und mit Quell-/Ziel-Issue per Cascade gelöscht. Die Migration trägt den Bestand näherungsweise nach.</li>
+<li><strong>Live-Aktualisierung (LIN-17):</strong> Ändern sich die Rückverweise eines Issues (neue/entfernte Erwähnung durch Beschreibung oder Kommentar, Kommentar gelöscht), schreibt der Schreibpfad je betroffenem Ziel-Issue das Domain-Event <code>IssueMentionsChanged { issue_id }</code> (nur die ID). Der Sync-Konsument macht daraus eine normale <code>U</code>-Aktion für das Issue (Gruppen und Sichtbarkeit wie bei jeder Issue-Änderung); der Web-Client lädt daraufhin die Detaildaten (<code>mentionedIn</code>) neu. Quell-Informationen stehen nicht im Event; die Sichtbarkeit der Quelle prüft weiter das Lesen.</li>
+<li><strong>Extraktion:</strong> wie <code>extract_identifiers</code> (Wortgrenzen, höchstens 20 je Text), Code (Inline und Fenced) wird ignoriert; das Issue selbst, Unbekanntes, für den Autor Unsichtbares und Papierkorb-Issues werden übergangen. Importe (<code>source = import</code>) legen keine Rückverweise an.</li>
+<li><strong>Sichtbarkeit:</strong> beim Lesen werden nur Quellen geliefert, die der Aufrufer sehen darf (Issue sichtbar bzw. geteilt, nicht im Papierkorb, Kommentar nicht gelöscht).</li>
+<li>Bereits früher automatisch angelegte <code>related</code>-Relationen bleiben bestehen (sie sind nicht von manuell angelegten unterscheidbar) und lassen sich wie jede Relation entfernen.</li>
 <li>Append-Semantik in API/MCP: <code>blocks</code>, <code>blockedBy</code>, <code>relatedTo</code> fügen nur hinzu; entfernt wird über <code>removeBlocks</code>, <code>removeBlockedBy</code>, <code>removeRelatedTo</code> (siehe <a href="#ch-07-mcp-server">07-mcp-server.md</a>).</li>
 </ul>
 <h3 id="ch-03-issues-workflow-4-2-history-und-benachrichtigungen">4.2 History und Benachrichtigungen</h3>
@@ -15525,11 +15530,18 @@ function compileVirtual(alias, key, v, ctx):
 <td>Gruppenköpfe</td>
 </tr>
 <tr>
+<td>Hide empty columns</td>
+<td><code>hideEmptyColumns</code></td>
+<td>Boolean</td>
+<td><code>false</code></td>
+<td>Board im Team: leere Status stehen unter „Hidden columns“ („Empty“) statt als Spalte; „leer“ meint die Treffer nach Filtern</td>
+</tr>
+<tr>
 <td>Hidden groups / columns</td>
 <td><code>hiddenGroups</code></td>
-<td>Liste von Gruppenschlüsseln</td>
-<td><code>[]</code></td>
-<td>Board: versteckte Spalten am Ende, bleiben Drop-Ziele</td>
+<td>Liste von Gruppenschlüsseln (höchstens 200)</td>
+<td>ungesetzt</td>
+<td>Board: versteckte Spalten am Ende, bleiben Drop-Ziele (außer Duplicate, das nur über die Relation entsteht). Ungesetzt heißt: Canceled und Duplicate sind versteckt; <code>[]</code> heißt: nichts ist versteckt</td>
 </tr>
 <tr>
 <td>Display properties</td>
@@ -15572,6 +15584,7 @@ function compileVirtual(alias, key, v, ctx):
     &quot;showTriageIssues&quot;: { &quot;type&quot;: &quot;boolean&quot; },
     &quot;showClosedProjects&quot;: { &quot;enum&quot;: [&quot;all&quot;, &quot;pastWeek&quot;, &quot;pastMonth&quot;, &quot;pastYear&quot;, &quot;none&quot;] },
     &quot;groupCountMode&quot;: { &quot;enum&quot;: [&quot;count&quot;, &quot;estimateSum&quot;] },
+    &quot;hideEmptyColumns&quot;: { &quot;type&quot;: &quot;boolean&quot; },
     &quot;hiddenGroups&quot;: { &quot;type&quot;: &quot;array&quot;, &quot;items&quot;: { &quot;type&quot;: &quot;string&quot; } },
     &quot;displayProperties&quot;: { &quot;type&quot;: &quot;array&quot;, &quot;items&quot;: { &quot;type&quot;: &quot;string&quot; }, &quot;uniqueItems&quot;: true },
     &quot;timelineZoom&quot;: { &quot;enum&quot;: [&quot;week&quot;, &quot;month&quot;, &quot;quarter&quot;, &quot;year&quot;] },
@@ -15835,7 +15848,7 @@ function compileVirtual(alias, key, v, ctx):
 </tr>
 <tr>
 <td><code>pastDay</code> / <code>pastWeek</code> / <code>pastTwoWeeks</code> / <code>pastMonth</code></td>
-<td><code>coalesce(completedAt, canceledAt) &gt;= now − P1D / P1W / P1M</code></td>
+<td><code>coalesce(completedAt, canceledAt) &gt;= now − P1D / P1W / P2W / P1M</code></td>
 </tr>
 <tr>
 <td><code>currentCycle</code></td>
@@ -19885,7 +19898,7 @@ function findUnique(buf, needle, from):
 <td><code>attachments</code>, <code>documents</code>, <code>stateHistory</code></td>
 <td>Array</td>
 <td>nur <code>get_issue</code></td>
-<td></td>
+<td><code>attachments</code>: alle Issue-Anhänge (Links und hochgeladene Dateien), Form wie <code>get_attachment</code> mit <code>format: "url"</code>; Upload-URLs signiert bis <code>expiresAt</code> (LIN-23). In Kommentaren eingebettete Dateien stehen nicht hier, sondern in <code>list_comments</code></td>
 </tr>
 <tr>
 <td><code>relations</code></td>
@@ -20242,7 +20255,7 @@ function findUnique(buf, needle, from):
   &quot;slaStartedAt&quot;: null, &quot;slaMediumRiskAt&quot;: null, &quot;slaHighRiskAt&quot;: null, &quot;slaBreachesAt&quot;: null,
   &quot;status&quot;: &quot;In Progress&quot;, &quot;statusType&quot;: &quot;started&quot;, &quot;labels&quot;: [&quot;Bug&quot;, &quot;Frontend&quot;],
   &quot;attachments&quot;: [
-    { &quot;id&quot;: &quot;f00d…-att&quot;, &quot;title&quot;: &quot;screenshot.png&quot;, &quot;subtitle&quot;: null, &quot;url&quot;: &quot;https://uploads.lineal.example/acme/f00d…?sig=…&quot;, &quot;contentType&quot;: &quot;image/png&quot;, &quot;createdAt&quot;: &quot;2026-10-10T07:16:00.000Z&quot; }
+    { &quot;id&quot;: &quot;f00d…-att&quot;, &quot;issue&quot;: &quot;ENG-124&quot;, &quot;title&quot;: &quot;screenshot.png&quot;, &quot;subtitle&quot;: null, &quot;url&quot;: &quot;https://uploads.lineal.example/acme/f00d…?sig=…&quot;, &quot;contentType&quot;: &quot;image/png&quot;, &quot;size&quot;: 48213, &quot;createdAt&quot;: &quot;2026-10-10T07:16:00.000Z&quot;, &quot;creator&quot;: { &quot;id&quot;: &quot;a11c…-alice&quot;, &quot;name&quot;: &quot;Alice Example&quot; }, &quot;expiresAt&quot;: &quot;2026-10-10T08:07:00.000Z&quot; }
   ],
   &quot;documents&quot;: [ { &quot;id&quot;: &quot;d0c1…-doc&quot;, &quot;title&quot;: &quot;Analyse SSO-Fehler&quot;, &quot;url&quot;: &quot;https://lineal.example/acme/document/analyse-sso-fehler-4a1b2c3d4e5f&quot; } ],
   &quot;stateHistory&quot;: [
@@ -24475,7 +24488,7 @@ If the direct upload failed or the signed URL expired, rerun prepare_attachment_
 </tr>
 <tr>
 <td>Board-Layout</td>
-<td>Spalten = Grouping (Default Status), optional Swimlanes = Sub-grouping; Spaltenkopf mit Anzahl („2 / 7“ bei Filter), „…“ und „+“; leere Spalten unter „Hidden columns“; Karte: ID, Status-Icon, Titel, Assignee, Property-Chips, „Created …“</td>
+<td>Spalten = Grouping (Default Status), optional Swimlanes = Sub-grouping; Spaltenkopf mit Anzahl („2 / 7“ bei Filter), „…“ und „+“; ausgeblendete Spalten (Standard Canceled/Duplicate, von Hand über „…“ → „Hide column“, leere Status mit der Display-Option „Hide empty columns“ unter „Empty“) einzeln mit Anzahl unter „Hidden columns“; Klick auf einen Eintrag blendet die Spalte für die Sitzung ein oder aus, „Keep visible“ im „…“-Menü hebt das Verstecken dauerhaft auf; Einträge sind Drop-Ziele (außer Duplicate); Karte: feste Höhe (ID, Status-Icon, Titel einzeilig mit Ellipsis, Assignee, Label-Chips einzeilig mit „+N“), Hover-Details mit vollem Titel, allen Labels, Status, Priorität, Assignee; Drop in andere Spalte ohne Rückflug-Animation</td>
 </tr>
 <tr>
 <td>Fußzeile</td>
@@ -28086,7 +28099,7 @@ If the direct upload failed or the signed URL expired, rerun prepare_attachment_
 <li>Agent: <code>list_issues</code> mit <code>assignee: "me"</code>, <code>team: "ENG"</code>, <code>state: "started"</code> → Bobs laufende Issues, darunter <code>ENG-132</code>.</li>
 <li>Agent: <code>get_issue</code> <code>ENG-132</code> → Beschreibung, Relationen (<code>blockedBy DES-42</code>), Kommentare.</li>
 <li>Agent: <code>save_issue</code> ohne <code>id</code>: <code>team: "WEB"</code>, <code>title: "Fehlermeldung bei leerem Warenkorb fehlt"</code>, <code>description</code> (Markdown), <code>labels: ["Bug"]</code>, <code>priority: 2</code>, <code>relatedTo: ["ENG-132"]</code> → <code>WEB-58</code> (Bob ist Mitglied von <code>WEB</code>, daher keine Triage).</li>
-<li>Agent: <code>save_comment</code> mit <code>issueId: "ENG-132"</code>, <code>body: "Beim Testen gefunden: WEB-58"</code> → Kommentar erscheint in der Web-App mit Quelle „via MCP“; die Erwähnung legt zusätzlich eine <code>related</code>-Relation an, sofern noch keine besteht.</li>
+<li>Agent: <code>save_comment</code> mit <code>issueId: "ENG-132"</code>, <code>body: "Beim Testen gefunden: WEB-58"</code> → Kommentar erscheint in der Web-App mit Quelle „via MCP“; WEB-58 zeigt den Kommentar unter „Mentioned in“ (keine Relation).</li>
 <li>Agent: <code>save_issue</code> mit <code>id: "WEB-58"</code>, <code>state: "started"</code>, <code>assignee: "me"</code> → erster <code>started</code>-Status von <code>WEB</code> (Kategoriename als Referenz, <a href="#ch-00-konventionen">00 §2</a>).</li>
 <li>Bob sieht alle Änderungen live in der Web-App (Sync), mit sich selbst als Akteur und dem Hinweis „via MCP“. In Settings → Account → Security &amp; access kann er die Autorisierung widerrufen.</li>
 </ol>
@@ -33372,7 +33385,7 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <p>Bereinigt gegenüber <code>docs/dev/offene-punkte.md</code> (erledigte Punkte entfernt):</p>
 <ul>
 <li><strong>Sync:</strong> Tab-Leader-Wahl im Web fehlt; der Web-Client hält weiter TanStack-Query-Caches (kein normalisierter Objektgraph), <code>/sync/bootstrap</code> befüllt daher beim Erststart nur das Personenverzeichnis (siehe §4.2); <code>/sync</code> und <code>/sync/bootstrap</code> liegen nicht hinter dem In-Process-Rate-Limit der API.</li>
-<li><strong>Issues:</strong> <code>moveSubIssues</code>, Bulk-Move, <code>issueBatchUpdate</code>, Label-Merge/-Delete, Erwähnung <code>ENG-123</code> → <code>related</code>-Relation, Duplicate-Subscriber-Übernahme; der Abo-Zustand eines Issues als GraphQL-Feld. (<code>Issue.children</code>, <code>relations</code> und <code>history</code> gibt es für die Detailansicht; sie laden beim Zugriff nach und gehören nicht in Listenabfragen. Die Web-Detailansicht lädt sie mit einer eigenen Query <code>IssueExtras</code> (Query-Key <code>["issue-detail", id]</code>, Invalidierung bei eigenen Mutationen und Sync-Events zu Issue/IssueRelation): Sub-Issues teamübergreifend aus <code>children</code>, Relationen aus <code>relations</code>, Aktivitätsverlauf aus <code>history</code> chronologisch gemischt mit den Kommentaren, IDs über die Caches in Namen aufgelöst, geschwärzte Ziele als „ein privates Element“.)</li>
+<li><strong>Issues:</strong> <code>moveSubIssues</code>, Bulk-Move, <code>issueBatchUpdate</code>, Label-Merge/-Delete, Erwähnung <code>ENG-123</code> → Rückverweis „Mentioned in“ (LIN-12, keine Relation), Duplicate-Subscriber-Übernahme; der Abo-Zustand eines Issues als GraphQL-Feld. (<code>Issue.children</code>, <code>relations</code> und <code>history</code> gibt es für die Detailansicht; sie laden beim Zugriff nach und gehören nicht in Listenabfragen. Die Web-Detailansicht lädt sie mit einer eigenen Query <code>IssueExtras</code> (Query-Key <code>["issue-detail", id]</code>, Invalidierung bei eigenen Mutationen und Sync-Events zu Issue/IssueRelation): Sub-Issues teamübergreifend aus <code>children</code>, Relationen aus <code>relations</code>, Aktivitätsverlauf aus <code>history</code> chronologisch gemischt mit den Kommentaren, IDs über die Caches in Namen aufgelöst, geschwärzte Ziele als „ein privates Element“.)</li>
 <li><strong>Teams/Nesting:</strong> Label-Merge (die Vorschau zeigt gleichnamige Labels, <code>nestTeam</code> führt sie nicht zusammen; es gibt kein <code>labelMapping</code>), Cycle-Instanzen und Projektstatus-Neuauflösung beim Nesting; <code>update_team</code> stößt die Cycle-Generierung nicht sofort an (Job holt innerhalb 1 min nach).</li>
 <li><strong>Issues:</strong> <code>issueRelationDelete</code>, ein MCP-Tool für Mehrfachänderungen (docs/07 beschreibt keines) und die Mehrfachauswahl in „My Issues“ (nur in den Team-Issues vorhanden). (<code>Issue.children</code>, <code>relations</code> und <code>history</code> gibt es für die Detailansicht; sie laden beim Zugriff nach und gehören nicht in Listenabfragen. Die Web-Detailansicht lädt sie mit einer eigenen Query <code>IssueExtras</code> (Query-Key <code>["issue-detail", id]</code>, Invalidierung bei eigenen Mutationen und Sync-Events zu Issue/IssueRelation): Sub-Issues teamübergreifend aus <code>children</code>, Relationen aus <code>relations</code>, Aktivitätsverlauf aus <code>history</code> chronologisch gemischt mit den Kommentaren, IDs über die Caches in Namen aufgelöst, geschwärzte Ziele als „ein privates Element“.)</li>
 <li><strong>Teams/Nesting:</strong> Label-Merge, Cycle-Instanzen und Projektstatus-Neuauflösung beim Nesting; <code>update_team</code> stößt die Cycle-Generierung nicht sofort an (Job holt innerhalb 1 min nach).</li>
@@ -33389,7 +33402,7 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <li><strong>Dokumente/Templates (WP34):</strong> erledigt sind Papierkorb-Kaskade (Issue, Projekt, Team inkl. Cycle-Dokumente, mit Wiederherstellung), endgültiges Löschen (Job <code>purge</code>: Dokumente und Projekte nach <code>trashRetentionDays</code>, verwaiste Inhalte/Snapshots), Snapshot-Bündelung (<code>documentUpdate(autosave: true)</code>, 10/60 Minuten), <code>@Name</code>-Erwähnungen in Dokumenten (<code>documentMention</code>) und Verlinkung von Issue-Kennungen in der Ausgabe, Form-Templates und <code>useDefaultTemplate</code> (GraphQL <code>issueCreate</code>/<code>projectCreate</code>, <code>templateId</code>, <code>formAnswers</code>). Die Echtzeit-Kollaboration (docs/06 §1.9 Stufe 2) ist seit WP36 gebaut (§3.5); Stufe 1 bleibt Fallback und Schreibweg für API/MCP. Offen: Fenster der Bündelung als Workspace-Einstellung (derzeit Konstanten), <code>documentContentChange</code>-Benachrichtigung und Dokument-Abo-Fan-out außer Erwähnungen. Die Web-UI für Template-Auswahl und Formulare beim Anlegen ist seit Paket F-B vorhanden (§2.2).</li>
 <li><strong>Views/Suche:</strong> Favoriten umsortieren, View-Abos, Eigentümerwechsel. Stemming ist erledigt (WP34): Volltextkonfiguration je Workspace <code>simple</code> (Default), <code>german</code> oder <code>english</code> (<code>workspaceFulltextConfigUpdate</code>, Migration 3100); der Wechsel baut alle Suchvektoren in einer Transaktion neu auf; keine Web-Auswahl.</li>
 <li><strong>Web:</strong> Filter-Chips aus <code>filterData</code> zurückwandeln, Initiativen-Tabs, Roadmap-Timeline, Team-Settings (SLA/Hierarchie/Webhooks/Recurring; Estimates, Automations und Templates sind vorhanden), Workspace-Settings (Limits; Teams, Members, Security, API, Labels und Templates sind vorhanden), Account-Settings.</li>
-<li><strong>Webhooks/Auth:</strong> <code>client_credentials</code>, App-User und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (<code>UrlPolicy</code>) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.</li>
+<li><strong>Webhooks/Auth:</strong> <code>client_credentials</code>, App-User über OAuth (Bots mit API-Keys gibt es seit LIN-22, siehe §4) und feingranulare Scopes; Notification bei Webhook-Deaktivierung; SSRF-Bausteine (<code>UrlPolicy</code>) für alle ausgehenden HTTP-Pfade; Legacy-SSE-/stdio-MCP.</li>
 <li><strong>Import:</strong> Der erste echte Lauf ist erfolgt; Korrekturen und der regelmäßige Abgleich (Sync, Konfliktregel je Objekt, Archivieren gelöschter Objekte, „Inhalte neu laden“) sowie die Zuordnung von Platzhaltern stehen in docs/13 §12–14. Abfragen sind gegen das öffentliche Linear-Schema validiert (WP28); Teilimport (Projektfilter, Zielteam) in docs/13 §10; Views, Favoriten, Issue-Reaktionen und Kommentare an Projekt-Updates werden importiert (WP34, docs/13 §11), der Dry-Run zählt Downloads per HEAD; offen: Favoriten-Ordner nur eine Ebene, Views anderer Modelle (Customer, Cycle, Document), Kommentare an Initiative-Updates; Sub-Issues anderer Projekte entfallen beim Projektfilter.</li>
 <li><strong>Rate-Limit:</strong> In-Process-Verteidigung in der Tiefe (siehe 4.4); weitere Feinheiten (u. a. Fehlversuchs-Zähler der Token-Prüfung ohne Reservierung, geteilter Überlauf-Bucket) sind als offene Punkte notiert.</li>
 </ul>
@@ -33405,7 +33418,7 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <li><strong><code>moveSubIssues</code></strong> (<code>issueUpdate</code> und <code>issueBatchUpdate</code>): beim Teamwechsel ziehen alle Nachfahren (höchstens 500, Tiefe ≤ 10) mit demselben Algorithmus in derselben Transaktion ins Zielteam; nicht sichtbare Sub-Issues bleiben unberührt, ohne dass sich das zeigt.</li>
 <li><strong>Archivieren</strong> ist von „Löschen“ getrennt: <code>archive</code> setzt nur <code>archivedAt</code> (History-Flag <code>archived</code>, wiederherstellbar mit <code>issueUnarchive</code>); <code>delete</code> legt in den Papierkorb.</li>
 <li><strong>Labels zusammenführen/löschen</strong> (<code>issueLabelMerge</code>, <code>issueLabelDelete</code>, <code>issueLabelUsage</code>; Web: Schaltflächen „Merge“/„Delete“ im Label-Manager mit Bestätigungsdialog und Anzahl betroffener Issues, nur Issue-Labels): Merge hängt alle Issues um (ohne Duplikate), ersetzt die Label-ID in Issue-Templates und in <code>filterData</code> gespeicherter Views und löscht die Quelle; Gruppen lassen sich nicht zusammenführen, das Ziel darf nicht retired sein, nicht in einer <code>singleSelect</code>-Gruppe liegen und muss in allen betroffenen Teams verfügbar sein. Delete entfernt das Label (Gruppen samt Kindern) von allen Issues, schreibt je Issue History (<code>removedLabelIds</code>, keine Notifications) und löscht endgültig. Delete und Merge verlangen das Verwaltungsrecht des Labels und zusätzlich Admin/Owner bzw. Team-Owner (docs/03 §5.4); Anzahl und <code>issueLabelUsage</code> zählen nur Issues in für den Aufrufer sichtbaren Teams.</li>
-<li><strong>Erwähnung einer Kennung</strong> (<code>ENG-123</code> in Beschreibung oder Kommentar, auch als Teil einer Issue-URL): legt eine <code>related</code>-Relation an, wenn der Aufrufer beide Issues bearbeiten darf (das Gegenstück ist sichtbar und beschreibbar), nicht im Papierkorb liegt und noch keine Relation (egal welchen Typs) besteht. Es zählen nur neu hinzugekommene Kennungen (höchstens 20 je Text); das Entfernen der Erwähnung entfernt die Relation nicht. Unbekannte oder unsichtbare Kennungen werden ohne Fehler übergangen.</li>
+<li><strong>Erwähnung einer Kennung</strong> (<code>ENG-123</code> in Beschreibung oder Kommentar, auch als Teil einer Issue-URL; Code ausgenommen): legt seit LIN-12 keine <code>related</code>-Relation mehr an, sondern einen Rückverweis (Tabelle <code>issue_mention</code>, Migration 4500; GraphQL <code>Issue.mentionedIn</code>, Abschnitt „Mentioned in“ in der Detailansicht). Die Zeilen einer Quelle werden beim Speichern ersetzt; höchstens 20 Kennungen je Text; unbekannte, für den Autor unsichtbare oder Papierkorb-Issues werden übergangen; Importe überspringen das. Lesen filtert auf Quellen, die der Aufrufer sehen darf.</li>
 <li><strong>Duplikat markieren</strong>: Abonnenten des Duplikats werden zusätzlich Abonnenten des Originals, sofern sie dessen Team sehen dürfen (Grund <code>addedByOther</code>, Event <code>IssueSubscriptionCreated</code>); am Duplikat behalten sie ihr Abo.</li>
 <li><strong><code>Issue.subscribed</code></strong>: Abo-Zustand des Aufrufers (aktives Issue-Abo, ohne reine Thread-Abos), geladen mit der Detail-Query <code>IssueExtras</code>. Die Glocke im Activity-Abschnitt der Detailansicht („Subscribe“/„Unsubscribe“) zeigt den Serverzustand und schaltet per <code>issueSubscribe</code>/<code>issueUnsubscribe</code> um.</li>
 </ul>
@@ -33498,6 +33511,21 @@ lineal import linear-csv --org acme --file export.csv --team ENG
 <td>nur für <code>admins</code>: Komma-Liste von User-UUIDs (<code>lineal create-workspace</code> gibt die ID des Owners aus). Erlaubt ist nur ein aktiver User mit Rolle Owner/Admin und dieser ID. Bewusst keine E-Mail und kein <code>url_key</code>: E-Mails legt jeder Workspace-Admin beliebig an, <code>url_key</code>s lassen sich umbenennen und neu belegen. Ungültige UUIDs verhindern den Start</td>
 </tr>
 <tr>
+<td><code>LINEAL_SMTP_HOST</code></td>
+<td>leer</td>
+<td>SMTP-Relay ohne Anmeldung und ohne TLS (z. B. Postfix auf demselben Host; im Docker-Stack <code>host.docker.internal</code>). Leer = Mails (Einladungen, E-Mail-Digest) werden nur geloggt</td>
+</tr>
+<tr>
+<td><code>LINEAL_SMTP_PORT</code></td>
+<td><code>25</code></td>
+<td>Port des SMTP-Relays</td>
+</tr>
+<tr>
+<td><code>LINEAL_MAIL_FROM</code></td>
+<td>–</td>
+<td>Absender, z. B. <code>Lineal &lt;lineal@example.org&gt;</code>; Pflicht, wenn <code>LINEAL_SMTP_HOST</code> gesetzt ist (ungültige Adresse verhindert den Start). Zustellung, Wiederholung, SPF/DKIM sind Aufgabe des Relays</td>
+</tr>
+<tr>
 <td><code>LINEAL_OWNER_PASSWORD</code></td>
 <td>–</td>
 <td>nur für <code>lineal create-workspace</code>: Passwort des Owners (sonst interaktive Abfrage ohne Echo)</td>
@@ -33563,7 +33591,7 @@ LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNE
 # Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Login mit der Owner-E-Mail
 </code></pre>
 <p>Der App-Stack hat eine eigene Datenbank <code>app-db</code> (postgres:16, Volume <code>appdata</code>, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB <code>postgres</code> (Port 5440). Ohne <code>LINEAL_DB_PASSWORD</code> startet <code>app-db</code> nicht (klare Meldung im Log); <code>docker compose up</code> ohne Profil braucht keine Variablen. <code>LINEAL_WORKSPACE_CREATION</code> (Default <code>disabled</code>) und <code>LINEAL_INSTANCE_ADMINS</code> werden an Server und Worker durchgereicht; Vorlage in <code>.env.example</code>.</p>
-<p>Dienste: <code>app-db</code>, <code>migrate</code> (Einmal-Job, Server und Worker warten auf Erfolg), <code>server</code> (Netze <code>default</code> + <code>edge</code>), <code>worker</code>, <code>web</code> (nur Netz <code>edge</code>, Port <code>127.0.0.1:${LINEAL_HTTP_PORT:-8088}</code>). <code>LINEAL_TRUSTED_PROXIES</code> ist nur die feste Adresse des nginx-Containers <code>172.31.88.10/32</code> (nicht das Subnetz: Das Gateway <code>.1</code> ist der Host). Blobs liegen im Volume <code>blobs</code> (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor <code>web</code> terminieren, <code>LINEAL_BASE_URL=https://…</code> setzen (Cookie <code>Secure</code>, CSRF-Origin) und in <code>deploy/nginx.conf</code> <code>set_real_ip_from &lt;TLS-Proxy&gt;</code> + <code>real_ip_header X-Forwarded-For</code> ergänzen, sonst sieht der Server die Adresse des TLS-Proxys als Client-IP. Die Seed-User haben ein bekanntes Passwort; <code>seed</code> läuft deshalb nur mit <code>LINEAL_DEV=1</code> oder <code>--allow-insecure-demo-users</code> (im Container: <code>-e LINEAL_DEV=1</code>), nur für Demo-Installationen.</p>
+<p>Dienste: <code>app-db</code>, <code>migrate</code> (Einmal-Job, Server und Worker warten auf Erfolg), <code>server</code> (Netze <code>default</code> + <code>edge</code>), <code>worker</code>, <code>web</code> (nur Netz <code>edge</code>, Port <code>127.0.0.1:${LINEAL_HTTP_PORT:-8088}</code>). <code>LINEAL_TRUSTED_PROXIES</code> ist nur die feste Adresse des nginx-Containers <code>172.31.88.10/32</code> (nicht das Subnetz: Das Gateway <code>.1</code> ist der Host). Blobs liegen im Volume <code>blobs</code> (Server und Worker teilen es). Für den Betrieb im Internet: TLS vor <code>web</code> terminieren, <code>LINEAL_BASE_URL=https://…</code> setzen (Cookie <code>Secure</code>, CSRF-Origin) und der Host-Proxy muss die Client-IP in <code>X-Forwarded-For</code> setzen bzw. überschreiben. <code>deploy/nginx.conf</code> vertraut dafür dem Gateway des edge-Netzes (<code>set_real_ip_from 172.31.88.1</code>, <code>real_ip_header X-Forwarded-For</code>; bei anderem Subnetz anpassen), sonst teilen alle Clients die Gateway-Adresse (ein gemeinsamer Rate-Limit-Eimer). Die Seed-User haben ein bekanntes Passwort; <code>seed</code> läuft deshalb nur mit <code>LINEAL_DEV=1</code> oder <code>--allow-insecure-demo-users</code> (im Container: <code>-e LINEAL_DEV=1</code>), nur für Demo-Installationen.</p>
 <h3 id="ch-15-umsetzungsstand-3-2d-backup-und-restore">3.2d Backup und Restore</h3>
 <p><code>scripts/backup.sh</code> sichert den App-Stack (Profil <code>app</code>) in <code>${LINEAL_BACKUP_DIR:-./backups}/lineal-&lt;UTC-Zeitstempel&gt;/</code> (Rechte 700):</p>
 <ul>
@@ -33600,7 +33628,9 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 <ul>
 <li>Session-Cookie <code>lineal_session</code> (<code>HttpOnly</code>, <code>SameSite=Lax</code>, <code>Secure</code> bei https); API-Keys und OAuth-Tokens per <code>Authorization</code>. Tokens liegen nur als SHA-256-Hash in der Datenbank. Die Token-Art bestimmt die Tabelle des Treffers (<code>Principal.kind</code>), nicht der Transportweg: Cookie nur für Sessions, <code>Authorization</code> nie für Sessions (sonst 401, zählt als Fehlversuch; auch <code>/auth/me</code>).</li>
 </ul>
-<p><strong>API-Keys in der Oberfläche (WP19).</strong> Einstellungsseite <code>/{ws}/settings/api</code> (persönlich; Eintrag „API“ in der Settings-Navigation): Liste der eigenen Keys (Label, Präfix, Scopes, Teams, zuletzt benutzt, Ablauf, Status), Dialog „New API key“ (Label ≤ 100 Zeichen, Read immer, optional Write, optionale Team-Auswahl – keine Auswahl = alle Teams, optionales Ablaufdatum), danach einmalige Token-Anzeige mit Kopieren-Button und Warnhinweis (der Klartext lebt nur im Dialogzustand, nicht im Query-Cache), Widerruf mit Bestätigung. GraphQL: <code>apiKeys</code> (nur eigene Keys, nie Hash/Klartext), <code>apiKeyCreate(input: {label, scopes: [READ|WRITE], teamIds?, expiresAt?})</code> mit <code>token</code> nur in dieser Antwort, <code>apiKeyRevoke(id)</code> (fremde IDs <code>not_found</code>, auch für Admins). Regeln: Anlegen nur mit echter Web-Session (<code>RequestCtx.via_session</code>; API-Key/OAuth → <code>forbidden</code>), ein team-beschränkter Aufrufer erzeugt nur Keys innerhalb seines Team-Scopes, <code>teamIds</code> nur sichtbare Teams (sonst <code>not_found</code>), höchstens 25 aktive Keys je User (<code>limit_exceeded</code>), kein <code>admin</code>-Scope über die UI.
+<p><strong>API-Keys in der Oberfläche (WP19).</strong> Einstellungsseite <code>/{ws}/settings/api</code> (persönlich; Eintrag „API“ in der Settings-Navigation): Liste der eigenen Keys (Label, Präfix, Scopes, Teams, zuletzt benutzt, Ablauf, Status), Dialog „New API key“ (Label ≤ 100 Zeichen, Read immer, optional Write, optionale Team-Auswahl – keine Auswahl = alle Teams, optionales Ablaufdatum), danach einmalige Token-Anzeige mit Kopieren-Button und Warnhinweis (der Klartext lebt nur im Dialogzustand, nicht im Query-Cache), Widerruf mit Bestätigung. GraphQL: <code>apiKeys</code> (nur eigene Keys, nie Hash/Klartext), <code>apiKeyCreate(input: {label, scopes: [READ|WRITE], teamIds?, expiresAt?})</code> mit <code>token</code> nur in dieser Antwort, <code>apiKeyRevoke(id)</code> (fremde IDs <code>not_found</code>, auch für Admins). Regeln: Anlegen nur mit echter Web-Session (<code>RequestCtx.via_session</code>; API-Key/OAuth → <code>forbidden</code>), ein team-beschränkter Aufrufer erzeugt nur Keys innerhalb seines Team-Scopes, <code>teamIds</code> nur sichtbare Teams (sonst <code>not_found</code>), höchstens 25 aktive Keys je User (<code>limit_exceeded</code>), kein <code>admin</code>-Scope über die UI.</p>
+<p><strong>Bots (LIN-22).</strong> Workspace-Admins legen unter <code>/{ws}/settings/members</code> (Bereich „Bots“) Bots an: User mit Rolle <code>app</code>, Name und E-Mail (Anzeigename wie bei Einladungen aus der E-Mail, Invite-Domain-Regel gilt), ohne Passwort, mit <code>emailEnabled: false</code> (keine Digests). Ein Browser-Login ist für die Rolle <code>app</code> auch mit gesetztem Passwort gesperrt. Pro Bot erzeugen Admins API-Keys (derselbe Dialog wie bei eigenen Keys; Scopes nur <code>read</code>/<code>write</code>, optional Teams und Ablauf) und widerrufen sie; ein Bot-Key handelt als <code>Actor::App</code> (z. B. Kommentar von <code>@lineal-bot</code>), in öffentlichen Teams wie ein Mitglied, private Teams über die normale Teammitgliedschaft. Suspendieren läuft über die Mitgliederliste. GraphQL: <code>bots</code>, <code>botCreate(input: {name, email})</code>, <code>botApiKeyCreate(botId, input)</code> (Token nur in dieser Antwort), <code>botApiKeyRevoke(botId, id)</code> (Keys anderer User → <code>not_found</code>); alles nur Owner/Admin mit <code>admin</code>-Scope per Web-Session. Audit: <code>bot.created</code>, <code>bot.api_key_created</code> (zusätzlich <code>api_key.created</code>), <code>api_key.revoked</code>. Einschränkung: die Team-Auswahl im Key-Dialog zeigt die Teams des Admins.</p>
+<p><strong>MCP: Anhänge in <code>get_issue</code> (LIN-23).</strong> <code>get_issue.attachments</code> war bisher immer <code>[]</code>. Jetzt liefert es alle Anhänge des Issues, Links und hochgeladene Dateien, in derselben Form wie <code>get_attachment</code> mit <code>format: "url"</code>: <code>id</code>, <code>issue</code>, <code>title</code>, <code>subtitle</code>, <code>url</code>, <code>contentType</code>, <code>size</code>, <code>createdAt</code>, <code>creator</code>, <code>expiresAt</code>. Damit sind <code>get_attachment</code> und <code>delete_attachment</code> ohne gemerkte Upload-ID nutzbar. Geladen wird nur, wenn <code>attachments</code> ausgegeben wird (Default oder in <code>fields</code>). In Kommentaren eingebettete Dateien bleiben in <code>list_comments</code>. Ein eigenes <code>list_attachments</code> gibt es nicht; <code>get_issue</code> mit <code>fields: ["attachments"]</code> erfüllt denselben Zweck.
 - CSRF für Cookie-Sessions: <code>POST /graphql</code> und <code>POST /auth/logout</code> verlangen einen erlaubten <code>Origin</code> (ersatzweise <code>Referer</code>) <strong>und</strong> den Header <code>X-Lineal-CSRF: 1</code>; <code>/auth/login</code>, <code>/oauth/authorize</code> (der session-gebundene Nonce ist das Token) und signierte Uploads prüfen nur den Origin. Anfragen mit <code>Authorization</code>-Header sowie <code>/mcp</code> und <code>/sync</code> (eigene Origin-Prüfung) sind ausgenommen.
 - Einladungen: <code>POST /invite/accept</code> (JSON <code>token</code>, <code>email</code>, <code>name?</code>, <code>password</code>) nimmt eine Einladung ohne Session an, legt den User an bzw. verknüpft den Platzhalter und setzt das Session-Cookie; ungültige Tokens oder fremde E-Mails antworten einheitlich <code>404</code>; CSRF wie beim Login (nur Origin). Die Web-Seite <code>/invite/&lt;token&gt;</code> (öffentlich, außerhalb von <code>$ws</code> und ohne App-Shell; Root-Guard lässt <code>/invite/…</code> ohne Session durch) fragt E-Mail (Nachweis, serverseitig geprüft), Name, Passwort (mind. 8 Zeichen) und Wiederholung ab, sendet <code>POST /invite/accept</code> mit <code>X-Lineal-CSRF: 1</code> und leitet nach <code>/&lt;ws&gt;/inbox</code>. Abgelaufene, widerrufene, angenommene und ungültige Links sowie fremde E-Mails zeigen dieselbe neutrale Meldung (der Server unterscheidet sie bewusst nicht). Ist bereits eine Session vorhanden, bietet die Seite „Mit diesem Konto annehmen“ (GraphQL <code>acceptInvitation</code>) oder „neues Konto anlegen“. Es gibt keinen Vorschau-Endpunkt: Die E-Mail muss ohnehin eingegeben werden, und ein Vorschau-Endpunkt würde Token-Gültigkeit und Workspace-Namen an Unangemeldete verraten. Die Seite setzt <code>referrer: no-referrer</code>; nginx liefert <code>/invite/*</code> mit <code>Cache-Control: no-store</code> und <code>Referrer-Policy: no-referrer</code>; der Vite-Proxy leitet nur <code>/invite/accept</code> an den Server.
 - Mitglieder und Einladungen (Web): <code>/{ws}/settings/members</code> (Settings-Navigation „Members“) zeigt die sichtbaren Workspace-Mitglieder (Name; die GraphQL-Sicht <code>UserRef</code> liefert weder E-Mail noch Rolle, die eigene Rolle kommt aus <code>/auth/me</code>) und die offenen Einladungen (E-Mail, Rolle, Teams, Ablauf, Status; „Resend“, „Revoke“) sowie den Dialog „Invite people“ (mehrere Adressen, Rolle, Teams; Gäste brauchen ein Team; Admin-Rolle nur für Owner/Admin). Gäste sehen nur einen Hinweis; für andere Rollen entscheidet der Server (<code>invitationsRole</code>, Antwort <code>forbidden</code> → Hinweis statt Liste); Serverfehler (z. B. Adresse bereits Mitglied) erscheinen im Dialog. E2E: F16 (<code>web/e2e/invite.e2e.ts</code>; setzt den Token per SQL auf einen bekannten Hash, da der Dev-Mailer nichts versendet und nur der Hash gespeichert wird).

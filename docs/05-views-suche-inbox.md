@@ -720,7 +720,8 @@ Anzeigeoptionen bestimmen, **wie** die Treffermenge einer Liste dargestellt wird
 | Show triage issues | `showTriageIssues` | Boolean | `false` | Projekt-Issue-Views |
 | Closed projects | `showClosedProjects` | `all`, `pastWeek`, `pastMonth`, `pastYear`, `none` | `all` | Projekt-Listen |
 | Group count | `groupCountMode` | `count`, `estimateSum` | `count` | Gruppenköpfe |
-| Hidden groups / columns | `hiddenGroups` | Liste von Gruppenschlüsseln | `[]` | Board: versteckte Spalten am Ende, bleiben Drop-Ziele |
+| Hide empty columns | `hideEmptyColumns` | Boolean | `false` | Board im Team: leere Status stehen unter „Hidden columns“ („Empty“) statt als Spalte; „leer“ meint die Treffer nach Filtern |
+| Hidden groups / columns | `hiddenGroups` | Liste von Gruppenschlüsseln (höchstens 200) | ungesetzt | Board: versteckte Spalten am Ende, bleiben Drop-Ziele (außer Duplicate, das nur über die Relation entsteht). Ungesetzt heißt: Canceled und Duplicate sind versteckt; `[]` heißt: nichts ist versteckt |
 | Display properties | `displayProperties` | Teilmenge von `id`, `status`, `assignee`, `priority`, `project`, `dueDate`, `milestone`, `cycle`, `labels`, `links`, `timeInStatus`, `createdAt`, `updatedAt`, `estimate`, `creator`, `slaStatus` (Projekte: `id`, `milestones`, `summary`, `priority`, `status`, `health`, `teams`, `initiatives`, `lead`, `members`, `dependencies`, `startDate`, `targetDate`, `issues`, `createdAt`, `updatedAt`, `completedAt`, `labels`) | Issues: `id`, `status`, `assignee`, `priority`, `project`, `dueDate`, `labels`, `createdAt`; Projekte: `health`, `priority`, `lead`, `targetDate`, `issues`, `status` | rein visuell |
 | Timeline zoom | `timelineZoom` | `week`, `month`, `quarter`, `year` | `quarter` | nur `timeline` |
 
@@ -752,6 +753,7 @@ Einschränkungen: **Triage** und **Inbox** erlauben nur Ordering (kein Grouping,
     "showTriageIssues": { "type": "boolean" },
     "showClosedProjects": { "enum": ["all", "pastWeek", "pastMonth", "pastYear", "none"] },
     "groupCountMode": { "enum": ["count", "estimateSum"] },
+    "hideEmptyColumns": { "type": "boolean" },
     "hiddenGroups": { "type": "array", "items": { "type": "string" } },
     "displayProperties": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "timelineZoom": { "enum": ["week", "month", "quarter", "year"] },

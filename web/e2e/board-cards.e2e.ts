@@ -287,6 +287,78 @@ test("board: Hidden columns lists every hidden column with its count", async ({ 
   await expect(page.getByRole("region", { name: "Canceled" })).toHaveCount(0);
 });
 
+test("board: hidden and empty columns persist, and a card drops onto a hidden entry", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await login(page, "bob");
+  const title = unique("Ziehen");
+  const id = await createIssue(page, "ENG", title);
+  await setStatus(page, id, "Todo");
+  const state = unique("Leer");
+  const eng = `(SELECT t.id FROM team t WHERE t.key = 'ENG')`;
+  sql(
+    `INSERT INTO workflow_state (organization_id, team_id, name, type, color, position)
+     SELECT s.organization_id, s.team_id, '${state}', 'started', '#22c55e', s.position + 0.5
+     FROM workflow_state s WHERE s.team_id = ${eng} AND s.name = 'In Progress'`,
+  );
+  try {
+    await openBoard(page);
+    const region = (name: string) => page.getByRole("region", { name });
+    const rail = page.getByRole("complementary", { name: "Hidden columns" });
+    await expect(region(state)).toBeVisible();
+
+    // Auto-Hide ist eine Option und übersteht einen Reload.
+    await page.getByRole("button", { name: "Display" }).click();
+    await page.getByRole("switch", { name: "Hide empty columns" }).click();
+    await page.keyboard.press("Escape");
+    await expect(region(state)).toHaveCount(0);
+    const entry = rail.getByRole("button", { name: `Show ${state} column` });
+    await expect(entry).toBeVisible();
+    await page.reload();
+    await expect(entry).toBeVisible();
+    await expect(region(state)).toHaveCount(0);
+    await shot(page, "hide-empty");
+
+    // Drop auf den Eintrag setzt den Status; die Spalte hat dann Treffer und kommt zurück.
+    await card(page, title).scrollIntoViewIfNeeded();
+    const from = (await card(page, title).boundingBox())!;
+    const to = (await entry.boundingBox())!;
+    await dragTo(
+      page,
+      { x: from.x + 40, y: from.y + 12 },
+      { x: to.x + to.width / 2, y: to.y + to.height / 2 },
+    );
+    await shot(page, "hide-empty-drop");
+    await page.mouse.up();
+    await expect(region(state).getByText(title)).toBeVisible();
+
+    // Von Hand verstecken übersteht einen Reload; Klick blendet ein, Keep visible hebt es auf.
+    await page.getByRole("button", { name: "Todo column options" }).click();
+    await page.getByRole("menuitem", { name: "Hide column" }).click();
+    await expect(region("Todo")).toHaveCount(0);
+    await page.reload();
+    const todo = rail.getByRole("button", { name: "Show Todo column" });
+    await expect(todo).toBeVisible();
+    await expect(region("Todo")).toHaveCount(0);
+    await todo.click();
+    await expect(region("Todo")).toBeVisible();
+    await page.getByRole("button", { name: "Todo column options" }).click();
+    await page.getByRole("menuitem", { name: "Keep visible" }).click();
+    await page.reload();
+    await expect(region("Todo")).toBeVisible();
+    await expect(rail.getByRole("button", { name: /Todo column/ })).toHaveCount(0);
+  } finally {
+    await page.getByRole("button", { name: "Display" }).click();
+    await page.getByRole("button", { name: "Reset" }).click();
+    sql(
+      `UPDATE issue SET state_id = (SELECT w.id FROM workflow_state w WHERE w.team_id = ${eng} AND w.name = 'Todo')
+       WHERE identifier = '${id}'`,
+    );
+    sql(`UPDATE workflow_state SET archived_at = now() WHERE name = '${state}'`);
+  }
+});
+
 test("board: column headers stay visible while scrolling", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 520 });
   await login(page, "alice");

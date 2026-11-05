@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import type { Issue, WorkflowState } from "@/gql/graphql";
 
 import { BulkActions, type BulkKind } from "./bulk-actions";
+import { useBoardVisibility } from "./board-visibility";
 import { IssueBoard } from "./issue-board";
 import { useSelection } from "./selection";
 import { useSelectAll } from "./use-select-all";
@@ -105,6 +106,7 @@ function MyIssuesList({
   const lookup = useIssueLookup(metas);
 
   const columns = useMemo(() => typeColumns(issues), [issues]);
+  const visibility = useBoardVisibility(columns);
   const grid = useMemo(
     () =>
       layout === "board"
@@ -169,6 +171,7 @@ function MyIssuesList({
       <>
         <IssueBoard
           columns={columns}
+          visibility={visibility}
           ws={ws}
           lookup={lookup}
           focusedId={focusedId}

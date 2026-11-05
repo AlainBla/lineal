@@ -26,6 +26,9 @@ pub const VIEW_TYPES: [&str; 12] = [
 /// keine favorisierbare Ansicht (daher nicht in [`VIEW_TYPES`]).
 pub const PROJECT_ISSUES: &str = "projectIssues";
 
+/// Obergrenze für `hiddenGroups`: gespeicherte Prefs bleiben klein, auch bei fremden Clients.
+const MAX_HIDDEN_GROUPS: usize = 200;
+
 /// Entität, auf die sich die Optionen beziehen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -193,6 +196,7 @@ pub fn system_defaults(view_type: Option<&str>, kind: Kind) -> Map<String, Value
     m.insert("nestedSubIssues".into(), json!("hide"));
     m.insert("showEmptyGroups".into(), json!(false));
     m.insert("showEmptySubGroups".into(), json!(false));
+    m.insert("hideEmptyColumns".into(), json!(false));
     m.insert("showTriageIssues".into(), json!(false));
     m.insert("showClosedProjects".into(), json!("all"));
     m.insert("groupCountMode".into(), json!("count"));
@@ -253,10 +257,18 @@ pub fn validate_patch(
                         .all(|x| x.as_str().is_some_and(|s| DISPLAY_PROPERTIES.contains(&s)))
             }),
             "groupCountMode" => matches!(v.as_str(), Some("count" | "estimateSum")),
+            // Gruppenschlüssel des Boards. Bewusst kein System-Default: ungesetzt heißt
+            // „Canceled/Duplicate versteckt“, `[]` heißt „nichts versteckt“ (docs/05 §2.1).
+            "hiddenGroups" => v.as_array().is_some_and(|a| {
+                a.len() <= MAX_HIDDEN_GROUPS
+                    && a.iter()
+                        .all(|x| x.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 64))
+            }),
             "orderCompletedByRecency"
             | "showSubIssues"
             | "showEmptyGroups"
             | "showEmptySubGroups"
+            | "hideEmptyColumns"
             | "showTriageIssues" => v.is_boolean(),
             _ => return Err(bad(k, "unknown option")),
         };
@@ -382,6 +394,28 @@ mod tests {
         // Projekt-Gruppierungen gelten nicht für Issues.
         assert!(!ok(json!({"grouping": "health"}), Kind::Issues, None));
         assert!(ok(json!({"grouping": "health"}), Kind::Projects, None));
+    }
+
+    #[test]
+    fn board_column_options_are_validated() {
+        let ok = |p: Value| validate_patch(&p, Kind::Issues, Some("teamAll")).is_ok();
+        assert!(ok(json!({"hideEmptyColumns": true})));
+        assert!(!ok(json!({"hideEmptyColumns": "yes"})));
+        assert!(ok(json!({"hiddenGroups": []})));
+        assert!(ok(
+            json!({"hiddenGroups": ["01a1a1dc-a053-7172-8c87-615a31f6cfc1"]})
+        ));
+        assert!(!ok(json!({"hiddenGroups": "todo"})));
+        assert!(!ok(json!({"hiddenGroups": [1]})));
+        assert!(!ok(json!({"hiddenGroups": [""]})));
+        assert!(!ok(json!({"hiddenGroups": ["x".repeat(65)]})));
+        assert!(!ok(
+            json!({"hiddenGroups": vec!["a"; MAX_HIDDEN_GROUPS + 1]})
+        ));
+        // Ungesetzt und leer unterscheiden sich, daher kein Default.
+        let defaults = system_defaults(Some("teamAll"), Kind::Issues);
+        assert!(!defaults.contains_key("hiddenGroups"));
+        assert_eq!(defaults["hideEmptyColumns"], false);
     }
 
     #[test]

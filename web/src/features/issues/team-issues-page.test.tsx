@@ -72,6 +72,75 @@ describe("Team-Issues", () => {
     expect(localStorage.getItem("lineal-issues-layout:ENG:all")).toBe("board");
   });
 
+  describe("versteckte Board-Spalten (LIN-24)", () => {
+    const board = async (values: Record<string, unknown> = {}) => {
+      localStorage.setItem("lineal-issues-layout:ENG:all", "board");
+      const gql = mockGraphql({
+        TeamMeta: meta,
+        TeamIssues: () => ({
+          issues: { nodes: ISSUES.slice(0, 3), hasNextPage: false, endCursor: null },
+        }),
+        ViewPrefs: () => ({ viewPreferences: { values, hasPersonal: true, hasDefault: false } }),
+        ViewPrefsUpdate: () => ({ viewPreferencesUpdate: { hasPersonal: true } }),
+      });
+      await renderWithApp(<TeamIssuesPage ws="acme" teamKey="ENG" view="all" />);
+      await screen.findByRole("complementary", { name: "Hidden columns" });
+      return gql;
+    };
+    const saved = (gql: ReturnType<typeof mockGraphql>) =>
+      gql.calls
+        .filter((c) => c.operation === "ViewPrefsUpdate")
+        .map((c) => c.variables.preferences);
+
+    it("Hide empty columns legt leere Status unter Empty und speichert die Option", async () => {
+      const gql = await board();
+      expect(screen.getByRole("region", { name: "Done" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /display/i }));
+      await userEvent.click(await screen.findByRole("switch", { name: "Hide empty columns" }));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "Done" })).toBeNull());
+      const rail = screen.getByRole("complementary", { name: "Hidden columns" });
+      expect(within(rail).getByRole("heading", { name: "Empty" })).toBeInTheDocument();
+      expect(within(rail).getByRole("button", { name: "Show Done column" })).toBeInTheDocument();
+      expect(saved(gql)).toContainEqual({ hideEmptyColumns: true });
+    });
+
+    it("Hide column versteckt die Spalte samt Standard-Status; Karten sind nicht mehr erreichbar", async () => {
+      const gql = await board();
+      await userEvent.click(screen.getByRole("button", { name: "Todo column options" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Hide column" }));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "Todo" })).toBeNull());
+      expect(screen.queryByText("Erstes")).toBeNull();
+      const rail = screen.getByRole("complementary", { name: "Hidden columns" });
+      expect(within(rail).getByRole("button", { name: "Show Todo column" })).toHaveTextContent("1");
+      const [patch] = saved(gql) as Array<{ hiddenGroups: string[] }>;
+      expect(patch?.hiddenGroups).toContain("s-todo");
+      expect(patch?.hiddenGroups).toHaveLength(
+        TEAM_META.states.filter((s) => s.type === "canceled" || s.type === "duplicate").length + 1,
+      );
+    });
+
+    it("Klick blendet ein und aus; Keep visible hebt das Verstecken auf", async () => {
+      const gql = await board({ hiddenGroups: ["s-progress"] });
+      await userEvent.click(await screen.findByRole("button", { name: "Show In Progress column" }));
+      await screen.findByRole("region", { name: "In Progress" });
+      await userEvent.click(screen.getByRole("button", { name: "Hide In Progress column" }));
+      await waitFor(() => expect(screen.queryByRole("region", { name: "In Progress" })).toBeNull());
+      await userEvent.click(screen.getByRole("button", { name: "Show In Progress column" }));
+      await userEvent.click(
+        await screen.findByRole("button", { name: "In Progress column options" }),
+      );
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Keep visible" }));
+      await waitFor(() => expect(saved(gql)).toContainEqual({ hiddenGroups: [] }));
+      expect(screen.queryByRole("complementary", { name: "Hidden columns" })).toBeNull();
+    });
+
+    it("sagt es, wenn alle Spalten versteckt sind", async () => {
+      await board({ hideEmptyColumns: true, hiddenGroups: ["s-backlog", "s-todo", "s-progress"] });
+      expect(await screen.findByText("All columns are hidden")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show Todo column" })).toBeInTheDocument();
+    });
+  });
+
   it("sortiert die Liste standardmäßig nach Priorität; Ordering in den Display options wechselt, wird je Team gespeichert und aktiviert Manual-DnD (F.13)", async () => {
     const same = [
       makeIssue({ id: "p0", identifier: "ENG-1", title: "Ohne", stateId: "s-todo", priority: 0 }),

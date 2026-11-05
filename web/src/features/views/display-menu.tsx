@@ -113,6 +113,7 @@ export function DisplayMenu({
   customized,
   compact,
   showLayout,
+  boardOptions,
 }: {
   options: DisplayOptions;
   onChange: (patch: Partial<DisplayOptions>) => void;
@@ -124,6 +125,8 @@ export function DisplayMenu({
   compact?: boolean;
   /** List/Board-Umschalter anbieten (nur, wo die Ansicht beides darstellen kann). */
   showLayout?: boolean;
+  /** Block „Board options“ anbieten (nur auf Boards, die versteckte Spalten kennen). */
+  boardOptions?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const desc = options.orderDirection === "desc";
@@ -278,6 +281,17 @@ export function DisplayMenu({
             checked={options.showEmptyGroups}
             onChange={(showEmptyGroups) => onChange({ showEmptyGroups })}
           />
+          {boardOptions && (
+            <>
+              <hr className="border-border" />
+              <div className="text-sm font-medium">Board options</div>
+              <Toggle
+                label="Hide empty columns"
+                checked={options.hideEmptyColumns}
+                onChange={(hideEmptyColumns) => onChange({ hideEmptyColumns })}
+              />
+            </>
+          )}
           <hr className="border-border" />
           <div className="text-sm font-medium">Display properties</div>
           <div role="group" aria-label="Display properties" className="flex flex-wrap gap-1.5">

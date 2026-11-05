@@ -683,10 +683,22 @@ mod tests {
         assert!(!data.to_string_lossy().contains(".."));
         assert!(meta.to_string_lossy().ends_with(".json"));
         assert_eq!(filename_of("a/b/../ev il.html"), "ev_il.html");
-        assert_eq!(download_filename("org/x/01a1-uuid", "image/png"), "01a1-uuid.png");
-        assert_eq!(download_filename("org/x/01a1-uuid", "IMAGE/JPEG; q=1"), "01a1-uuid.jpg");
-        assert_eq!(download_filename("org/x/report.pdf", "image/png"), "report.pdf");
-        assert_eq!(download_filename("org/x/blob", "application/x-unknown"), "blob");
+        assert_eq!(
+            download_filename("org/x/01a1-uuid", "image/png"),
+            "01a1-uuid.png"
+        );
+        assert_eq!(
+            download_filename("org/x/01a1-uuid", "IMAGE/JPEG; q=1"),
+            "01a1-uuid.jpg"
+        );
+        assert_eq!(
+            download_filename("org/x/report.pdf", "image/png"),
+            "report.pdf"
+        );
+        assert_eq!(
+            download_filename("org/x/blob", "application/x-unknown"),
+            "blob"
+        );
     }
 
     #[tokio::test]

@@ -8,8 +8,11 @@ import {
   filterAssigned,
   filterByView,
   groupByStateType,
+  hiddenStateIds,
   nextFocus,
   previewMove,
+  splitBoardColumns,
+  type BoardColumn,
   relationInput,
   slugify,
   stateTypeInView,
@@ -207,5 +210,72 @@ describe("Labels, Relationen, Verschieben, Hilfen", () => {
     expect(filterAssigned([A, recent, old], now).map((i) => i.id)).toEqual(["a", "r"]);
     const groups = groupByStateType([A, C, recent]);
     expect(groups.map((g) => g.label)).toEqual(["Started", "Unstarted", "Completed"]);
+  });
+});
+
+describe("splitBoardColumns", () => {
+  const col = (id: string, type: string, count = 0) =>
+    ({
+      state: { id, name: id, type },
+      issues: Array.from({ length: count }, (_, i) => ({ id: `${id}-${i}` })),
+    }) as unknown as BoardColumn;
+  const cols = [
+    col("todo", "unstarted", 2),
+    col("review", "started"),
+    col("done", "completed", 1),
+    col("canceled", "canceled", 1),
+    col("dup", "duplicate"),
+  ];
+  const split = (
+    over: Partial<Parameters<typeof splitBoardColumns>[1]> = {},
+    columns: BoardColumn[] = cols,
+  ) => {
+    const r = splitBoardColumns(columns, {
+      hiddenGroups: null,
+      hideEmpty: false,
+      revealed: new Set(),
+      ...over,
+    });
+    return {
+      shown: r.shown.map((c) => c.state.id),
+      hidden: r.hidden.map((h) => `${h.column.state.id}:${h.reason}:${h.open}`),
+    };
+  };
+
+  it("versteckt ohne gespeicherte Liste nur Canceled und Duplicate, leere Spalten bleiben", () => {
+    expect(split()).toEqual({
+      shown: ["todo", "review", "done"],
+      hidden: ["canceled:manual:false", "dup:manual:false"],
+    });
+  });
+
+  it("eine gespeicherte Liste ersetzt den Standard, auch als leere Liste", () => {
+    expect(split({ hiddenGroups: [] }).hidden).toEqual([]);
+    expect(split({ hiddenGroups: ["todo"] })).toEqual({
+      shown: ["review", "done", "canceled", "dup"],
+      hidden: ["todo:manual:false"],
+    });
+  });
+
+  it("Auto-Hide legt leere Status hinter die versteckten; versteckt bleibt versteckt", () => {
+    expect(split({ hideEmpty: true })).toEqual({
+      shown: ["todo", "done"],
+      hidden: ["canceled:manual:false", "dup:manual:false", "review:empty:false"],
+    });
+  });
+
+  it("eine Spalte mit Treffern kommt beim Auto-Hide von selbst zurück", () => {
+    const filled = cols.map((c) => (c.state.id === "review" ? col("review", "started", 1) : c));
+    expect(split({ hideEmpty: true }, filled).shown).toContain("review");
+  });
+
+  it("eingeblendete Spalten erscheinen, ihr Eintrag bleibt in der Liste", () => {
+    const r = split({ hideEmpty: true, revealed: new Set(["review", "canceled"]) });
+    expect(r.shown).toEqual(["todo", "review", "done", "canceled"]);
+    expect(r.hidden).toEqual(["canceled:manual:true", "dup:manual:false", "review:empty:true"]);
+  });
+
+  it("ignoriert Einträge zu nicht mehr vorhandenen Status", () => {
+    expect([...hiddenStateIds(cols, ["weg", "todo"])]).toEqual(["todo"]);
   });
 });

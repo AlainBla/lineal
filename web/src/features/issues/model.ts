@@ -88,6 +88,55 @@ export interface BoardColumn {
 }
 
 export const COLUMN_PREFIX = "column:";
+/** Drop-Ziel eines Eintrags unter „Hidden columns“; die Spalte selbst belegt `COLUMN_PREFIX`. */
+export const HIDDEN_PREFIX = "hidden-column:";
+
+/** Eintrag unter „Hidden columns“: von Hand (oder Standard) versteckt oder nur gerade leer. */
+export interface HiddenColumn {
+  column: BoardColumn;
+  reason: "manual" | "empty";
+  /** Für diese Sitzung eingeblendet. */
+  open: boolean;
+}
+
+/**
+ * Status, die als Spalte versteckt sind. Ohne gespeicherte Liste gelten Canceled/Duplicate als
+ * versteckt (docs/08 F5); Einträge zu nicht mehr vorhandenen Status fallen weg.
+ */
+export function hiddenStateIds(
+  columns: BoardColumn[],
+  hiddenGroups: readonly string[] | null,
+): Set<string> {
+  const isHidden = (c: BoardColumn) =>
+    hiddenGroups
+      ? hiddenGroups.includes(c.state.id)
+      : c.state.type === "canceled" || c.state.type === "duplicate";
+  return new Set(columns.filter(isHidden).map((c) => c.state.id));
+}
+
+/** Teilt die Spalten in sichtbare und Einträge unter „Hidden columns“ (erst versteckte, dann leere). */
+export function splitBoardColumns(
+  columns: BoardColumn[],
+  opts: {
+    hiddenGroups: readonly string[] | null;
+    hideEmpty: boolean;
+    revealed: ReadonlySet<string>;
+  },
+): { shown: BoardColumn[]; hidden: HiddenColumn[] } {
+  const manual = hiddenStateIds(columns, opts.hiddenGroups);
+  const reasonOf = (c: BoardColumn): HiddenColumn["reason"] | null => {
+    if (manual.has(c.state.id)) return "manual";
+    return opts.hideEmpty && c.issues.length === 0 ? "empty" : null;
+  };
+  const entries = (reason: HiddenColumn["reason"]) =>
+    columns
+      .filter((c) => reasonOf(c) === reason)
+      .map((column) => ({ column, reason, open: opts.revealed.has(column.state.id) }));
+  return {
+    shown: columns.filter((c) => !reasonOf(c) || opts.revealed.has(c.state.id)),
+    hidden: [...entries("manual"), ...entries("empty")],
+  };
+}
 
 /**
  * Board-Spalten: eine je Status der Ansicht, Issues nach `sortOrder`. Leere Spalten bleiben

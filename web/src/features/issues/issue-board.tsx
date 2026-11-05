@@ -7,31 +7,50 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  pointerWithin,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Link } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import { Ellipsis, Eye, EyeOff, Plus } from "lucide-react";
+import { Fragment, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 import { useShortcuts } from "@/lib/shortcuts";
 
 import type { DisplayProperty } from "@/features/views/display-options";
 
+import type { BoardVisibility } from "./board-visibility";
 import { StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { issueMenuHandlers } from "./context-menu-store";
 import { IssueCardBody, IssueCardHover, SelectBox } from "./issue-row";
-import { applyDrop, COLUMN_PREFIX, issuePath, type BoardColumn, type DropResult } from "./model";
+import {
+  applyDrop,
+  COLUMN_PREFIX,
+  HIDDEN_PREFIX,
+  issuePath,
+  type BoardColumn,
+  type DropResult,
+  type HiddenColumn,
+} from "./model";
 import type { Selection } from "./selection";
 
 interface BoardProps {
   columns: BoardColumn[];
+  /** Sichtbare und versteckte Spalten (`useBoardVisibility`). */
+  visibility: BoardVisibility;
   ws: string;
   lookup: IssueLookup;
   focusedId: string | null;
@@ -125,6 +144,7 @@ function Column({
   onCreate,
   selection,
   display,
+  menu,
 }: {
   column: BoardColumn;
   ws: string;
@@ -134,6 +154,8 @@ function Column({
   onCreate?: (stateId: string) => void;
   selection?: Selection;
   display?: readonly DisplayProperty[];
+  /** Eintrag im „…“-Menü des Spaltenkopfs. */
+  menu?: { label: string; hidden: boolean; run: () => void };
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: COLUMN_PREFIX + column.state.id });
   const { state, issues } = column;
@@ -156,11 +178,31 @@ function Column({
         <span className="rounded-full bg-background px-1.5 text-xs font-medium text-muted-foreground tabular-nums">
           {issues.length}
         </span>
+        {menu && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto size-6"
+                aria-label={`${state.name} column options`}
+              >
+                <Ellipsis className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onSelect={menu.run}>
+                {menu.hidden ? <Eye /> : <EyeOff />}
+                {menu.label}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         {onCreate && (
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto size-6"
+            className={cn("size-6", !menu && "ml-auto")}
             aria-label={`Create issue in ${state.name}`}
             onClick={() => onCreate(state.id)}
           >
@@ -197,9 +239,63 @@ function Column({
   );
 }
 
+/** Eintrag unter „Hidden columns“: Klick blendet die Spalte ein oder aus, Karten lassen sich ablegen. */
+function HiddenColumnEntry({
+  entry: { column, open },
+  onToggle,
+}: {
+  entry: HiddenColumn;
+  onToggle: (stateId: string) => void;
+}) {
+  const { state, issues } = column;
+  // Eingeblendet ist die Spalte selbst das Ziel. Duplicate entsteht nur über die Relation.
+  const { setNodeRef, isOver } = useDroppable({
+    id: HIDDEN_PREFIX + state.id,
+    disabled: open || state.type === "duplicate",
+  });
+  return (
+    <div ref={setNodeRef}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={cn(
+          "w-full justify-start gap-2",
+          open && "bg-surface-active",
+          isOver && "bg-surface-active ring-2 ring-primary",
+        )}
+        aria-pressed={open}
+        aria-label={`${open ? "Hide" : "Show"} ${state.name} column`}
+        onClick={() => onToggle(state.id)}
+      >
+        <StatusIcon type={state.type} color={state.color} />
+        <span className="truncate">{state.name}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{issues.length}</span>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Die kleinen Einträge unter „Hidden columns“ zählen nur, wenn der Zeiger darauf steht; sonst
+ * gewänne bei `closestCorners` oft eine Karte der Nachbarspalte.
+ */
+const collisionDetection: CollisionDetection = (args) => {
+  const isEntry = (c: { id: string | number }) => String(c.id).startsWith(HIDDEN_PREFIX);
+  const entries = pointerWithin({
+    ...args,
+    droppableContainers: args.droppableContainers.filter(isEntry),
+  });
+  if (entries.length > 0) return entries;
+  return closestCorners({
+    ...args,
+    droppableContainers: args.droppableContainers.filter((c) => !isEntry(c)),
+  });
+};
+
 /** Board: Spalten = Status, Drag & Drop ändert Status und Reihenfolge (`applyDrop`). */
 export function IssueBoard({
   columns,
+  visibility,
   ws,
   lookup,
   focusedId,
@@ -215,18 +311,13 @@ export function IssueBoard({
   // sie zielt auf die Kartenposition vor dem optimistischen Update, die Karte erschiene sonst
   // erst am Ursprung und spränge dann in die Zielspalte. Abbruch und Drop ohne Änderung animieren.
   const [skipDropAnimation, setSkipDropAnimation] = useState(false);
-  // Canceled/Duplicate stehen unter „Hidden columns“ (docs/08 F5), standardmäßig eingeklappt.
-  const [revealed, setRevealed] = useState<ReadonlySet<string>>(new Set());
-  const isHiddenType = (c: BoardColumn) =>
-    c.state.type === "canceled" || c.state.type === "duplicate";
-  const hiddenColumns = columns.filter(isHiddenType);
-  const shownColumns = columns.filter((c) => !isHiddenType(c) || revealed.has(c.state.id));
-  const toggleRevealed = (id: string) =>
-    setRevealed((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
+  const { shown: shownColumns, hidden: hiddenColumns, toggle, isHidden, hide, keep } = visibility;
+  const columnMenu = (id: string) => {
+    if (!hide || !keep) return undefined;
+    return isHidden(id)
+      ? { label: "Keep visible", hidden: true, run: () => keep(id) }
+      : { label: "Hide column", hidden: false, run: () => hide(id) };
+  };
 
   // Strg+←/→: fokussierte Karte eine Spalte weiter verschieben (B4.19).
   const moveFocused = (delta: 1 | -1) => {
@@ -268,7 +359,8 @@ export function IssueBoard({
   };
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null);
-    const result = applyDrop(columns, String(e.active.id), e.over ? String(e.over.id) : null);
+    const over = e.over ? String(e.over.id).replace(HIDDEN_PREFIX, COLUMN_PREFIX) : null;
+    const result = applyDrop(columns, String(e.active.id), over);
     const issue = columns.flatMap((c) => c.issues).find((i) => i.id === result.issueId);
     setSkipDropAnimation(!!result.patch && !!issue && movesCard(result.patch));
     if (result.patch && issue) onDrop({ ...result, issue });
@@ -277,7 +369,7 @@ export function IssueBoard({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={collisionDetection}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}
@@ -297,32 +389,28 @@ export function IssueBoard({
               onCreate={onCreateInColumn}
               selection={selection}
               display={display}
+              menu={columnMenu(c.state.id)}
             />
           ))}
+          {shownColumns.length === 0 && (
+            <p className="w-72 px-1 py-4 text-center text-sm text-muted-foreground">
+              All columns are hidden
+            </p>
+          )}
           {hiddenColumns.length > 0 && (
             <aside
               aria-label="Hidden columns"
               className="flex w-56 shrink-0 flex-col gap-1 self-start rounded-xl bg-surface p-2"
             >
               <h2 className="px-2 py-1 text-sm font-medium">Hidden columns</h2>
-              {hiddenColumns.map((c) => {
-                const open = revealed.has(c.state.id);
-                return (
-                  <Button
-                    key={c.state.id}
-                    variant="ghost"
-                    size="sm"
-                    className="justify-start gap-2"
-                    aria-pressed={open}
-                    aria-label={`${open ? "Hide" : "Show"} ${c.state.name} column`}
-                    onClick={() => toggleRevealed(c.state.id)}
-                  >
-                    <StatusIcon type={c.state.type} color={c.state.color} />
-                    <span className="truncate">{c.state.name}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">{c.issues.length}</span>
-                  </Button>
-                );
-              })}
+              {hiddenColumns.map((entry, i) => (
+                <Fragment key={entry.column.state.id}>
+                  {entry.reason === "empty" && hiddenColumns[i - 1]?.reason !== "empty" && (
+                    <h3 className="px-2 pt-2 text-xs text-subtle-foreground">Empty</h3>
+                  )}
+                  <HiddenColumnEntry entry={entry} onToggle={toggle} />
+                </Fragment>
+              ))}
             </aside>
           )}
         </div>

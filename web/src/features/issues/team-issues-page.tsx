@@ -17,6 +17,7 @@ import { useViewIssues } from "@/features/views/queries";
 import type { Issue } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
+import { useBoardVisibility } from "./board-visibility";
 import { BulkActions, type BulkKind } from "./bulk-actions";
 import { openCreateIssue } from "./create-store";
 import { useTeamIssues, useTeamMeta } from "./hooks";
@@ -127,6 +128,11 @@ export function TeamIssuesPage({
     () => sortColumns(buildBoardColumns(states, visible, view)),
     [states, visible, view, sortColumns],
   );
+  const visibility = useBoardVisibility(columns, {
+    hiddenGroups: controls.options.hiddenGroups,
+    hideEmpty: controls.options.hideEmptyColumns,
+    onHiddenGroups: (hiddenGroups) => controls.onOptions({ hiddenGroups }),
+  });
   const groups = useMemo(
     () => sortColumns(groupByState(states, visible, view)),
     [states, visible, view, sortColumns],
@@ -151,11 +157,14 @@ export function TeamIssuesPage({
     () =>
       customGrouping
         ? customGroups.map((g) => g.issues.map((i) => i.id))
-        : (layout === "board" ? columns : groups).map((g) => g.issues.map((i) => i.id)),
-    [layout, columns, groups, customGrouping, customGroups],
+        : (layout === "board" ? visibility.shown : groups).map((g) => g.issues.map((i) => i.id)),
+    [layout, visibility.shown, groups, customGrouping, customGroups],
   );
-  // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben) verwerfen.
-  const focused: Issue | null = visible.find((i) => i.id === focusedId) ?? null;
+  // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben, Spalte versteckt) verwerfen.
+  const focused: Issue | null =
+    (grid.some((ids) => ids.includes(focusedId ?? "")) &&
+      visible.find((i) => i.id === focusedId)) ||
+    null;
   useFocusNav(layout === "board" ? grid : [grid.flat()], focused?.id ?? null, setFocusedId);
   const selection = useSelection(
     useMemo(() => grid.flat(), [grid]),
@@ -257,6 +266,7 @@ export function TeamIssuesPage({
     body = (
       <IssueBoard
         columns={columns}
+        visibility={visibility}
         ws={ws}
         lookup={lookup}
         focusedId={focused?.id ?? null}
@@ -318,7 +328,7 @@ export function TeamIssuesPage({
             </Link>
           ))}
         </nav>
-        <TeamViewControls controls={controls} />
+        <TeamViewControls controls={controls} board={layout === "board"} />
         <div className="ml-auto flex items-center gap-1">
           <div
             role="group"

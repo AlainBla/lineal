@@ -93,7 +93,14 @@ function press(el: Element | null | undefined) {
   (el as HTMLElement).click();
 }
 
-export function TeamViewControls({ controls }: { controls: TeamViewControlsState }) {
+export function TeamViewControls({
+  controls,
+  board,
+}: {
+  controls: TeamViewControlsState;
+  /** Board-Layout aktiv: bietet die „Board options“ an. */
+  board?: boolean;
+}) {
   const { sources } = useFilterSources();
   const root = useRef<HTMLDivElement>(null);
   useActions([
@@ -127,6 +134,7 @@ export function TeamViewControls({ controls }: { controls: TeamViewControlsState
         options={controls.options}
         onChange={controls.onOptions}
         onReset={controls.onReset}
+        boardOptions={board}
       />
     </div>
   );
