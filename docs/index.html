@@ -13390,7 +13390,7 @@ function startCycle(next):
 </ul>
 <h3 id="ch-04-planung-3-5-detailseite-und-ressourcen-lin-25">3.5 Detailseite und Ressourcen (LIN-25)</h3>
 <p>Ein Meilenstein ist ein Zeitpunkt mit einer Bedingung plus die Issues, die dorthin führen. Er bleibt schlank: Gesundheit, Verantwortliche und Freigaben bleiben beim Projekt.</p>
-<p>Die Seite <code>/&lt;ws&gt;/project/&lt;ref&gt;/milestone/&lt;id&gt;</code> zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf.</p>
+<p>Die Seite <code>/&lt;ws&gt;/project/&lt;ref&gt;/milestone/&lt;id&gt;</code> zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf. Kommentare verlangen Zugriff auf alle Teams des Projekts; fehlt er für eines, blendet die Oberfläche den Bereich aus. Das gilt ebenso für Kommentare an Projekten und Status-Updates.</p>
 <p>Die Beschreibung wird wie bei Projekten live bearbeitet (<code>GET /collab/milestone/{id}</code>, LIN-27): Anwesende und Verbindungsstatus stehen unter dem Editor, gespeichert wird über <code>save_milestone</code>, die Rechte folgen dem Projekt. Änderungen über GraphQL oder MCP erhöhen die Version und landen beim nächsten Abgleich im offenen Raum. Ohne Verbindung fällt der Editor auf Autosave zurück.</p>
 <p><strong>Ressourcen</strong> sind Dokumente, Dateien und Links. Sie gehören dem Projekt, der Meilenstein ist ein optionaler Bezug (<code>project_milestone_id</code> an <code>document</code>, <code>entity_external_link</code> und <code>project_file</code>):</p>
 <ul>

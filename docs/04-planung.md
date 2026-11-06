@@ -698,7 +698,7 @@ Beim Löschen verlieren alle Issues des Meilensteins sofort ihre Zuordnung (`pro
 
 Ein Meilenstein ist ein Zeitpunkt mit einer Bedingung plus die Issues, die dorthin führen. Er bleibt schlank: Gesundheit, Verantwortliche und Freigaben bleiben beim Projekt.
 
-Die Seite `/<ws>/project/<ref>/milestone/<id>` zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf.
+Die Seite `/<ws>/project/<ref>/milestone/<id>` zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf. Kommentare verlangen Zugriff auf alle Teams des Projekts; fehlt er für eines, blendet die Oberfläche den Bereich aus. Das gilt ebenso für Kommentare an Projekten und Status-Updates.
 
 Die Beschreibung wird wie bei Projekten live bearbeitet (`GET /collab/milestone/{id}`, LIN-27): Anwesende und Verbindungsstatus stehen unter dem Editor, gespeichert wird über `save_milestone`, die Rechte folgen dem Projekt. Änderungen über GraphQL oder MCP erhöhen die Version und landen beim nächsten Abgleich im offenen Raum. Ohne Verbindung fällt der Editor auf Autosave zurück.
 

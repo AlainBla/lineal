@@ -70,6 +70,23 @@ describe("CommentsSection", () => {
     return gql;
   };
 
+  const coded = (message: string, code: string) => Object.assign(new Error(message), { code });
+
+  it("blendet sich ohne Zugriff auf alle Projekt-Teams aus", async () => {
+    const gql = render({ TargetComments: () => coded("Could not find Project", "not_found") });
+    await waitFor(() => expect(gql.calls.some((c) => c.operation === "TargetComments")).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Project comments" })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Could not load comments")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Leave a comment" })).not.toBeInTheDocument();
+  });
+
+  it("zeigt andere Ladefehler weiter an", async () => {
+    render({ TargetComments: () => coded("boom", "internal") });
+    expect(await screen.findByText("Could not load comments")).toBeInTheDocument();
+  });
+
   it("listet Threads, legt Kommentare und Antworten an", async () => {
     const created: Record<string, unknown>[] = [];
     render({

@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar } from "@/features/issues/icons";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
-import { ErrorState } from "@/features/issues/states";
+import { ErrorState, isNotFound } from "@/features/issues/states";
 import { errorMessage, showToast } from "@/features/issues/toast-store";
 import { useKnownUsers } from "@/features/issues/users";
 import type { Comment } from "@/gql/graphql";
@@ -313,6 +313,8 @@ export function CommentsSection({
     [q.data, scope],
   );
   useScrollToCommentHash(q.isSuccess);
+  // Kommentare verlangen Zugriff auf alle Teams des Projekts, die Seite nur auf eines.
+  if (isNotFound(q.error)) return null;
   return (
     <section aria-label={title} className="flex flex-col gap-3">
       <h2 className="text-sm font-medium">{title}</h2>
