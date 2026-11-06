@@ -1,5 +1,5 @@
 /**
- * Daten der Kommentare an Dokumenten, Projekten, Initiativen und deren Status-Updates (F.06).
+ * Daten der Kommentare an Dokumenten, Projekten, Meilensteinen, Initiativen und deren Status-Updates (F.06).
  * Ein Ziel (`CommentTarget`) benennt genau ein Elternobjekt; Issue-Kommentare haben ihre eigene
  * Oberfläche (features/issues/comments.tsx).
  */
@@ -12,11 +12,12 @@ import { gqlRequest } from "@/lib/graphql";
 export type CommentTarget =
   | { documentId: string }
   | { projectId: string }
+  | { projectMilestoneId: string }
   | { initiativeId: string }
   | { projectUpdateId: string }
   | { initiativeUpdateId: string };
 
-export const COMMENT_FIELDS = `id body userId user { id name displayName } documentId projectId initiativeId
+export const COMMENT_FIELDS = `id body userId user { id name displayName } documentId projectId projectMilestoneId initiativeId
   projectUpdateId initiativeUpdateId parentId quotedText anchorStart anchorEnd anchorState editedAt
   resolvedAt resolvingUserId createdAt updatedAt`;
 

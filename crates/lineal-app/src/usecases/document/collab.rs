@@ -19,6 +19,9 @@ pub enum CollabTarget {
     Project(ProjectId),
     /// Markdown-Beschreibung einer Initiative (`initiative.content`).
     Initiative(InitiativeId),
+    /// Beschreibung eines Meilensteins (`project_milestone.description`); die Rechte folgen dem
+    /// Projekt.
+    Milestone(MilestoneId),
 }
 
 impl CollabTarget {
@@ -29,6 +32,7 @@ impl CollabTarget {
             Self::Issue(i) => Some(("issue", i.0)),
             Self::Project(p) => Some(("project", p.0)),
             Self::Initiative(i) => Some(("initiative", i.0)),
+            Self::Milestone(m) => Some(("projectMilestone", m.0)),
         }
     }
 }
@@ -227,6 +231,35 @@ impl App {
                     title: p.name,
                     markdown: p.content.unwrap_or_default(),
                     version: p.version,
+                    can_write,
+                })
+            }
+            CollabTarget::Milestone(id) => {
+                let gone = || AppError::not_found("Could not find milestone");
+                let m = tx
+                    .projects()
+                    .get_milestone(id)
+                    .await?
+                    .filter(|m| m.archived_at.is_none())
+                    .ok_or_else(gone)?;
+                let r = crate::resolve::project::resolve_in(tx, snap, &m.project_id.0.to_string())
+                    .await
+                    .map_err(|_| gone())?;
+                if r.project.trashed {
+                    return Err(gone());
+                }
+                let can_write = r.project.archived_at.is_none()
+                    && crate::usecases::project::require_manage(
+                        snap,
+                        ctx,
+                        Action::ManageProject,
+                        &r.teams,
+                    )
+                    .is_ok();
+                Ok(OwnerView {
+                    title: m.name,
+                    markdown: m.description.unwrap_or_default(),
+                    version: m.version,
                     can_write,
                 })
             }
@@ -546,6 +579,29 @@ impl App {
                     )
                     .await?
                     .initiative
+                    .version
+                }
+                CollabTarget::Milestone(id) => {
+                    let project = {
+                        let mut tx = self.store.begin(ctx.org_id).await?;
+                        tx.projects()
+                            .get_milestone(id)
+                            .await?
+                            .ok_or_else(|| AppError::not_found("Could not find milestone"))?
+                            .project_id
+                    };
+                    self.save_milestone(
+                        ctx,
+                        crate::usecases::project::milestone::SaveMilestoneInput {
+                            project: project.0.to_string(),
+                            id: Some(id.0.to_string()),
+                            description: Some(clean),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                    .1
+                    .milestone
                     .version
                 }
                 CollabTarget::Document(_) => {

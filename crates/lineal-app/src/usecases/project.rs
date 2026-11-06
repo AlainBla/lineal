@@ -6,6 +6,7 @@
 
 pub mod milestone;
 pub mod pure;
+pub mod resources;
 pub mod update;
 pub mod view;
 

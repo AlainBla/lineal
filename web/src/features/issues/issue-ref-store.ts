@@ -7,12 +7,28 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import type { Issue, WorkflowState } from "@/gql/graphql";
 
-import type { IssueRefInfo } from "./issue-refs";
+import { gqlRequest } from "@/lib/graphql";
+
+import type { IssueRefInfo, ProjectRefInfo } from "./issue-refs";
 import { fetchIssue, fetchTeams, keys, type TeamMeta, type TeamRef } from "./queries";
 
 const MAX_PARALLEL = 4;
 /** Nicht gefundene Kennungen erst nach dieser Zeit erneut anfragen. */
 const MISSING_TTL_MS = 5 * 60_000;
+
+const projectRefKey = (identifier: string) => ["project-ref", identifier] as const;
+
+async function fetchProjectRef(identifier: string, signal?: AbortSignal): Promise<ProjectRefInfo> {
+  const res = await gqlRequest<
+    { project: { identifier: string; name: string; color: string | null } },
+    { id: string }
+  >(
+    `query ProjectRef($id: String!) { project(id: $id) { identifier name color } }`,
+    { id: identifier },
+    { signal },
+  );
+  return res.project;
+}
 
 export class IssueRefStore {
   private readonly missing = new Map<string, number>();
@@ -61,6 +77,15 @@ export class IssueRefStore {
     return undefined;
   }
 
+  lookupProject(identifier: string): ProjectRefInfo | null | undefined {
+    const project = this.client.getQueryData<ProjectRefInfo>(projectRefKey(identifier));
+    if (project) return project;
+    const since = this.missing.get(identifier);
+    if (since !== undefined && Date.now() - since < MISSING_TTL_MS) return null;
+    this.enqueue(identifier);
+    return undefined;
+  }
+
   private toInfo(issue: Issue): IssueRefInfo {
     const key = issue.identifier.split("-")[0] ?? "";
     let color: string | null = null;
@@ -86,12 +111,19 @@ export class IssueRefStore {
     while (this.active < MAX_PARALLEL && this.queue.length > 0) {
       const id = this.queue.shift()!;
       this.active += 1;
-      void this.client
-        .fetchQuery({
-          queryKey: keys.issue(id),
-          queryFn: ({ signal }) => fetchIssue(id, signal),
-          retry: false,
-        })
+      // `P-123` ist ein Ticket des Teams P, `P-KOL-3` ein Projekt.
+      const load: Promise<unknown> = /^P-[A-Z]/.test(id)
+        ? this.client.fetchQuery({
+            queryKey: projectRefKey(id),
+            queryFn: ({ signal }) => fetchProjectRef(id, signal),
+            retry: false,
+          })
+        : this.client.fetchQuery({
+            queryKey: keys.issue(id),
+            queryFn: ({ signal }) => fetchIssue(id, signal),
+            retry: false,
+          });
+      void load
         .then(() => this.missing.delete(id))
         .catch(() => this.missing.set(id, Date.now()))
         .finally(() => {

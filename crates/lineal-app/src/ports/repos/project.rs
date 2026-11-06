@@ -196,6 +196,21 @@ pub struct ExternalLink {
     pub sort_order: f64,
 }
 
+/// Eine Datei am Projekt, optional einem Meilenstein zugeordnet (docs/04 §3.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectFile {
+    pub id: Uuid,
+    pub project_id: ProjectId,
+    pub milestone_id: Option<MilestoneId>,
+    pub url: String,
+    pub storage_key: String,
+    pub title: String,
+    pub content_type: Option<String>,
+    pub size: Option<i64>,
+    pub creator_id: Option<UserId>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Ein Meilenstein (docs/04 §3.1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Milestone {
@@ -209,6 +224,41 @@ pub struct Milestone {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Bewusst abgeschlossen (docs/04 §3.6).
+    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_by_id: Option<UserId>,
+    pub result_note: Option<String>,
+    /// Eingefrorene Issue-Liste; fehlt bei übernommenen Altdaten.
+    pub snapshot: Option<serde_json::Value>,
+}
+
+/// Abschluss eines Meilensteins.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneCompletion {
+    pub by: Option<UserId>,
+    pub note: Option<String>,
+    pub snapshot: serde_json::Value,
+}
+
+/// Eine Verschiebung des Zieldatums.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneDateChange {
+    pub milestone_id: MilestoneId,
+    pub from_date: Option<NaiveDate>,
+    pub to_date: Option<NaiveDate>,
+    pub actor_id: Option<UserId>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Ein Issue, wie es beim Abschließen des Meilensteins stand.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneIssueRef {
+    pub id: IssueId,
+    pub team_id: TeamId,
+    pub identifier: String,
+    pub title: String,
+    pub state_name: String,
+    pub state_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -451,6 +501,128 @@ pub trait ProjectRepo: Send {
     }
     /// Anzahl Dokumente des Projekts (`resourceCount`).
     async fn document_count(&mut self, _id: ProjectId) -> AppResult<i64> {
+        unimplemented_repo()
+    }
+    async fn add_milestone_date_change(&mut self, _c: &MilestoneDateChange) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Alle Terminänderungen der Meilensteine eines Projekts, älteste zuerst.
+    async fn list_milestone_date_changes(
+        &mut self,
+        _project: ProjectId,
+    ) -> AppResult<Vec<MilestoneDateChange>> {
+        unimplemented_repo()
+    }
+    /// Issues, die erst nach Anlegen plus Karenz in ihren Meilenstein kamen (docs/04 §3.6).
+    async fn milestone_added_issues(
+        &mut self,
+        _project: ProjectId,
+        _grace_days: i32,
+    ) -> AppResult<Vec<(MilestoneId, IssueId)>> {
+        unimplemented_repo()
+    }
+    async fn milestone_issue_refs(
+        &mut self,
+        _milestone: MilestoneId,
+    ) -> AppResult<Vec<MilestoneIssueRef>> {
+        unimplemented_repo()
+    }
+    /// Setzt oder (`None`) löscht den Abschluss samt Snapshot; `note` bleibt beim Wiederöffnen.
+    async fn set_milestone_completion(
+        &mut self,
+        _id: MilestoneId,
+        _completion: Option<MilestoneCompletion>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Offene Issues in einen anderen Meilenstein verschieben oder (`None`) lösen, je mit
+    /// History-Eintrag.
+    async fn move_open_milestone_issues(
+        &mut self,
+        _from: MilestoneId,
+        _to: Option<MilestoneId>,
+        _actor: Option<UserId>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        unimplemented_repo()
+    }
+    /// Hängt Issues und Ressourcen eines Meilensteins an ein anderes Projekt um (Umwandlung,
+    /// docs/04 §3.4), je Issue mit History-Eintrag.
+    async fn move_milestone_to_project(
+        &mut self,
+        _milestone: MilestoneId,
+        _from: ProjectId,
+        _to: ProjectId,
+        _actor: Option<UserId>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        unimplemented_repo()
+    }
+    /// Nach einem Import: Meilensteine ohne offene Issues gelten als abgeschlossen, ohne Snapshot.
+    async fn complete_finished_milestones(&mut self) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// Links genau eines Bereichs: des Meilensteins oder (`None`) des Projekts selbst.
+    async fn list_scoped_links(
+        &mut self,
+        _id: ProjectId,
+        _milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<ExternalLink>> {
+        unimplemented_repo()
+    }
+    /// Hängt einen Link an Meilenstein oder Projekt; dieselbe URL dort bleibt unverändert.
+    async fn add_scoped_link(
+        &mut self,
+        _id: ProjectId,
+        _milestone: Option<MilestoneId>,
+        _url: &str,
+        _label: &str,
+        _creator: Option<UserId>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Entfernt einen Link des Projekts; `false`, wenn es ihn dort nicht gibt.
+    async fn remove_link(&mut self, _id: ProjectId, _link: Uuid) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Dokumente genau eines Bereichs (`id`, Titel, Slug).
+    async fn list_scoped_documents(
+        &mut self,
+        _id: ProjectId,
+        _milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<(Uuid, String, String)>> {
+        unimplemented_repo()
+    }
+    /// Ordnet ein Projektdokument einem Meilenstein zu oder löst es; `false`, wenn es dem Projekt
+    /// nicht gehört.
+    async fn set_document_milestone(
+        &mut self,
+        _id: ProjectId,
+        _document: Uuid,
+        _milestone: Option<MilestoneId>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// Dateien genau eines Bereichs.
+    async fn list_scoped_files(
+        &mut self,
+        _id: ProjectId,
+        _milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<ProjectFile>> {
+        unimplemented_repo()
+    }
+    async fn insert_file(&mut self, _file: &ProjectFile, _now: DateTime<Utc>) -> AppResult<()> {
+        unimplemented_repo()
+    }
+    /// Löscht eine Datei des Projekts und liefert ihren Objektschlüssel; `None`, wenn es sie dort
+    /// nicht gibt.
+    async fn delete_file(&mut self, _id: ProjectId, _file: Uuid) -> AppResult<Option<String>> {
+        unimplemented_repo()
+    }
+    async fn find_file_by_key(&mut self, _key: &str) -> AppResult<Option<ProjectFile>> {
         unimplemented_repo()
     }
     /// Dokumente des Projekts (`id`, Titel, Slug) für `includeResources`.

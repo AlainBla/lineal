@@ -254,10 +254,8 @@ impl MilestoneStatus {
 #[derive(Debug, Clone, Copy)]
 pub struct MilestoneStatusInput {
     pub target_date: Option<NaiveDate>,
-    /// Es gibt relevante Issues (nicht `canceled`/`duplicate`).
-    pub has_relevant_issues: bool,
-    /// Alle relevanten Issues sind `completed`.
-    pub all_completed: bool,
+    /// Bewusst abgeschlossen (`completedAt`); erledigte Issues allein reichen nicht.
+    pub completed: bool,
 }
 
 /// Status aller Meilensteine eines Projekts (docs/04 §3.1 `milestoneStatuses`).
@@ -269,7 +267,7 @@ pub fn milestone_statuses(
     items
         .iter()
         .map(|m| {
-            if m.has_relevant_issues && m.all_completed {
+            if m.completed {
                 MilestoneStatus::Done
             } else if m.target_date.is_some_and(|d| d < today) {
                 MilestoneStatus::Overdue
@@ -640,23 +638,19 @@ mod tests {
         let items = [
             MilestoneStatusInput {
                 target_date: None,
-                has_relevant_issues: true,
-                all_completed: true,
+                completed: true,
             },
             MilestoneStatusInput {
                 target_date: Some(d(2026, 10, 1)),
-                has_relevant_issues: true,
-                all_completed: false,
+                completed: false,
             },
             MilestoneStatusInput {
                 target_date: None,
-                has_relevant_issues: false,
-                all_completed: false,
+                completed: false,
             },
             MilestoneStatusInput {
                 target_date: None,
-                has_relevant_issues: true,
-                all_completed: false,
+                completed: false,
             },
         ];
         let s = milestone_statuses(&items, today);
@@ -669,13 +663,6 @@ mod tests {
                 MilestoneStatus::Unstarted
             ]
         );
-        // Ein Meilenstein ohne Issues ist nie done.
-        let only = [MilestoneStatusInput {
-            target_date: None,
-            has_relevant_issues: false,
-            all_completed: true,
-        }];
-        assert_eq!(milestone_statuses(&only, today), [MilestoneStatus::Next]);
     }
 
     fn st(name: &str, kind: ProjectStatusType, team: Option<TeamId>) -> ProjectStatus {

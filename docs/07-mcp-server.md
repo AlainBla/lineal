@@ -2498,7 +2498,7 @@ sequenceDiagram
 }
 ```
 
-Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung werden nach 1 h verworfen.
+Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung laufen nach 1 h ab.
 
 **Fehler:** `not_found` (Issue); `invalid_request` (`size` ≥ 2 GB, leerer Dateiname, ungültiger MIME-Typ); `limit_exceeded` (Speicherkontingent, offene Uploads). **Core:** `ReserveUpload` – [03-issues-workflow.md](03-issues-workflow.md) (Anhänge), Objektspeicher in [10](10-architektur-umsetzung.md).
 
@@ -3339,6 +3339,23 @@ Meilenstein-Objekt: `{ id, name, description, targetDate, progress, sortOrder, s
 **Antwort:** Meilenstein-Objekt. **Fehler:** `invalid_request` (`name` fehlt beim Create, Name im Projekt doppelt); `not_found`. **Core:** `CreateMilestone`, `UpdateMilestone` – [04-planung.md](04-planung.md).
 
 ---
+
+
+#### Meilenstein-Erweiterungen (LIN-25)
+
+Lineal-eigene Tools jenseits des Linear-Snapshots, in `tools/list` nach `get_workspace_overview`:
+
+| Tool | Zweck | Scope |
+|---|---|---|
+| `get_milestone_resources` | Dokumente, Links und Dateien eines Meilensteins | read |
+| `save_milestone_resource` | Link (`url`, `title`), vorhandenes Projektdokument (`document`) oder Upload (`assetUrl`) anhängen; genau eines davon | write |
+| `delete_milestone_resource` | `type` (`link`, `document`, `file`) und `id`; Dokumente bleiben im Projekt | write |
+| `prepare_milestone_upload` | Upload wie `prepare_attachment_upload`, aber ohne Issue | write |
+| `complete_milestone` | Abschließen mit `openIssues` (`keep`, `remove`, `move` plus `moveTo`) und `note` | write |
+| `reopen_milestone` | Wieder öffnen, die Notiz bleibt | write |
+| `convert_milestone_to_project` | Offenen Meilenstein in ein Projekt umwandeln | write |
+
+`get_milestone` liefert zusätzlich `startedIssueCount`, `completedAt`, `resultNote` und `targetDateHistory`.
 
 ### 3.9 Cycles
 

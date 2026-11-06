@@ -793,9 +793,24 @@ async fn milestones_order_progress_and_delete(pool: PgPool) {
         .iter()
         .map(|m| (m.milestone.name.as_str(), m.status.as_str(), m.progress))
         .collect();
-    assert_eq!(status, [("Alpha", "done", 1.0), ("Beta", "overdue", 0.0)]);
+    // Erledigte Issues schließen nicht ab; `done` setzt erst die bewusste Handlung (LIN-25).
+    assert_eq!(status, [("Alpha", "next", 1.0), ("Beta", "overdue", 0.0)]);
     let (_, got) = app.get_milestone(&alice, project, "alpha").await.unwrap();
     assert_eq!((got.issue_count, got.completed_issue_count), (1, 1));
+    assert!(got.ready_to_complete);
+    // Altdaten und Importe: fertige Meilensteine gelten als abgeschlossen, ohne Snapshot.
+    let mut tx = PgStore::new(pool.clone())
+        .begin(SeedData::acme().org)
+        .await
+        .unwrap();
+    assert_eq!(
+        tx.projects().complete_finished_milestones().await.unwrap(),
+        1
+    );
+    tx.commit().await.unwrap();
+    let (_, got) = app.get_milestone(&alice, project, "alpha").await.unwrap();
+    assert_eq!(got.status.as_str(), "done");
+    assert!(got.milestone.completed_at.is_some() && got.milestone.snapshot.is_none());
     // Update (Tri-State): Zieldatum leeren, Beschreibung setzen.
     let (_, upd) = app
         .save_milestone(

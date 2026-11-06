@@ -129,6 +129,8 @@ export interface RoadmapMilestone {
   id: string;
   name: string;
   targetDate: string;
+  status: string;
+  href: string;
 }
 
 export interface RoadmapItem {

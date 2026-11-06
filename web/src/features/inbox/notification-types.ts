@@ -25,6 +25,7 @@ const LABELS: Record<string, string> = {
   issueSlaBreached: "SLA breached",
   issueReminder: "Reminder",
   projectReminder: "Reminder",
+  projectMilestoneReminder: "Reminder",
   initiativeReminder: "Reminder",
   documentReminder: "Reminder",
   issueShared: "Shared with you",

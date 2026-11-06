@@ -26,11 +26,11 @@ test("F.01/F.07: project with a milestone is created in the UI and an issue is a
   await expect(page.getByLabel("Status", { exact: true })).toHaveValue("started");
 
   // Meilenstein anlegen.
-  await page.getByRole("link", { name: "Milestones" }).click();
+  await page.getByRole("main").getByRole("link", { name: "Milestones" }).click();
   await page.getByLabel("Milestone name", { exact: true }).fill("Beta");
   await page.getByLabel("Target date", { exact: true }).fill("2027-01-31");
   await page.getByRole("button", { name: "Add milestone" }).click();
-  await expect(page.getByLabel("Milestone name Beta")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Beta" })).toBeVisible();
 
   // Issue anlegen und Projekt sowie Meilenstein setzen (Shift+P, Shift+M).
   const identifier = await createIssue(page, "ENG", issueTitle);

@@ -652,6 +652,8 @@ Projekte können aus einem Template (`type = project`) angelegt werden; das Temp
 | `sortOrder` | Float | Reihenfolge im Projekt |
 | `progress` | Float 0..1 | Berechnet wie Projektfortschritt, nur über Issues dieses Meilensteins |
 | `status` | Enum `ProjectMilestoneStatus` | Berechnet: `unstarted`, `next`, `overdue`, `done` |
+| `completedAt` | DateTime? | Bewusst abgeschlossen (§3.6); setzt den Status `done` |
+| `resultNote` | Markdown? | Ergebnisnotiz; bleibt beim Wiederöffnen erhalten |
 
 **Sortierung.** Neue Meilensteine werden ans Ende gehängt (`sortOrder = max + 1`). Wird ein Zieldatum gesetzt, sortiert die Oberfläche nicht automatisch um; die Reihenfolge ist rein manuell. Einfügen zwischen zwei Meilensteinen: `(a + b) / 2`.
 
@@ -664,8 +666,7 @@ function milestoneStatuses(project, today):
     ms = milestones of project order by sortOrder
     nextAssigned = false
     for m in ms:
-        relevant = issues of m where state.type not in (canceled, duplicate)
-        if relevant not empty and all(i.state.type == completed for i in relevant):
+        if m.completedAt != null:
             m.status = done
         else if m.targetDate != null and m.targetDate < today:
             m.status = overdue
@@ -674,7 +675,6 @@ function milestoneStatuses(project, today):
             nextAssigned = true
         else:
             m.status = unstarted
-        # ein Meilenstein ohne Issues ist nie done
 ```
 
 `today` ist das Kalenderdatum in der Zeitzone des Lead-Teams. Der `next`-Meilenstein wird in der Oberfläche gelb hervorgehoben; das ist nicht abschaltbar.
@@ -687,12 +687,40 @@ function milestoneStatuses(project, today):
 
 ### 3.3 Löschen eines Meilensteins
 
-Beim Löschen verlieren alle Issues des Meilensteins sofort ihre Zuordnung (`projectMilestone = null`), bleiben aber im Projekt. Jedes betroffene Issue erhält einen History-Eintrag. Der Meilenstein selbst wird mit `archivedAt` markiert und nach 30 Tagen endgültig gelöscht; ein Wiederherstellen stellt die Issue-Zuordnungen **nicht** wieder her (Annahme).
+Beim Löschen verlieren alle Issues des Meilensteins sofort ihre Zuordnung (`projectMilestone = null`), bleiben aber im Projekt. Jedes betroffene Issue erhält einen History-Eintrag. Der Meilenstein selbst wird mit `archivedAt` markiert und nach 30 Tagen endgültig gelöscht; ein Wiederherstellen stellt die Issue-Zuordnungen **nicht** wieder her (Annahme). Dokumente, Links und Dateien des Meilensteins bleiben am Projekt (§3.5).
 
 ### 3.4 Umwandeln und Verschieben
 
-- **In Projekt umwandeln:** Erzeugt ein neues Projekt mit Name und Beschreibung des Meilensteins, gleichen Teams und gleicher Priorität wie das Ursprungsprojekt. Die Issues des Meilensteins wechseln in das neue Projekt; der Meilenstein wird gelöscht.
+- **In Projekt umwandeln:** Erzeugt ein neues Projekt mit Name und Beschreibung des Meilensteins, gleichen Teams (soweit für die Person sichtbar) und gleicher Priorität wie das Ursprungsprojekt. Die Issues und Ressourcen des Meilensteins wechseln in das neue Projekt; der Meilenstein wird gelöscht. Ein abgeschlossener Meilenstein lässt sich nicht umwandeln.
 - **In anderes Projekt verschieben** (intern): Sind Issue-Teams nicht am Zielprojekt beteiligt, muss der Aufrufer entweder `addIssueTeamToProject = true` oder ein `newIssueTeamId` angeben; ohne eines davon `invalid_request`.
+
+### 3.5 Detailseite und Ressourcen (LIN-25)
+
+Ein Meilenstein ist ein Zeitpunkt mit einer Bedingung plus die Issues, die dorthin führen. Er bleibt schlank: Gesundheit, Verantwortliche und Freigaben bleiben beim Projekt.
+
+Die Seite `/<ws>/project/<ref>/milestone/<id>` zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf.
+
+Die Beschreibung wird wie bei Projekten live bearbeitet (`GET /collab/milestone/{id}`, LIN-27): Anwesende und Verbindungsstatus stehen unter dem Editor, gespeichert wird über `save_milestone`, die Rechte folgen dem Projekt. Änderungen über GraphQL oder MCP erhöhen die Version und landen beim nächsten Abgleich im offenen Raum. Ohne Verbindung fällt der Editor auf Autosave zurück.
+
+**Ressourcen** sind Dokumente, Dateien und Links. Sie gehören dem Projekt, der Meilenstein ist ein optionaler Bezug (`project_milestone_id` an `document`, `entity_external_link` und `project_file`):
+
+- Die Rechte folgen dem Projekt: Lesen darf, wer das Projekt sieht, Ändern verlangt `ManageProject`.
+- Ein Dokument vom Meilenstein zu lösen lässt es im Projekt. Links und Dateien werden gelöscht, Dateien samt Objekt im Speicher.
+- Dateien liegen in `project_file`, nicht in `attachment`, weil Issue-Anhänge überall ein Issue voraussetzen.
+
+### 3.6 Abschließen und Terminverlauf (LIN-25)
+
+**Abschließen** ist eine bewusste Handlung und geschieht nie automatisch. Sind alle relevanten Issues erledigt, schlägt die Seite es nur vor (`readyToComplete`). Der Dialog fragt, was mit offenen Issues passiert (`keep`, `remove`, `move`), und nimmt eine Ergebnisnotiz auf. Ziel von `move` ist ein anderer offener Meilenstein desselben Projekts. Die Issue-Liste wird als `snapshot` eingefroren; beim Lesen filtert der Server sie auf die sichtbaren Teams. **Wiederöffnen** löscht Abschluss und Snapshot, die Notiz bleibt.
+
+**Altdaten und Importe:** Meilensteine, deren relevante Issues alle erledigt sind, bekommen `completedAt` vom letzten erledigten Issue, ohne Snapshot. Das gilt für die Migration und nach jedem Linear-Import.
+
+**Terminverlauf:** Jede Änderung von `targetDate` an einem bestehenden Meilenstein landet in `project_milestone_date_change`. Die Verschiebung („+14 days“) ist die Differenz zum ersten bekannten Datum.
+
+**Zuwachs („added“):** Ein Issue gilt als hinzugekommen, wenn es später als sieben Tage nach dem Anlegen des Meilensteins in ihn kam. Maßgeblich ist der letzte History-Eintrag zu `projectMilestoneId`, sonst das Anlegen des Issues. Die sieben Tage nehmen die erste Befüllung aus.
+
+### 3.7 Alle Meilensteine (LIN-25)
+
+`/<ws>/milestones` listet die Meilensteine aller sichtbaren Projekte, gruppiert nach überfällig, nächste 30 Tage, später und ohne Datum. Abgeschlossene sind ausgeblendet und lassen sich einblenden. Die Roadmap färbt die Rauten nach Status und verlinkt die Detailseite. „Remind me“ gilt auch für Meilensteine (Notification `projectMilestoneReminder`).
 
 ---
 

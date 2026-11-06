@@ -384,7 +384,7 @@ export class CollabProvider {
   }
 }
 
-export type CollabKind = "document" | "issue" | "project" | "initiative";
+export type CollabKind = "document" | "issue" | "project" | "initiative" | "milestone";
 
 /** `ws(s)://host/collab/<kind>/<id>` passend zur aktuellen Seite. */
 export function collabUrl(kind: CollabKind, id: string, loc: Location = window.location): string {

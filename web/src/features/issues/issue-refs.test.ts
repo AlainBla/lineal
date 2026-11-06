@@ -3,7 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { Node as PmNode } from "@tiptap/pm/model";
 import { describe, expect, it } from "vitest";
 
-import { findIssueRefs } from "./issue-refs";
+import { findIssueRefs, findProjectRefs } from "./issue-refs";
 
 const schema = getSchema([StarterKit]);
 const p = (...content: unknown[]) => ({ type: "paragraph", content });
@@ -45,5 +45,45 @@ describe("findIssueRefs", () => {
 
   it("liefert nichts, solange keine Team-Schlüssel bekannt sind", () => {
     expect(ids(doc(p(text("KOL-1"))), [])).toEqual([]);
+  });
+});
+
+describe("findProjectRefs", () => {
+  const refs = (d: PmNode, keys = ["KOL"]) =>
+    findProjectRefs(d, new Set(keys)).map((m) => [
+      m.identifier,
+      d.textBetween(m.from, m.to),
+      m.bracketed,
+    ]);
+
+  it("findet Kennungen mit und ohne Klammern sowie Projekt-Links", () => {
+    const d = doc(
+      p(
+        text("Siehe [P-KOL-3], P-KOL-4 und "),
+        text("P-KOL-5", [
+          { type: "link", attrs: { href: "https://x/kollegeplus/project/P-KOL-5/overview" } },
+        ]),
+      ),
+    );
+    expect(refs(d)).toEqual([
+      ["P-KOL-3", "P-KOL-3", true],
+      ["P-KOL-4", "P-KOL-4", false],
+      ["P-KOL-5", "P-KOL-5", false],
+    ]);
+  });
+
+  it("ignoriert fremde Schlüssel, Code, Teilwörter und fremde Links", () => {
+    const d = doc(
+      p(text("P-XYZ-1 XP-KOL-1 P-KOL-1a P-KOL ")),
+      p(text("P-KOL-5", [{ type: "code" }])),
+      { type: "codeBlock", content: [text("P-KOL-6")] },
+      p(text("P-KOL-7", [{ type: "link", attrs: { href: "https://example.com/x" } }])),
+      p(text("P-KOL-8", [{ type: "link", attrs: { href: "https://x/ws/project/P-KOL-9" } }])),
+    );
+    expect(refs(d)).toEqual([]);
+  });
+
+  it("macht aus einer Projektkennung kein Ticket", () => {
+    expect(ids(doc(p(text("[P-KOL-3]"))))).toEqual([]);
   });
 });

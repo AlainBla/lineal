@@ -13,6 +13,7 @@ import type {
   IssueConnection,
   IssueLabel,
   Project,
+  MilestoneSnapshotIssue,
   ProjectMilestone,
   ProjectUpdate,
 } from "@/gql/graphql";
@@ -33,7 +34,9 @@ const PROJECT_FIELDS = `id identifier slugId name summary description icon color
   status { id name type color } health progress scope completedScope issueCount completedIssueCount
   startDate startDateResolution targetDate targetDateResolution startedAt completedAt archivedAt
   leadTeam { ${REF} } teams { ${REF} } lead { ${REF} } members { ${REF} } labels { ${REF} } initiatives { ${REF} }
-  milestones { id name description targetDate sortOrder status progress issueCount completedIssueCount }
+  milestones { id name description targetDate sortOrder status progress issueCount completedIssueCount startedIssueCount
+    readyToComplete completedAt resultNote hasSnapshot addedIssueIds
+    targetDateHistory { fromDate toDate changedAt } }
   openIssueCount createdAt updatedAt`;
 
 // Listenvariante ohne Langtexte: `initiatives(first: 200)` bliebe sonst über dem
@@ -578,6 +581,87 @@ export function useInitiativeLinks(initiativeId: string) {
       onSuccess: done,
     }),
   };
+}
+
+export interface CompleteMilestoneInput {
+  openIssues: "keep" | "remove" | "move";
+  moveTo?: string;
+  note?: string;
+}
+
+export function useCompleteMilestone(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; input: CompleteMilestoneInput }) =>
+      gqlRequest(
+        `mutation PlanningMilestoneComplete($projectId: String!, $id: String!, $input: MilestoneCompleteInput!) {
+          projectMilestoneComplete(projectId: $projectId, id: $id, input: $input) { success }
+        }`,
+        { projectId, ...v },
+      ),
+    onSuccess: () => {
+      invalidatePlanning(qc);
+      void qc.invalidateQueries({ queryKey: ["issues"] });
+    },
+  });
+}
+
+/** Wandelt den Meilenstein in ein Projekt um und liefert dessen Kennung. */
+export function useConvertMilestone(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) =>
+      (
+        await gqlRequest<
+          { projectMilestoneConvert: { project: { identifier: string } | null } },
+          { projectId: string; id: string }
+        >(
+          `mutation PlanningMilestoneConvert($projectId: String!, $id: String!) {
+            projectMilestoneConvert(projectId: $projectId, id: $id) { project { identifier } }
+          }`,
+          { projectId, id },
+        )
+      ).projectMilestoneConvert.project?.identifier,
+    onSuccess: () => {
+      invalidatePlanning(qc);
+      void qc.invalidateQueries({ queryKey: ["issues"] });
+    },
+  });
+}
+
+export function useReopenMilestone(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) =>
+      gqlRequest(
+        `mutation PlanningMilestoneReopen($projectId: String!, $id: String!) {
+          projectMilestoneReopen(projectId: $projectId, id: $id) { success }
+        }`,
+        { projectId, id },
+      ),
+    onSuccess: () => invalidatePlanning(qc),
+  });
+}
+
+/** Eingefrorene Issue-Liste eines abgeschlossenen Meilensteins. */
+export function useMilestoneSnapshot(projectId: string, id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["planning", "milestone-snapshot", id],
+    enabled,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<
+          { milestoneSnapshot: MilestoneSnapshotIssue[] },
+          { projectId: string; id: string }
+        >(
+          `query PlanningMilestoneSnapshot($projectId: String!, $id: String!) {
+            milestoneSnapshot(projectId: $projectId, id: $id) { id identifier title stateName stateType }
+          }`,
+          { projectId, id },
+          { signal },
+        )
+      ).milestoneSnapshot,
+  });
 }
 
 export function useUpdateMilestone(projectId: string) {

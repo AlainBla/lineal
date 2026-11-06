@@ -120,7 +120,16 @@ pub const COMPAT_TOOLS: [(&str, Group); 55] = [
 
 /// Lineal-eigene Erweiterungen (bewusst über den Linear-MCP hinaus), erscheinen in
 /// `tools/list` nach den kompatiblen Tools.
-pub const EXTENSION_TOOLS: [(&str, Group); 1] = [("get_workspace_overview", Group::Workspace)];
+pub const EXTENSION_TOOLS: [(&str, Group); 8] = [
+    ("get_workspace_overview", Group::Workspace),
+    ("get_milestone_resources", Group::Milestones),
+    ("save_milestone_resource", Group::Milestones),
+    ("delete_milestone_resource", Group::Milestones),
+    ("prepare_milestone_upload", Group::Milestones),
+    ("complete_milestone", Group::Milestones),
+    ("reopen_milestone", Group::Milestones),
+    ("convert_milestone_to_project", Group::Milestones),
+];
 
 /// Alle Tools: kompatible, dann Erweiterungen.
 pub fn all_tools() -> impl Iterator<Item = (&'static str, Group)> {
@@ -193,12 +202,12 @@ mod tests {
 
     #[test]
     fn extension_is_separate_from_snapshot() {
-        assert_eq!(EXTENSION_TOOLS.map(|(n, _)| n), ["get_workspace_overview"]);
+        assert_eq!(EXTENSION_TOOLS[0].0, "get_workspace_overview");
         assert!(!snapshot_names().contains("get_workspace_overview"));
         assert_eq!(group_for("get_workspace_overview"), Some(Group::Workspace));
         let all: Vec<_> = all_tools().map(|(n, _)| n).collect();
-        assert_eq!(all.len(), 56);
-        assert_eq!(all.last(), Some(&"get_workspace_overview"));
+        assert_eq!(all.len(), 63);
+        assert_eq!(all[55], "get_workspace_overview");
     }
 
     #[tokio::test]

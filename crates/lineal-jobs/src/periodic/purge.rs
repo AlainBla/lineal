@@ -37,10 +37,8 @@ impl PeriodicJob for PurgeJob {
         if !trash.errors.is_empty() {
             tracing::warn!(errors = ?trash.errors, "trash purge finished with errors");
         }
-        let reservations = app.run_upload_purge(now).await?;
-        if reservations > 0 {
-            tracing::info!(reservations, "purged expired upload reservations");
-        }
+        // Die Upload-Bereinigung (`App::run_upload_purge`) läuft bewusst nicht mehr: Sie hat Editor-Bilder
+        // und Avatare gelöscht. Abgebrochene Uploads bleiben dafür liegen.
         purge_queues(app, now).await?;
         Ok(())
     }

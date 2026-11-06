@@ -308,6 +308,11 @@ export function RichEditor({
                 const ws = window.location.pathname.split("/")[1] ?? "";
                 return `/${ws}/issue/${identifier}`;
               },
+              lookupProject: (identifier) => refStore.lookupProject(identifier),
+              projectHrefFor: (identifier) => {
+                const ws = window.location.pathname.split("/")[1] ?? "";
+                return `/${ws}/project/${identifier}/overview`;
+              },
             }),
           ]
         : []),

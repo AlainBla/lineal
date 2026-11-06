@@ -1376,10 +1376,45 @@ input LinkInput {
 	title: String!
 }
 
+"""
+Was beim Abschließen mit offenen Issues geschieht.
+"""
+input MilestoneCompleteInput {
+	"""
+	`keep` | `remove` | `move`.
+	"""
+	openIssues: String!
+	"""
+	Ziel bei `move`.
+	"""
+	moveTo: String
+	note: String
+}
+
+"""
+Eine Verschiebung des Zieldatums.
+"""
+type MilestoneDateChange {
+	fromDate: String
+	toDate: String
+	changedAt: String!
+}
+
 input MilestoneInput {
 	name: String
 	description: String
 	targetDate: String
+}
+
+"""
+Issue, wie es beim Abschließen stand.
+"""
+type MilestoneSnapshotIssue {
+	id: String!
+	identifier: String!
+	title: String!
+	stateName: String!
+	stateType: String!
 }
 
 type Mutation {
@@ -1528,6 +1563,32 @@ type Mutation {
 	projectDelete(id: String!, restore: Boolean): ProjectSuccessPayload!
 	projectMilestoneCreate(projectId: String!, input: MilestoneInput!): ProjectMilestonePayload!
 	projectMilestoneUpdate(projectId: String!, id: String!, input: MilestoneInput!): ProjectMilestonePayload!
+	"""
+	Schließt den Meilenstein bewusst ab.
+	"""
+	projectMilestoneComplete(projectId: String!, id: String!, input: MilestoneCompleteInput!): ProjectSuccessPayload!
+	"""
+	Wandelt den Meilenstein in ein Projekt um.
+	"""
+	projectMilestoneConvert(projectId: String!, id: String!): ProjectPayload!
+	"""
+	Öffnet den Meilenstein wieder.
+	"""
+	projectMilestoneReopen(projectId: String!, id: String!): ProjectSuccessPayload!
+	"""
+	Link an Meilenstein oder Projekt hängen.
+	"""
+	resourceLinkAdd(projectId: String!, milestoneId: String, url: String!, label: String!): ProjectSuccessPayload!
+	resourceLinkRemove(projectId: String!, id: String!): ProjectSuccessPayload!
+	"""
+	Ordnet ein Dokument des Projekts einem Meilenstein zu; ohne `milestoneId` löst es den Bezug.
+	"""
+	resourceDocumentSet(projectId: String!, documentId: String!, milestoneId: String): ProjectSuccessPayload!
+	"""
+	Hängt einen abgeschlossenen `fileUpload` als Datei an.
+	"""
+	resourceFileAdd(projectId: String!, milestoneId: String, assetUrl: String!, title: String): ProjectSuccessPayload!
+	resourceFileRemove(projectId: String!, id: String!): ProjectSuccessPayload!
 	"""
 	Löscht den Meilenstein; seine Issues bleiben im Projekt.
 	"""
@@ -2167,6 +2228,19 @@ type ProjectMilestone {
 	progress: Float!
 	issueCount: Int!
 	completedIssueCount: Int!
+	startedIssueCount: Int!
+	readyToComplete: Boolean!
+	completedAt: String
+	resultNote: String
+	"""
+	Es gibt eine eingefrorene Issue-Liste (fehlt bei Altdaten).
+	"""
+	hasSnapshot: Boolean!
+	targetDateHistory: [MilestoneDateChange!]!
+	"""
+	Issues, die erst nach dem Start dazukamen.
+	"""
+	addedIssueIds: [String!]!
 	createdAt: String!
 	updatedAt: String!
 }
@@ -2338,7 +2412,13 @@ type Query {
 	project(id: String!): Project!
 	"""
 	Meilensteine eines Projekts in `sortOrder`-Reihenfolge.
+	Eingefrorene Issue-Liste eines abgeschlossenen Meilensteins (nur sichtbare Teams).
 	"""
+	milestoneSnapshot(projectId: String!, id: String!): [MilestoneSnapshotIssue!]!
+	"""
+	Ressourcen eines Meilensteins oder, ohne `milestoneId`, des Projekts selbst.
+	"""
+	resources(projectId: String!, milestoneId: String): Resources!
 	projectMilestones(projectId: String!): [ProjectMilestone!]!
 	"""
 	Status-Updates eines Projekts (neueste zuerst).
@@ -2673,6 +2753,45 @@ type ResolvedAsset {
 	contentType: String
 	size: Float
 	expiresAt: String!
+}
+
+"""
+Dokument in der Ressourcenliste.
+"""
+type ResourceDocument {
+	id: String!
+	title: String!
+	slugId: String!
+}
+
+"""
+Datei in der Ressourcenliste; `downloadUrl` ist signiert und kurzlebig.
+"""
+type ResourceFile {
+	id: String!
+	title: String!
+	contentType: String
+	size: Float
+	downloadUrl: String!
+	createdAt: String!
+}
+
+"""
+Link in der Ressourcenliste.
+"""
+type ResourceLink {
+	id: String!
+	url: String!
+	label: String!
+}
+
+"""
+Ressourcen eines Meilensteins oder des Projekts selbst.
+"""
+type Resources {
+	documents: [ResourceDocument!]!
+	links: [ResourceLink!]!
+	files: [ResourceFile!]!
 }
 
 """

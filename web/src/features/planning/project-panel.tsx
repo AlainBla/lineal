@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Diamond, MoreHorizontal, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -16,14 +17,7 @@ import { useViewIssues } from "@/features/views/queries";
 
 import { ProjectProperties } from "./project-details";
 import { useCreateMilestone, useDeleteMilestone, useUpdateMilestone } from "./queries";
-import { shortDate } from "./ui";
-
-const MILESTONE_COLOR: Record<string, string> = {
-  done: "text-primary",
-  overdue: "text-destructive",
-  next: "text-amber-500",
-  unstarted: "text-muted-foreground",
-};
+import { MILESTONE_COLOR, milestonePath, shortDate } from "./ui";
 
 /** Einklappbarer Abschnitt des Seitenpanels (▾), optional mit „+“ rechts. */
 function Section({
@@ -57,9 +51,11 @@ function Section({
 }
 
 function MilestonesSection({
+  ws,
   project,
   onSelect,
 }: {
+  ws: string;
   project: Project;
   onSelect?: (id: string | null) => void;
 }) {
@@ -89,15 +85,14 @@ function MilestonesSection({
         {project.milestones.map((m) => (
           <li key={m.id} className="flex items-center gap-2">
             <Diamond className={cn("size-3.5 shrink-0", MILESTONE_COLOR[m.status])} />
-            <button
-              type="button"
-              className="min-w-0 truncate text-left hover:underline"
-              onClick={() => onSelect?.(m.id)}
+            <Link
+              to={milestonePath(ws, project.identifier, m.id) as "/"}
+              className="min-w-0 truncate hover:underline"
             >
               {m.name}
-            </button>
+            </Link>
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-              {Math.round(m.progress * 100)}% of {m.issueCount}
+              {m.completedIssueCount} of {m.issueCount}
             </span>
             {m.targetDate && (
               <span className="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -235,7 +230,7 @@ export function ProjectPanel({
       <Section title="Properties">
         <ProjectProperties project={project} ws={ws} stacked />
       </Section>
-      <MilestonesSection project={project} onSelect={onSelectMilestone} />
+      <MilestonesSection ws={ws} project={project} onSelect={onSelectMilestone} />
       <ProgressSection project={project} />
     </aside>
   );

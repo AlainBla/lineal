@@ -163,3 +163,143 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
     assert_eq!(data_files, 1, "nur das erste, finalisierte Objekt bleibt");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// LIN-25: Datei am Meilenstein: Upload ohne Issue, signierter Download, Rechte folgen dem Projekt.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_file_flow_follows_project_access(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool.clone());
+    let data = SeedData::acme();
+    let mut tx = store.begin(data.org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let dir = std::env::temp_dir().join(format!("lineal-lin25-{}", Uuid::now_v7()));
+    let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
+    app.config.blob_dir = dir.clone();
+    app.config.base_url = "http://lineal.test".into();
+    app.blobs = Arc::new(LocalBlobStore::from_app(&app));
+    let app = Arc::new(app);
+    let router = lineal_api::router::router(app.clone(), false);
+    let bob = ctx_for(SeedUser::Bob);
+    let alice = ctx_for(SeedUser::Alice);
+
+    // Projekt nur im Team DES, das Alice nicht sieht.
+    let (project, milestone): (String, String) = {
+        let p = app
+            .save_project(
+                &bob,
+                lineal_app::usecases::project::SaveProjectInput {
+                    name: Some("Geheim".into()),
+                    add_teams: vec!["DES".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (_, m) = app
+            .save_milestone(
+                &bob,
+                lineal_app::usecases::project::milestone::SaveMilestoneInput {
+                    project: p.project.id.to_string(),
+                    name: Some("Abnahme".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        (p.project.id.to_string(), m.milestone.id.to_string())
+    };
+
+    let upload = |user| {
+        let app = app.clone();
+        let router = router.clone();
+        async move {
+            let p = app
+                .prepare_attachment_upload(
+                    &user,
+                    PrepareUploadInput {
+                        issue: None,
+                        filename: "plan.png".into(),
+                        content_type: "image/png".into(),
+                        size: PNG.len() as i64,
+                        title: None,
+                        subtitle: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let res = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::PUT)
+                        .uri(p.url.trim_start_matches("http://lineal.test"))
+                        .header("content-type", "image/png")
+                        .body(Body::from(PNG.to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            p.asset_url
+        }
+    };
+
+    let asset = upload(bob.clone()).await;
+    let id = app
+        .add_resource_file(&bob, &project, Some(&milestone), &asset, None)
+        .await
+        .unwrap();
+    let list = app
+        .list_resources(&bob, &project, Some(&milestone))
+        .await
+        .unwrap();
+    assert_eq!(list.files[0].file.title, "plan.png");
+    assert_eq!(list.files[0].file.size, Some(PNG.len() as i64));
+    let get = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(
+                    list.files[0]
+                        .download_url
+                        .trim_start_matches("http://lineal.test"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+
+    // Ein zweites Mal lässt sich derselbe Upload nicht anhängen.
+    let again = app
+        .add_resource_file(&bob, &project, Some(&milestone), &asset, None)
+        .await
+        .unwrap_err();
+    assert_eq!(again.details["reason"], "upload_finalized");
+
+    // Wer das Projekt nicht sieht, bekommt weder Liste noch Download-URL.
+    assert!(app.list_resources(&alice, &project, None).await.is_err());
+    let urls = [asset.clone()];
+    assert!(app.resolve_assets(&alice, &urls).await.unwrap().is_empty());
+    assert_eq!(app.resolve_assets(&bob, &urls).await.unwrap().len(), 1);
+
+    // Fremder Upload: nur der Ersteller darf ihn anhängen.
+    let foreign = upload(alice.clone()).await;
+    let err = app
+        .add_resource_file(&bob, &project, Some(&milestone), &foreign, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.details["reason"], "upload_not_owned");
+
+    // Löschen entfernt Zeile und Objekt.
+    app.remove_resource_file(&bob, &project, &id.to_string())
+        .await
+        .unwrap();
+    let list = app
+        .list_resources(&bob, &project, Some(&milestone))
+        .await
+        .unwrap();
+    assert!(list.files.is_empty());
+    assert!(app.resolve_assets(&bob, &urls).await.unwrap().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}

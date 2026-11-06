@@ -3,6 +3,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use lineal_app::ports::services::BlobInfo;
 use lineal_app::ports::{BlobStore, Store};
 use lineal_app::usecases::issue::CreateIssueInput;
 use lineal_app::{App, AppResult};
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 /// Merkt sich gelöschte Schlüssel.
 #[derive(Default)]
-struct RecordingBlobs(Mutex<Vec<String>>);
+struct RecordingBlobs(Mutex<Vec<String>>, Mutex<Vec<String>>);
 
 impl RecordingBlobs {
     fn deleted(&self) -> Vec<String> {
@@ -27,6 +28,13 @@ impl RecordingBlobs {
 
 #[async_trait]
 impl BlobStore for RecordingBlobs {
+    async fn head(&self, key: &str) -> AppResult<Option<BlobInfo>> {
+        let stored = self.1.lock().unwrap().iter().any(|k| k == key);
+        Ok(stored.then(|| BlobInfo {
+            size: 10,
+            content_type: "image/png".into(),
+        }))
+    }
     async fn delete(&self, key: &str) -> AppResult<()> {
         self.0.lock().unwrap().push(key.to_owned());
         Ok(())
@@ -200,6 +208,52 @@ async fn expired_unfinalized_reservations_lose_their_blob(pool: PgPool) {
     assert_eq!(left, 2);
     // Idempotent.
     assert_eq!(fx.app.run_upload_purge(now).await.unwrap(), 0);
+}
+
+/// Bilder im Text werden nie finalisiert; ihre Datei darf die Frist nicht verlieren (LIN-25).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn editor_uploads_with_a_stored_file_survive_the_purge(pool: PgPool) {
+    let fx = setup(pool).await;
+    let now = t0();
+    fx.blobs.1.lock().unwrap().push("acme/inline.png".into());
+    reserve(&fx, None, "acme/inline.png", now - Duration::days(3), false).await;
+
+    assert_eq!(fx.app.run_upload_purge(now).await.unwrap(), 0);
+    assert!(fx.blobs.deleted().is_empty());
+    let done: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM upload_reservation WHERE finalized_at IS NOT NULL",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(done, 1, "kommt beim nächsten Lauf nicht wieder");
+}
+
+/// Der periodische Job fasst Uploads nicht mehr an, auch keine abgebrochenen.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn periodic_purge_leaves_uploads_alone(pool: PgPool) {
+    let fx = setup(pool).await;
+    let now = t0();
+    fx.blobs.1.lock().unwrap().push("acme/inline.png".into());
+    reserve(&fx, None, "acme/inline.png", now - Duration::days(3), false).await;
+    reserve(
+        &fx,
+        None,
+        "acme/aborted.png",
+        now - Duration::days(3),
+        false,
+    )
+    .await;
+
+    PurgeJob.run(&fx.app, now).await.unwrap();
+
+    assert!(fx.blobs.deleted().is_empty());
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM upload_reservation WHERE finalized_at IS NULL")
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(left, 2);
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

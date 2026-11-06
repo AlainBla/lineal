@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -76,6 +76,13 @@ const project = (over: Partial<Project> = {}): Project =>
         progress: 0,
         issueCount: 1,
         completedIssueCount: 0,
+        startedIssueCount: 0,
+        readyToComplete: false,
+        completedAt: null,
+        resultNote: null,
+        hasSnapshot: false,
+        addedIssueIds: [],
+        targetDateHistory: [],
         createdAt: "2026-10-01T00:00:00Z",
         updatedAt: "2026-10-01T00:00:00Z",
       },
@@ -214,11 +221,10 @@ describe("Projekt bearbeiten (F.01)", () => {
     );
   });
 
-  it("Meilensteine: umbenennen, Datum ändern, löschen nur nach Bestätigung", async () => {
+  it("Meilensteine: Zeile führt zur Detailseite, löschen nur nach Bestätigung", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
     const gql = mockGraphql({
       ...base(() => project()),
-      PlanningMilestoneUpdate: () => ({ projectMilestoneUpdate: { success: true } }),
       PlanningMilestoneDelete: () => ({ projectMilestoneDelete: { success: true } }),
     });
     await renderWithApp(
@@ -227,24 +233,17 @@ describe("Projekt bearbeiten (F.01)", () => {
       "/acme/project/P-ENG-1/milestones",
     );
     const user = userEvent.setup();
-    const field = await screen.findByLabelText("Milestone name Alpha");
-    await user.clear(field);
-    await user.type(field, "Alpha 2{Enter}");
-    await waitFor(() => expect(gql.of("PlanningMilestoneUpdate")).toHaveLength(1));
-    expect(gql.of("PlanningMilestoneUpdate")[0]!.variables).toMatchObject({
-      id: "m-alpha",
-      input: { name: "Alpha 2" },
-    });
-    const date = screen.getByLabelText("Target date of Alpha");
-    fireEvent.change(date, { target: { value: "2026-12-15" } });
-    await waitFor(() =>
-      expect(gql.of("PlanningMilestoneUpdate").at(-1)!.variables).toMatchObject({
-        input: { targetDate: "2026-12-15" },
-      }),
+    expect(await screen.findByRole("link", { name: "Alpha" })).toHaveAttribute(
+      "href",
+      "/acme/project/P-ENG-1/milestone/m-alpha",
     );
-    await user.click(screen.getByRole("button", { name: "Delete milestone Alpha" }));
+    const remove = async () => {
+      await user.click(screen.getByRole("button", { name: "Milestone actions Alpha" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    };
+    await remove();
     expect(gql.of("PlanningMilestoneDelete")).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Delete milestone Alpha" }));
+    await remove();
     await waitFor(() => expect(gql.of("PlanningMilestoneDelete")).toHaveLength(1));
     expect(confirm).toHaveBeenCalledTimes(2);
   });

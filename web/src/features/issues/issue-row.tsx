@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { EntityIcon } from "@/components/entity-icon";
@@ -24,6 +25,8 @@ interface RowProps {
   display?: readonly DisplayProperty[];
   /** Einrückung für verschachtelte Sub-Issues. */
   depth?: number;
+  /** Hinweis rechts neben dem Titel, z. B. „added“ am Meilenstein. */
+  badge?: ReactNode;
 }
 
 const shortDay = (iso: string) =>
@@ -139,6 +142,7 @@ export function IssueRow({
   selection,
   display = DEFAULT_PROPERTIES,
   depth = 0,
+  badge,
 }: RowProps) {
   const show = (p: DisplayProperty) => display.includes(p);
   const creator = show("creator") ? lookup.assigneeName(issue.creatorId ?? null) : null;
@@ -215,6 +219,7 @@ export function IssueRow({
         </span>
       )}
       {estimate && <span className="text-xs text-muted-foreground">{estimate}</span>}
+      {badge}
       {creator && (
         <span title={`Creator: ${creator}`}>
           <Avatar name={creator} />

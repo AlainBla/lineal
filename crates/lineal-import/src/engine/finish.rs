@@ -140,6 +140,8 @@ impl Session<'_, '_> {
             .imports()
             .finalize_import_counters(&team_ids)
             .await?;
+        // Abgeschlossene Meilensteine sind gespeichert, nicht berechnet (docs/04 §3.6).
+        self.tx()?.projects().complete_finished_milestones().await?;
         let source = self.source().to_owned();
         let mapped: BTreeMap<String, i64> = self
             .tx()?

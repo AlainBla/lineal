@@ -4,6 +4,7 @@
  */
 
 export interface WorkspaceNav {
+  milestones: string;
   inbox: string;
   myIssues: string;
   drafts: string;
@@ -33,6 +34,7 @@ export function workspacePaths(ws: string): WorkspaceNav {
     projects: `/${ws}/projects/all`,
     initiatives: `/${ws}/initiatives/active`,
     roadmap: `/${ws}/roadmap`,
+    milestones: `/${ws}/milestones`,
     views: `/${ws}/views/issues`,
     trash: `/${ws}/trash/issues`,
     settings: `/${ws}/settings/workspace`,
@@ -92,6 +94,8 @@ const SEGMENT_TITLES: Record<string, string> = {
   workload: "Workload",
   cycles: "Cycles",
   cycle: "Cycle",
+  milestone: "Milestone",
+  milestones: "Milestones",
   projects: "Projects",
   project: "Project",
   initiatives: "Initiatives",

@@ -1239,6 +1239,7 @@ Die Berechnung der Empfänger (Fan-out aus dem Outbox-Event, Deduplizierung, Ide
 | `projectUpdateNewComment` | `commentsAndReplies` | Kommentar zu einem Statusbericht | Autor des Berichts, Thread-Teilnehmer |
 | `projectUpdateReaction`, `projectUpdateCommentReaction` | `reactions` | Reaktion auf Bericht bzw. Kommentar | Autor |
 | `projectReminder` | `reminders` | „Remind me“ am Projekt | setzender User |
+| `projectMilestoneReminder` | `reminders` | „Remind me“ am Meilenstein | setzender User |
 | `projectMilestoneMention`, `projectMilestoneCommentMention`, `projectMilestoneNewComment`, `projectMilestoneCommentReaction`, `projectMilestoneDescriptionContentChange`, `projectMilestoneThreadResolved` | wie die Projekt-Entsprechung | analog am Meilenstein | analog |
 | `initiativeAddedAsOwner` | `assignments` | User wird Owner | neuer Owner |
 | `initiativeMention`, `initiativeCommentMention` | `mentions` | Erwähnung | Erwähnte |

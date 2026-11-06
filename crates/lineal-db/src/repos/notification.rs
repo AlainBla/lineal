@@ -246,9 +246,10 @@ fn prefs_from(r: PrefsRow) -> UserNotificationPrefs {
     }
 }
 
-const REMINDER_COLS: &str = "id, user_id, target_type, COALESCE(issue_id, project_id, initiative_id, document_id), \
+const REMINDER_COLS: &str = "id, user_id, target_type, COALESCE(issue_id, project_milestone_id, project_id, initiative_id, document_id), \
      remind_at, fired_at";
-const REMINDER_TARGET: &str = "COALESCE(issue_id, project_id, initiative_id, document_id)";
+const REMINDER_TARGET: &str =
+    "COALESCE(issue_id, project_milestone_id, project_id, initiative_id, document_id)";
 
 type ReminderRow = (
     Uuid,
@@ -270,15 +271,21 @@ fn reminder_of(r: ReminderRow) -> Reminder {
     }
 }
 
-fn reminder_cols(
-    target_type: &str,
-    id: Uuid,
-) -> (Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>) {
+type ReminderCols = (
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+);
+
+fn reminder_cols(target_type: &str, id: Uuid) -> ReminderCols {
     match target_type {
-        "issue" => (Some(id), None, None, None),
-        "project" => (None, Some(id), None, None),
-        "initiative" => (None, None, Some(id), None),
-        _ => (None, None, None, Some(id)),
+        "issue" => (Some(id), None, None, None, None),
+        "project" => (None, Some(id), None, None, None),
+        "initiative" => (None, None, Some(id), None, None),
+        "milestone" => (None, None, None, None, Some(id)),
+        _ => (None, None, None, Some(id), None),
     }
 }
 
@@ -1640,12 +1647,14 @@ impl NotificationRepo for PgTx {
         remind_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> AppResult<Reminder> {
-        let (issue, project, initiative, document) = reminder_cols(target_type, target_id);
+        let (issue, project, initiative, document, milestone) =
+            reminder_cols(target_type, target_id);
         let row: ReminderRow = sqlx::query_as(&format!(
             "INSERT INTO reminder (id, organization_id, user_id, target_type, issue_id, project_id, \
-               initiative_id, document_id, remind_at, created_at, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) \
-             ON CONFLICT (organization_id, user_id, target_type, issue_id, project_id, initiative_id, document_id) \
+               initiative_id, document_id, remind_at, created_at, updated_at, project_milestone_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11) \
+             ON CONFLICT (organization_id, user_id, target_type, issue_id, project_id, initiative_id, \
+               document_id, project_milestone_id) \
              DO UPDATE SET remind_at = EXCLUDED.remind_at, fired_at = NULL, updated_at = $10, \
                version = reminder.version + 1 \
              RETURNING {REMINDER_COLS}"
@@ -1660,6 +1669,7 @@ impl NotificationRepo for PgTx {
         .bind(document)
         .bind(remind_at)
         .bind(now)
+        .bind(milestone)
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)?;

@@ -249,6 +249,18 @@ impl<'a> Fan<'a> {
                 }
                 self.target_project(ProjectId(id)).await?;
             }
+            "milestone" => {
+                let milestone = self
+                    .tx
+                    .projects()
+                    .get_milestone(lineal_domain::ids::MilestoneId(id))
+                    .await?;
+                let Some(m) = milestone.filter(|m| m.archived_at.is_none()) else {
+                    return Ok(false);
+                };
+                self.target_project(m.project_id).await?;
+                self.refs.project_milestone_id = Some(m.id.0);
+            }
             "initiative" => {
                 if !self
                     .tx

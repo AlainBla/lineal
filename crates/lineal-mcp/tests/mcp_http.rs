@@ -201,7 +201,7 @@ async fn tools_list_matches_snapshot_exactly() {
     )
     .await;
     let tools = body["result"]["tools"].as_array().expect("tools");
-    assert_eq!(tools.len(), 56);
+    assert_eq!(tools.len(), 63);
 
     let snapshot: Value = serde_json::from_str(SNAPSHOT_JSON).expect("snapshot");
     let compat: BTreeSet<&str> = COMPAT_TOOLS.iter().map(|(n, _)| *n).collect();
@@ -216,7 +216,12 @@ async fn tools_list_matches_snapshot_exactly() {
                 "description of {name}"
             );
         } else {
-            assert_eq!(name, "get_workspace_overview");
+            assert!(
+                lineal_mcp::dispatch::EXTENSION_TOOLS
+                    .iter()
+                    .any(|(n, _)| *n == name),
+                "{name}"
+            );
         }
     }
     assert_eq!(compat.len(), 55);

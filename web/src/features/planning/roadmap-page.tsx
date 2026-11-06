@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Diamond } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -37,7 +37,7 @@ import {
   useUpdateInitiative,
   useUpdateProject,
 } from "./queries";
-import { PageHeader } from "./ui";
+import { MILESTONE_COLOR, PageHeader } from "./ui";
 
 const LABEL_W = 224;
 const ROW_H = 32;
@@ -317,15 +317,19 @@ export function RoadmapView({
               onKey={onKey}
             />
             {it.milestones.map((m) => (
-              <span
+              <Link
                 key={m.id}
+                to={m.href as "/"}
                 data-milestone={m.id}
                 title={`${m.name} · ${formatSpanDate(m.targetDate, null)}`}
-                className="pointer-events-auto absolute top-2 -ml-1.5 text-amber-500"
+                className={cn(
+                  "pointer-events-auto absolute top-2 -ml-1.5",
+                  MILESTONE_COLOR[m.status],
+                )}
                 style={{ left: dayX(m.targetDate, ruler, zoom) }}
               >
                 <Diamond className="size-3 fill-current" aria-label={`Milestone ${m.name}`} />
-              </span>
+              </Link>
             ))}
           </div>
         </div>,

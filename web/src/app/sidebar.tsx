@@ -21,6 +21,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Diamond,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState, type ReactNode } from "react";
@@ -424,6 +425,12 @@ export function Sidebar({
                 <NavLink to={p.roadmap}>
                   <GanttChart />
                   Roadmap
+                </NavLink>
+              </li>
+              <li>
+                <NavLink to={p.milestones}>
+                  <Diamond />
+                  Milestones
                 </NavLink>
               </li>
               <li>

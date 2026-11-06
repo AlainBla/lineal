@@ -1,8 +1,14 @@
-import { PanelRight, Plus } from "lucide-react";
+import { Diamond, MoreHorizontal, PanelRight, Plus } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { CommentsSection } from "@/features/comments/comments-section";
 import { DocumentsSection } from "@/features/docs/documents-section";
@@ -13,14 +19,13 @@ import { RichEditor } from "@/features/issues/rich-editor";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Project } from "@/gql/graphql";
 
-import { DateField, TextField } from "./fields";
 import { ProjectActions, ProjectDetails } from "./project-details";
 import { ProjectPanel } from "./project-panel";
+import { ResourcesSection } from "./resources";
 import {
   HEALTH_LABEL,
   useCreateMilestone,
   useDeleteMilestone,
-  useUpdateMilestone,
   usePostProjectUpdate,
   useProject,
   useProjectUpdates,
@@ -29,7 +34,18 @@ import {
 import { useRemindAction } from "@/features/inbox/remind";
 import { IssueView } from "@/features/views/issue-view";
 import { cn } from "@/lib/cn";
-import { HealthBadge, PageHeader, ProgressBar, shortDate } from "./ui";
+import {
+  HealthBadge,
+  MILESTONE_COLOR,
+  MilestoneBar,
+  MilestoneStatusBadge,
+  milestonePath,
+  PageHeader,
+  ProgressBar,
+  shiftLabel,
+  shortDate,
+  targetShift,
+} from "./ui";
 
 export type ProjectTab = "overview" | "issues" | "updates" | "milestones" | "resources";
 export const PROJECT_TABS: ProjectTab[] = [
@@ -143,58 +159,97 @@ function UpdatesFeed({ projectId }: { projectId: string }) {
   );
 }
 
-function Milestones({ project }: { project: Project }) {
+function Milestones({ ws, project }: { ws: string; project: Project }) {
   const create = useCreateMilestone(project.id);
   const del = useDeleteMilestone(project.id);
-  const upd = useUpdateMilestone(project.id);
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
   return (
     <div className="flex flex-col gap-3 p-4">
-      <ul className="divide-y divide-border rounded-lg border border-border">
-        {project.milestones.length === 0 && (
-          <li className="px-3 py-2 text-sm text-muted-foreground">No milestones.</li>
-        )}
-        {project.milestones.map((m) => (
-          <li key={m.id} className="flex flex-wrap items-end gap-3 px-3 py-2 text-sm">
-            <div className="w-56">
-              <TextField
-                label={`Milestone name ${m.name}`}
-                value={m.name}
-                required
-                maxLength={255}
-                onCommit={(name) => upd.mutate({ id: m.id, input: { name } })}
-              />
-            </div>
-            <DateField
-              label={`Target date of ${m.name}`}
-              date={m.targetDate}
-              dayOnly
-              onChange={(targetDate) => upd.mutate({ id: m.id, input: { targetDate } })}
-            />
-            <ProgressBar value={m.progress} label={`Progress of ${m.name}`} />
-            <span className="text-xs text-muted-foreground">
-              {m.completedIssueCount} / {m.issueCount}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              aria-label={`Delete milestone ${m.name}`}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Delete milestone "${m.name}"? Its issues stay in the project without a milestone.`,
-                  )
-                )
-                  del.mutate(m.id);
-              }}
-            >
-              Delete
-            </Button>
-          </li>
-        ))}
-      </ul>
+      {project.milestones.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No milestones.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead className="text-left text-xs text-muted-foreground">
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 font-medium">Milestone</th>
+                <th className="px-3 py-2 font-medium">Target date</th>
+                <th className="px-3 py-2 font-medium">Issues</th>
+                <th className="w-1/4 px-3 py-2 font-medium">
+                  <span className="sr-only">Progress</span>
+                </th>
+                <th className="w-10 px-3 py-2">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {project.milestones.map((m) => (
+                <tr key={m.id} className="hover:bg-surface-hover">
+                  <td className="px-3 py-2">
+                    <span className="flex items-center gap-2">
+                      <Diamond
+                        className={cn("size-3.5 shrink-0 fill-current", MILESTONE_COLOR[m.status])}
+                      />
+                      <Link
+                        to={milestonePath(ws, project.identifier, m.id) as "/"}
+                        className="truncate font-medium hover:underline"
+                      >
+                        {m.name}
+                      </Link>
+                      <MilestoneStatusBadge status={m.status} />
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                    {shortDate(m.targetDate)}
+                    {targetShift(m) !== null && (
+                      <span className="ml-1 text-amber-500">{shiftLabel(targetShift(m)!)}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+                    {m.completedIssueCount} of {m.issueCount}
+                  </td>
+                  <td className="px-3 py-2">
+                    <MilestoneBar
+                      done={m.completedIssueCount}
+                      started={m.startedIssueCount}
+                      total={m.issueCount}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Milestone actions ${m.name}`}
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            if (
+                              window.confirm(
+                                `Delete milestone "${m.name}"? Its issues stay in the project without a milestone.`,
+                              )
+                            )
+                              del.mutate(m.id);
+                          }}
+                        >
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <form
         aria-label="Add milestone"
         className="flex items-center gap-2"
@@ -230,9 +285,9 @@ function Milestones({ project }: { project: Project }) {
           <Plus /> Add milestone
         </Button>
       </form>
-      {(create.isError || del.isError || upd.isError) && (
+      {(create.isError || del.isError) && (
         <p role="alert" className="text-xs text-destructive">
-          {errorText(create.error ?? del.error ?? upd.error)}
+          {errorText(create.error ?? del.error)}
         </p>
       )}
     </div>
@@ -445,7 +500,12 @@ export function ProjectPage({
                 <ul className="flex flex-col gap-1 text-sm">
                   {p.milestones.map((m) => (
                     <li key={m.id}>
-                      {m.name}{" "}
+                      <Link
+                        to={milestonePath(ws, p.identifier, m.id) as "/"}
+                        className="hover:underline"
+                      >
+                        {m.name}
+                      </Link>{" "}
                       <span className="text-xs text-muted-foreground">
                         {shortDate(m.targetDate)}
                       </span>
@@ -471,13 +531,18 @@ export function ProjectPage({
             <UpdatesFeed projectId={p.id} />
           </div>
         )}
-        {tab === "milestones" && <Milestones project={p} />}
+        {tab === "milestones" && <Milestones ws={ws} project={p} />}
         {tab === "resources" && (
-          <DocumentsSection
-            ws={ws}
-            scope={{ projectId: p.id }}
-            teamId={p.leadTeam?.id ?? p.teams[0]?.id}
-          />
+          <>
+            <DocumentsSection
+              ws={ws}
+              scope={{ projectId: p.id }}
+              teamId={p.leadTeam?.id ?? p.teams[0]?.id}
+            />
+            <div className="max-w-md p-4">
+              <ResourcesSection ws={ws} projectId={p.id} />
+            </div>
+          </>
         )}
       </div>
     </div>

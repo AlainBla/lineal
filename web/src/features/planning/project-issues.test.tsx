@@ -38,6 +38,13 @@ const MS = (id: string, name: string, over: Record<string, unknown> = {}) => ({
   progress: 0.5,
   issueCount: 2,
   completedIssueCount: 1,
+  startedIssueCount: 0,
+  readyToComplete: false,
+  completedAt: null,
+  resultNote: null,
+  hasSnapshot: false,
+  addedIssueIds: [],
+  targetDateHistory: [],
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
   ...over,
@@ -154,7 +161,7 @@ describe("Projekt-Issues (docs/08 §2.7)", () => {
     expect(within(group).getByText("Erstes")).toBeInTheDocument();
     const panel = screen.getByRole("complementary", { name: "Project details" });
     expect(within(panel).getByRole("region", { name: "Properties" })).toBeInTheDocument();
-    expect(within(panel).getByText(/50% of 2/)).toBeInTheDocument();
+    expect(within(panel).getByText("1 of 2")).toBeInTheDocument();
     expect(within(panel).getByText("No milestone")).toBeInTheDocument();
     const progress = within(panel).getByRole("region", { name: "Progress" });
     expect(within(progress).getByText("Scope")).toBeInTheDocument();

@@ -353,6 +353,7 @@ impl AttachmentRepo for PgTx {
         sqlx::query_scalar(
             "SELECT k FROM unnest($1::text[]) AS k \
              WHERE NOT EXISTS (SELECT 1 FROM attachment WHERE storage_key = k) \
+               AND NOT EXISTS (SELECT 1 FROM project_file WHERE storage_key = k) \
                AND NOT EXISTS (SELECT 1 FROM upload_reservation WHERE storage_key = k)",
         )
         .bind(keys)

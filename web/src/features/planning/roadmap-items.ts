@@ -1,6 +1,7 @@
 import type { Initiative, Project } from "@/gql/graphql";
 
 import { asResolution, type RoadmapItem } from "./roadmap-model";
+import { milestonePath } from "./ui";
 
 const COLOR = /^#[0-9A-Fa-f]{6}$/;
 
@@ -26,7 +27,13 @@ export function projectItems(projects: Project[], ws: string): RoadmapItem[] {
       startEditable: true,
       milestones: p.milestones
         .filter((m) => !!m.targetDate)
-        .map((m) => ({ id: m.id, name: m.name, targetDate: m.targetDate!.slice(0, 10) })),
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          targetDate: m.targetDate!.slice(0, 10),
+          status: m.status,
+          href: milestonePath(ws, p.identifier, m.id),
+        })),
     }));
 }
 

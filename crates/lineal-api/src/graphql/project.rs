@@ -10,8 +10,9 @@ use async_graphql::{Context, InputObject, MaybeUndefined, Object, SimpleObject};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use lineal_app::AppError;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor, PageRequest};
-use lineal_app::usecases::project::milestone::{ProjectRef, SaveMilestoneInput};
+use lineal_app::usecases::project::milestone::{OpenIssues, ProjectRef, SaveMilestoneInput};
 use lineal_app::usecases::project::pure::parse_date;
+use lineal_app::usecases::project::resources::ResourcesView;
 use lineal_app::usecases::project::update::{ListProjectUpdatesInput, ProjectUpdateView};
 use lineal_app::usecases::project::{
     ListProjectsInput, MilestoneView, ProjectView, SaveProjectInput, ViewOpts,
@@ -206,8 +207,47 @@ pub struct MilestoneGql {
     pub progress: f64,
     pub issue_count: i64,
     pub completed_issue_count: i64,
+    pub started_issue_count: i64,
+    pub ready_to_complete: bool,
+    pub completed_at: Option<String>,
+    pub result_note: Option<String>,
+    /// Es gibt eine eingefrorene Issue-Liste (fehlt bei Altdaten).
+    pub has_snapshot: bool,
+    pub target_date_history: Vec<MilestoneDateChangeGql>,
+    /// Issues, die erst nach dem Start dazukamen.
+    pub added_issue_ids: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Eine Verschiebung des Zieldatums.
+#[derive(SimpleObject)]
+#[graphql(name = "MilestoneDateChange")]
+pub struct MilestoneDateChangeGql {
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+    pub changed_at: String,
+}
+
+/// Issue, wie es beim Abschließen stand.
+#[derive(SimpleObject)]
+#[graphql(name = "MilestoneSnapshotIssue")]
+pub struct MilestoneSnapshotIssueGql {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+    pub state_name: String,
+    pub state_type: String,
+}
+
+/// Was beim Abschließen mit offenen Issues geschieht.
+#[derive(InputObject)]
+pub struct MilestoneCompleteInput {
+    /// `keep` | `remove` | `move`.
+    pub open_issues: String,
+    /// Ziel bei `move`.
+    pub move_to: Option<String>,
+    pub note: Option<String>,
 }
 
 impl MilestoneGql {
@@ -223,6 +263,21 @@ impl MilestoneGql {
             progress: m.progress,
             issue_count: m.issue_count,
             completed_issue_count: m.completed_issue_count,
+            started_issue_count: m.started_issue_count,
+            ready_to_complete: m.ready_to_complete,
+            completed_at: m.milestone.completed_at.map(|t| t.to_rfc3339()),
+            result_note: m.milestone.result_note,
+            has_snapshot: m.milestone.snapshot.is_some(),
+            target_date_history: m
+                .date_changes
+                .into_iter()
+                .map(|c| MilestoneDateChangeGql {
+                    from_date: c.from_date.map(|d| d.to_string()),
+                    to_date: c.to_date.map(|d| d.to_string()),
+                    changed_at: c.created_at.to_rfc3339(),
+                })
+                .collect(),
+            added_issue_ids: m.added_issue_ids.iter().map(|i| i.to_string()).collect(),
             created_at: m.milestone.created_at.to_rfc3339(),
             updated_at: m.milestone.updated_at.to_rfc3339(),
         }
@@ -395,6 +450,82 @@ pub struct MilestoneInput {
     pub name: Option<String>,
     pub description: Option<String>,
     pub target_date: MaybeUndefined<String>,
+}
+
+/// Dokument in der Ressourcenliste.
+#[derive(SimpleObject)]
+#[graphql(name = "ResourceDocument")]
+pub struct ResourceDocumentGql {
+    pub id: String,
+    pub title: String,
+    pub slug_id: String,
+}
+
+/// Link in der Ressourcenliste.
+#[derive(SimpleObject)]
+#[graphql(name = "ResourceLink")]
+pub struct ResourceLinkGql {
+    pub id: String,
+    pub url: String,
+    pub label: String,
+}
+
+/// Datei in der Ressourcenliste; `downloadUrl` ist signiert und kurzlebig.
+#[derive(SimpleObject)]
+#[graphql(name = "ResourceFile")]
+pub struct ResourceFileGql {
+    pub id: String,
+    pub title: String,
+    pub content_type: Option<String>,
+    pub size: Option<f64>,
+    pub download_url: String,
+    pub created_at: String,
+}
+
+/// Ressourcen eines Meilensteins oder des Projekts selbst.
+#[derive(SimpleObject)]
+#[graphql(name = "Resources")]
+pub struct ResourcesGql {
+    pub documents: Vec<ResourceDocumentGql>,
+    pub links: Vec<ResourceLinkGql>,
+    pub files: Vec<ResourceFileGql>,
+}
+
+impl From<ResourcesView> for ResourcesGql {
+    fn from(v: ResourcesView) -> Self {
+        Self {
+            documents: v
+                .documents
+                .into_iter()
+                .map(|d| ResourceDocumentGql {
+                    id: d.id.to_string(),
+                    title: d.title,
+                    slug_id: d.slug_id,
+                })
+                .collect(),
+            links: v
+                .links
+                .into_iter()
+                .map(|l| ResourceLinkGql {
+                    id: l.id.to_string(),
+                    url: l.url,
+                    label: l.label,
+                })
+                .collect(),
+            files: v
+                .files
+                .into_iter()
+                .map(|f| ResourceFileGql {
+                    id: f.file.id.to_string(),
+                    title: f.file.title,
+                    content_type: f.file.content_type,
+                    size: f.file.size.map(|s| s as f64),
+                    download_url: f.download_url,
+                    created_at: f.file.created_at.to_rfc3339(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(SimpleObject)]
@@ -620,6 +751,44 @@ impl ProjectQuery {
     }
 
     /// Meilensteine eines Projekts in `sortOrder`-Reihenfolge.
+    /// Eingefrorene Issue-Liste eines abgeschlossenen Meilensteins (nur sichtbare Teams).
+    async fn milestone_snapshot(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+    ) -> async_graphql::Result<Vec<MilestoneSnapshotIssueGql>> {
+        let rows = app(ctx)?
+            .milestone_snapshot(request_ctx(ctx)?, &project_id, &id)
+            .await
+            .map_err(gql_err)?;
+        let text = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or_default().to_owned();
+        Ok(rows
+            .iter()
+            .map(|v| MilestoneSnapshotIssueGql {
+                id: text(v, "id"),
+                identifier: text(v, "identifier"),
+                title: text(v, "title"),
+                state_name: text(v, "stateName"),
+                state_type: text(v, "stateType"),
+            })
+            .collect())
+    }
+
+    /// Ressourcen eines Meilensteins oder, ohne `milestoneId`, des Projekts selbst.
+    async fn resources(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        milestone_id: Option<String>,
+    ) -> async_graphql::Result<ResourcesGql> {
+        Ok(app(ctx)?
+            .list_resources(request_ctx(ctx)?, &project_id, milestone_id.as_deref())
+            .await
+            .map_err(gql_err)?
+            .into())
+    }
+
     async fn project_milestones(
         &self,
         ctx: &Context<'_>,
@@ -765,6 +934,158 @@ impl ProjectMutation {
         input: MilestoneInput,
     ) -> async_graphql::Result<ProjectMilestonePayload> {
         self.save_milestone(ctx, project_id, Some(id), input).await
+    }
+
+    /// Schließt den Meilenstein bewusst ab.
+    async fn project_milestone_complete(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+        input: MilestoneCompleteInput,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        let open = match (input.open_issues.as_str(), input.move_to) {
+            ("keep", _) => OpenIssues::Keep,
+            ("remove", _) => OpenIssues::Remove,
+            ("move", Some(to)) => OpenIssues::Move(to),
+            _ => {
+                return Err(gql_err(AppError::invalid_request(
+                    "openIssues must be keep, remove, or move with moveTo.",
+                )));
+            }
+        };
+        app(ctx)?
+            .complete_milestone(
+                request_ctx(ctx)?,
+                &project_id,
+                &id,
+                open,
+                input.note.as_deref(),
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    /// Wandelt den Meilenstein in ein Projekt um.
+    async fn project_milestone_convert(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+    ) -> async_graphql::Result<ProjectPayload> {
+        let view = app(ctx)?
+            .convert_milestone_to_project(request_ctx(ctx)?, &project_id, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectPayload {
+            success: true,
+            project: Some(view.into()),
+        })
+    }
+
+    /// Öffnet den Meilenstein wieder.
+    async fn project_milestone_reopen(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .reopen_milestone(request_ctx(ctx)?, &project_id, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    /// Link an Meilenstein oder Projekt hängen.
+    async fn resource_link_add(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        milestone_id: Option<String>,
+        url: String,
+        label: String,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .add_resource_link(
+                request_ctx(ctx)?,
+                &project_id,
+                milestone_id.as_deref(),
+                &url,
+                &label,
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    async fn resource_link_remove(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .remove_resource_link(request_ctx(ctx)?, &project_id, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    /// Ordnet ein Dokument des Projekts einem Meilenstein zu; ohne `milestoneId` löst es den Bezug.
+    async fn resource_document_set(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        document_id: String,
+        milestone_id: Option<String>,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .set_document_milestone(
+                request_ctx(ctx)?,
+                &project_id,
+                &document_id,
+                milestone_id.as_deref(),
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    /// Hängt einen abgeschlossenen `fileUpload` als Datei an.
+    async fn resource_file_add(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        milestone_id: Option<String>,
+        asset_url: String,
+        title: Option<String>,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .add_resource_file(
+                request_ctx(ctx)?,
+                &project_id,
+                milestone_id.as_deref(),
+                &asset_url,
+                title.as_deref(),
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
+    }
+
+    async fn resource_file_remove(
+        &self,
+        ctx: &Context<'_>,
+        project_id: String,
+        id: String,
+    ) -> async_graphql::Result<ProjectSuccessPayload> {
+        app(ctx)?
+            .remove_resource_file(request_ctx(ctx)?, &project_id, &id)
+            .await
+            .map_err(gql_err)?;
+        Ok(ProjectSuccessPayload { success: true })
     }
 
     /// Löscht den Meilenstein; seine Issues bleiben im Projekt.

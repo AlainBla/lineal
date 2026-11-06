@@ -8,7 +8,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use lineal_app::ports::repos::ProjectRepo;
 use lineal_app::ports::repos::cycle::{HistoryPoint, IssueScopeRow};
 use lineal_app::ports::repos::project::{
-    ExternalLink, Milestone, MilestonePatch, NewMilestone, NewProject, NewProjectUpdate, Project,
+    ExternalLink, Milestone, MilestoneCompletion, MilestoneDateChange, MilestoneIssueRef,
+    MilestonePatch, NewMilestone, NewProject, NewProjectUpdate, Project, ProjectFile,
     ProjectFilter, ProjectLabelRow, ProjectPatch, ProjectStatus, ProjectUpdate,
     ProjectUpdateFilter, ReminderSettings, ReminderTarget,
 };
@@ -231,9 +232,13 @@ struct MilestoneRow {
     version: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    completed_by_id: Option<Uuid>,
+    result_note: Option<String>,
+    snapshot: Option<Value>,
 }
 
-const MILESTONE_COLS: &str = "id, project_id, name, description, target_date, sort_order, archived_at, version, created_at, updated_at";
+const MILESTONE_COLS: &str = "id, project_id, name, description, target_date, sort_order, archived_at, version, created_at, updated_at, completed_at, completed_by_id, result_note, snapshot";
 
 impl From<MilestoneRow> for Milestone {
     fn from(r: MilestoneRow) -> Self {
@@ -248,6 +253,10 @@ impl From<MilestoneRow> for Milestone {
             version: r.version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            completed_at: r.completed_at,
+            completed_by_id: r.completed_by_id.map(UserId),
+            result_note: r.result_note,
+            snapshot: r.snapshot,
         }
     }
 }
@@ -331,6 +340,37 @@ pub(crate) fn pad_set(arr: &mut Vec<f64>, idx: usize, value: f64) {
         arr.push(value);
     } else {
         arr[idx] = value;
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct FileRow {
+    id: Uuid,
+    project_id: Uuid,
+    project_milestone_id: Option<Uuid>,
+    url: String,
+    storage_key: String,
+    title: String,
+    content_type: Option<String>,
+    size: Option<i64>,
+    creator_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<FileRow> for ProjectFile {
+    fn from(r: FileRow) -> Self {
+        Self {
+            id: r.id,
+            project_id: ProjectId(r.project_id),
+            milestone_id: r.project_milestone_id.map(MilestoneId),
+            url: r.url,
+            storage_key: r.storage_key,
+            title: r.title,
+            content_type: r.content_type,
+            size: r.size,
+            creator_id: r.creator_id.map(UserId),
+            created_at: r.created_at,
+        }
     }
 }
 
@@ -946,7 +986,7 @@ impl ProjectRepo for PgTx {
             "INSERT INTO entity_external_link (organization_id, url, label, project_id, sort_order, creator_id, \
              created_at, updated_at) VALUES ($1, $2, $3, $4, \
              COALESCE((SELECT max(sort_order) FROM entity_external_link WHERE project_id = $4), 0) + 1, $5, $6, $6) \
-             ON CONFLICT (project_id, url) WHERE project_id IS NOT NULL DO NOTHING",
+             ON CONFLICT (project_id, project_milestone_id, url) WHERE project_id IS NOT NULL DO NOTHING",
         )
         .bind(self.org.0)
         .bind(url)
@@ -958,6 +998,452 @@ impl ProjectRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn add_milestone_date_change(&mut self, c: &MilestoneDateChange) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO project_milestone_date_change (organization_id, project_milestone_id, from_date, \
+             to_date, actor_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(self.org.0)
+        .bind(c.milestone_id.0)
+        .bind(c.from_date)
+        .bind(c.to_date)
+        .bind(c.actor_id.map(|a| a.0))
+        .bind(c.created_at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_milestone_date_changes(
+        &mut self,
+        project: ProjectId,
+    ) -> AppResult<Vec<MilestoneDateChange>> {
+        type Row = (
+            Uuid,
+            Option<NaiveDate>,
+            Option<NaiveDate>,
+            Option<Uuid>,
+            DateTime<Utc>,
+        );
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT c.project_milestone_id, c.from_date, c.to_date, c.actor_id, c.created_at \
+             FROM project_milestone_date_change c JOIN project_milestone m \
+             ON m.organization_id = c.organization_id AND m.id = c.project_milestone_id \
+             WHERE c.organization_id = $1 AND m.project_id = $2 ORDER BY c.created_at, c.id",
+        )
+        .bind(self.org.0)
+        .bind(project.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(milestone, from_date, to_date, actor, created_at)| MilestoneDateChange {
+                    milestone_id: MilestoneId(milestone),
+                    from_date,
+                    to_date,
+                    actor_id: actor.map(UserId),
+                    created_at,
+                },
+            )
+            .collect())
+    }
+
+    async fn milestone_added_issues(
+        &mut self,
+        project: ProjectId,
+        grace_days: i32,
+    ) -> AppResult<Vec<(MilestoneId, IssueId)>> {
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT i.project_milestone_id, i.id FROM issue i JOIN project_milestone m \
+             ON m.organization_id = i.organization_id AND m.id = i.project_milestone_id \
+             WHERE i.organization_id = $1 AND i.project_id = $2 AND NOT i.trashed \
+             AND GREATEST(i.created_at, COALESCE((SELECT max(h.created_at) FROM issue_history h \
+               WHERE h.organization_id = i.organization_id AND h.issue_id = i.id \
+               AND h.changes ? 'projectMilestoneId'), i.created_at)) \
+               > m.created_at + make_interval(days => $3)",
+        )
+        .bind(self.org.0)
+        .bind(project.0)
+        .bind(grace_days)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(m, i)| (MilestoneId(m), IssueId(i)))
+            .collect())
+    }
+
+    async fn milestone_issue_refs(
+        &mut self,
+        milestone: MilestoneId,
+    ) -> AppResult<Vec<MilestoneIssueRef>> {
+        type Row = (Uuid, Uuid, String, i32, String, String, String);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT i.id, i.team_id, t.key, i.number, i.title, s.name, i.state_type \
+             FROM issue i JOIN team t ON t.organization_id = i.organization_id AND t.id = i.team_id \
+             JOIN workflow_state s ON s.organization_id = i.organization_id AND s.id = i.state_id \
+             WHERE i.organization_id = $1 AND i.project_milestone_id = $2 AND NOT i.trashed \
+             ORDER BY t.key, i.number",
+        )
+        .bind(self.org.0)
+        .bind(milestone.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, team, key, number, title, state_name, state_type)| MilestoneIssueRef {
+                    id: IssueId(id),
+                    team_id: TeamId(team),
+                    identifier: format!("{key}-{number}"),
+                    title,
+                    state_name,
+                    state_type,
+                },
+            )
+            .collect())
+    }
+
+    async fn set_milestone_completion(
+        &mut self,
+        id: MilestoneId,
+        completion: Option<MilestoneCompletion>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let done = completion.is_some();
+        let (by, note, snapshot) = match completion {
+            Some(c) => (c.by.map(|u| u.0), c.note, Some(c.snapshot)),
+            None => (None, None, None),
+        };
+        sqlx::query(
+            "UPDATE project_milestone SET completed_at = CASE WHEN $3 THEN $7::timestamptz END, \
+             completed_by_id = $4, result_note = CASE WHEN $3 THEN $5 ELSE result_note END, \
+             snapshot = $6, version = version + 1, updated_at = $7 \
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(done)
+        .bind(by)
+        .bind(note)
+        .bind(snapshot)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn move_open_milestone_issues(
+        &mut self,
+        from: MilestoneId,
+        to: Option<MilestoneId>,
+        actor: Option<UserId>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT id, team_id FROM issue WHERE organization_id = $1 AND project_milestone_id = $2 \
+             AND NOT trashed AND state_type NOT IN ('completed', 'canceled', 'duplicate') \
+             ORDER BY number FOR UPDATE",
+        )
+        .bind(self.org.0)
+        .bind(from.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (issue, team) in rows {
+            sqlx::query(
+                "UPDATE issue SET project_milestone_id = $3, version = version + 1, updated_at = $4 \
+                 WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(self.org.0)
+            .bind(issue)
+            .bind(to.map(|m| m.0))
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            sqlx::query(
+                "INSERT INTO issue_history (organization_id, issue_id, actor_id, source, changes, created_at) \
+                 VALUES ($1, $2, $3, 'user', $4, $5)",
+            )
+            .bind(self.org.0)
+            .bind(issue)
+            .bind(actor.map(|a| a.0))
+            .bind(json!({ "projectMilestoneId": { "from": from.0, "to": to.map(|m| m.0) } }))
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            out.push((IssueId(issue), TeamId(team)));
+        }
+        Ok(out)
+    }
+
+    async fn move_milestone_to_project(
+        &mut self,
+        milestone: MilestoneId,
+        from: ProjectId,
+        to: ProjectId,
+        actor: Option<UserId>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<(IssueId, TeamId)>> {
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT id, team_id FROM issue WHERE organization_id = $1 AND project_milestone_id = $2 \
+             ORDER BY number FOR UPDATE",
+        )
+        .bind(self.org.0)
+        .bind(milestone.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (issue, team) in rows {
+            sqlx::query(
+                "UPDATE issue SET project_id = $3, project_milestone_id = NULL, version = version + 1, \
+                 updated_at = $4 WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(self.org.0)
+            .bind(issue)
+            .bind(to.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            sqlx::query(
+                "INSERT INTO issue_history (organization_id, issue_id, actor_id, source, changes, created_at) \
+                 VALUES ($1, $2, $3, 'user', $4, $5)",
+            )
+            .bind(self.org.0)
+            .bind(issue)
+            .bind(actor.map(|a| a.0))
+            .bind(json!({
+                "projectId": { "from": from.0, "to": to.0 },
+                "projectMilestoneId": { "from": milestone.0, "to": null },
+            }))
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            out.push((IssueId(issue), TeamId(team)));
+        }
+        for table in ["document", "entity_external_link", "project_file"] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET project_id = $3, project_milestone_id = NULL, updated_at = $4 \
+                 WHERE organization_id = $1 AND project_milestone_id = $2"
+            ))
+            .bind(self.org.0)
+            .bind(milestone.0)
+            .bind(to.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        }
+        Ok(out)
+    }
+
+    async fn complete_finished_milestones(&mut self) -> AppResult<u64> {
+        let done = sqlx::query(
+            "UPDATE project_milestone m SET completed_at = d.last_completed FROM ( \
+               SELECT project_milestone_id, max(COALESCE(completed_at, updated_at)) AS last_completed \
+               FROM issue WHERE organization_id = $1 AND project_milestone_id IS NOT NULL AND NOT trashed \
+               AND state_type NOT IN ('canceled', 'duplicate') GROUP BY project_milestone_id \
+               HAVING bool_and(state_type = 'completed')) d \
+             WHERE m.organization_id = $1 AND m.id = d.project_milestone_id \
+             AND m.archived_at IS NULL AND m.completed_at IS NULL",
+        )
+        .bind(self.org.0)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(done.rows_affected())
+    }
+
+    async fn list_scoped_links(
+        &mut self,
+        id: ProjectId,
+        milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<ExternalLink>> {
+        let rows: Vec<(Uuid, String, String, f64)> = sqlx::query_as(
+            "SELECT id, url, label, sort_order FROM entity_external_link WHERE organization_id = $1 \
+             AND project_id = $2 AND project_milestone_id IS NOT DISTINCT FROM $3 \
+             AND archived_at IS NULL ORDER BY sort_order, created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(milestone.map(|m| m.0))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, url, label, sort_order)| ExternalLink {
+                id,
+                url,
+                label,
+                sort_order,
+            })
+            .collect())
+    }
+
+    async fn add_scoped_link(
+        &mut self,
+        id: ProjectId,
+        milestone: Option<MilestoneId>,
+        url: &str,
+        label: &str,
+        creator: Option<UserId>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO entity_external_link (organization_id, url, label, project_id, project_milestone_id, \
+             sort_order, creator_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, \
+             COALESCE((SELECT max(sort_order) FROM entity_external_link WHERE project_id = $4), 0) + 1, $6, $7, $7) \
+             ON CONFLICT (project_id, project_milestone_id, url) WHERE project_id IS NOT NULL DO NOTHING",
+        )
+        .bind(self.org.0)
+        .bind(url)
+        .bind(label)
+        .bind(id.0)
+        .bind(milestone.map(|m| m.0))
+        .bind(creator.map(|u| u.0))
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn remove_link(&mut self, id: ProjectId, link: Uuid) -> AppResult<bool> {
+        let done = sqlx::query(
+            "DELETE FROM entity_external_link WHERE organization_id = $1 AND project_id = $2 AND id = $3",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(link)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn list_scoped_documents(
+        &mut self,
+        id: ProjectId,
+        milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<(Uuid, String, String)>> {
+        sqlx::query_as(
+            "SELECT id, title, slug_id FROM document WHERE organization_id = $1 AND project_id = $2 \
+             AND project_milestone_id IS NOT DISTINCT FROM $3 AND NOT trashed AND archived_at IS NULL \
+             ORDER BY sort_order, created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(milestone.map(|m| m.0))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn set_document_milestone(
+        &mut self,
+        id: ProjectId,
+        document: Uuid,
+        milestone: Option<MilestoneId>,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let done = sqlx::query(
+            "UPDATE document SET project_milestone_id = $4, updated_at = $5, version = version + 1 \
+             WHERE organization_id = $1 AND project_id = $2 AND id = $3 AND NOT trashed",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(document)
+        .bind(milestone.map(|m| m.0))
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn list_scoped_files(
+        &mut self,
+        id: ProjectId,
+        milestone: Option<MilestoneId>,
+    ) -> AppResult<Vec<ProjectFile>> {
+        let rows: Vec<FileRow> = sqlx::query_as(
+            "SELECT id, project_id, project_milestone_id, url, storage_key, title, content_type, size, \
+             creator_id, created_at FROM project_file WHERE organization_id = $1 AND project_id = $2 \
+             AND project_milestone_id IS NOT DISTINCT FROM $3 AND archived_at IS NULL \
+             ORDER BY created_at, id",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(milestone.map(|m| m.0))
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(ProjectFile::from).collect())
+    }
+
+    async fn insert_file(&mut self, f: &ProjectFile, now: DateTime<Utc>) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO project_file (id, organization_id, project_id, project_milestone_id, url, \
+             storage_key, title, content_type, size, creator_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+        )
+        .bind(f.id)
+        .bind(self.org.0)
+        .bind(f.project_id.0)
+        .bind(f.milestone_id.map(|m| m.0))
+        .bind(&f.url)
+        .bind(&f.storage_key)
+        .bind(&f.title)
+        .bind(&f.content_type)
+        .bind(f.size)
+        .bind(f.creator_id.map(|u| u.0))
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn delete_file(&mut self, id: ProjectId, file: Uuid) -> AppResult<Option<String>> {
+        sqlx::query_scalar(
+            "DELETE FROM project_file WHERE organization_id = $1 AND project_id = $2 AND id = $3 \
+             RETURNING storage_key",
+        )
+        .bind(self.org.0)
+        .bind(id.0)
+        .bind(file)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn find_file_by_key(&mut self, key: &str) -> AppResult<Option<ProjectFile>> {
+        let row: Option<FileRow> = sqlx::query_as(
+            "SELECT id, project_id, project_milestone_id, url, storage_key, title, content_type, size, \
+             creator_id, created_at FROM project_file WHERE organization_id = $1 AND storage_key = $2 \
+             AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(key)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(ProjectFile::from))
     }
 
     async fn document_count(&mut self, id: ProjectId) -> AppResult<i64> {
@@ -1300,6 +1786,19 @@ impl ProjectRepo for PgTx {
             .await
             .map_err(db_err)?;
             out.push((IssueId(issue), TeamId(issue_team)));
+        }
+        // Ressourcen bleiben am Projekt (docs/04 §3.3).
+        for table in ["document", "entity_external_link", "project_file"] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET project_milestone_id = NULL, updated_at = $3 \
+                 WHERE organization_id = $1 AND project_milestone_id = $2"
+            ))
+            .bind(self.org.0)
+            .bind(id.0)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
         }
         sqlx::query(
             "UPDATE project_milestone SET archived_at = $3, version = version + 1, updated_at = $3 \

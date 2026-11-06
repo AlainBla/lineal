@@ -131,3 +131,35 @@ test("WP36: issue description is edited live by two users and saved on the issue
   await aliceCtx.close();
   await bobCtx.close();
 });
+
+// LIN-27: Die Beschreibung eines Meilensteins wird live bearbeitet und landet am Meilenstein.
+test("LIN-27: two users edit a milestone description live and it persists", async ({ browser }) => {
+  const id = sqlValue("SELECT id FROM project_milestone WHERE name = 'Alpha'");
+  const aliceCtx = await browser.newContext();
+  const bobCtx = await browser.newContext();
+  const alice = await aliceCtx.newPage();
+  const bob = await bobCtx.newPage();
+  await login(alice, "alice");
+  await login(bob, "bob");
+  for (const page of [alice, bob]) {
+    await page.goto(`/acme/project/P-ENG-1/milestone/${id}`);
+    await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible();
+  }
+  await expect(bob.getByRole("list", { name: "Participants" }).getByLabel(/Alice/)).toBeVisible();
+
+  const text = unique("Abnahme");
+  await alice.getByRole("textbox", { name: "Description" }).click();
+  await alice.keyboard.type(`${text} `, { delay: 20 });
+  await expect(bob.getByRole("textbox", { name: "Description" })).toContainText(text);
+
+  await expect
+    .poll(() => sqlValue(`SELECT description FROM project_milestone WHERE id = '${id}'`), {
+      timeout: 20_000,
+    })
+    .toContain(text);
+  await bob.reload();
+  await expect(bob.getByRole("textbox", { name: "Description" })).toContainText(text);
+
+  await aliceCtx.close();
+  await bobCtx.close();
+});

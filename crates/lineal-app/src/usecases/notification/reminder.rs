@@ -1,5 +1,5 @@
-//! „Remind me“ (docs/05 §6.10, F.10): persönliche Erinnerung an Issue, Projekt, Initiative oder
-//! Dokument. Setzen/Entfernen wirkt nur auf die eigene Erinnerung und nur an sichtbaren
+//! „Remind me“ (docs/05 §6.10, F.10): persönliche Erinnerung an Issue, Projekt, Meilenstein,
+//! Initiative oder Dokument. Setzen/Entfernen wirkt nur auf die eigene Erinnerung und nur an sichtbaren
 //! Objekten; der Job [`App::create_reminder_notifications`] erzeugt bei Fälligkeit
 //! `issueReminder`/`projectReminder`/`initiativeReminder`/`documentReminder` (auch für die eigene
 //! Aktion – Ausnahme von der Self-Suppression, deshalb ohne Akteur).
@@ -27,6 +27,7 @@ fn kind_for(target_type: &str) -> Option<&'static str> {
     Some(match target_type {
         "issue" => "issueReminder",
         "project" => "projectReminder",
+        "milestone" => "projectMilestoneReminder",
         "initiative" => "initiativeReminder",
         "document" => "documentReminder",
         _ => return None,
@@ -81,6 +82,23 @@ impl App {
                 };
                 if ok { Ok(id) } else { Err(target_not_found()) }
             }
+            "milestone" => {
+                let id = uuid()?;
+                let project = tx
+                    .projects()
+                    .get_milestone(lineal_domain::ids::MilestoneId(id))
+                    .await?
+                    .filter(|m| m.archived_at.is_none())
+                    .ok_or_else(target_not_found)?
+                    .project_id;
+                let teams = tx.notifications().project_team_ids(project).await?;
+                let ok = if teams.is_empty() {
+                    !guest
+                } else {
+                    teams.iter().any(|t| visible.contains(t))
+                };
+                if ok { Ok(id) } else { Err(target_not_found()) }
+            }
             "initiative" => {
                 let id = uuid()?;
                 snap.require_workspace(ctx, Action::ViewInitiatives)
@@ -96,7 +114,7 @@ impl App {
             }
             "document" => self.document_for_subscription(tx, snap, uuid()?).await,
             _ => Err(AppError::invalid_request(
-                "`targetType` must be one of issue, project, initiative, document.",
+                "`targetType` must be one of issue, project, milestone, initiative, document.",
             )
             .with_details(json!({ "field": "targetType" }))),
         }

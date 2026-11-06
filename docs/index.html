@@ -5125,8 +5125,41 @@ pre code{background:none;padding:0}pre.mermaid{background:#fff;border:1px solid 
 <td>Fortschritt der Issues des Meilensteins (Formel wie Projekt)</td>
 <td></td>
 </tr>
+<tr>
+<td><code>completedAt</code></td>
+<td>DateTime</td>
+<td>nein</td>
+<td><code>null</code></td>
+<td>Bewusst abgeschlossen; setzt den Status <code>done</code> (<a href="#ch-04-planung">04 §3.6</a>)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>completedById</code></td>
+<td>UUID</td>
+<td>nein</td>
+<td><code>null</code></td>
+<td>Wer abgeschlossen hat</td>
+<td>FK → User</td>
+</tr>
+<tr>
+<td><code>resultNote</code></td>
+<td>String</td>
+<td>nein</td>
+<td><code>null</code></td>
+<td>Ergebnisnotiz (Markdown)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>snapshot</code></td>
+<td>JSON</td>
+<td>nein</td>
+<td><code>null</code></td>
+<td>Beim Abschluss eingefrorene Issue-Liste</td>
+<td></td>
+</tr>
 </tbody>
 </table>
+<p>Dazu gehören <code>ProjectMilestoneDateChange</code> (Terminverlauf) und <code>ProjectFile</code> (Datei am Projekt, optional mit <code>projectMilestoneId</code>).</p>
 <p><strong>Invarianten</strong></p>
 <ol>
 <li>Ein Meilenstein gehört genau einem Projekt und kann nicht in ein anderes verschoben werden (nur Umwandlung in ein eigenes Projekt).</li>
@@ -7370,7 +7403,7 @@ function stats(issues):
 <h3 id="ch-01-domaenenmodell-6-6-meilenstein-status">6.6 Meilenstein-Status</h3>
 <p>Ausgewertet je Projekt in Reihenfolge <code>sortOrder</code> (<code>today</code> = Datum in der Zeitzone des Lead-Teams):</p>
 <ol>
-<li><code>done</code>: Der Meilenstein hat mindestens ein relevantes Issue und alle relevanten Issues sind <code>completed</code> (Fortschritt = 1).</li>
+<li><code>done</code>: <code>completedAt</code> ist gesetzt. Abschließen ist eine bewusste Handlung (<a href="#ch-04-planung">04 §3.6</a>); erledigte Issues allein reichen nicht.</li>
 <li><code>overdue</code>: nicht <code>done</code> und <code>targetDate &lt; today</code>.</li>
 <li><code>next</code>: der erste Meilenstein (nach <code>sortOrder</code>), der weder <code>done</code> noch <code>overdue</code> ist.</li>
 <li><code>unstarted</code>: alle übrigen.</li>
@@ -13312,6 +13345,16 @@ function startCycle(next):
 <td>Enum <code>ProjectMilestoneStatus</code></td>
 <td>Berechnet: <code>unstarted</code>, <code>next</code>, <code>overdue</code>, <code>done</code></td>
 </tr>
+<tr>
+<td><code>completedAt</code></td>
+<td>DateTime?</td>
+<td>Bewusst abgeschlossen (§3.6); setzt den Status <code>done</code></td>
+</tr>
+<tr>
+<td><code>resultNote</code></td>
+<td>Markdown?</td>
+<td>Ergebnisnotiz; bleibt beim Wiederöffnen erhalten</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Sortierung.</strong> Neue Meilensteine werden ans Ende gehängt (<code>sortOrder = max + 1</code>). Wird ein Zieldatum gesetzt, sortiert die Oberfläche nicht automatisch um; die Reihenfolge ist rein manuell. Einfügen zwischen zwei Meilensteinen: <code>(a + b) / 2</code>.</p>
@@ -13321,8 +13364,7 @@ function startCycle(next):
     ms = milestones of project order by sortOrder
     nextAssigned = false
     for m in ms:
-        relevant = issues of m where state.type not in (canceled, duplicate)
-        if relevant not empty and all(i.state.type == completed for i in relevant):
+        if m.completedAt != null:
             m.status = done
         else if m.targetDate != null and m.targetDate &lt; today:
             m.status = overdue
@@ -13331,7 +13373,6 @@ function startCycle(next):
             nextAssigned = true
         else:
             m.status = unstarted
-        # ein Meilenstein ohne Issues ist nie done
 </code></pre>
 <p><code>today</code> ist das Kalenderdatum in der Zeitzone des Lead-Teams. Der <code>next</code>-Meilenstein wird in der Oberfläche gelb hervorgehoben; das ist nicht abschaltbar.</p>
 <h3 id="ch-04-planung-3-2-issue-meilenstein">3.2 Issue → Meilenstein</h3>
@@ -13341,12 +13382,29 @@ function startCycle(next):
 <li>Die Meilenstein-Referenz im MCP (<code>milestone</code>) wird innerhalb des Projekts des Issues aufgelöst (UUID oder Name).</li>
 </ul>
 <h3 id="ch-04-planung-3-3-l-schen-eines-meilensteins">3.3 Löschen eines Meilensteins</h3>
-<p>Beim Löschen verlieren alle Issues des Meilensteins sofort ihre Zuordnung (<code>projectMilestone = null</code>), bleiben aber im Projekt. Jedes betroffene Issue erhält einen History-Eintrag. Der Meilenstein selbst wird mit <code>archivedAt</code> markiert und nach 30 Tagen endgültig gelöscht; ein Wiederherstellen stellt die Issue-Zuordnungen <strong>nicht</strong> wieder her (Annahme).</p>
+<p>Beim Löschen verlieren alle Issues des Meilensteins sofort ihre Zuordnung (<code>projectMilestone = null</code>), bleiben aber im Projekt. Jedes betroffene Issue erhält einen History-Eintrag. Der Meilenstein selbst wird mit <code>archivedAt</code> markiert und nach 30 Tagen endgültig gelöscht; ein Wiederherstellen stellt die Issue-Zuordnungen <strong>nicht</strong> wieder her (Annahme). Dokumente, Links und Dateien des Meilensteins bleiben am Projekt (§3.5).</p>
 <h3 id="ch-04-planung-3-4-umwandeln-und-verschieben">3.4 Umwandeln und Verschieben</h3>
 <ul>
-<li><strong>In Projekt umwandeln:</strong> Erzeugt ein neues Projekt mit Name und Beschreibung des Meilensteins, gleichen Teams und gleicher Priorität wie das Ursprungsprojekt. Die Issues des Meilensteins wechseln in das neue Projekt; der Meilenstein wird gelöscht.</li>
+<li><strong>In Projekt umwandeln:</strong> Erzeugt ein neues Projekt mit Name und Beschreibung des Meilensteins, gleichen Teams (soweit für die Person sichtbar) und gleicher Priorität wie das Ursprungsprojekt. Die Issues und Ressourcen des Meilensteins wechseln in das neue Projekt; der Meilenstein wird gelöscht. Ein abgeschlossener Meilenstein lässt sich nicht umwandeln.</li>
 <li><strong>In anderes Projekt verschieben</strong> (intern): Sind Issue-Teams nicht am Zielprojekt beteiligt, muss der Aufrufer entweder <code>addIssueTeamToProject = true</code> oder ein <code>newIssueTeamId</code> angeben; ohne eines davon <code>invalid_request</code>.</li>
 </ul>
+<h3 id="ch-04-planung-3-5-detailseite-und-ressourcen-lin-25">3.5 Detailseite und Ressourcen (LIN-25)</h3>
+<p>Ein Meilenstein ist ein Zeitpunkt mit einer Bedingung plus die Issues, die dorthin führen. Er bleibt schlank: Gesundheit, Verantwortliche und Freigaben bleiben beim Projekt.</p>
+<p>Die Seite <code>/&lt;ws&gt;/project/&lt;ref&gt;/milestone/&lt;id&gt;</code> zeigt Kopf mit Zähler („7 of 12 done“) statt Prozent, Beschreibung mit Bildern, Issues nach Status, Kommentare, Ressourcen und Terminverlauf.</p>
+<p>Die Beschreibung wird wie bei Projekten live bearbeitet (<code>GET /collab/milestone/{id}</code>, LIN-27): Anwesende und Verbindungsstatus stehen unter dem Editor, gespeichert wird über <code>save_milestone</code>, die Rechte folgen dem Projekt. Änderungen über GraphQL oder MCP erhöhen die Version und landen beim nächsten Abgleich im offenen Raum. Ohne Verbindung fällt der Editor auf Autosave zurück.</p>
+<p><strong>Ressourcen</strong> sind Dokumente, Dateien und Links. Sie gehören dem Projekt, der Meilenstein ist ein optionaler Bezug (<code>project_milestone_id</code> an <code>document</code>, <code>entity_external_link</code> und <code>project_file</code>):</p>
+<ul>
+<li>Die Rechte folgen dem Projekt: Lesen darf, wer das Projekt sieht, Ändern verlangt <code>ManageProject</code>.</li>
+<li>Ein Dokument vom Meilenstein zu lösen lässt es im Projekt. Links und Dateien werden gelöscht, Dateien samt Objekt im Speicher.</li>
+<li>Dateien liegen in <code>project_file</code>, nicht in <code>attachment</code>, weil Issue-Anhänge überall ein Issue voraussetzen.</li>
+</ul>
+<h3 id="ch-04-planung-3-6-abschlie-en-und-terminverlauf-lin-25">3.6 Abschließen und Terminverlauf (LIN-25)</h3>
+<p><strong>Abschließen</strong> ist eine bewusste Handlung und geschieht nie automatisch. Sind alle relevanten Issues erledigt, schlägt die Seite es nur vor (<code>readyToComplete</code>). Der Dialog fragt, was mit offenen Issues passiert (<code>keep</code>, <code>remove</code>, <code>move</code>), und nimmt eine Ergebnisnotiz auf. Ziel von <code>move</code> ist ein anderer offener Meilenstein desselben Projekts. Die Issue-Liste wird als <code>snapshot</code> eingefroren; beim Lesen filtert der Server sie auf die sichtbaren Teams. <strong>Wiederöffnen</strong> löscht Abschluss und Snapshot, die Notiz bleibt.</p>
+<p><strong>Altdaten und Importe:</strong> Meilensteine, deren relevante Issues alle erledigt sind, bekommen <code>completedAt</code> vom letzten erledigten Issue, ohne Snapshot. Das gilt für die Migration und nach jedem Linear-Import.</p>
+<p><strong>Terminverlauf:</strong> Jede Änderung von <code>targetDate</code> an einem bestehenden Meilenstein landet in <code>project_milestone_date_change</code>. Die Verschiebung („+14 days“) ist die Differenz zum ersten bekannten Datum.</p>
+<p><strong>Zuwachs („added“):</strong> Ein Issue gilt als hinzugekommen, wenn es später als sieben Tage nach dem Anlegen des Meilensteins in ihn kam. Maßgeblich ist der letzte History-Eintrag zu <code>projectMilestoneId</code>, sonst das Anlegen des Issues. Die sieben Tage nehmen die erste Befüllung aus.</p>
+<h3 id="ch-04-planung-3-7-alle-meilensteine-lin-25">3.7 Alle Meilensteine (LIN-25)</h3>
+<p><code>/&lt;ws&gt;/milestones</code> listet die Meilensteine aller sichtbaren Projekte, gruppiert nach überfällig, nächste 30 Tage, später und ohne Datum. Abgeschlossene sind ausgeblendet und lassen sich einblenden. Die Roadmap färbt die Rauten nach Status und verlinkt die Detailseite. „Remind me“ gilt auch für Meilensteine (Notification <code>projectMilestoneReminder</code>).</p>
 <hr />
 <h2 id="ch-04-planung-4-initiativen">4. Initiativen</h2>
 <h3 id="ch-04-planung-4-1-felder">4.1 Felder</h3>
@@ -16813,6 +16871,12 @@ function compileVirtual(alias, key, v, ctx):
 <td>setzender User</td>
 </tr>
 <tr>
+<td><code>projectMilestoneReminder</code></td>
+<td><code>reminders</code></td>
+<td>„Remind me“ am Meilenstein</td>
+<td>setzender User</td>
+</tr>
+<tr>
 <td><code>projectMilestoneMention</code>, <code>projectMilestoneCommentMention</code>, <code>projectMilestoneNewComment</code>, <code>projectMilestoneCommentReaction</code>, <code>projectMilestoneDescriptionContentChange</code>, <code>projectMilestoneThreadResolved</code></td>
 <td>wie die Projekt-Entsprechung</td>
 <td>analog am Meilenstein</td>
@@ -17929,7 +17993,7 @@ function compileVirtual(alias, key, v, ctx):
 <li>Inline-Kommentar-Anker (1.8) werden als relative Positionen auf Element-IDs gespeichert und überstehen dadurch beliebige Bearbeitungen.</li>
 </ul>
 <blockquote>
-<p><strong>Umsetzung (WP36):</strong> Stufe 2 ist mit Yjs-kompatiblem CRDT (<code>yrs</code>/<code>yjs</code>) umgesetzt: Raum je geöffnetem Inhalt im Serverprozess über <code>GET /collab/{document|issue|project|initiative}/{id}</code> (eigener WebSocket, nicht der <code>/sync</code>-Strom), Dokument = <code>Y.XmlFragment</code> im TipTap-Schema, Persistenz von <code>contentState</code> (Base64, mit Epoche) und abgeleitetem Markdown nach 2 s Ruhe bzw. spätestens 10 s über denselben Weg wie das automatische Speichern (Bereinigung, Version, Snapshot-Bündelung, Ereignisse); Awareness (Name/Farbe vom Server) flüchtig; API/MCP-Schreibvorgänge führen den Zustand per minimaler Blockänderung nach und landen über CRDT-Merge im offenen Raum; Inline-Kommentar-Anker (<code>anchorStart</code>/<code>anchorEnd</code>) als Base64 relativer Positionen, <code>anchorState</code> abgeleitet, Altbestand über <code>quotedText</code>. Beschreibungen von Issues (Web-Editor), Projekten und Initiativen (nur Server-Endpunkt) laufen über denselben Raummechanismus; ihr Markdown bleibt am Besitzerobjekt. Einzelinstanz-Annahme, Grenzen und Schließcodes: docs/15 §3.5.</p>
+<p><strong>Umsetzung (WP36):</strong> Stufe 2 ist mit Yjs-kompatiblem CRDT (<code>yrs</code>/<code>yjs</code>) umgesetzt: Raum je geöffnetem Inhalt im Serverprozess über <code>GET /collab/{document|issue|project|initiative|milestone}/{id}</code> (eigener WebSocket, nicht der <code>/sync</code>-Strom), Dokument = <code>Y.XmlFragment</code> im TipTap-Schema, Persistenz von <code>contentState</code> (Base64, mit Epoche) und abgeleitetem Markdown nach 2 s Ruhe bzw. spätestens 10 s über denselben Weg wie das automatische Speichern (Bereinigung, Version, Snapshot-Bündelung, Ereignisse); Awareness (Name/Farbe vom Server) flüchtig; API/MCP-Schreibvorgänge führen den Zustand per minimaler Blockänderung nach und landen über CRDT-Merge im offenen Raum; Inline-Kommentar-Anker (<code>anchorStart</code>/<code>anchorEnd</code>) als Base64 relativer Positionen, <code>anchorState</code> abgeleitet, Altbestand über <code>quotedText</code>. Beschreibungen von Issues (Web-Editor), Projekten und Initiativen (nur Server-Endpunkt) laufen über denselben Raummechanismus; ihr Markdown bleibt am Besitzerobjekt. Einzelinstanz-Annahme, Grenzen und Schließcodes: docs/15 §3.5.</p>
 </blockquote>
 <p>Ein Verfahren nach dem Prinzip „Operational Transformation“ ist gleichwertig zulässig, erfordert aber einen zentralen Sequenzer pro Inhalt. Die Snapshot-Historie bleibt in beiden Stufen gleich.</p>
 <h3 id="ch-06-dokumente-templates-1-10-l-schen-papierkorb-archiv">1.10 Löschen, Papierkorb, Archiv</h3>
@@ -21518,7 +21582,7 @@ curl -X PUT --data-binary @file.png \
   &quot;suggested&quot;: { &quot;title&quot;: &quot;screenshot.png&quot;, &quot;subtitle&quot;: null }
 }
 </code></pre>
-<p>Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung werden nach 1 h verworfen.</p>
+<p>Alle Header sind Teil der Signatur; der Objektspeicher prüft exakte Größe und Content-Type. Reservierungen ohne Finalisierung laufen nach 1 h ab.</p>
 <p><strong>Fehler:</strong> <code>not_found</code> (Issue); <code>invalid_request</code> (<code>size</code> ≥ 2 GB, leerer Dateiname, ungültiger MIME-Typ); <code>limit_exceeded</code> (Speicherkontingent, offene Uploads). <strong>Core:</strong> <code>ReserveUpload</code> – <a href="#ch-03-issues-workflow">03-issues-workflow.md</a> (Anhänge), Objektspeicher in <a href="#ch-10-architektur-umsetzung">10</a>.</p>
 <blockquote>
 <p><strong>Umsetzung:</strong> <code>size</code> ≥ 2 GiB liefert <code>limit_exceeded</code> (siehe <a href="#ch-03-issues-workflow">03 §7.2</a>); alle anderen genannten Eingabefehler <code>invalid_request</code>.</p>
@@ -22383,6 +22447,55 @@ If the direct upload failed or the signed URL expired, rerun prepare_attachment_
 <p><strong>Regeln:</strong> <code>project</code> ist immer Pflicht (auch beim Update; dient der Namensauflösung von <code>id</code>). Neue Meilensteine werden ans Ende gehängt (<code>sortOrder</code> = max + 1). <code>description</code> ist Markdown; leerer String leert.</p>
 <p><strong>Antwort:</strong> Meilenstein-Objekt. <strong>Fehler:</strong> <code>invalid_request</code> (<code>name</code> fehlt beim Create, Name im Projekt doppelt); <code>not_found</code>. <strong>Core:</strong> <code>CreateMilestone</code>, <code>UpdateMilestone</code> – <a href="#ch-04-planung">04-planung.md</a>.</p>
 <hr />
+<h4 id="ch-07-mcp-server-meilenstein-erweiterungen-lin-25">Meilenstein-Erweiterungen (LIN-25)</h4>
+<p>Lineal-eigene Tools jenseits des Linear-Snapshots, in <code>tools/list</code> nach <code>get_workspace_overview</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Zweck</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_milestone_resources</code></td>
+<td>Dokumente, Links und Dateien eines Meilensteins</td>
+<td>read</td>
+</tr>
+<tr>
+<td><code>save_milestone_resource</code></td>
+<td>Link (<code>url</code>, <code>title</code>), vorhandenes Projektdokument (<code>document</code>) oder Upload (<code>assetUrl</code>) anhängen; genau eines davon</td>
+<td>write</td>
+</tr>
+<tr>
+<td><code>delete_milestone_resource</code></td>
+<td><code>type</code> (<code>link</code>, <code>document</code>, <code>file</code>) und <code>id</code>; Dokumente bleiben im Projekt</td>
+<td>write</td>
+</tr>
+<tr>
+<td><code>prepare_milestone_upload</code></td>
+<td>Upload wie <code>prepare_attachment_upload</code>, aber ohne Issue</td>
+<td>write</td>
+</tr>
+<tr>
+<td><code>complete_milestone</code></td>
+<td>Abschließen mit <code>openIssues</code> (<code>keep</code>, <code>remove</code>, <code>move</code> plus <code>moveTo</code>) und <code>note</code></td>
+<td>write</td>
+</tr>
+<tr>
+<td><code>reopen_milestone</code></td>
+<td>Wieder öffnen, die Notiz bleibt</td>
+<td>write</td>
+</tr>
+<tr>
+<td><code>convert_milestone_to_project</code></td>
+<td>Offenen Meilenstein in ein Projekt umwandeln</td>
+<td>write</td>
+</tr>
+</tbody>
+</table>
+<p><code>get_milestone</code> liefert zusätzlich <code>startedIssueCount</code>, <code>completedAt</code>, <code>resultNote</code> und <code>targetDateHistory</code>.</p>
 <h3 id="ch-07-mcp-server-3-9-cycles">3.9 Cycles</h3>
 <h4 id="ch-07-mcp-server-list-cycles"><code>list_cycles</code></h4>
 <blockquote>
@@ -24864,7 +24977,7 @@ If the direct upload failed or the signed URL expired, rerun prepare_attachment_
 </tr>
 <tr>
 <td>Milestones</td>
-<td>Liste aller Meilensteine (Name, Zieldatum, Fortschritt „38% of 13“, Beschreibung), <strong>Add milestone</strong>, Zeilenmenü (Open milestone issues, Edit…, Set target date…, Move milestone to ▶, Convert to project, Delete…)</td>
+<td>Liste aller Meilensteine (Name, Status, Zieldatum mit Verschiebung, Zähler „5 of 13“, Balken). Ein Klick öffnet die Detailseite, dort werden Name und Datum bearbeitet (<a href="#ch-04-planung">04 §3.5</a>), <strong>Add milestone</strong>, Zeilenmenü (Open milestone issues, Edit…, Set target date…, Move milestone to ▶, Convert to project, Delete…)</td>
 </tr>
 <tr>
 <td>Rechte Sidebar</td>
@@ -33630,7 +33743,10 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 </ul>
 <p><strong>API-Keys in der Oberfläche (WP19).</strong> Einstellungsseite <code>/{ws}/settings/api</code> (persönlich; Eintrag „API“ in der Settings-Navigation): Liste der eigenen Keys (Label, Präfix, Scopes, Teams, zuletzt benutzt, Ablauf, Status), Dialog „New API key“ (Label ≤ 100 Zeichen, Read immer, optional Write, optionale Team-Auswahl – keine Auswahl = alle Teams, optionales Ablaufdatum), danach einmalige Token-Anzeige mit Kopieren-Button und Warnhinweis (der Klartext lebt nur im Dialogzustand, nicht im Query-Cache), Widerruf mit Bestätigung. GraphQL: <code>apiKeys</code> (nur eigene Keys, nie Hash/Klartext), <code>apiKeyCreate(input: {label, scopes: [READ|WRITE], teamIds?, expiresAt?})</code> mit <code>token</code> nur in dieser Antwort, <code>apiKeyRevoke(id)</code> (fremde IDs <code>not_found</code>, auch für Admins). Regeln: Anlegen nur mit echter Web-Session (<code>RequestCtx.via_session</code>; API-Key/OAuth → <code>forbidden</code>), ein team-beschränkter Aufrufer erzeugt nur Keys innerhalb seines Team-Scopes, <code>teamIds</code> nur sichtbare Teams (sonst <code>not_found</code>), höchstens 25 aktive Keys je User (<code>limit_exceeded</code>), kein <code>admin</code>-Scope über die UI.</p>
 <p><strong>Bots (LIN-22).</strong> Workspace-Admins legen unter <code>/{ws}/settings/members</code> (Bereich „Bots“) Bots an: User mit Rolle <code>app</code>, Name und E-Mail (Anzeigename wie bei Einladungen aus der E-Mail, Invite-Domain-Regel gilt), ohne Passwort, mit <code>emailEnabled: false</code> (keine Digests). Ein Browser-Login ist für die Rolle <code>app</code> auch mit gesetztem Passwort gesperrt. Pro Bot erzeugen Admins API-Keys (derselbe Dialog wie bei eigenen Keys; Scopes nur <code>read</code>/<code>write</code>, optional Teams und Ablauf) und widerrufen sie; ein Bot-Key handelt als <code>Actor::App</code> (z. B. Kommentar von <code>@lineal-bot</code>), in öffentlichen Teams wie ein Mitglied, private Teams über die normale Teammitgliedschaft. Suspendieren läuft über die Mitgliederliste. GraphQL: <code>bots</code>, <code>botCreate(input: {name, email})</code>, <code>botApiKeyCreate(botId, input)</code> (Token nur in dieser Antwort), <code>botApiKeyRevoke(botId, id)</code> (Keys anderer User → <code>not_found</code>); alles nur Owner/Admin mit <code>admin</code>-Scope per Web-Session. Audit: <code>bot.created</code>, <code>bot.api_key_created</code> (zusätzlich <code>api_key.created</code>), <code>api_key.revoked</code>. Einschränkung: die Team-Auswahl im Key-Dialog zeigt die Teams des Admins.</p>
-<p><strong>MCP: Anhänge in <code>get_issue</code> (LIN-23).</strong> <code>get_issue.attachments</code> war bisher immer <code>[]</code>. Jetzt liefert es alle Anhänge des Issues, Links und hochgeladene Dateien, in derselben Form wie <code>get_attachment</code> mit <code>format: "url"</code>: <code>id</code>, <code>issue</code>, <code>title</code>, <code>subtitle</code>, <code>url</code>, <code>contentType</code>, <code>size</code>, <code>createdAt</code>, <code>creator</code>, <code>expiresAt</code>. Damit sind <code>get_attachment</code> und <code>delete_attachment</code> ohne gemerkte Upload-ID nutzbar. Geladen wird nur, wenn <code>attachments</code> ausgegeben wird (Default oder in <code>fields</code>). In Kommentaren eingebettete Dateien bleiben in <code>list_comments</code>. Ein eigenes <code>list_attachments</code> gibt es nicht; <code>get_issue</code> mit <code>fields: ["attachments"]</code> erfüllt denselben Zweck.
+<p><strong>MCP: Anhänge in <code>get_issue</code> (LIN-23).</strong> <code>get_issue.attachments</code> war bisher immer <code>[]</code>. Jetzt liefert es alle Anhänge des Issues, Links und hochgeladene Dateien, in derselben Form wie <code>get_attachment</code> mit <code>format: "url"</code>: <code>id</code>, <code>issue</code>, <code>title</code>, <code>subtitle</code>, <code>url</code>, <code>contentType</code>, <code>size</code>, <code>createdAt</code>, <code>creator</code>, <code>expiresAt</code>. Damit sind <code>get_attachment</code> und <code>delete_attachment</code> ohne gemerkte Upload-ID nutzbar. Geladen wird nur, wenn <code>attachments</code> ausgegeben wird (Default oder in <code>fields</code>). In Kommentaren eingebettete Dateien bleiben in <code>list_comments</code>. Ein eigenes <code>list_attachments</code> gibt es nicht; <code>get_issue</code> mit <code>fields: ["attachments"]</code> erfüllt denselben Zweck.</p>
+<p><strong>Meilensteine (LIN-25, LIN-27).</strong> Eigene Detailseite, Ressourcen (Links, Dokumente, Dateien), bewusstes Abschließen mit Snapshot, Terminverlauf, Liste aller Meilensteine, Erinnerungen und Umwandeln in ein Projekt. Die Beschreibung läuft über den Collab-Raum <code>milestone</code>.</p>
+<p><strong>Projektverweise (LIN-26).</strong> <code>[P-KOL-3]</code> im Text wird zum Chip, der das Projekt öffnet.</p>
+<p><strong>Uploads.</strong> Die periodische Upload-Bereinigung läuft nicht mehr, weil sie Editor-Bilder und Avatare gelöscht hat. Abgebrochene Uploads bleiben liegen. <code>App::run_upload_purge</code> bleibt bestehen und löscht, falls von Hand gestartet, keine Uploads ohne Zielzeile, deren Datei gespeichert ist.
 - CSRF für Cookie-Sessions: <code>POST /graphql</code> und <code>POST /auth/logout</code> verlangen einen erlaubten <code>Origin</code> (ersatzweise <code>Referer</code>) <strong>und</strong> den Header <code>X-Lineal-CSRF: 1</code>; <code>/auth/login</code>, <code>/oauth/authorize</code> (der session-gebundene Nonce ist das Token) und signierte Uploads prüfen nur den Origin. Anfragen mit <code>Authorization</code>-Header sowie <code>/mcp</code> und <code>/sync</code> (eigene Origin-Prüfung) sind ausgenommen.
 - Einladungen: <code>POST /invite/accept</code> (JSON <code>token</code>, <code>email</code>, <code>name?</code>, <code>password</code>) nimmt eine Einladung ohne Session an, legt den User an bzw. verknüpft den Platzhalter und setzt das Session-Cookie; ungültige Tokens oder fremde E-Mails antworten einheitlich <code>404</code>; CSRF wie beim Login (nur Origin). Die Web-Seite <code>/invite/&lt;token&gt;</code> (öffentlich, außerhalb von <code>$ws</code> und ohne App-Shell; Root-Guard lässt <code>/invite/…</code> ohne Session durch) fragt E-Mail (Nachweis, serverseitig geprüft), Name, Passwort (mind. 8 Zeichen) und Wiederholung ab, sendet <code>POST /invite/accept</code> mit <code>X-Lineal-CSRF: 1</code> und leitet nach <code>/&lt;ws&gt;/inbox</code>. Abgelaufene, widerrufene, angenommene und ungültige Links sowie fremde E-Mails zeigen dieselbe neutrale Meldung (der Server unterscheidet sie bewusst nicht). Ist bereits eine Session vorhanden, bietet die Seite „Mit diesem Konto annehmen“ (GraphQL <code>acceptInvitation</code>) oder „neues Konto anlegen“. Es gibt keinen Vorschau-Endpunkt: Die E-Mail muss ohnehin eingegeben werden, und ein Vorschau-Endpunkt würde Token-Gültigkeit und Workspace-Namen an Unangemeldete verraten. Die Seite setzt <code>referrer: no-referrer</code>; nginx liefert <code>/invite/*</code> mit <code>Cache-Control: no-store</code> und <code>Referrer-Policy: no-referrer</code>; der Vite-Proxy leitet nur <code>/invite/accept</code> an den Server.
 - Mitglieder und Einladungen (Web): <code>/{ws}/settings/members</code> (Settings-Navigation „Members“) zeigt die sichtbaren Workspace-Mitglieder (Name; die GraphQL-Sicht <code>UserRef</code> liefert weder E-Mail noch Rolle, die eigene Rolle kommt aus <code>/auth/me</code>) und die offenen Einladungen (E-Mail, Rolle, Teams, Ablauf, Status; „Resend“, „Revoke“) sowie den Dialog „Invite people“ (mehrere Adressen, Rolle, Teams; Gäste brauchen ein Team; Admin-Rolle nur für Owner/Admin). Gäste sehen nur einen Hinweis; für andere Rollen entscheidet der Server (<code>invitationsRole</code>, Antwort <code>forbidden</code> → Hinweis statt Liste); Serverfehler (z. B. Adresse bereits Mitglied) erscheinen im Dialog. E2E: F16 (<code>web/e2e/invite.e2e.ts</code>; setzt den Token per SQL auf einen bekannten Hash, da der Dev-Mailer nichts versendet und nur der Hash gespeichert wird).
@@ -33650,7 +33766,7 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 <li><strong>Einordnung:</strong> Das In-Process-Rate-Limit ist Verteidigung in der Tiefe. Produktiv gehört ein Edge-Rate-Limit (Reverse-Proxy/WAF) davor. Das Restrisiko „geteilter Überlauf unter Massen-Spoofing“ ist bewusst akzeptiert.</li>
 </ul>
 <h3 id="ch-15-umsetzungsstand-4-5-dateien-und-l-schen">4.5 Dateien und Löschen</h3>
-<p>Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; <code>BlobStore::delete</code> entfernt Blobs beim endgültigen Löschen von Issues und Teams sowie bei abgelaufenen, nie finalisierten Upload-Reservierungen (nur wenn kein Anhang mehr auf das Objekt verweist).</p>
+<p>Objekte liegen hinter HMAC-signierten, kurzlebigen URLs; <code>BlobStore::delete</code> entfernt Blobs beim endgültigen Löschen von Issues und Teams (nur wenn kein Anhang mehr auf das Objekt verweist). Abgelaufene Upload-Reservierungen räumt kein Job mehr ab.</p>
 <h3 id="ch-15-umsetzungsstand-4-6-lieferkette">4.6 Lieferkette</h3>
 <p><code>scripts/check.sh</code> führt (wenn installiert) <code>cargo deny check advisories bans licenses</code> aus (<code>deny.toml</code>: nur permissive Lizenzen, keine unbekannten Registries) und <code>npm audit --omit=dev --audit-level=high</code> für die Laufzeit-Abhängigkeiten des Web-Clients (derzeit 0 Funde). <strong>Begründete Ausnahme:</strong> <code>npm audit</code> meldet für Dev-Werkzeuge hohe Funde in der Kette <code>@graphql-codegen/cli</code> → <code>graphql-tools</code> → <code>globby</code>/<code>micromatch</code> → <code>braces</code> (Stack-Erschöpfung bei tief verschachtelten Mustern, GHSA-vfj7-8cjw-p6xm). Es gibt keine gepatchte <code>braces</code>-Version; die Pakete laufen nur beim Build über eigene Konfigurations- und Schemadateien, nie mit fremden Eingaben und nicht im ausgelieferten Bundle. Erneut prüfen, wenn <code>@graphql-codegen/cli</code> oder <code>braces</code> aktualisiert werden.</p>
 <h3 id="ch-15-umsetzungsstand-4-7-audit-log-wp25">4.7 Audit-Log (WP25)</h3>

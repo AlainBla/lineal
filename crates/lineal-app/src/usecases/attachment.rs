@@ -617,8 +617,8 @@ impl App {
     }
 
     /// Bildet `assetUrl`s des eigenen Workspaces auf signierte Download-URLs ab. Nur lesbare Dateien:
-    /// Issue-Anhänge nach Zugriffsprüfung auf das Issue sowie Uploads ohne Ziel-Issue (z. B. Bilder
-    /// in Markdown). Fremde, unbekannte oder nicht lesbare URLs fehlen im Ergebnis.
+    /// Issue-Anhänge nach Zugriffsprüfung auf das Issue, Projektdateien nach Zugriffsprüfung auf das
+    /// Projekt sowie Uploads ohne Ziel-Issue (z. B. Bilder in Markdown). Fremde, unbekannte oder nicht lesbare URLs fehlen im Ergebnis.
     pub async fn resolve_assets(
         &self,
         ctx: &RequestCtx,
@@ -661,6 +661,15 @@ impl App {
                         continue;
                     }
                     (a.title, a.content_type, a.size)
+                } else if let Some(f) = tx.projects().find_file_by_key(key).await? {
+                    // Dateien am Projekt: lesbar, wer das Projekt sehen darf.
+                    if resolve::project::resolve_in(&mut *tx, &snap, &f.project_id.to_string())
+                        .await
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    (f.title, f.content_type, f.size)
                 } else if let Some(r) = tx.attachments().reservation_by_key(key).await? {
                     if r.issue_id.is_some() {
                         continue;
@@ -807,6 +816,9 @@ impl App {
     }
 
     /// Periodisch: räumt abgelaufene, nie finalisierte Upload-Reservierungen samt Blob ab.
+    ///
+    /// Uploads ohne Ziel-Issue stammen aus dem Editor oder dem Avatar-Dialog und werden nie
+    /// finalisiert; ihre `assetUrl` steht im Text. Liegt die Datei vor, bleibt sie deshalb erhalten.
     pub async fn run_upload_purge(&self, now: DateTime<Utc>) -> AppResult<u64> {
         let cutoff = now - RESERVATION_GRACE;
         let mut sys = self.store.begin_system().await?;
@@ -822,9 +834,21 @@ impl App {
         }
         let mut total = 0;
         for (org, list) in by_org {
-            let ids: Vec<_> = list.iter().map(|r| r.id).collect();
-            let keys: Vec<String> = list.into_iter().map(|r| r.storage_key).collect();
+            let mut keep = Vec::new();
+            let mut drop_list = Vec::new();
+            for r in list {
+                if r.issue_id.is_none() && self.blobs.head(&r.storage_key).await?.is_some() {
+                    keep.push(r.id);
+                } else {
+                    drop_list.push(r);
+                }
+            }
+            let ids: Vec<_> = drop_list.iter().map(|r| r.id).collect();
+            let keys: Vec<String> = drop_list.into_iter().map(|r| r.storage_key).collect();
             let mut tx = self.store.begin(OrgId(org)).await?;
+            for id in keep {
+                tx.attachments().finalize_reservation(id, now).await?;
+            }
             tx.attachments().delete_reservations(&ids).await?;
             let orphans = tx.attachments().unreferenced_storage_keys(&keys).await?;
             tx.commit().await?;

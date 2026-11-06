@@ -7,14 +7,16 @@ use crate::policy::PolicySnapshot;
 use crate::ports::Tx;
 use crate::ports::repos::cycle::IssueScopeRow;
 use crate::ports::repos::initiative::Initiative;
-use crate::ports::repos::project::{Milestone, Project, ProjectLabelRow, ProjectStatus};
+use crate::ports::repos::project::{
+    Milestone, MilestoneDateChange, Project, ProjectLabelRow, ProjectStatus,
+};
 use crate::ports::repos::team::Team;
 use crate::ports::repos::user::User;
 use crate::resolve;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use lineal_domain::enums::{StateType, UserRole};
-use lineal_domain::ids::{MilestoneId, ProjectId, TeamId, UserId};
+use lineal_domain::ids::{IssueId, MilestoneId, ProjectId, TeamId, UserId};
 use lineal_domain::rules::progress::{Stats, stats};
 use std::collections::HashMap;
 
@@ -29,6 +31,8 @@ pub struct ProjectScope {
     /// Relevante Issues (ohne `canceled`/`duplicate`).
     pub issue_count: i64,
     pub completed_issue_count: i64,
+    /// Relevante Issues in Kategorie `started`.
+    pub started_issue_count: i64,
 }
 
 impl ProjectScope {
@@ -46,11 +50,18 @@ impl ProjectScope {
             in_progress_scope: s.started,
             issue_count: relevant.clone().count() as i64,
             completed_issue_count: relevant
+                .clone()
                 .filter(|r| r.state_type == StateType::Completed)
+                .count() as i64,
+            started_issue_count: relevant
+                .filter(|r| r.state_type == StateType::Started)
                 .count() as i64,
         }
     }
 }
+
+/// Karenz nach dem Anlegen: Die erste Befüllung zählt nicht als Zuwachs (docs/04 §3.6).
+pub const SCOPE_GRACE_DAYS: i32 = 7;
 
 /// Ein Meilenstein mit berechneten Feldern.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +72,13 @@ pub struct MilestoneView {
     pub progress: f64,
     pub issue_count: i64,
     pub completed_issue_count: i64,
+    pub started_issue_count: i64,
+    /// Alle relevanten Issues sind erledigt, aber der Meilenstein ist noch nicht abgeschlossen.
+    pub ready_to_complete: bool,
+    /// Terminänderungen, älteste zuerst.
+    pub date_changes: Vec<MilestoneDateChange>,
+    /// Issues, die erst nach dem Start dazukamen.
+    pub added_issue_ids: Vec<IssueId>,
 }
 
 /// Ein Projekt, wie ein bestimmter Betrachter es sieht (docs/02 §5.3 `projectView`).
@@ -128,23 +146,40 @@ pub async fn milestone_views(
     let inputs: Vec<MilestoneStatusInput> = milestones
         .iter()
         .zip(&scopes)
-        .map(|(m, s)| MilestoneStatusInput {
+        .map(|(m, _)| MilestoneStatusInput {
             target_date: m.target_date,
-            has_relevant_issues: s.issue_count > 0,
-            all_completed: s.issue_count > 0 && s.completed_issue_count == s.issue_count,
+            completed: m.completed_at.is_some(),
         })
         .collect();
     let statuses = milestone_statuses(&inputs, today);
+    let mut changes: HashMap<MilestoneId, Vec<MilestoneDateChange>> = HashMap::new();
+    for c in tx.projects().list_milestone_date_changes(project).await? {
+        changes.entry(c.milestone_id).or_default().push(c);
+    }
+    let mut added: HashMap<MilestoneId, Vec<IssueId>> = HashMap::new();
+    for (m, i) in tx
+        .projects()
+        .milestone_added_issues(project, SCOPE_GRACE_DAYS)
+        .await?
+    {
+        added.entry(m).or_default().push(i);
+    }
     Ok(milestones
         .into_iter()
         .zip(scopes)
         .zip(statuses)
         .map(|((milestone, s), status)| MilestoneView {
+            ready_to_complete: milestone.completed_at.is_none()
+                && s.issue_count > 0
+                && s.completed_issue_count == s.issue_count,
+            date_changes: changes.remove(&milestone.id).unwrap_or_default(),
+            added_issue_ids: added.remove(&milestone.id).unwrap_or_default(),
             milestone,
             status,
             progress: s.progress,
             issue_count: s.issue_count,
             completed_issue_count: s.completed_issue_count,
+            started_issue_count: s.started_issue_count,
         })
         .collect())
 }

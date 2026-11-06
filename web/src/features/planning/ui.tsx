@@ -45,6 +45,76 @@ export function ProgressBar({ value, label }: { value: number; label?: string })
   );
 }
 
+/** Verschiebung gegenüber dem ersten Zieldatum in Tagen; `null`, wenn es keine gab. */
+export function targetShift(m: {
+  targetDate?: string | null;
+  targetDateHistory: Array<{ fromDate?: string | null }>;
+}): number | null {
+  const first = m.targetDateHistory.find((c) => c.fromDate)?.fromDate;
+  if (!first || !m.targetDate) return null;
+  const days = Math.round((Date.parse(m.targetDate) - Date.parse(first)) / 86_400_000);
+  return days === 0 ? null : days;
+}
+
+export const shiftLabel = (days: number) => `${days > 0 ? "+" : "−"}${Math.abs(days)} days`;
+
+/** Pfad der Meilenstein-Detailseite. */
+export const milestonePath = (ws: string, projectRef: string, id: string) =>
+  `/${ws}/project/${projectRef}/milestone/${id}`;
+
+export const MILESTONE_COLOR: Record<string, string> = {
+  done: "text-primary",
+  overdue: "text-destructive",
+  next: "text-amber-500",
+  unstarted: "text-muted-foreground",
+};
+
+const MILESTONE_LABEL: Record<string, string> = {
+  done: "Completed",
+  overdue: "Overdue",
+  next: "Next",
+};
+
+/** Status-Plakette eines Meilensteins; `unstarted` bleibt ohne Plakette. */
+export function MilestoneStatusBadge({ status }: { status: string }) {
+  const label = MILESTONE_LABEL[status];
+  if (!label) return null;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 rounded-full border border-current px-2 text-xs font-medium",
+        MILESTONE_COLOR[status],
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Balken mit getrennten Anteilen: erledigt, in Arbeit, offen. */
+export function MilestoneBar({
+  done,
+  started,
+  total,
+  className,
+}: {
+  done: number;
+  started: number;
+  total: number;
+  className?: string;
+}) {
+  const share = (n: number) => (total > 0 ? `${(n / total) * 100}%` : "0%");
+  return (
+    <div
+      aria-hidden
+      className={cn("flex h-1.5 overflow-hidden rounded-full bg-surface-active", className)}
+    >
+      <div className="bg-primary" style={{ width: share(done) }} />
+      <div className="bg-amber-500" style={{ width: share(started) }} />
+    </div>
+  );
+}
+
 /** Kopfzeile mit Titel, optionalen Tabs (Links) und Aktionen rechts. */
 export function PageHeader({
   title,

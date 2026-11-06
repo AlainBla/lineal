@@ -389,6 +389,11 @@
   color: var(--foreground);
   text-decoration: none;
 }
+/* Klammern um `[P-KOL-3]`: Der Chip ersetzt sie optisch, im Dokument bleiben sie. */
+.lineal-prose .issue-ref-bracket {
+  display: none;
+}
+
 .lineal-prose .issue-ref-start {
   display: inline-flex;
   align-items: center;

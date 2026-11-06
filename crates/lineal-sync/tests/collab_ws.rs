@@ -1341,6 +1341,75 @@ async fn project_and_initiative_description_rooms_persist_to_their_owner(pool: P
     );
 }
 
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_description_room_merges_and_takes_api_writes(pool: PgPool) {
+    use lineal_app::usecases::project::milestone::SaveMilestoneInput;
+    use lineal_testkit::seed::planning::{seed_milestone_id, seed_project_id};
+    let e = env(pool).await;
+    let id = seed_milestone_id().0;
+    let select = "SELECT description FROM project_milestone WHERE id = $1";
+
+    let mut alice = desc_client(&e, "alice", "milestone", id).await;
+    let mut bob = desc_client(&e, "bob", "milestone", id).await;
+    assert_eq!(alice.hello["canWrite"], true);
+    alice.add_paragraph("von Alice").await;
+    bob.add_paragraph("von Bob").await;
+    pump_both(&mut alice, &mut bob, 600).await;
+    assert_eq!(alice.md(), bob.md());
+    let text = wait_sql(&e, select, id, |d| {
+        d.contains("von Alice") && d.contains("von Bob")
+    })
+    .await;
+    assert!(text.contains("von Alice"));
+
+    // Schreiben über API oder MCP bei offener Sitzung landet im Raum und bleibt erhalten.
+    e.app
+        .save_milestone(
+            &user(SeedUser::Bob),
+            SaveMilestoneInput {
+                project: seed_project_id().0.to_string(),
+                id: Some(id.to_string()),
+                description: Some("Neu per API".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for _ in 0..40 {
+        alice.pump(Duration::from_millis(100)).await;
+        if alice.md() == "Neu per API" {
+            break;
+        }
+    }
+    assert_eq!(alice.md(), "Neu per API");
+    alice.pump(Duration::from_millis(600)).await;
+    wait_sql(&e, select, id, |d| d == "Neu per API").await;
+
+    // Carol (nur WEB) sieht das ENG-Projekt nicht, also auch seinen Meilenstein nicht.
+    assert_eq!(
+        e.status(Some("carol"), &format!("/collab/milestone/{id}"))
+            .await,
+        404
+    );
+    // Ohne Schreibrecht (Projekt archiviert) bleibt nur das Mitlesen.
+    sqlx::query("UPDATE project SET archived_at = now() WHERE id = $1")
+        .bind(seed_project_id().0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let reader = desc_client(&e, "bob", "milestone", id).await;
+    assert_eq!(reader.hello["canWrite"], false);
+    // Einen unbekannten Meilenstein gibt es nicht.
+    assert_eq!(
+        e.status(
+            Some("alice"),
+            &format!("/collab/milestone/{}", Uuid::now_v7())
+        )
+        .await,
+        404
+    );
+}
+
 async fn issue_for(e: &Env, who: SeedUser, team: &str, title: &str) -> Uuid {
     use lineal_app::usecases::issue::CreateIssueInput;
     e.app

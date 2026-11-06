@@ -15,7 +15,7 @@ import { useShortcutContext } from "@/lib/shortcuts";
 
 import { snoozePresets } from "./queries";
 
-export type RemindTargetType = "issue" | "project" | "initiative" | "document";
+export type RemindTargetType = "issue" | "project" | "milestone" | "initiative" | "document";
 
 export interface RemindTarget {
   targetType: RemindTargetType;

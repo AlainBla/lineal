@@ -672,3 +672,348 @@ async fn status_updates_contract(pool: sqlx::PgPool) {
         ErrorKind::Forbidden
     );
 }
+
+/// LIN-25: Ressourcen hängen am Meilenstein; ohne ihn bleiben sie am Projekt.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_resources_stay_with_the_project(pool: sqlx::PgPool) {
+    let app = setup(pool).await;
+    let who = SeedUser::Alice;
+    let m = call(
+        &app,
+        who,
+        "save_milestone",
+        json!({ "project": "P-ENG-1", "name": "Go-Live" }),
+    )
+    .await
+    .unwrap();
+    let doc = call(
+        &app,
+        who,
+        "save_document",
+        json!({ "title": "Checkliste", "project": "P-ENG-1" }),
+    )
+    .await
+    .unwrap();
+    let doc_id = doc["uuid"].as_str().or(doc["id"].as_str()).unwrap();
+    let scope = json!({ "project": "P-ENG-1", "milestone": "Go-Live" });
+    let add = |extra: Value| {
+        let mut a = scope.clone();
+        a.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        a
+    };
+    call(
+        &app,
+        who,
+        "save_milestone_resource",
+        add(json!({ "url": "https://example.com/report", "title": "Bericht" })),
+    )
+    .await
+    .unwrap();
+    call(
+        &app,
+        who,
+        "save_milestone_resource",
+        add(json!({ "document": doc_id })),
+    )
+    .await
+    .unwrap();
+    let r = call(&app, who, "get_milestone_resources", scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(r["links"][0]["title"], "Bericht");
+    assert_eq!(r["documents"][0]["title"], "Checkliste");
+
+    // Genau eine Art je Aufruf; ein fremdes Dokument gibt es in diesem Projekt nicht.
+    assert_eq!(
+        err_kind(
+            call(
+                &app,
+                who,
+                "save_milestone_resource",
+                add(json!({ "url": "https://example.com", "document": doc_id })),
+            )
+            .await
+        ),
+        ErrorKind::InvalidRequest
+    );
+    assert_eq!(
+        err_kind(
+            call(
+                &app,
+                who,
+                "save_milestone_resource",
+                add(json!({ "document": "00000000-0000-4000-8000-000000000001" })),
+            )
+            .await
+        ),
+        ErrorKind::NotFound
+    );
+
+    // Löschen des Meilensteins: Dokument und Link bleiben am Projekt.
+    let view = ctx_for(who);
+    app.delete_milestone(&view, "P-ENG-1", m["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    let left = app.list_resources(&view, "P-ENG-1", None).await.unwrap();
+    assert!(left.links.iter().any(|l| l.label == "Bericht"));
+    assert!(left.documents.iter().any(|d| d.title == "Checkliste"));
+}
+
+/// LIN-25: Abschließen ist bewusst, friert die Liste ein und behält den Terminverlauf.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_completion_is_deliberate(pool: sqlx::PgPool) {
+    let app = setup(pool).await;
+    let who = SeedUser::Alice;
+    for name in ["Go-Live", "Nachbereitung"] {
+        call(
+            &app,
+            who,
+            "save_milestone",
+            json!({ "project": "P-ENG-1", "name": name, "targetDate": "2027-01-10" }),
+        )
+        .await
+        .unwrap();
+    }
+    let open_issue = call(
+        &app,
+        who,
+        "save_issue",
+        json!({ "team": "ENG", "title": "Offen", "project": "P-ENG-1", "milestone": "Go-Live" }),
+    )
+    .await
+    .unwrap();
+    call(
+        &app,
+        who,
+        "save_issue",
+        json!({ "team": "ENG", "title": "Fertig", "project": "P-ENG-1",
+                "milestone": "Go-Live", "state": "completed" }),
+    )
+    .await
+    .unwrap();
+
+    // Terminverlauf: nur echte Änderungen zählen.
+    let move_date = |d: &str| json!({ "project": "P-ENG-1", "id": "Go-Live", "targetDate": d });
+    for d in ["2027-01-24", "2027-01-24"] {
+        call(&app, who, "save_milestone", move_date(d))
+            .await
+            .unwrap();
+    }
+    let scope = json!({ "project": "P-ENG-1", "query": "Go-Live" });
+    let g = call(&app, who, "get_milestone", scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        g["targetDateHistory"].as_array().unwrap().len(),
+        1,
+        "{}",
+        g["targetDateHistory"]
+    );
+    assert_eq!(g["targetDateHistory"][0]["from"], "2027-01-10");
+    assert_eq!(g["targetDateHistory"][0]["to"], "2027-01-24");
+    assert_ne!(g["status"], "done", "erledigte Issues schließen nicht ab");
+
+    let complete = |extra: Value| {
+        let mut a = json!({ "project": "P-ENG-1", "milestone": "Go-Live" });
+        a.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        a
+    };
+    assert_eq!(
+        err_kind(
+            call(
+                &app,
+                who,
+                "complete_milestone",
+                complete(json!({ "openIssues": "move", "moveTo": "Go-Live" })),
+            )
+            .await
+        ),
+        ErrorKind::InvalidRequest,
+        "nicht in sich selbst"
+    );
+    let done = call(
+        &app,
+        who,
+        "complete_milestone",
+        complete(json!({ "openIssues": "move", "moveTo": "Nachbereitung", "note": "Live." })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done["status"], "done");
+
+    // Das offene Issue wanderte, die eingefrorene Liste kennt beide.
+    let moved = call(
+        &app,
+        who,
+        "get_issue",
+        json!({ "id": open_issue["id"], "fields": ["projectMilestone"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(moved["projectMilestone"]["name"], "Nachbereitung");
+    let frozen = app
+        .milestone_snapshot(&ctx_for(who), "P-ENG-1", "Go-Live")
+        .await
+        .unwrap();
+    assert_eq!(frozen.len(), 2);
+    let g = call(&app, who, "get_milestone", scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(g["resultNote"], "Live.");
+
+    assert_eq!(
+        err_kind(
+            call(
+                &app,
+                who,
+                "complete_milestone",
+                complete(json!({ "openIssues": "keep" })),
+            )
+            .await
+        ),
+        ErrorKind::Conflict
+    );
+    let again = call(
+        &app,
+        who,
+        "reopen_milestone",
+        json!({ "project": "P-ENG-1", "milestone": "Go-Live" }),
+    )
+    .await
+    .unwrap();
+    assert_ne!(again["status"], "done");
+    let g = call(&app, who, "get_milestone", scope).await.unwrap();
+    assert_eq!(g["resultNote"], "Live.", "die Notiz bleibt");
+}
+
+/// LIN-25: Umwandlung nimmt Issues und Ressourcen mit, Remind me greift am Meilenstein.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn private_project_team_does_not_block_milestone_convert(pool: sqlx::PgPool) {
+    let app = setup(pool.clone()).await;
+    let who = SeedUser::Alice;
+    // Alice ist nur in ENG: Das zweite Projekt-Team wird privat und damit für sie unsichtbar.
+    call(
+        &app,
+        who,
+        "save_project",
+        json!({ "id": "P-ENG-1", "addTeams": ["WEB"] }),
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE team SET visibility = 'private' WHERE key = 'WEB'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    call(
+        &app,
+        who,
+        "save_milestone",
+        json!({ "project": "P-ENG-1", "name": "Geteilt" }),
+    )
+    .await
+    .unwrap();
+
+    let converted = call(
+        &app,
+        who,
+        "convert_milestone_to_project",
+        json!({ "project": "P-ENG-1", "milestone": "Geteilt" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(converted["name"], "Geteilt");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_converts_to_project_and_reminds(pool: sqlx::PgPool) {
+    let app = setup(pool).await;
+    let who = SeedUser::Alice;
+    let ctx = ctx_for(who);
+    let m = call(
+        &app,
+        who,
+        "save_milestone",
+        json!({ "project": "P-ENG-1", "name": "Spin-off", "description": "Eigenes Vorhaben" }),
+    )
+    .await
+    .unwrap();
+    let id = m["id"].as_str().unwrap();
+    let issue = call(
+        &app,
+        who,
+        "save_issue",
+        json!({ "team": "ENG", "title": "Teil davon", "project": "P-ENG-1", "milestone": "Spin-off" }),
+    )
+    .await
+    .unwrap();
+    call(
+        &app,
+        who,
+        "save_milestone_resource",
+        json!({ "project": "P-ENG-1", "milestone": "Spin-off", "url": "https://example.com/a" }),
+    )
+    .await
+    .unwrap();
+
+    let at = chrono::Utc::now() + chrono::Duration::days(1);
+    let r = app.set_reminder(&ctx, "milestone", id, Some(at)).await;
+    // Uhr im Test: 2026-10-10; der Zeitpunkt liegt sicher in der Zukunft.
+    assert!(r.unwrap().is_some());
+    assert!(
+        app.get_reminder(&ctx, "milestone", id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        app.set_reminder(
+            &ctx,
+            "milestone",
+            "00000000-0000-4000-8000-000000000001",
+            Some(at)
+        )
+        .await
+        .unwrap_err()
+        .kind,
+        ErrorKind::NotFound
+    );
+
+    let created = call(
+        &app,
+        who,
+        "convert_milestone_to_project",
+        json!({ "project": "P-ENG-1", "milestone": "Spin-off" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["name"], "Spin-off");
+    let new_id = created["id"].as_str().unwrap();
+    let moved = call(
+        &app,
+        who,
+        "get_issue",
+        json!({ "id": issue["id"], "fields": ["project", "projectMilestone"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(moved["project"], "Spin-off");
+    assert!(moved["projectMilestone"].is_null());
+    let res = app.list_resources(&ctx, new_id, None).await.unwrap();
+    assert_eq!(res.links.len(), 1);
+    assert_eq!(
+        err_kind(
+            call(
+                &app,
+                who,
+                "get_milestone",
+                json!({ "project": "P-ENG-1", "query": "Spin-off" }),
+            )
+            .await
+        ),
+        ErrorKind::NotFound
+    );
+}

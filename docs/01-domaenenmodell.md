@@ -1247,6 +1247,12 @@ Etappe innerhalb genau eines Projekts.
 | `sortOrder` | Float | ja | ans Ende bzw. nach `targetDate` einsortiert | Reihenfolge im Projekt | |
 | `status` | Enum(`unstarted`,`next`,`overdue`,`done`) | abgel. | — | siehe [6.6](#66-meilenstein-status) | |
 | `progress` | Float | abgel. | — | Fortschritt der Issues des Meilensteins (Formel wie Projekt) | |
+| `completedAt` | DateTime | nein | `null` | Bewusst abgeschlossen; setzt den Status `done` ([04 §3.6](04-planung.md)) | |
+| `completedById` | UUID | nein | `null` | Wer abgeschlossen hat | FK → User |
+| `resultNote` | String | nein | `null` | Ergebnisnotiz (Markdown) | |
+| `snapshot` | JSON | nein | `null` | Beim Abschluss eingefrorene Issue-Liste | |
+
+Dazu gehören `ProjectMilestoneDateChange` (Terminverlauf) und `ProjectFile` (Datei am Projekt, optional mit `projectMilestoneId`).
 
 **Invarianten**
 
@@ -1885,7 +1891,7 @@ Für ein Team und den Zeitpunkt `now`:
 
 Ausgewertet je Projekt in Reihenfolge `sortOrder` (`today` = Datum in der Zeitzone des Lead-Teams):
 
-1. `done`: Der Meilenstein hat mindestens ein relevantes Issue und alle relevanten Issues sind `completed` (Fortschritt = 1).
+1. `done`: `completedAt` ist gesetzt. Abschließen ist eine bewusste Handlung ([04 §3.6](04-planung.md)); erledigte Issues allein reichen nicht.
 2. `overdue`: nicht `done` und `targetDate < today`.
 3. `next`: der erste Meilenstein (nach `sortOrder`), der weder `done` noch `overdue` ist.
 4. `unstarted`: alle übrigen.

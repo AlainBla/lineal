@@ -1,5 +1,5 @@
 /**
- * Beschreibung von Projekt und Initiative: Echtzeit-Mitbearbeitung über den Collab-Endpunkt (wie bei
+ * Beschreibung von Projekt, Initiative und Meilenstein: Echtzeit-Mitbearbeitung über den Collab-Endpunkt (wie bei
  * Issues), sonst Stufe 1 mit Autosave über die reguläre Mutation.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
+import { uploadImageAsset } from "@/features/issues/assets";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { useKnownUsers } from "@/features/issues/users";
 
@@ -35,10 +36,14 @@ function Stage1Editor({
   value,
   readOnly,
   onSave,
+  placeholder = "Add description…",
+  uploadImage,
 }: {
   value: string;
   readOnly: boolean;
   onSave: (markdown: string) => Promise<unknown>;
+  placeholder?: string;
+  uploadImage?: (file: File) => Promise<string>;
 }) {
   const mentionUsers = useMentionUsers();
   const [status, setStatus] = useState<SaveStatus>("saved");
@@ -77,8 +82,12 @@ function Stage1Editor({
         value={value}
         editable={!readOnly}
         ariaLabel="Description"
-        placeholder="Add description…"
+        placeholder={placeholder}
         users={mentionUsers}
+        uploadImage={uploadImage}
+        onUploadError={(e) =>
+          setError(e instanceof Error ? e.message : "Could not upload the image.")
+        }
         onChange={(md) => {
           pending.current = md;
           setStatus("dirty");
@@ -108,16 +117,42 @@ function Stage1Editor({
   );
 }
 
+/** Beschreibung eines Meilensteins: Echtzeit wie beim Projekt, zusätzlich Bilder per Einfügen oder Ziehen. */
+export function MilestoneDescription({
+  id,
+  value,
+  onSave,
+}: {
+  id: string;
+  value: string;
+  onSave: (markdown: string) => Promise<unknown>;
+}) {
+  return (
+    <PlanningDescription
+      kind="milestone"
+      id={id}
+      value={value}
+      onSave={onSave}
+      placeholder="Done when… Say in one sentence when this milestone is reached."
+      uploadImage={uploadImageAsset}
+    />
+  );
+}
+
 export function PlanningDescription({
   kind,
   id,
   value,
   onSave,
+  placeholder = "Add description…",
+  uploadImage,
 }: {
-  kind: "project" | "initiative";
+  kind: "project" | "initiative" | "milestone";
   id: string;
   value: string;
   onSave: (markdown: string) => Promise<unknown>;
+  placeholder?: string;
+  uploadImage?: (file: File) => Promise<string>;
 }) {
   const session = useCollab(kind, id);
   const mentionUsers = useMentionUsers();
@@ -128,7 +163,15 @@ export function PlanningDescription({
     return <Skeleton className="h-16 w-full" />;
   }
   if (session.status === "fallback" || session.status === "closed" || !session.provider) {
-    return <Stage1Editor value={value} readOnly={false} onSave={onSave} />;
+    return (
+      <Stage1Editor
+        value={value}
+        readOnly={false}
+        onSave={onSave}
+        placeholder={placeholder}
+        uploadImage={uploadImage}
+      />
+    );
   }
   return (
     <div className="flex flex-col gap-1">
@@ -136,8 +179,9 @@ export function PlanningDescription({
         key={`collab:${session.generation}`}
         value=""
         ariaLabel="Description"
-        placeholder="Add description…"
+        placeholder={placeholder}
         users={mentionUsers}
+        uploadImage={uploadImage}
         collab={{ provider: session.provider, canWrite: session.canWrite }}
       />
       <div className="flex items-center justify-end gap-2 text-xs text-subtle-foreground">
