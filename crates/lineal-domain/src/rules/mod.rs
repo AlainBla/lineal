@@ -4,6 +4,7 @@ pub mod cycle_calendar;
 pub mod date;
 pub mod estimate;
 pub mod filter;
+pub mod ics;
 pub mod labels;
 pub mod markdown;
 pub mod patch;

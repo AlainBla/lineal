@@ -312,6 +312,82 @@ describe("RoadmapPage", () => {
     expect(screen.getByRole("radio", { name: "Quarter" })).toHaveAttribute("aria-checked", "true");
   });
 
+  describe("Meilenstein-Raute", () => {
+    const render = async (status = "unstarted", fail = false) => {
+      const calls: Array<Record<string, unknown>> = [];
+      const base = project();
+      const withStatus = {
+        ...base,
+        milestones: base.milestones.map((m) => ({ ...m, status })),
+      };
+      mockGraphql({
+        PlanningProjects: () => ({
+          projectsPage: {
+            nodes: [withStatus],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }),
+        PlanningInitiatives: () => ({ initiatives: [] }),
+        PlanningMilestoneMove: (v: Record<string, unknown>) => {
+          calls.push(v);
+          if (fail) throw new Error("forbidden");
+          return { projectMilestoneUpdate: { success: true } };
+        },
+      });
+      const { container } = await renderWithApp(
+        <RoadmapPage ws="acme" scope={{ kind: "workspace" }} />,
+        newClient(),
+        "/acme/roadmap",
+      );
+      await screen.findByRole("button", { name: /Checkout Relaunch/ });
+      return { calls, marker: container.querySelector("[data-milestone='m-1']")! as HTMLElement };
+    };
+    const drag = (el: HTMLElement, dx: number) => {
+      fireEvent.pointerDown(el, { button: 0, clientX: 100 });
+      fireEvent(window, new MouseEvent("pointermove", { clientX: 100 + dx }));
+      fireEvent(window, new MouseEvent("pointerup", { clientX: 100 + dx }));
+    };
+
+    it("Pfeiltaste verschiebt das Zieldatum im richtigen Projekt", async () => {
+      const { calls, marker } = await render();
+      fireEvent.keyDown(marker, { key: "ArrowLeft" });
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toMatchObject({
+        projectId: "p-1",
+        id: "m-1",
+        input: { targetDate: "2026-11-14" },
+      });
+    });
+
+    it("Ziehen verschiebt um ganze Tage, ein Klick danach navigiert nicht", async () => {
+      const { calls, marker } = await render();
+      drag(marker, 300);
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]!.input).toMatchObject({ targetDate: expect.stringMatching(/^2026-1[12]-/) });
+      expect(calls[0]!.input).not.toEqual({ targetDate: "2026-11-15" });
+      expect(fireEvent.click(marker)).toBe(false);
+    });
+
+    it("kleine Bewegung bleibt ein Klick", async () => {
+      const { calls, marker } = await render();
+      drag(marker, 2);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("Abgeschlossene bleiben stehen", async () => {
+      const { calls, marker } = await render("done");
+      drag(marker, 300);
+      fireEvent.keyDown(marker, { key: "ArrowRight" });
+      expect(calls).toHaveLength(0);
+    });
+
+    it("zeigt den Fehler, wenn der Server ablehnt", async () => {
+      const { marker } = await render("unstarted", true);
+      fireEvent.keyDown(marker, { key: "ArrowRight" });
+      expect(await screen.findByRole("alert")).toBeInTheDocument();
+    });
+  });
+
   it("verschiebt per Pfeiltaste: projectUpdate mit neuen Daten", async () => {
     const calls: Array<Record<string, unknown>> = [];
     setup(calls);

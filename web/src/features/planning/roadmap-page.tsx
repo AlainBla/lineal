@@ -19,13 +19,16 @@ import {
   GROUP_LABEL,
   groupItems,
   itemRange,
+  milestoneMovable,
   PX_PER_DAY,
+  shiftDay,
   todayIso,
   ZOOM_LABEL,
   ZOOMS,
   type DragMode,
   type GroupBy,
   type RoadmapItem,
+  type RoadmapMilestone,
   type Span,
   type Zoom,
 } from "./roadmap-model";
@@ -33,6 +36,7 @@ import {
   useInitiative,
   useInitiatives,
   useFiscalMonth,
+  useMoveMilestone,
   useProjects,
   useUpdateInitiative,
   useUpdateProject,
@@ -146,6 +150,83 @@ function Bar({
 }
 
 /**
+ * Raute auf der Roadmap. Ziehen oder die Pfeiltasten verschieben das Zieldatum, ein Klick öffnet den
+ * Meilenstein. Abgeschlossene lassen sich nur öffnen.
+ */
+function MilestoneMarker({
+  m,
+  left,
+  px,
+  onMove,
+}: {
+  m: RoadmapMilestone;
+  left: number;
+  px: number;
+  onMove: (m: RoadmapMilestone, targetDate: string) => void;
+}) {
+  const [dx, setDx] = useState(0);
+  const dragged = useRef(false);
+  const movable = milestoneMovable(m);
+  const days = Math.round(dx / px);
+  const shown = days ? shiftDay(m.targetDate, days) : m.targetDate;
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!movable || e.button !== 0) return;
+    e.stopPropagation();
+    dragged.current = false;
+    const startX = e.clientX;
+    let last = 0;
+    const move = (ev: PointerEvent) => {
+      last = ev.clientX - startX;
+      if (Math.abs(last) >= 4) dragged.current = true;
+      setDx(last);
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", stop);
+      setDx(0);
+    };
+    const up = () => {
+      stop();
+      const delta = Math.round(last / px);
+      if (dragged.current && delta !== 0) onMove(m, shiftDay(m.targetDate, delta));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", stop);
+  };
+
+  return (
+    <Link
+      to={m.href as "/"}
+      draggable={false}
+      data-milestone={m.id}
+      title={`${m.name} · ${formatSpanDate(shown, null)}`}
+      className={cn(
+        "pointer-events-auto absolute top-2 -ml-1.5",
+        movable && "cursor-ew-resize touch-none",
+        MILESTONE_COLOR[m.status],
+      )}
+      style={{ left: left + days * px }}
+      onPointerDown={onPointerDown}
+      onClick={(e) => {
+        // Nach dem Ziehen folgt ein Klick, der nicht navigieren soll.
+        if (dragged.current) e.preventDefault();
+        dragged.current = false;
+      }}
+      onKeyDown={(e) => {
+        if (!movable || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+        e.preventDefault();
+        onMove(m, shiftDay(m.targetDate, e.key === "ArrowLeft" ? -1 : 1));
+      }}
+    >
+      <Diamond className="size-3 fill-current" aria-label={`Milestone ${m.name}`} />
+    </Link>
+  );
+}
+
+/**
  * Zeitachsen-Ansicht (docs/04 §2.5): Balken von Start- bis Zieldatum, Meilensteine als Marker,
  * „Heute“-Linie, Zoom Woche bis Jahr, Gruppierung. Ziehen verschiebt bzw. verändert die Daten über
  * `projectUpdate`/`initiativeUpdate`; die Rechteprüfung liegt beim Server, ein Fehler stellt die
@@ -164,11 +245,13 @@ export function RoadmapView({
   const qc = useQueryClient();
   const updateProject = useUpdateProject();
   const updateInitiative = useUpdateInitiative();
+  const moveMilestone = useMoveMilestone();
   const fiscal = useFiscalMonth();
   const [zoom, setZoom] = useState<Zoom>("month");
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
   const [drag, setDrag] = useState<Drag | null>(null);
   const [override, setOverride] = useState<Record<string, Span>>({});
+  const [movedTo, setMovedTo] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const dragRef = useRef<Drag | null>(null);
@@ -205,6 +288,26 @@ export function RoadmapView({
         );
     },
     [qc, updateProject, updateInitiative],
+  );
+
+  const commitMilestone = useCallback(
+    (m: RoadmapMilestone, targetDate: string) => {
+      setError(null);
+      setMovedTo((o) => ({ ...o, [m.id]: targetDate }));
+      moveMilestone
+        .mutateAsync({ projectId: m.projectId, id: m.id, targetDate })
+        .catch((e: unknown) => setError(errorText(e)))
+        .finally(() =>
+          qc.refetchQueries({ queryKey: ["planning"] }).finally(() =>
+            setMovedTo((o) => {
+              const rest = { ...o };
+              delete rest[m.id];
+              return rest;
+            }),
+          ),
+        );
+    },
+    [qc, moveMilestone],
   );
 
   const finish = (item: RoadmapItem, d: Drag) => {
@@ -316,21 +419,18 @@ export function RoadmapView({
               onStartDrag={startDrag}
               onKey={onKey}
             />
-            {it.milestones.map((m) => (
-              <Link
-                key={m.id}
-                to={m.href as "/"}
-                data-milestone={m.id}
-                title={`${m.name} · ${formatSpanDate(m.targetDate, null)}`}
-                className={cn(
-                  "pointer-events-auto absolute top-2 -ml-1.5",
-                  MILESTONE_COLOR[m.status],
-                )}
-                style={{ left: dayX(m.targetDate, ruler, zoom) }}
-              >
-                <Diamond className="size-3 fill-current" aria-label={`Milestone ${m.name}`} />
-              </Link>
-            ))}
+            {it.milestones.map((milestone) => {
+              const m = { ...milestone, targetDate: movedTo[milestone.id] ?? milestone.targetDate };
+              return (
+                <MilestoneMarker
+                  key={m.id}
+                  m={m}
+                  left={dayX(m.targetDate, ruler, zoom)}
+                  px={px}
+                  onMove={commitMilestone}
+                />
+              );
+            })}
           </div>
         </div>,
       );

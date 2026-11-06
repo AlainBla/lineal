@@ -36,6 +36,7 @@ import { IssueView } from "@/features/views/issue-view";
 import { cn } from "@/lib/cn";
 import {
   HealthBadge,
+  milestoneLink,
   MILESTONE_COLOR,
   MilestoneBar,
   MilestoneStatusBadge,
@@ -74,10 +75,17 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function UpdateComposer({ projectId }: { projectId: string }) {
+function UpdateComposer({ ws, project }: { ws: string; project: Project }) {
   const [body, setBody] = useState("");
   const [health, setHealth] = useState<Health>("onTrack");
-  const post = usePostProjectUpdate(projectId);
+  const post = usePostProjectUpdate(project.id);
+  const text = useRef<HTMLTextAreaElement>(null);
+  const insertMilestone = (m: Project["milestones"][number]) => {
+    const url = window.location.origin + milestonePath(ws, project.identifier, m.id);
+    const at = text.current?.selectionStart ?? body.length;
+    setBody(`${body.slice(0, at)}${milestoneLink(m.name, url)}${body.slice(at)}`);
+    text.current?.focus();
+  };
   // Ref-Lock: ein Doppelklick vor dem Re-Render legt kein zweites Update an.
   const busy = useRef(false);
   return (
@@ -111,6 +119,7 @@ function UpdateComposer({ projectId }: { projectId: string }) {
         ))}
       </div>
       <textarea
+        ref={text}
         aria-label="Update text"
         value={body}
         onChange={(e) => setBody(e.target.value)}
@@ -123,7 +132,24 @@ function UpdateComposer({ projectId }: { projectId: string }) {
           {errorText(post.error)}
         </p>
       )}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {project.milestones.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="ghost" size="sm">
+                <Diamond />
+                Mention milestone
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {project.milestones.map((m) => (
+                <DropdownMenuItem key={m.id} onSelect={() => insertMilestone(m)}>
+                  {m.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <Button type="submit" size="sm" disabled={!body.trim() || post.isPending}>
           Post update
         </Button>
@@ -527,7 +553,7 @@ export function ProjectPage({
         )}
         {tab === "updates" && (
           <div className="flex max-w-3xl flex-col gap-4 p-4">
-            <UpdateComposer projectId={p.id} />
+            <UpdateComposer ws={ws} project={p} />
             <UpdatesFeed projectId={p.id} />
           </div>
         )}

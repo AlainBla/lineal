@@ -1848,6 +1848,14 @@ type Mutation {
 	"""
 	apiKeyRevoke(id: String!): ApiKeyRevokePayload!
 	"""
+	Legt den Feed an oder ersetzt ihn und liefert die neue URL.
+	"""
+	calendarFeedRotate: String!
+	"""
+	Schaltet den Feed ab.
+	"""
+	calendarFeedRevoke: Boolean!
+	"""
 	Legt einen Bot an (Rolle `app`, ohne Passwort und ohne E-Mail-Benachrichtigungen).
 	"""
 	botCreate(input: BotCreateInput!): BotCreatePayload!
@@ -2582,6 +2590,10 @@ type Query {
 	Eigene API-Keys des Viewers (neueste zuerst, inkl. widerrufener).
 	"""
 	apiKeys: [ApiKey!]!
+	"""
+	Ob die angemeldete Person einen Kalender-Feed hat.
+	"""
+	calendarFeedEnabled: Boolean!
 	"""
 	Alle Bots des Workspace (inkl. suspendierter), nur für Admins.
 	"""

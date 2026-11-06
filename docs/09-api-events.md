@@ -635,6 +635,7 @@ Rechte: Anlegen/Ändern nur Workspace-Admins oder OAuth-Apps mit Scope `admin`. 
 | `Reaction` | `create`, `remove` | wie Elternobjekt |
 | `Attachment` | `create`, `update`, `remove` | Team des Issues |
 | `Project` | `create`, `update`, `remove` | Teams des Projekts (mind. eines passend) |
+| `ProjectMilestone` | `create`, `update`, `remove` | wie Project; ohne `snapshot`, weil er Issues aller Teams nennt. Abschließen und Wiederöffnen sind `update` |
 | `ProjectUpdate` | `create`, `update`, `remove` | wie Project |
 | `Cycle` | `create`, `update`, `remove` | `Cycle.teamId` |
 | `Document` | `create`, `update`, `remove` | Team des Elternobjekts |

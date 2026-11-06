@@ -5,6 +5,7 @@ pub mod account;
 pub mod api_key;
 pub mod audit;
 pub mod bot;
+pub mod calendar;
 pub mod comment;
 pub mod cycle;
 pub mod document;
@@ -32,6 +33,7 @@ use account::{AccountMutation, AccountQuery};
 use api_key::{ApiKeyMutation, ApiKeyQuery};
 use audit::AuditQuery;
 use bot::{BotMutation, BotQuery};
+use calendar::{CalendarMutation, CalendarQuery};
 use comment::{CommentMutation, CommentQuery};
 use cycle::{CycleMutation, CycleQuery};
 use document::{DocumentMutation, DocumentQuery};
@@ -72,6 +74,7 @@ pub struct QueryRoot(
     WebhookQuery,
     ImportQuery,
     ApiKeyQuery,
+    CalendarQuery,
     BotQuery,
     AuditQuery,
     AccountQuery,
@@ -99,6 +102,7 @@ pub struct MutationRoot(
     WebhookMutation,
     ImportMutation,
     ApiKeyMutation,
+    CalendarMutation,
     BotMutation,
     AccountMutation,
     TeamExtraMutation,

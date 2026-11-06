@@ -35,13 +35,14 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 /// Abonnierbare Ressourcentypen (docs/09 §4.2; deckt sich mit dem CHECK der Tabelle).
-pub const RESOURCE_TYPES: [&str; 13] = [
+pub const RESOURCE_TYPES: [&str; 14] = [
     "Issue",
     "Comment",
     "Attachment",
     "IssueLabel",
     "Reaction",
     "Project",
+    "ProjectMilestone",
     "ProjectUpdate",
     "Cycle",
     "Document",
@@ -384,6 +385,15 @@ pub fn map_event(ev: &DomainEvent) -> Option<MappedEvent> {
         E::ProjectCreated { project_id } => m("Project", "create", project_id.0),
         E::ProjectUpdated { project_id, .. } => m("Project", "update", project_id.0),
         E::ProjectRemoved { project_id } => m("Project", "remove", project_id.0),
+        E::ProjectMilestoneCreated { milestone_id, .. } => {
+            m("ProjectMilestone", "create", milestone_id.0)
+        }
+        E::ProjectMilestoneUpdated { milestone_id, .. } => {
+            m("ProjectMilestone", "update", milestone_id.0)
+        }
+        E::ProjectMilestoneRemoved { milestone_id, .. } => {
+            m("ProjectMilestone", "remove", milestone_id.0)
+        }
         E::ProjectUpdateCreated { update_id, .. } => m("ProjectUpdate", "create", update_id.0),
         E::ProjectUpdateUpdated { update_id, .. } => m("ProjectUpdate", "update", update_id.0),
         E::ProjectUpdateRemoved { update_id, .. } => m("ProjectUpdate", "remove", update_id.0),

@@ -664,6 +664,55 @@ export function useMilestoneSnapshot(projectId: string, id: string, enabled: boo
   });
 }
 
+/** Für die Roadmap: dort stehen Meilensteine mehrerer Projekte nebeneinander. */
+export function useMoveMilestone() {
+  return useMutation({
+    mutationFn: async (v: { projectId: string; id: string; targetDate: string }) =>
+      gqlRequest(
+        `mutation PlanningMilestoneMove($projectId: String!, $id: String!, $input: MilestoneInput!) {
+          projectMilestoneUpdate(projectId: $projectId, id: $id, input: $input) { success }
+        }`,
+        { projectId: v.projectId, id: v.id, input: { targetDate: v.targetDate } },
+      ),
+  });
+}
+
+export function useCalendarFeedEnabled() {
+  return useQuery({
+    queryKey: ["calendar-feed"],
+    queryFn: async () =>
+      (
+        await gqlRequest<{ calendarFeedEnabled: boolean }, Record<string, never>>(
+          `query CalendarFeedEnabled { calendarFeedEnabled }`,
+          {},
+        )
+      ).calendarFeedEnabled,
+  });
+}
+
+/** Legt den Link an oder ersetzt ihn. Die URL kommt nur in dieser Antwort. */
+export function useRotateCalendarFeed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (
+        await gqlRequest<{ calendarFeedRotate: string }, Record<string, never>>(
+          `mutation CalendarFeedRotate { calendarFeedRotate }`,
+          {},
+        )
+      ).calendarFeedRotate,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["calendar-feed"] }),
+  });
+}
+
+export function useRevokeCalendarFeed() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => gqlRequest(`mutation CalendarFeedRevoke { calendarFeedRevoke }`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["calendar-feed"] }),
+  });
+}
+
 export function useUpdateMilestone(projectId: string) {
   const qc = useQueryClient();
   return useMutation({

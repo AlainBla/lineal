@@ -37,7 +37,7 @@ pub fn hash_token(token: &str) -> String {
 }
 
 /// 3 × UUIDv4 als Hex (366 Bit Zufall aus dem OS-RNG; nicht `IdGen`, das zeitbasiert ist).
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     format!(
         "{}{}{}",
         Uuid::new_v4().simple(),

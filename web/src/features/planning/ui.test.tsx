@@ -5,7 +5,7 @@ import { mockGraphql, newClient, renderWithApp } from "@/features/issues/test-fi
 import type { Project } from "@/gql/graphql";
 
 import { ProjectsPage } from "./projects-page";
-import { cycleRange, dayInZone, shortDate } from "./ui";
+import { cycleRange, dayInZone, mentionsMilestone, milestoneLink, shortDate } from "./ui";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -82,5 +82,18 @@ describe("Projektliste (B5.11)", () => {
     expect(await screen.findByText("Projekt 1")).toBeInTheDocument();
     expect(await screen.findByText("Projekt 2")).toBeInTheDocument();
     expect(gql.of("PlanningProjects")).toHaveLength(2);
+  });
+});
+
+describe("Verweise auf Meilensteine", () => {
+  it("maskiert Klammern im Namen", () => {
+    expect(milestoneLink("Phase [2]", "https://x.test/m")).toBe(
+      "[Phase \\[2\\]](https://x.test/m)",
+    );
+  });
+
+  it("erkennt nur die genaue URL-Form", () => {
+    expect(mentionsMilestone("[a](https://x.test/p/milestone/m-1)", "m-1")).toBe(true);
+    expect(mentionsMilestone("m-1 ohne Link", "m-1")).toBe(false);
   });
 });

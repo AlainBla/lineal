@@ -58,6 +58,14 @@ export function targetShift(m: {
 
 export const shiftLabel = (days: number) => `${days > 0 ? "+" : "−"}${Math.abs(days)} days`;
 
+/** Markdown-Link auf einen Meilenstein; eckige Klammern im Namen würden den Link zerreißen. */
+export function milestoneLink(name: string, url: string) {
+  return `[${name.replace(/[[\]\\]/g, "\\$&")}](${url})`;
+}
+
+/** Status-Updates verweisen über die URL auf einen Meilenstein. */
+export const mentionsMilestone = (body: string, id: string) => body.includes(`/milestone/${id}`);
+
 /** Pfad der Meilenstein-Detailseite. */
 export const milestonePath = (ws: string, projectRef: string, id: string) =>
   `/${ws}/project/${projectRef}/milestone/${id}`;

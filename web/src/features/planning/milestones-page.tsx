@@ -8,6 +8,7 @@ import { ErrorState, ListSkeleton } from "@/features/issues/states";
 import type { Project, ProjectMilestone } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 
+import { CalendarFeedButton } from "./calendar-feed";
 import { useProjects } from "./queries";
 import {
   MILESTONE_COLOR,
@@ -76,14 +77,17 @@ export function MilestonesPage({ ws }: { ws: string }) {
         title="Milestones"
         docTitle="Milestones"
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            aria-pressed={showCompleted}
-            onClick={() => setShowCompleted((s) => !s)}
-          >
-            {showCompleted ? "Hide completed" : "Show completed"}
-          </Button>
+          <>
+            <CalendarFeedButton />
+            <Button
+              variant="outline"
+              size="sm"
+              aria-pressed={showCompleted}
+              onClick={() => setShowCompleted((s) => !s)}
+            >
+              {showCompleted ? "Hide completed" : "Show completed"}
+            </Button>
+          </>
         }
       />
       <div className="min-h-0 flex-1 overflow-auto p-4">

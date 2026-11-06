@@ -722,6 +722,22 @@ Die Beschreibung wird wie bei Projekten live bearbeitet (`GET /collab/milestone/
 
 `/<ws>/milestones` listet die Meilensteine aller sichtbaren Projekte, gruppiert nach überfällig, nächste 30 Tage, später und ohne Datum. Abgeschlossene sind ausgeblendet und lassen sich einblenden. Die Roadmap färbt die Rauten nach Status und verlinkt die Detailseite. „Remind me“ gilt auch für Meilensteine (Notification `projectMilestoneReminder`).
 
+### 3.8 Reichweite (LIN-25)
+
+**Roadmap.** Rauten offener Meilensteine lassen sich ziehen oder mit den Pfeiltasten um einen Tag verschieben. Das ändert das Zieldatum und erscheint im Terminverlauf. Abgeschlossene Meilensteine bleiben stehen, ein Klick öffnet den Meilenstein.
+
+**Statusbericht.** „Mention milestone“ fügt im Statusbericht des Projekts einen Link auf den Meilenstein ein. Die Detailseite zeigt unter „Status updates“ alle Berichte, deren Text diesen Link enthält. Ohne Treffer entfällt der Abschnitt.
+
+**Kalender.** `GET /calendar/<token>.ics` liefert die Zieldaten aller Meilensteine, die die Person sehen darf, als ganztägige Termine. Kalender-Apps können sich nicht anmelden, deshalb gibt es je Person einen geheimen Link, angelegt unter „Milestones“ → „Calendar“. Die Rechte gelten bei jedem Abruf neu.
+
+- Gespeichert wird nur der SHA-256-Hash, die URL erscheint einmal.
+- Ein neuer Link ersetzt den alten, „Turn off“ entfernt ihn. Beides geht nur aus einer Web-Session.
+- Bei gesperrten Personen, ungültigen und alten Links antwortet der Server mit 404.
+- Der Feed enthält Name, Projekt, Datum und Link, aber keine Beschreibung, weil Kalender oft bei Dritten liegen.
+- Der Token steht in der URL und damit auch in Zugriffslogs.
+
+**Webhooks.** Ressourcentyp `ProjectMilestone`, siehe [09 §4.2](09-api-events.md).
+
 ---
 
 ## 4. Initiativen

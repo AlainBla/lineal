@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use lineal_app::ports::Store;
 use lineal_app::usecases::issue::CreateIssueInput;
+use lineal_app::usecases::project::milestone::{OpenIssues, SaveMilestoneInput};
 use lineal_app::usecases::webhook::{CreateWebhookInput, sign};
 use lineal_app::{App, RequestCtx};
 use lineal_db::PgStore;
@@ -70,6 +71,71 @@ fn header<'a>(req: &'a WebhookRequest, name: &str) -> Option<&'a str> {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.as_str())
+}
+
+/// Meilensteine: Abschließen ist ein `update`, der Snapshot nennt Issues aller Teams und bleibt draußen.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_events_are_delivered_without_the_snapshot(pool: PgPool) {
+    let (app, _) = setup(pool.clone(), "http://lineal.test").await;
+    app.create_webhook(
+        &alice(),
+        CreateWebhookInput {
+            url: "http://127.0.0.1:9/hook".into(),
+            all_public_teams: true,
+            resource_types: vec!["ProjectMilestone".into()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (_, m) = app
+        .save_milestone(
+            &alice(),
+            SaveMilestoneInput {
+                project: "P-ENG-1".into(),
+                name: Some("Beta".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = m.milestone.id.0.to_string();
+    app.complete_milestone(&alice(), "P-ENG-1", &id, OpenIssues::Keep, Some("Fertig"))
+        .await
+        .unwrap();
+    app.delete_milestone(&alice(), "P-ENG-1", &id)
+        .await
+        .unwrap();
+    plan(&app).await;
+    let rec = Recorder::default();
+    assert_eq!(
+        deliver_due(&app, &rec, app.clock.now(), 10).await.unwrap(),
+        3
+    );
+
+    let reqs = rec.0.lock().unwrap().clone();
+    let bodies: Vec<Value> = reqs
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    let actions: Vec<_> = bodies
+        .iter()
+        .map(|v| v["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["create", "update", "remove"]);
+    let done = &bodies[1];
+    assert_eq!(header(&reqs[1], "Lineal-Event"), Some("ProjectMilestone"));
+    assert_eq!(done["type"], "ProjectMilestone");
+    assert_eq!(done["data"]["name"], "Beta");
+    assert_eq!(done["data"]["resultNote"], "Fertig");
+    assert!(done["data"]["completedAt"].is_string());
+    assert!(done["data"].get("snapshot").is_none());
+    assert!(
+        done["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/milestone/{id}"))
+    );
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]

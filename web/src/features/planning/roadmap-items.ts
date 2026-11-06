@@ -29,6 +29,7 @@ export function projectItems(projects: Project[], ws: string): RoadmapItem[] {
         .filter((m) => !!m.targetDate)
         .map((m) => ({
           id: m.id,
+          projectId: p.id,
           name: m.name,
           targetDate: m.targetDate!.slice(0, 10),
           status: m.status,

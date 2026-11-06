@@ -113,6 +113,32 @@ pub trait AuthRepo: Send {
         now: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<Option<Principal>>;
 
+    /// Besitzer eines Kalender-Feeds. Mandantenübergreifend wie `find_principal_by_token_hash`,
+    /// liefert nur aktive User; nur unter `begin_system` aufrufen.
+    async fn find_calendar_feed_principal(&mut self, _hash: &str) -> AppResult<Option<Principal>> {
+        unimplemented_repo()
+    }
+
+    /// Setzt den Kalender-Feed des Users; ein vorhandener Link wird dadurch ungültig.
+    async fn set_calendar_feed(
+        &mut self,
+        _user: UserId,
+        _hash: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+
+    /// Entfernt den Kalender-Feed des Users.
+    async fn delete_calendar_feed(&mut self, _user: UserId) -> AppResult<()> {
+        unimplemented_repo()
+    }
+
+    /// Ob der User einen Kalender-Feed hat.
+    async fn has_calendar_feed(&mut self, _user: UserId) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+
     /// Login-Kandidaten zu einer E-Mail (optional eingegrenzt auf einen Workspace-`urlKey`).
     /// Mandantenübergreifend; nur unter `begin_system` aufrufen.
     async fn find_login_candidates(

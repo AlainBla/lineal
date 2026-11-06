@@ -127,11 +127,18 @@ export function dragSpan(span: Span, mode: DragMode, deltaDays: number, fiscal =
 
 export interface RoadmapMilestone {
   id: string;
+  projectId: string;
   name: string;
   targetDate: string;
   status: string;
   href: string;
 }
+
+/** Abgeschlossene Meilensteine bleiben, wo sie sind: Ihr Termin ist Geschichte. */
+export const milestoneMovable = (m: RoadmapMilestone) => m.status !== "done";
+
+/** Zieldatum nach Verschieben um `days` Tage. */
+export const shiftDay = (iso: string, days: number) => fromDay(toDay(iso) + days);
 
 export interface RoadmapItem {
   id: string;

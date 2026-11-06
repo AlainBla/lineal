@@ -217,7 +217,7 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 
 **MCP: Anhänge in `get_issue` (LIN-23).** `get_issue.attachments` war bisher immer `[]`. Jetzt liefert es alle Anhänge des Issues, Links und hochgeladene Dateien, in derselben Form wie `get_attachment` mit `format: "url"`: `id`, `issue`, `title`, `subtitle`, `url`, `contentType`, `size`, `createdAt`, `creator`, `expiresAt`. Damit sind `get_attachment` und `delete_attachment` ohne gemerkte Upload-ID nutzbar. Geladen wird nur, wenn `attachments` ausgegeben wird (Default oder in `fields`). In Kommentaren eingebettete Dateien bleiben in `list_comments`. Ein eigenes `list_attachments` gibt es nicht; `get_issue` mit `fields: ["attachments"]` erfüllt denselben Zweck.
 
-**Meilensteine (LIN-25, LIN-27).** Eigene Detailseite, Ressourcen (Links, Dokumente, Dateien), bewusstes Abschließen mit Snapshot, Terminverlauf, Liste aller Meilensteine, Erinnerungen und Umwandeln in ein Projekt. Die Beschreibung läuft über den Collab-Raum `milestone`.
+**Meilensteine (LIN-25, LIN-27).** Eigene Detailseite, Ressourcen (Links, Dokumente, Dateien), bewusstes Abschließen mit Snapshot, Terminverlauf, Liste aller Meilensteine, Erinnerungen und Umwandeln in ein Projekt. Die Beschreibung läuft über den Collab-Raum `milestone`. Dazu kommen Webhooks (`ProjectMilestone`), ein Kalender-Feed je Person, Ziehen der Rauten auf der Roadmap und Erwähnungen im Statusbericht.
 
 **Projektverweise (LIN-26).** `[P-KOL-3]` im Text wird zum Chip, der das Projekt öffnet.
 

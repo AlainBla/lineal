@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { createIssue, login, unique } from "./helpers";
+import { createIssue, login, sql, unique } from "./helpers";
 
 // 1x1-PNG.
 const PNG = Buffer.from(
@@ -151,6 +151,89 @@ test("LIN-25: milestone page keeps description, image, comment and issue in one 
     .getByRole("link", { name: "Issues" })
     .click();
   await expect(page.getByText(title)).toBeVisible();
+});
+
+// LIN-25 Stufe 4: Raute ziehen, im Statusbericht erwähnen, im Kalender abonnieren.
+test("LIN-25: drag a milestone on the roadmap, mention it in an update, subscribe in a calendar", async ({
+  page,
+}) => {
+  await login(page, "alice");
+  const project = unique("Reichweite");
+  const name = unique("Rollout");
+  await createProject(page, project);
+  const updates = page.url().replace(/\/[^/]+$/, "/updates");
+  await page.getByRole("main").getByRole("link", { name: "Milestones" }).click();
+  await page.getByLabel("Milestone name", { exact: true }).fill(name);
+  await page.getByRole("button", { name: "Add milestone" }).click();
+  await expect(page.getByRole("link", { name })).toBeVisible();
+  sql(
+    `UPDATE project SET start_date = '2026-11-02', target_date = '2026-12-18' WHERE name = '${project}'`,
+  );
+  sql(`UPDATE project_milestone SET target_date = '2026-11-20' WHERE name = '${name}'`);
+
+  // Zoom „Month“ = 7 px je Tag: 70 px = 10 Tage nach rechts. Das Ziehen navigiert nicht.
+  await page.goto("/acme/roadmap");
+  const marker = page.getByRole("gridcell").locator(`a[title^="${name}"]`);
+  await expect(marker).toHaveAttribute("title", `${name} · Nov 20, 2026`);
+  await marker.scrollIntoViewIfNeeded();
+  const box = (await marker.boundingBox())!;
+  const saved = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/graphql") &&
+      (r.request().postData() ?? "").includes("PlanningMilestoneMove"),
+  );
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 35, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  expect(((await (await saved).json()) as { errors?: unknown }).errors).toBeUndefined();
+  await expect(marker).toHaveAttribute("title", `${name} · Nov 30, 2026`);
+  await expect(page).toHaveURL(/\/acme\/roadmap$/);
+
+  // Ein Klick öffnet weiterhin den Meilenstein, der Terminverlauf kennt die Verschiebung.
+  await page.reload();
+  await marker.click();
+  await expect(page).toHaveURL(/\/milestone\/[0-9a-f-]+$/);
+  await expect(page.getByLabel("Target date", { exact: true })).toHaveValue("2026-11-30");
+  await expect(page.getByRole("region", { name: "Target date history" })).toContainText(
+    "30 Nov 2026",
+  );
+  const milestonePage = page.url();
+
+  // Erwähnung im Statusbericht.
+  await page.goto(updates);
+  const form = page.getByRole("form", { name: "Post update" });
+  await form.getByLabel("Update text").fill("Termin verschoben: ");
+  await form.getByRole("button", { name: "Mention milestone" }).click();
+  await page.getByRole("menuitem", { name }).click();
+  await expect(form.getByLabel("Update text")).toHaveValue(new RegExp(`\\[${name}\\]\\(http`));
+  await form.getByRole("button", { name: "Post update" }).click();
+  await expect(form.getByLabel("Update text")).toHaveValue("");
+  await page.goto(milestonePage);
+  const mentions = page.getByRole("region", { name: "Status updates" });
+  await expect(mentions).toContainText("Termin verschoben");
+  await expect(mentions.getByRole("link", { name })).toHaveAttribute(
+    "href",
+    new RegExp(`${new URL(milestonePage).pathname}$`),
+  );
+
+  // Kalender-Abo: Der Link funktioniert ohne Anmeldung und lässt sich abschalten.
+  await page.goto("/acme/milestones");
+  await page.getByRole("button", { name: "Calendar" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: /Create (new )?link/ }).click();
+  const link = await dialog.getByLabel("Calendar link").inputValue();
+  const path = new URL(link).pathname;
+  const anon = await page.request.get(path, { headers: { cookie: "" } });
+  expect(anon.status()).toBe(200);
+  expect(anon.headers()["content-type"]).toContain("text/calendar");
+  const ics = (await anon.text()).replace(/\r\n /g, "");
+  expect(ics).toContain(`SUMMARY:${name} (${project})`);
+  expect(ics).toContain("DTSTART;VALUE=DATE:20261130");
+  await dialog.getByRole("button", { name: "Turn off" }).click();
+  await expect(dialog.getByRole("button", { name: "Create link" })).toBeVisible();
+  expect((await page.request.get(path)).status()).toBe(404);
 });
 
 // LIN-26: Projekt-Verweise im Text sind Chips und öffnen das Projekt.

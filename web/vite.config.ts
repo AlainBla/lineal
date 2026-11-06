@@ -16,6 +16,8 @@ const proxy = {
   // Datei-Upload (PUT) und signierte Downloads (GET) des Blob-Speichers.
   "/uploads": backend,
   "/files": backend,
+  // Kalender-Abo der Meilensteine.
+  "/calendar": backend,
   "/sync": { target: backend, ws: true },
   // Echtzeit-Mitbearbeitung (WebSocket, WP36).
   "/collab": { target: backend, ws: true },

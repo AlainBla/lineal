@@ -53,6 +53,7 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/invite/accept", post(rest::auth::accept_invite))
         .route("/uploads/{token}", put(blob::upload))
         .route("/files/{token}", get(blob::download))
+        .route("/calendar/{file}", get(calendar_feed))
         .route("/oauth/register", post(oauth::register))
         .route(
             "/oauth/authorize",
@@ -89,6 +90,34 @@ async fn graphql_post(
             gql::execute(&state.schema, &auth, rate.map(|Extension(r)| r), request).await
         }
         Err(rejection) => gql::bad_body(&rejection),
+    }
+}
+
+/// `GET /calendar/<token>.ics`: Kalender-Feed der Meilensteine. Der Token steht in der URL, weil
+/// Kalender-Apps keine Header setzen; ein unbekannter Token liefert 404.
+async fn calendar_feed(
+    State(state): State<ApiState>,
+    axum::extract::Path(file): axum::extract::Path<String>,
+) -> Response {
+    let found = match file.strip_suffix(".ics") {
+        Some(token) => state.app.calendar_feed_ics(token).await,
+        None => Ok(None),
+    };
+    match found {
+        Ok(Some(ics)) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/calendar; charset=utf-8",
+                ),
+                (axum::http::header::CACHE_CONTROL, "private, no-store"),
+                (axum::http::header::REFERRER_POLICY, "no-referrer"),
+            ],
+            ics,
+        )
+            .into_response(),
+        Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
+        Err(e) => crate::error::ApiError(e).into_response(),
     }
 }
 

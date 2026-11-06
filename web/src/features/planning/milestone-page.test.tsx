@@ -112,6 +112,7 @@ const OTHER_DOC = { id: "d-2", title: "Konzept", slugId: "def456def456" };
 
 const handlers = (over: Record<string, unknown> = {}) => ({
   PlanningProject: () => ({ project: PROJECT }),
+  PlanningProjectUpdates: () => ({ projectUpdates: [] }),
   ViewIssuesList: () => ({ viewIssues: { nodes: ISSUES, hasNextPage: false, endCursor: null } }),
   TargetComments: () => ({
     comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -177,6 +178,40 @@ describe("Meilenstein-Detailseite (LIN-25)", () => {
     expect(labels[1]).toContain("Todo");
     await user.click(within(section).getByRole("button", { name: /Done/ }));
     expect(within(section).getByText("Inhalte migriert")).toBeInTheDocument();
+  });
+
+  it("zeigt nur Statusberichte, die diesen Meilenstein erwähnen", async () => {
+    const update = (id: string, body: string) => ({
+      id,
+      body,
+      health: "atRisk",
+      isStale: false,
+      editedAt: null,
+      createdAt: "2026-11-01T10:00:00Z",
+      user: { id: "u-1", name: "Alice", displayName: "alice" },
+    });
+    mockGraphql(
+      handlers({
+        PlanningProjectUpdates: () => ({
+          projectUpdates: [
+            update("u1", `Siehe [Beta](https://x.test/acme/project/P/milestone/${MILESTONE.id}).`),
+            update("u2", "Anderes Thema"),
+          ],
+        }),
+      }),
+    );
+    await open();
+    const section = await screen.findByRole("region", { name: "Status updates" });
+    expect(within(section).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(section).getByText("Alice")).toBeInTheDocument();
+    expect(within(section).queryByText(/Anderes Thema/)).toBeNull();
+  });
+
+  it("zeigt ohne Erwähnung keinen Abschnitt für Statusberichte", async () => {
+    const gql = mockGraphql(handlers());
+    await open();
+    await waitFor(() => expect(gql.of("PlanningProjectUpdates")).toHaveLength(1));
+    expect(screen.queryByRole("region", { name: "Status updates" })).toBeNull();
   });
 
   it("fragt die Issues nur dieses Meilensteins ab", async () => {

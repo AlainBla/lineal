@@ -67,6 +67,77 @@ const KEY_COLS: &str = "id, user_id, label, key_prefix, scopes, team_ids, expire
 
 #[async_trait]
 impl AuthRepo for PgTx {
+    async fn find_calendar_feed_principal(&mut self, hash: &str) -> AppResult<Option<Principal>> {
+        let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+            "SELECT f.organization_id, u.id, u.role FROM calendar_feed f \
+             JOIN \"user\" u ON u.organization_id = f.organization_id AND u.id = f.user_id \
+             JOIN organization o ON o.id = f.organization_id AND o.archived_at IS NULL \
+             WHERE f.token_hash = $1 AND u.active AND u.status = 'active' AND u.archived_at IS NULL",
+        )
+        .bind(hash)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let Some((org, user, role)) = row else {
+            return Ok(None);
+        };
+        let role = parse_role(&role)?;
+        Ok(Some(Principal {
+            kind: CredentialKind::ApiKey,
+            org_id: OrgId(org),
+            actor: actor_for(UserId(user), role),
+            scopes: Scopes {
+                read: true,
+                write: false,
+                admin: false,
+            },
+            team_scope: None,
+        }))
+    }
+
+    async fn set_calendar_feed(
+        &mut self,
+        user: UserId,
+        hash: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO calendar_feed (organization_id, user_id, token_hash, created_at) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, user_id) \
+             DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .bind(hash)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn delete_calendar_feed(&mut self, user: UserId) -> AppResult<()> {
+        sqlx::query("DELETE FROM calendar_feed WHERE organization_id = $1 AND user_id = $2")
+            .bind(self.org.0)
+            .bind(user.0)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn has_calendar_feed(&mut self, user: UserId) -> AppResult<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM calendar_feed \
+             WHERE organization_id = $1 AND user_id = $2)",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn find_principal_by_token_hash(
         &mut self,
         hash: &str,

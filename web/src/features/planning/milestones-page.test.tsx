@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -67,6 +67,45 @@ describe("Alle Meilensteine (LIN-25)", () => {
     await user.click(screen.getByRole("button", { name: "Show completed" }));
     expect(screen.getByRole("link", { name: "Fertig" })).toBeInTheDocument();
     expect(within(screen.getByRole("table")).getAllByText("Checkout").length).toBeGreaterThan(1);
+  });
+
+  describe("Kalender-Abo", () => {
+    const setup = (enabled: boolean) => {
+      const gql = mockGraphql({
+        PlanningProjects: () => ({
+          projectsPage: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }),
+        CalendarFeedEnabled: () => ({ calendarFeedEnabled: enabled }),
+        CalendarFeedRotate: () => ({ calendarFeedRotate: "https://x.test/calendar/t.ics" }),
+        CalendarFeedRevoke: () => ({ calendarFeedRevoke: true }),
+      });
+      return gql;
+    };
+    const open = async () => {
+      const user = userEvent.setup();
+      await renderWithApp(<MilestonesPage ws="acme" />, newClient(), "/acme/milestones");
+      await user.click(await screen.findByRole("button", { name: "Calendar" }));
+      return user;
+    };
+
+    it("legt den Link an und zeigt ihn einmal", async () => {
+      const gql = setup(false);
+      const user = await open();
+      await user.click(await screen.findByRole("button", { name: "Create link" }));
+      expect(await screen.findByLabelText("Calendar link")).toHaveValue(
+        "https://x.test/calendar/t.ics",
+      );
+      expect(gql.of("CalendarFeedRotate")).toHaveLength(1);
+    });
+
+    it("zeigt einen aktiven Link nicht erneut und kann ihn abschalten", async () => {
+      const gql = setup(true);
+      const user = await open();
+      expect(await screen.findByRole("button", { name: "Create new link" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Calendar link")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Turn off" }));
+      await waitFor(() => expect(gql.of("CalendarFeedRevoke")).toHaveLength(1));
+    });
   });
 
   it("sagt, wenn es keine offenen Meilensteine gibt", async () => {

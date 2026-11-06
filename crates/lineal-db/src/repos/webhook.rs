@@ -399,6 +399,28 @@ async fn load_entity(
             }
             Some((teams, data, format!("project/{slug}")))
         }
+        "ProjectMilestone" => {
+            let Some(row) = row_json(&mut *c, "project_milestone", org, id).await? else {
+                return Ok(None);
+            };
+            let Some(project) = str_id(&row, "project_id") else {
+                return Ok(None);
+            };
+            let teams = project_teams(&mut *c, org, project).await?;
+            let slug: Option<String> = sqlx::query_scalar(
+                "SELECT slug_id FROM project WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(org)
+            .bind(project)
+            .fetch_optional(&mut *c)
+            .await
+            .map_err(db_err)?;
+            let path = slug
+                .map(|s| format!("project/{s}/milestone/{id}"))
+                .unwrap_or_default();
+            // Der Snapshot nennt Issues aller Teams, ein Webhook sieht aber nur einen Teil davon.
+            Some((teams, camelize(row, &["snapshot", "sort_order"]), path))
+        }
         "ProjectUpdate" => {
             let Some(row) = row_json(&mut *c, "project_update", org, id).await? else {
                 return Ok(None);

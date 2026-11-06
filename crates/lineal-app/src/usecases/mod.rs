@@ -7,6 +7,7 @@ pub mod auth;
 pub mod automation;
 pub mod bot;
 pub mod branch_name;
+pub mod calendar;
 pub mod comment;
 pub mod cycle;
 pub mod document;

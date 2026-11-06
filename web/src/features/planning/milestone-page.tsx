@@ -42,11 +42,14 @@ import {
   useDeleteMilestone,
   useMilestoneSnapshot,
   useProject,
+  useProjectUpdates,
   useReopenMilestone,
   useUpdateMilestone,
 } from "./queries";
 import { ResourcesSection } from "./resources";
 import {
+  HealthBadge,
+  mentionsMilestone,
   MILESTONE_COLOR,
   MilestoneBar,
   MilestoneStatusBadge,
@@ -255,6 +258,35 @@ function FrozenIssues({ ws, project, id }: { ws: string; project: Project; id: s
             </Link>
             <span className="min-w-0 flex-1 truncate">{i.title}</span>
             <span className="shrink-0 text-xs text-muted-foreground">{i.stateName}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Statusberichte des Projekts, die diesen Meilenstein erwähnen; ohne Treffer kein Abschnitt. */
+function MilestoneUpdates({ ws, project, id }: { ws: string; project: Project; id: string }) {
+  const updates = useProjectUpdates(project.id);
+  const mentions = (updates.data ?? []).filter((u) => mentionsMilestone(u.body, id));
+  if (mentions.length === 0) return null;
+  return (
+    <section aria-label="Status updates" className="flex flex-col gap-2">
+      <h2 className="text-sm font-medium">Status updates</h2>
+      <ul className="flex flex-col gap-2">
+        {mentions.map((u) => (
+          <li key={u.id} className="rounded-md border border-border p-3">
+            <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <HealthBadge health={u.health} />
+              <span>{u.user?.name ?? "Someone"}</span>
+              <Link
+                to={`/${ws}/project/${project.identifier}/updates` as "/"}
+                className="hover:underline"
+              >
+                {relativeTime(u.createdAt)}
+              </Link>
+            </div>
+            <RichEditor key={u.id} value={u.body} editable={false} ariaLabel="Update" />
           </li>
         ))}
       </ul>
@@ -549,6 +581,7 @@ function Detail({
             ) : (
               <MilestoneIssues ws={ws} project={project} milestone={m} />
             )}
+            <MilestoneUpdates ws={ws} project={project} id={m.id} />
             <CommentsSection target={{ projectMilestoneId: m.id }} title="Activity" />
           </div>
         </div>
