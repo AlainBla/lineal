@@ -263,7 +263,25 @@ async fn comment_scope(c: Pool<'_>, org: Uuid, row: &Value) -> AppResult<(Vec<Uu
             Some(p) => project_teams(&mut *c, org, p).await?,
             None => match str_id(row, "document_id") {
                 Some(d) => document_teams(&mut *c, org, d).await?,
-                None => Vec::new(),
+                // Kommentar an einer Initiative oder ihrem Update: Lead-Team (docs/04 §4.6).
+                None => {
+                    let initiative = match str_id(row, "initiative_id") {
+                        Some(i) => Some(i),
+                        None => match str_id(row, "initiative_update_id") {
+                            Some(u) => sqlx::query_scalar(
+                                "SELECT initiative_id FROM initiative_update \
+                                 WHERE organization_id = $1 AND id = $2",
+                            )
+                            .bind(org)
+                            .bind(u)
+                            .fetch_optional(&mut *c)
+                            .await
+                            .map_err(db_err)?,
+                            None => None,
+                        },
+                    };
+                    initiative_teams(&mut *c, org, initiative).await?
+                }
             },
         }
     };
@@ -465,8 +483,11 @@ async fn load_entity(
                 return Ok(None);
             };
             let slug = row["slug_id"].as_str().unwrap_or_default().to_string();
+            // Privates Lead-Team: das Event trägt dieses Team, damit `allPublicTeams`-Hooks es
+            // nicht erhalten (docs/04 §4.6, docs/09 §4.1). Ohne Lead-Team workspace-weit.
+            let teams = str_id(&row, "lead_team_id").into_iter().collect();
             Some((
-                Vec::new(),
+                teams,
                 camelize(
                     row,
                     &[
@@ -483,11 +504,8 @@ async fn load_entity(
             let Some(row) = row_json(&mut *c, "initiative_update", org, id).await? else {
                 return Ok(None);
             };
-            Some((
-                Vec::new(),
-                camelize(row, &["progress_snapshot"]),
-                String::new(),
-            ))
+            let teams = initiative_teams(&mut *c, org, str_id(&row, "initiative_id")).await?;
+            Some((teams, camelize(row, &["progress_snapshot"]), String::new()))
         }
         // Whitelist: nie E-Mail, Passwort-Hash oder persönliche Einstellungen.
         "User" => {
@@ -508,17 +526,45 @@ async fn load_entity(
     })
 }
 
+/// Team-Zuordnung einer Initiative für Webhooks: ihr Lead-Team (privat → nur dieses Team erhält
+/// das Event), ohne Lead-Team workspace-weit (leer). `None` oder gelöscht → leer.
+async fn initiative_teams(
+    c: Pool<'_>,
+    org: Uuid,
+    initiative: Option<Uuid>,
+) -> AppResult<Vec<Uuid>> {
+    let Some(i) = initiative else {
+        return Ok(Vec::new());
+    };
+    let lead: Option<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT lead_team_id FROM initiative WHERE organization_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(i)
+    .fetch_optional(&mut *c)
+    .await
+    .map_err(db_err)?;
+    Ok(lead.flatten().into_iter().collect())
+}
+
 #[allow(clippy::type_complexity)]
 async fn document_teams(c: Pool<'_>, org: Uuid, doc: Uuid) -> AppResult<Vec<Uuid>> {
-    let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT team_id, issue_id, project_id, cycle_id FROM document WHERE organization_id = $1 AND id = $2",
+    let row: Option<(
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+    )> = sqlx::query_as(
+        "SELECT team_id, issue_id, project_id, initiative_id, cycle_id \
+             FROM document WHERE organization_id = $1 AND id = $2",
     )
     .bind(org)
     .bind(doc)
     .fetch_optional(&mut *c)
     .await
     .map_err(db_err)?;
-    let Some((team, issue, project, cycle)) = row else {
+    let Some((team, issue, project, initiative, cycle)) = row else {
         return Ok(Vec::new());
     };
     if let Some(t) = team {
@@ -529,6 +575,9 @@ async fn document_teams(c: Pool<'_>, org: Uuid, doc: Uuid) -> AppResult<Vec<Uuid
     }
     if let Some(p) = project {
         return project_teams(&mut *c, org, p).await;
+    }
+    if initiative.is_some() {
+        return initiative_teams(&mut *c, org, initiative).await;
     }
     if let Some(cy) = cycle {
         return sqlx::query_scalar(

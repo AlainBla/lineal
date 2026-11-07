@@ -328,20 +328,22 @@ impl CommentRepo for PgTx {
                     None => Ok(None),
                 }
             }
-            ParentRef::Initiative(_) => Ok(self
-                .exists(
-                    "SELECT 1 FROM initiative WHERE organization_id = $1 AND id = $2 AND NOT trashed",
-                    id,
+            ParentRef::Initiative(_) => self.initiative_scope(id).await,
+            ParentRef::InitiativeUpdate(_) => {
+                let initiative: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT initiative_id FROM initiative_update \
+                     WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL",
                 )
-                .await?
-                .then_some(ParentScope::Workspace)),
-            ParentRef::InitiativeUpdate(_) => Ok(self
-                .exists(
-                    "SELECT 1 FROM initiative_update WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL",
-                    id,
-                )
-                .await?
-                .then_some(ParentScope::Workspace)),
+                .bind(self.org.0)
+                .bind(id)
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+                match initiative {
+                    Some(i) => self.initiative_scope(i).await,
+                    None => Ok(None),
+                }
+            }
             ParentRef::Document(_) => {
                 let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> =
                     sqlx::query_as(
@@ -362,8 +364,8 @@ impl CommentRepo for PgTx {
                 if let Some(p) = project {
                     return self.project_scope(p).await;
                 }
-                if initiative.is_some() {
-                    return Ok(Some(ParentScope::Workspace));
+                if let Some(i) = initiative {
+                    return self.initiative_scope(i).await;
                 }
                 Ok(team.map(|t| ParentScope::Teams(vec![TeamId(t)])))
             }
@@ -731,6 +733,22 @@ impl PgTx {
     async fn project_scope(&mut self, project: Uuid) -> AppResult<Option<ParentScope>> {
         let teams = self.project_team_ids(project).await?;
         Ok((!teams.is_empty()).then_some(ParentScope::Teams(teams)))
+    }
+
+    /// Sichtbarkeitsbereich einer Initiative (docs/04 §4.6): Lead-Team, sonst workspace-weit.
+    async fn initiative_scope(&mut self, initiative: Uuid) -> AppResult<Option<ParentScope>> {
+        let lead: Option<Option<Uuid>> = sqlx::query_scalar(
+            "SELECT lead_team_id FROM initiative \
+             WHERE organization_id = $1 AND id = $2 AND NOT trashed",
+        )
+        .bind(self.org.0)
+        .bind(initiative)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(lead.map(|t| ParentScope::Initiative {
+            lead_team: t.map(TeamId),
+        }))
     }
 
     /// Projekt oder Initiative per UUID, Kennung (`P-ENG-7`, `I-4`), Slug oder Namen.

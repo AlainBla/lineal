@@ -173,6 +173,22 @@ pub(crate) fn authorize(
                 );
             }
         }
+        ParentScope::Initiative { lead_team } => {
+            // Gäste sehen Initiativen nie (docs/04 §4.6); ViewInitiatives weist sie ab.
+            snap.require_workspace(ctx, Action::ViewInitiatives)?;
+            // Privates Lead-Team: nur sichtbar für Team-Mitglieder; sonst „nicht gefunden“.
+            if let Some(t) = lead_team
+                && !snap.visible_team_ids().contains(t)
+            {
+                return Err(AppError::not_found("Could not find referenced Initiative."));
+            }
+            if write && !matches!(ctx.actor, Actor::System) && !ctx.scopes.write {
+                return Err(
+                    AppError::forbidden("Token scope does not allow write operations.")
+                        .with_details(json!({ "reason": "insufficient_scope", "scope": "write" })),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -388,6 +404,16 @@ async fn user_can_access(
 ) -> AppResult<bool> {
     match scope {
         ParentScope::Workspace => Ok(role != UserRole::Guest),
+        ParentScope::Initiative { lead_team } => {
+            // Gäste nie (docs/04 §4.6); privates Lead-Team nur für Mitglieder.
+            if role == UserRole::Guest {
+                return Ok(false);
+            }
+            let Some(t) = lead_team else { return Ok(true) };
+            let memberships = tx.teams().list_memberships_of_user(user).await?;
+            let view = crate::policy::ActorView::new(Actor::User { id: user, role }, &memberships);
+            Ok(compute_visible_team_ids(&view, tree).contains(t))
+        }
         ParentScope::Teams(teams) => {
             let memberships = tx.teams().list_memberships_of_user(user).await?;
             let view = crate::policy::ActorView::new(Actor::User { id: user, role }, &memberships);

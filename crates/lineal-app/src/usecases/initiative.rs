@@ -667,6 +667,11 @@ impl App {
                 }
                 patch.priority = input.priority;
                 patch.owner_id = owner;
+                // Das Lead-Team zu entfernen macht die Initiative workspace-weit (docs/04 §4.6) und
+                // verlangt dasselbe Recht wie das Anlegen ohne Lead-Team (S-16).
+                if matches!(lead_team, Some(None)) && cur.lead_team_id.is_some() {
+                    snap.require_initiative_without_lead_team(ctx)?;
+                }
                 patch.lead_team_id = lead_team;
                 if let Some(s) = status
                     && s != cur.status

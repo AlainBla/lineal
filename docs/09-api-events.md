@@ -639,8 +639,8 @@ Rechte: Anlegen/Ändern nur Workspace-Admins oder OAuth-Apps mit Scope `admin`. 
 | `ProjectUpdate` | `create`, `update`, `remove` | wie Project |
 | `Cycle` | `create`, `update`, `remove` | `Cycle.teamId` |
 | `Document` | `create`, `update`, `remove` | Team des Elternobjekts |
-| `Initiative` | `create`, `update`, `remove` | workspace-weit (nur bei `allPublicTeams`) |
-| `InitiativeUpdate` | `create`, `update`, `remove` | workspace-weit |
+| `Initiative` | `create`, `update`, `remove` | Lead-Team (docs/04 §4.6): privates Lead-Team → nur team-gebundene Hooks dieses Teams; ohne Lead-Team workspace-weit (nur `allPublicTeams`) |
+| `InitiativeUpdate` | `create`, `update`, `remove` | wie `Initiative` (Lead-Team der Initiative) |
 | `User` | `create`, `update` | workspace-weit |
 | `IssueSLA` | `set`, `highRisk`, `breached` | Team des Issues; Payload enthält zusätzlich `issueData` |
 | `OAuthAuthorization` | `revoked` | nur an Webhooks der betroffenen OAuth-App; Payload mit `oauthClientId` |
@@ -909,9 +909,10 @@ on SyncAction a:
 | Issue, Comment, Attachment, Reaction, IssueRelation, IssueHistory | `team:<Issue.teamId>`; zusätzlich `user:<id>` für Nutzer mit `issueShare` (Issue, Kommentare, Anhänge und Reaktionen; Entzug → `D` an `user:<id>`) |
 | WorkflowState, Cycle, team-Label, Template (team) | `team:<teamId>` |
 | Project, ProjectMilestone, ProjectUpdate | `team:<t>` für jedes beteiligte Team; ohne Team `org:` |
-| Initiative, InitiativeUpdate, Workspace-Label, User, Team (Metadaten öffentlicher Teams) | `org:<orgId>` |
+| Initiative, InitiativeUpdate (sowie deren Dokumente und Kommentare) | privates/öffentliches Lead-Team → `iteam:<leadTeam>`; ohne Lead-Team `org` |
+| Workspace-Label, User, Team (Metadaten öffentlicher Teams) | `org:<orgId>` |
 
-> **Umsetzung:** Die Gruppe `org` erhalten Nicht-Gäste. Gäste sehen Workspace-Metadaten und Workspace-Labels über `orgpub` (trägt Organisation und Workspace-Labels, alle User) und Personen über `tmem:<teamId>` (`User`-Aktionen tragen `tmem:<t>` je Mitgliedschaft der Person; Gäste erhalten sie für ihre Mitglieds-Teams). Damit bleiben Verzeichnis und Labels live, ohne dass ein Gast Personen oder Daten fremder Teams erfährt. Zugestellt wird nur der Schnitt der Gruppen; `syncGroups` einer Aktion enthält nur die Gruppen des Empfängers.
+> **Umsetzung:** Die Gruppe `org` erhalten Nicht-Gäste. `iteam:<teamId>` (docs/04 §4.6) erhalten Nicht-Gäste für jedes sichtbare Team; so sehen Initiativen nur Nicht-Gäste, und solche mit privatem Lead-Team nur dessen Mitglieder. Gäste sehen Workspace-Metadaten und Workspace-Labels über `orgpub` (trägt Organisation und Workspace-Labels, alle User) und Personen über `tmem:<teamId>` (`User`-Aktionen tragen `tmem:<t>` je Mitgliedschaft der Person; Gäste erhalten sie für ihre Mitglieds-Teams). Damit bleiben Verzeichnis und Labels live, ohne dass ein Gast Personen, Initiativen oder Daten fremder Teams erfährt. Zugestellt wird nur der Schnitt der Gruppen; `syncGroups` einer Aktion enthält nur die Gruppen des Empfängers.
 | Team (privat) | `team:<teamId>` |
 | Notification, Favorite, private CustomView, NotificationSubscription | `user:<userId>` |
 | Document | Gruppen des Elternobjekts |

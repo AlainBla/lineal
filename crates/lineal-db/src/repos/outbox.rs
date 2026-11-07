@@ -478,6 +478,16 @@ fn issue_groups(issue: &str, team: &str) -> String {
     )
 }
 
+/// Sync-Gruppen einer Initiative (docs/04 §4.6): privates/öffentliches Lead-Team über die
+/// Gruppe `iteam:<team>` (nur Nicht-Gast-Mitglieder, siehe `allowed_groups`), ohne Lead-Team
+/// workspace-weit (`org`, das Gäste ebenfalls nicht erhalten). `lead` ist der SQL-Ausdruck der
+/// Lead-Team-ID (darf NULL sein).
+fn initiative_groups(lead: &str) -> String {
+    format!(
+        "CASE WHEN ({lead}) IS NULL THEN ARRAY['org'] ELSE ARRAY['iteam:' || ({lead})::text] END"
+    )
+}
+
 /// Sync-Gruppen eines Projekts: alle beteiligten Teams, ohne Team der gesamte Workspace.
 fn project_groups(project_id: &str) -> String {
     format!(
@@ -492,9 +502,13 @@ fn document_groups() -> String {
         "CASE WHEN d.issue_id IS NOT NULL THEN ARRAY['team:' || (SELECT di.team_id FROM issue di \
               WHERE di.id = d.issue_id)::text] \
             WHEN d.project_id IS NOT NULL THEN {} \
+            WHEN d.initiative_id IS NOT NULL THEN {} \
             WHEN d.team_id IS NOT NULL THEN ARRAY['team:' || d.team_id::text] \
             ELSE ARRAY['org'] END",
-        project_groups("d.project_id")
+        project_groups("d.project_id"),
+        initiative_groups(
+            "(SELECT di.lead_team_id FROM initiative di WHERE di.id = d.initiative_id)"
+        )
     )
 }
 
@@ -503,6 +517,7 @@ fn comment_groups() -> String {
     format!(
         "CASE WHEN c.issue_id IS NOT NULL THEN {} \
              WHEN COALESCE(c.project_id, pm.project_id, pu.project_id) IS NOT NULL THEN {} \
+             WHEN COALESCE(c.initiative_id, iu.initiative_id) IS NOT NULL THEN {} \
              WHEN c.document_id IS NOT NULL THEN {} \
              ELSE ARRAY['org'] END",
         issue_groups(
@@ -510,12 +525,17 @@ fn comment_groups() -> String {
             "(SELECT ci.team_id FROM issue ci WHERE ci.id = c.issue_id)"
         ),
         project_groups("COALESCE(c.project_id, pm.project_id, pu.project_id)"),
+        initiative_groups(
+            "(SELECT ci.lead_team_id FROM initiative ci \
+              WHERE ci.id = COALESCE(c.initiative_id, iu.initiative_id))"
+        ),
         document_groups()
     )
 }
 
 const COMMENT_JOINS: &str = "LEFT JOIN project_milestone pm ON pm.id = c.project_milestone_id \
      LEFT JOIN project_update pu ON pu.id = c.project_update_id \
+     LEFT JOIN initiative_update iu ON iu.id = c.initiative_update_id \
      LEFT JOIN document d ON d.id = c.document_id";
 
 /// SQL (`$1` = Workspace, `$2` = Array von Objekt-IDs) je Modell: liefert `(data jsonb, groups text[])`.
@@ -633,14 +653,20 @@ fn model_sql(model: &str) -> Option<String> {
             FROM project_update u WHERE u.organization_id = $1 AND u.id = ANY($2)",
             project_groups("u.project_id")
         ),
-        "Initiative" => "SELECT jsonb_build_object('id', n.id, 'name', n.name, \
-              'archivedAt', sync_ts(n.archived_at), 'updatedAt', sync_ts(n.updated_at)), ARRAY['org'] \
-            FROM initiative n WHERE n.organization_id = $1 AND n.id = ANY($2)"
-            .to_owned(),
-        "InitiativeUpdate" => "SELECT jsonb_build_object('id', u.id, 'initiativeId', u.initiative_id, \
-              'userId', u.user_id, 'updatedAt', sync_ts(u.updated_at)), ARRAY['org'] \
-            FROM initiative_update u WHERE u.organization_id = $1 AND u.id = ANY($2)"
-            .to_owned(),
+        "Initiative" => format!(
+            "SELECT jsonb_build_object('id', n.id, 'name', n.name, \
+              'archivedAt', sync_ts(n.archived_at), 'updatedAt', sync_ts(n.updated_at)), {} \
+            FROM initiative n WHERE n.organization_id = $1 AND n.id = ANY($2)",
+            initiative_groups("n.lead_team_id")
+        ),
+        "InitiativeUpdate" => format!(
+            "SELECT jsonb_build_object('id', u.id, 'initiativeId', u.initiative_id, \
+              'userId', u.user_id, 'updatedAt', sync_ts(u.updated_at)), {} \
+            FROM initiative_update u WHERE u.organization_id = $1 AND u.id = ANY($2)",
+            initiative_groups(
+                "(SELECT ni.lead_team_id FROM initiative ni WHERE ni.id = u.initiative_id)"
+            )
+        ),
         "Document" => format!(
             "SELECT jsonb_build_object('id', d.id, 'title', d.title, 'icon', d.icon, 'color', d.color, \
               'projectId', d.project_id, 'issueId', d.issue_id, 'initiativeId', d.initiative_id, \

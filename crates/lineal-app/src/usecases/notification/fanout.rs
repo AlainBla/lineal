@@ -270,7 +270,7 @@ impl<'a> Fan<'a> {
                 {
                     return Ok(false);
                 }
-                self.target_initiative(id);
+                self.target_initiative(id).await?;
             }
             "document" => match self.tx.notifications().document_facts(id).await? {
                 Some(f) if !f.trashed => {
@@ -313,11 +313,20 @@ impl<'a> Fan<'a> {
         Ok(())
     }
 
-    fn target_initiative(&mut self, initiative: Uuid) {
+    async fn target_initiative(&mut self, initiative: Uuid) -> AppResult<()> {
         self.refs.target_type = "initiative";
         self.refs.initiative_id = Some(initiative);
-        self.teams = Vec::new();
+        // Lead-Team (docs/04 §4.6): privat → nur Mitglieder; `workspace_only` bleibt gesetzt, damit
+        // Gäste nie benachrichtigt werden. Ohne Lead-Team (leer) alle Nicht-Gäste.
+        let lead = self
+            .tx
+            .initiatives()
+            .get(lineal_domain::ids::InitiativeId(initiative))
+            .await?
+            .and_then(|i| i.lead_team_id);
+        self.teams = lead.into_iter().collect();
         self.workspace_only = true;
+        Ok(())
     }
 
     /// Abo nachführen, aber nur für User, die das Issue sehen.
@@ -810,7 +819,7 @@ impl<'a> Fan<'a> {
             {
                 return Ok(false);
             }
-            self.target_initiative(initiative);
+            self.target_initiative(initiative).await?;
             self.add_all(mentioned.iter().copied(), "initiativeCommentMention");
             if is_new {
                 let notifications = self.tx.notifications();
@@ -833,7 +842,7 @@ impl<'a> Fan<'a> {
             else {
                 return Ok(false);
             };
-            self.target_initiative(u.initiative_id);
+            self.target_initiative(u.initiative_id).await?;
             self.refs.initiative_update_id = Some(u.id);
             self.add_all(mentioned.iter().copied(), "initiativeUpdateCommentMention");
             if is_new {
@@ -954,7 +963,7 @@ impl<'a> Fan<'a> {
                 {
                     return Ok(false);
                 }
-                self.target_initiative(initiative);
+                self.target_initiative(initiative).await?;
                 if let Some(a) = c.author_id {
                     self.add(a, "initiativeCommentReaction");
                 }
@@ -969,7 +978,7 @@ impl<'a> Fan<'a> {
                 else {
                     return Ok(false);
                 };
-                self.target_initiative(u.initiative_id);
+                self.target_initiative(u.initiative_id).await?;
                 self.refs.initiative_update_id = Some(u.id);
                 if let Some(a) = c.author_id {
                     self.add(a, "initiativeUpdateCommentReaction");
@@ -1012,7 +1021,7 @@ impl<'a> Fan<'a> {
             else {
                 return Ok(false);
             };
-            self.target_initiative(u.initiative_id);
+            self.target_initiative(u.initiative_id).await?;
             self.refs.initiative_update_id = Some(u.id);
             self.add(u.author_id, "initiativeUpdateReaction");
             return Ok(true);
@@ -1155,7 +1164,7 @@ impl<'a> Fan<'a> {
         let Some(i) = self.tx.notifications().initiative_facts(initiative).await? else {
             return Ok(false);
         };
-        self.target_initiative(initiative);
+        self.target_initiative(initiative).await?;
         self.dedup_override = Some(format!("once:initiative:{initiative}"));
         if owner_new && let Some(owner) = i.owner_id {
             self.add(owner, "initiativeAddedAsOwner");
@@ -1181,7 +1190,7 @@ impl<'a> Fan<'a> {
             return Ok(false);
         };
         self.fallback_actor(ev.origin, Some(u.author_id));
-        self.target_initiative(u.initiative_id);
+        self.target_initiative(u.initiative_id).await?;
         self.refs.initiative_update_id = Some(u.id);
         self.dedup_override = Some(format!("once:initiativeUpdate:{}", u.id));
         let mentioned = self.mention_users(&u.body).await?;

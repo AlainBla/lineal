@@ -969,10 +969,18 @@ impl NotificationRepo for PgTx {
     }
 
     async fn document_facts(&mut self, id: Uuid) -> AppResult<Option<DocumentFacts>> {
-        type Row = (Option<Uuid>, bool, Option<Uuid>, Option<Uuid>, Option<Uuid>);
+        type Row = (
+            Option<Uuid>,
+            bool,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<Uuid>,
+        );
         let row: Option<Row> = sqlx::query_as(
             "SELECT d.creator_id, d.trashed, \
-                    (SELECT i.team_id FROM issue i WHERE i.id = d.issue_id), d.project_id, d.team_id \
+                    (SELECT i.team_id FROM issue i WHERE i.id = d.issue_id), d.project_id, \
+                    (SELECT n.lead_team_id FROM initiative n WHERE n.id = d.initiative_id), d.team_id \
              FROM document d WHERE d.organization_id = $1 AND d.id = $2",
         )
         .bind(self.org.0)
@@ -980,9 +988,12 @@ impl NotificationRepo for PgTx {
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        let Some((creator, trashed, issue_team, project, team)) = row else {
+        let Some((creator, trashed, issue_team, project, initiative_lead, team)) = row else {
             return Ok(None);
         };
+        // Initiative-Dokument (docs/04 §4.6): Lead-Team, und nie an Gäste – wie bei Initiativen
+        // selbst über `workspace_only`.
+        let mut initiative_doc = false;
         let teams: Vec<Uuid> = if let Some(t) = issue_team {
             vec![t]
         } else if let Some(p) = project {
@@ -994,10 +1005,13 @@ impl NotificationRepo for PgTx {
             .fetch_all(&mut *self.tx)
             .await
             .map_err(db_err)?
+        } else if let Some(lead) = initiative_lead {
+            initiative_doc = true;
+            vec![lead]
         } else {
             team.into_iter().collect()
         };
-        let workspace_only = teams.is_empty();
+        let workspace_only = initiative_doc || teams.is_empty();
         Ok(Some(DocumentFacts {
             id,
             creator_id: creator.map(UserId),

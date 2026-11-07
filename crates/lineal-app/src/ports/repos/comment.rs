@@ -75,8 +75,13 @@ impl ParentRef {
 pub enum ParentScope {
     /// Alle diesen Teams (Issue: eines; Projekt: alle Teams des Projekts).
     Teams(Vec<TeamId>),
-    /// Workspaceweit (Initiativen und ihre Updates).
+    /// Workspaceweit. Wird derzeit nicht mehr erzeugt (teamlose Projekte liefern `None`,
+    /// Initiativen die Variante `Initiative`); als Rückfallebene erhalten.
     Workspace,
+    /// Eine Initiative, ihr Update oder ihr Dokument (docs/04 §4.6): nur Nicht-Gäste, und bei
+    /// privatem Lead-Team nur Mitglieder dieses Teams. `None` = kein Lead-Team (workspace-weit
+    /// für Nicht-Gäste).
+    Initiative { lead_team: Option<TeamId> },
 }
 
 /// Ein Kommentar.

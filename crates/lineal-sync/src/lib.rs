@@ -663,16 +663,22 @@ fn allowed_groups(snap: &PolicySnapshot, ctx: &RequestCtx) -> Vec<String> {
     let mut groups: Vec<String> = visible.iter().map(|t| format!("team:{}", t.0)).collect();
     // Workspace-Metadaten und Workspace-Labels sehen alle, auch Gäste.
     groups.push("orgpub".to_owned());
+    // Nicht-Gäste sehen Initiativen ihrer sichtbaren Teams (docs/04 §4.6): `iteam:<team>`.
+    let add_initiative_groups = |groups: &mut Vec<String>| {
+        groups.extend(visible.iter().map(|t| format!("iteam:{}", t.0)));
+    };
     if let Actor::User { id, role } = ctx.actor {
         if role == UserRole::Guest {
             // Gäste sehen nur Personen ihrer eigenen Teams (docs/02 §6.5).
             groups.extend(visible.iter().map(|t| format!("tmem:{}", t.0)));
         } else {
             groups.push("org".to_owned());
+            add_initiative_groups(&mut groups);
         }
         groups.push(format!("user:{}", id.0));
     } else if let Actor::App { id } = ctx.actor {
         groups.push("org".to_owned());
+        add_initiative_groups(&mut groups);
         groups.push(format!("user:{}", id.0));
     }
     groups
