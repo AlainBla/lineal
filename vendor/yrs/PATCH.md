@@ -1,4 +1,4 @@
-# Vendored yrs 0.25.0 (MIT) mit zwei Korrektur-Patches
+# Vendored yrs 0.25.0 (MIT) mit Korrektur-Patches
 
 Quelle: crates.io `yrs` 0.25.0 (rustc 1.93 uebersetzt die neueren Versionen 0.27/0.28 wegen
 `if let`-Guards nicht; 0.26 enthaelt Fehler 1 noch). Manifest: Dev-Abhaengigkeiten und Benches
@@ -13,7 +13,11 @@ entfernt. Der Fund stammt aus dem Zufallstest `fuzz_two_clients_converge_without
    bereits aufgeraeumt, lokal leben die Eintraege noch), blieben alle folgenden Eintraege
    ungeloescht: Server und Browser divergierten dauerhaft. Die Schleife laeuft jetzt immer.
 
-Beide Stellen sind mit `LINEAL-PATCH` markiert. Entfernen, sobald auf eine yrs-Version mit beiden
+3. `src/transaction.rs`, `delete`, und `src/block.rs`, `Item::gc`: Arbeitsliste statt Rekursion. Ein
+   Update von rund 340 KB mit 40.000 verschachtelten Elementen hat den Stack gesprengt und den Server
+   beendet (`catch_unwind` greift dabei nicht). Test: `crates/lineal-sync/tests/yrs_dos.rs`.
+
+Die Stellen sind mit `LINEAL-PATCH` markiert. Entfernen, sobald auf eine yrs-Version mit diesen
 Korrekturen aktualisiert werden kann (dann in `crates/lineal-app/Cargo.toml` wieder `yrs = "x"`
 und `exclude` im Workspace streichen).
 Lizenz: MIT (Autoren: Kevin Jahns, Bartosz Sypytkowski u. a.).

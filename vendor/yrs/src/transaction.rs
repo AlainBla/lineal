@@ -712,7 +712,26 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, mut item: ItemPtr) -> bool {
+    pub(crate) fn delete(&mut self, item: ItemPtr) -> bool {
+        // LINEAL-PATCH: Arbeitsliste statt Rekursion. Die Tiefe steuert der Absender eines Updates,
+        // und ein Stack-Überlauf beendet den Prozess. Reihenfolge wie zuvor: Tiefensuche, Pre-Order.
+        let mut pending = Vec::new();
+        let result = self.delete_one(item, &mut pending);
+        while let Some(ptr) = pending.pop() {
+            let id = *ptr.id();
+            if !self.delete_one(ptr, &mut pending) {
+                // Whis will be gc'd later and we want to merge it if possible
+                // We try to merge all deleted items after each transaction,
+                // but we have no knowledge about that this needs to be merged
+                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
+                self.merge_blocks.push(id);
+            }
+        }
+        result
+    }
+
+    /// Löscht genau ein Element und legt seine Kinder auf `pending`.
+    fn delete_one(&mut self, mut item: ItemPtr, pending: &mut Vec<ItemPtr>) -> bool {
         let mut recurse = Vec::new();
         let mut result = false;
 
@@ -777,16 +796,7 @@ impl<'doc> TransactionMut<'doc> {
             result = true;
         }
 
-        for &ptr in recurse.iter() {
-            let id = *ptr.id();
-            if !self.delete(ptr) {
-                // Whis will be gc'd later and we want to merge it if possible
-                // We try to merge all deleted items after each transaction,
-                // but we have no knowledge about that this needs to be merged
-                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                self.merge_blocks.push(id);
-            }
-        }
+        pending.extend(recurse.into_iter().rev());
 
         result
     }

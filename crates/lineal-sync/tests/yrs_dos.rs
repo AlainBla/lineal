@@ -74,3 +74,55 @@ fn invalid_utf8_in_any_string_is_rejected() {
     let ok = [119u8, 2, b'h', b'i'];
     assert!(Any::decode(&mut Cursor::new(&ok)).is_ok());
 }
+
+/// Ein tief verschachtelter XML-Baum als Update. Gebaut auf großem Stack, damit nur die Empfängerseite
+/// geprüft wird.
+fn nested_tree(depth: usize, root: &'static str, delete: bool) -> Vec<u8> {
+    use yrs::{Doc, Options, ReadTxn, StateVector, Transact, XmlElementPrelim, XmlFragment};
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || {
+            let doc = Doc::with_options(Options {
+                client_id: 1,
+                skip_gc: true,
+                ..Options::default()
+            });
+            let frag = doc.get_or_insert_xml_fragment(root);
+            {
+                let mut txn = doc.transact_mut();
+                let mut el = frag.insert(&mut txn, 0, XmlElementPrelim::empty("a"));
+                for _ in 1..depth {
+                    el = el.insert(&mut txn, 0, XmlElementPrelim::empty("a"));
+                }
+            }
+            if delete {
+                frag.remove_range(&mut doc.transact_mut(), 0, 1);
+            }
+            doc.transact()
+                .encode_state_as_update_v1(&StateVector::default())
+        })
+        .expect("thread")
+        .join()
+        .expect("build")
+}
+
+#[test]
+fn deleting_a_deep_tree_does_not_overflow_the_stack() {
+    use yrs::{Doc, Transact};
+    // Knapp unter `max_update_bytes`: Das Limit lässt so ein Update durch.
+    let update = nested_tree(60_000, "default", true);
+    assert!(update.len() < 512 * 1024, "{}", update.len());
+    // Ein Stack-Überlauf bricht den ganzen Prozess ab und damit diesen Test.
+    let applied = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let doc = Doc::new();
+            doc.get_or_insert_xml_fragment("default");
+            let update = Update::decode_v1(&update).expect("decode");
+            doc.transact_mut().apply_update(update).is_ok()
+        })
+        .expect("thread")
+        .join()
+        .expect("apply");
+    assert!(applied);
+}

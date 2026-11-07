@@ -15,6 +15,7 @@
 //! Tabelle voll (Massen-Spoofing), teilen sich neue Schlüssel einen Überlauf-Zähler (mit
 //! zehnfachem Limit) und es wird gewarnt.
 
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -246,17 +247,39 @@ impl LoginReservation {
     }
 }
 
+/// Hash der normalisierten Adresse: Die Schlüssel entstehen vor jeder Prüfung der Eingabe und
+/// bleiben im Speicher, ihre Größe darf also nicht vom Absender abhängen.
+fn account_hash(account: &str) -> String {
+    format!("{:x}", Sha256::digest(account.trim().to_lowercase()))
+}
+
 fn pair_key(account: &str, ip: &str) -> String {
-    format!("acct:{}|{ip}", account.trim().to_lowercase())
+    format!("acct:{}|{ip}", account_hash(account))
 }
 
 fn account_total_key(account: &str) -> String {
-    format!("acctt:{}", account.trim().to_lowercase())
+    format!("acctt:{}", account_hash(account))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn login_keys_stay_small_for_huge_accounts() {
+        let account = "a".repeat(2 * 1024 * 1024);
+        assert!(pair_key(&account, "203.0.113.7").len() < 128);
+        assert!(account_total_key(&account).len() < 128);
+    }
+
+    #[test]
+    fn login_keys_ignore_case_and_outer_spaces() {
+        assert_eq!(pair_key(" A@b.de ", "ip"), pair_key("a@b.de", "ip"));
+        assert_eq!(account_total_key(" A@b.de "), account_total_key("a@b.de"));
+        assert_ne!(pair_key("a@b.de", "ip1"), pair_key("a@b.de", "ip2"));
+        assert_ne!(account_total_key("a@b.de"), account_total_key("c@b.de"));
+    }
 
     #[test]
     fn ip_blocks_after_twenty_failures_and_recovers_after_the_window() {

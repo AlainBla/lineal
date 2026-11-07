@@ -473,6 +473,7 @@ pub fn anchors_for_quote(doc: &Doc, quoted: &str) -> Option<(String, String)> {
 pub enum LimitError {
     TooDeep,
     TooManyNodes,
+    UnknownRoot,
 }
 
 /// Prüft Tiefe ([`pm::MAX_DEPTH`]) und Knotenzahl ([`pm::MAX_NODES`]) des Baums **iterativ**
@@ -480,6 +481,10 @@ pub enum LimitError {
 pub fn check_limits(doc: &Doc) -> Result<(), LimitError> {
     let frag = doc.get_or_insert_xml_fragment(FRAGMENT);
     let txn = doc.transact();
+    // Andere Wurzeln nutzt kein Editor; die Grenzen unten würden sie auch nicht sehen.
+    if txn.root_refs().any(|(name, _)| name != FRAGMENT) {
+        return Err(LimitError::UnknownRoot);
+    }
     let mut nodes = 0usize;
     let mut stack: Vec<(yrs::XmlElementRef, usize)> = Vec::new();
     for child in frag.children(&txn) {
@@ -665,6 +670,20 @@ mod tests {
             let _ = apply_markdown(&other, &md);
             let _ = sanitized_markdown_of(&other);
         }
+    }
+
+    #[test]
+    fn foreign_roots_are_rejected() {
+        let doc = new_doc();
+        doc.get_or_insert_xml_fragment(FRAGMENT);
+        assert_eq!(check_limits(&doc), Ok(()));
+        let other = doc.get_or_insert_xml_fragment("x");
+        other.insert(
+            &mut doc.transact_mut(),
+            0,
+            yrs::XmlElementPrelim::empty("a"),
+        );
+        assert_eq!(check_limits(&doc), Err(LimitError::UnknownRoot));
     }
 
     #[test]

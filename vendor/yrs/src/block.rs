@@ -1375,7 +1375,16 @@ impl Item {
 
     pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
         if self.is_deleted() && !self.info.is_keep() {
-            self.content.gc(collector);
+            // LINEAL-PATCH: Arbeitsliste statt Rekursion (siehe `TransactionMut::delete`). Die
+            // Reihenfolge der Markierungen ist egal, `collect_marked` sucht jede Clock einzeln.
+            let mut pending = Vec::new();
+            self.content.take_children(&mut pending);
+            while let Some(mut item) = pending.pop() {
+                if item.is_deleted() && !item.info.is_keep() {
+                    item.content.take_children(&mut pending);
+                    collector.mark(&item.id);
+                }
+            }
             let len = self.len();
             if parent_gc {
                 collector.mark(&self.id);
@@ -1909,25 +1918,22 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&mut self, collector: &mut GCCollector) {
-        match self {
-            ItemContent::Type(branch) => {
-                let mut curr = branch.start.take();
-                while let Some(mut item) = curr {
-                    curr = item.right.clone();
-                    item.gc(collector, true);
-                }
+    /// Löst die Kinder eines Typs von ihm und legt sie auf `pending`.
+    fn take_children(&mut self, pending: &mut Vec<ItemPtr>) {
+        if let ItemContent::Type(branch) = self {
+            let mut curr = branch.start.take();
+            while let Some(item) = curr {
+                curr = item.right.clone();
+                pending.push(item);
+            }
 
-                for (_, ptr) in branch.map.drain() {
-                    curr = Some(ptr);
-                    while let Some(mut item) = curr {
-                        curr = item.left.clone();
-                        item.gc(collector, true);
-                        continue;
-                    }
+            for (_, ptr) in branch.map.drain() {
+                curr = Some(ptr);
+                while let Some(item) = curr {
+                    curr = item.left.clone();
+                    pending.push(item);
                 }
             }
-            _ => {}
         }
     }
 }

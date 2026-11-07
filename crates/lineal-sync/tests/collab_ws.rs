@@ -11,7 +11,7 @@ use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
 use lineal_app::{App, RequestCtx};
 use lineal_db::PgStore;
 use lineal_domain::rules::patch::PatchOp;
-use lineal_sync::collab::CollabConfig;
+use lineal_sync::collab::{CLOSE_TOO_BIG, CollabConfig};
 use lineal_sync::{SyncConfig, router_with};
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use serde_json::{Value, json};
@@ -954,6 +954,60 @@ async fn opening_a_document_does_not_rewrite_it_and_edits_keep_tables_tasks_imag
     wait_for_db(&e, doc, |m| m.contains("TIPP")).await;
     let (stored, ..) = e.db_doc(doc).await;
     assert_eq!(stored, md.replacen("mehr", "mehr TIPP", 1));
+}
+
+/// Ein tief verschachtelter Baum als Update, gebaut auf großem Stack.
+fn deep_tree(depth: usize, root: &'static str, delete: bool) -> Vec<u8> {
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || {
+            let d = crdt::new_doc();
+            let frag = d.get_or_insert_xml_fragment(root);
+            {
+                let mut txn = d.transact_mut();
+                let mut el = frag.insert(&mut txn, 0, yrs::XmlElementPrelim::empty("paragraph"));
+                for _ in 1..depth {
+                    el = el.insert(&mut txn, 0, yrs::XmlElementPrelim::empty("paragraph"));
+                }
+            }
+            if delete {
+                frag.remove_range(&mut d.transact_mut(), 0, 1);
+            }
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default())
+        })
+        .expect("thread")
+        .join()
+        .expect("build")
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn hostile_trees_leave_the_room_usable(pool: PgPool) {
+    let e = env(pool).await;
+    let doc = e.doc(SeedUser::Alice, "ENG", "Spec", "x").await;
+
+    // Baum aufbauen und im selben Update löschen: Das Löschen darf den Stack nicht sprengen.
+    let mut c = e.join("alice", doc).await;
+    c.send(&YMessage::Sync(SyncMessage::Update(deep_tree(
+        60_000, "default", true,
+    ))))
+    .await;
+    c.pump(Duration::from_millis(500)).await;
+    assert_eq!(c.closed, None);
+
+    // Stehen bleiben darf so ein Baum nicht, auch nicht unter einer anderen Wurzel.
+    for root in ["default", "other"] {
+        let mut c = e.join("alice", doc).await;
+        c.send(&YMessage::Sync(SyncMessage::Update(deep_tree(
+            1_000, root, false,
+        ))))
+        .await;
+        c.pump(Duration::from_millis(500)).await;
+        assert_eq!(c.closed, Some(CLOSE_TOO_BIG), "{root}");
+    }
+
+    let c = e.join("alice", doc).await;
+    assert_eq!(c.md(), "x");
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
