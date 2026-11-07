@@ -14,6 +14,7 @@ import {
 import { IssueContextMenuHost } from "./issue-context-menu";
 import { useIssueGlobalShortcuts } from "./global-shortcuts";
 import { ImageLightbox } from "./image-lightbox";
+import { MarkdownPreview } from "./markdown-preview";
 import { Toaster } from "./toaster";
 
 /**
@@ -46,6 +47,7 @@ export function IssuesHost() {
       <IssueContextMenuHost />
       <Toaster />
       <ImageLightbox />
+      <MarkdownPreview />
     </>
   );
 }

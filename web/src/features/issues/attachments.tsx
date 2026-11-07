@@ -19,6 +19,7 @@ export function safeHref(url: string): string | undefined {
 }
 import { useIssueExtras } from "./hooks";
 import { downloadUrl, openLightbox } from "./image-lightbox-store";
+import { isMarkdown, openMarkdownPreview } from "./markdown-preview-store";
 import { createAttachment, deleteAttachment, keys } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
 
@@ -142,6 +143,16 @@ export function AttachmentsSection({
             // Hochgeladene Bilder (same-origin, CSP `img-src 'self'`) öffnen zuerst groß (LIN-21).
             const image =
               a.sourceType === "upload" && !!href && !!a.contentType?.startsWith("image/");
+            // Hochgeladene Markdown-Dateien werden in Lineal gerendert statt heruntergeladen (LIN-43).
+            const markdown =
+              a.sourceType === "upload" && !!href && isMarkdown(a.contentType, a.title);
+            // Namensklick öffnet die passende In-App-Ansicht (Bild-Lightbox bzw. Markdown-Vorschau).
+            const openInApp =
+              image && href
+                ? () => openLightbox({ src: href, alt: a.title, filename: a.title })
+                : markdown && href
+                  ? () => openMarkdownPreview({ src: href, title: a.title })
+                  : undefined;
             return (
               <li key={a.id} className="group flex items-center gap-2 text-sm">
                 {image ? (
@@ -157,11 +168,11 @@ export function AttachmentsSection({
                   rel="noopener noreferrer"
                   className="min-w-0 truncate hover:underline"
                   onClick={
-                    image
+                    openInApp
                       ? (e) => {
                           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                           e.preventDefault();
-                          openLightbox({ src: href, alt: a.title, filename: a.title });
+                          openInApp();
                         }
                       : undefined
                   }
@@ -171,7 +182,7 @@ export function AttachmentsSection({
                 {a.size != null && (
                   <span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span>
                 )}
-                {image && (
+                {(image || markdown) && href && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -189,7 +200,7 @@ export function AttachmentsSection({
                     size="icon"
                     className={cn(
                       "size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                      !image && "ml-auto",
+                      !image && !markdown && "ml-auto",
                     )}
                     aria-label={`Remove attachment ${a.title}`}
                     onClick={() => remove.mutate(a.id)}

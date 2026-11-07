@@ -6,6 +6,8 @@ import "@/app/test-polyfills";
 
 import { AttachmentsSection, formatBytes } from "./attachments";
 import { ImageLightbox } from "./image-lightbox";
+import { MarkdownPreview } from "./markdown-preview";
+import { closeMarkdownPreview } from "./markdown-preview-store";
 import { makeIssue, mockGraphql, renderWithApp } from "./test-fixtures";
 
 const ISSUE = makeIssue({ id: "i1", identifier: "ENG-1" });
@@ -39,7 +41,10 @@ function handlers(attachments: unknown[], extra: Record<string, () => unknown> =
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  closeMarkdownPreview();
+});
 
 describe("Anhänge (F.08)", () => {
   it("formatiert Größen", () => {
@@ -144,5 +149,42 @@ describe("Anhänge (F.08)", () => {
     const region = await screen.findByRole("region", { name: "Attachments" });
     await within(region).findByRole("link", { name: "spec.pdf" });
     expect(within(region).queryByRole("button", { name: "Download spec.pdf" })).toBeNull();
+  });
+
+  it("zeigt Markdown-Anhänge in Lineal gerendert an statt herunterzuladen (LIN-43)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a3",
+          title: "readme.md",
+          contentType: "text/markdown",
+          url: "http://localhost:8080/files/md",
+        },
+      ]),
+    );
+    const base = globalThis.fetch as unknown as (...a: unknown[]) => Promise<Response>;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/files/md")) return base(input, init);
+      return new Response("# Überschrift\n\nHallo Welt", {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      });
+    });
+    await renderWithApp(
+      <>
+        <AttachmentsSection issue={ISSUE} />
+        <MarkdownPreview />
+      </>,
+    );
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    const link = await within(region).findByRole("link", { name: "readme.md" });
+    // Markdown bekommt wie Bilder einen eigenen Download-Knopf.
+    expect(within(region).getByRole("button", { name: "Download readme.md" })).toBeInTheDocument();
+    // Klick auf den Namen öffnet die gerenderte Vorschau statt des Downloads.
+    await userEvent.click(link);
+    const dialog = await screen.findByRole("dialog", { name: "readme.md" });
+    expect(await within(dialog).findByText("Hallo Welt")).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "Überschrift" })).toBeInTheDocument();
   });
 });
