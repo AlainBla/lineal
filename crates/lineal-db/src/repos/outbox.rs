@@ -589,6 +589,7 @@ fn model_sql(model: &str) -> Option<String> {
               CASE WHEN r.issue_id IS NOT NULL THEN {} \
                    WHEN r.comment_id IS NOT NULL THEN {} \
                    WHEN r.project_update_id IS NOT NULL THEN {} \
+                   WHEN r.initiative_update_id IS NOT NULL THEN {} \
                    ELSE ARRAY['org'] END \
             FROM reaction r \
               LEFT JOIN comment c ON c.id = r.comment_id \
@@ -597,7 +598,12 @@ fn model_sql(model: &str) -> Option<String> {
             WHERE r.organization_id = $1 AND r.id = ANY($2)",
             issue_groups("r.issue_id", "(SELECT ri.team_id FROM issue ri WHERE ri.id = r.issue_id)"),
             comment_groups(),
-            project_groups("ru.project_id")
+            project_groups("ru.project_id"),
+            initiative_groups(
+                "(SELECT ni.lead_team_id FROM initiative ni \
+                  JOIN initiative_update iu2 ON iu2.initiative_id = ni.id \
+                  WHERE iu2.id = r.initiative_update_id)"
+            )
         ),
         // Beide Seiten einer Relation: je Seite nur die Gruppen des jeweiligen Issues (die ID des
         // Gegenstücks verrät sonst die Existenz eines Issues in einem unsichtbaren Team).

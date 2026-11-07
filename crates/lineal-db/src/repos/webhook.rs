@@ -352,6 +352,18 @@ async fn load_entity(
                     Some(p) => project_teams(&mut *c, org, p).await?,
                     None => Vec::new(),
                 }
+            } else if let Some(u) = str_id(&row, "initiative_update_id") {
+                // Reaktion an einem Initiative-Update: Lead-Team der Initiative (docs/04 §4.6).
+                let initiative: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT initiative_id FROM initiative_update \
+                     WHERE organization_id = $1 AND id = $2",
+                )
+                .bind(org)
+                .bind(u)
+                .fetch_optional(&mut *c)
+                .await
+                .map_err(db_err)?;
+                initiative_teams(&mut *c, org, initiative).await?
             } else {
                 Vec::new()
             };

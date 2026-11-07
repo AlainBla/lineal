@@ -198,6 +198,42 @@ async fn sync_groups_respect_lead_team(pool: PgPool) {
         vec!["org".to_string()],
         "öffentliche Initiative: workspace-weit (ohne Gäste)"
     );
+
+    // Update und eine Reaktion direkt am Update tragen ebenfalls das Lead-Team.
+    let update = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO initiative_update (id, organization_id, initiative_id, user_id, body) \
+         VALUES ($1, $2, $3, $4, 'Stand')",
+    )
+    .bind(update)
+    .bind(env.data.org.0)
+    .bind(private)
+    .bind(env.data.bob.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let reaction = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO reaction (id, organization_id, emoji, user_id, initiative_update_id) \
+         VALUES ($1, $2, '👍', $3, $4)",
+    )
+    .bind(reaction)
+    .bind(env.data.org.0)
+    .bind(env.data.bob.0)
+    .bind(update)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        groups(&env, "InitiativeUpdate", update).await,
+        vec![format!("iteam:{}", env.data.des.0)],
+        "Update einer privaten Initiative"
+    );
+    assert_eq!(
+        groups(&env, "Reaction", reaction).await,
+        vec![format!("iteam:{}", env.data.des.0)],
+        "Reaktion am Update einer privaten Initiative"
+    );
 }
 
 // --- S-16: Webhooks ---------------------------------------------------------------------------
