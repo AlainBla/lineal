@@ -25,12 +25,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 step "cargo test"
 cargo test --workspace
 
-step "cargo deny: advisories, bans, licenses (optional)"
-if cargo deny --version >/dev/null 2>&1; then
-  cargo deny check advisories bans licenses
-else
-  echo "übersprungen: cargo-deny fehlt (cargo install cargo-deny --locked)"
+step "cargo deny: advisories, bans, licenses"
+if ! cargo deny --version >/dev/null 2>&1; then
+  echo "cargo-deny fehlt: 'cargo install cargo-deny --locked'" >&2
+  exit 1
 fi
+cargo deny check advisories bans licenses
 
 step "GraphQL-Schema exportieren (web/schema.graphql wird neu erzeugt)"
 cargo run -q -p lineal-server -- schema-export --out web/schema.graphql
