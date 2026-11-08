@@ -100,8 +100,14 @@ pub struct CreatedApiKey {
 /// (ein Lauf) — das war ein Timing-Orakel, das unbekannte von bekannten Adressen unterschied. Der
 /// Hash wird einmal je Prozess berechnet, danach läuft nur noch die Verify.
 fn burn_verify_impl(hasher: &dyn PasswordHasher, password: &str, cache: &OnceLock<String>) {
-    let dummy = cache.get_or_init(|| hasher.hash("lineal-dummy-password").unwrap_or_default());
-    if !dummy.is_empty() {
+    // Nur einen erfolgreichen Hash cachen: Ein vorübergehender Hash-Fehler darf die Dummy-Prüfung
+    // nicht dauerhaft deaktivieren (sonst würden unbekannte Adressen schnell — ein Timing-Leck).
+    if cache.get().is_none()
+        && let Ok(h) = hasher.hash("lineal-dummy-password")
+    {
+        let _ = cache.set(h);
+    }
+    if let Some(dummy) = cache.get() {
         let _ = hasher.verify(password, dummy);
     }
 }
