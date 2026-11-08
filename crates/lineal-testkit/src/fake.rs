@@ -144,7 +144,7 @@ impl AuditRepo for FakeTx {
                 request_id: e.request_id.clone(),
             })
             .collect();
-        rows.sort_by(|a, b| (b.occurred_at, b.id).cmp(&(a.occurred_at, a.id)));
+        rows.sort_by_key(|r| std::cmp::Reverse((r.occurred_at, r.id)));
         if let Some(c) = cursor {
             rows.retain(|r| (r.occurred_at, r.id) < (c.occurred_at, c.id));
         }
