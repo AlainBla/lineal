@@ -42,5 +42,7 @@ export function useMarkdownPreview(): MarkdownPreview | null {
 /** Erkennt einen Markdown-Anhang an Inhaltstyp oder Dateiendung. */
 export function isMarkdown(contentType: string | null | undefined, title: string): boolean {
   const essence = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
-  return essence === "text/markdown" || essence === "text/x-markdown" || /\.(md|markdown)$/i.test(title);
+  return (
+    essence === "text/markdown" || essence === "text/x-markdown" || /\.(md|markdown)$/i.test(title)
+  );
 }

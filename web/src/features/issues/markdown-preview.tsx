@@ -15,9 +15,7 @@ import { RichEditor } from "./rich-editor";
 /** Größte Datei, die wir als Vorschau laden (reiner Text; alles darüber bleibt Download). */
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 
-type Result =
-  | { status: "ready"; text: string }
-  | { status: "error"; message: string };
+type Result = { status: "ready"; text: string } | { status: "error"; message: string };
 
 export function MarkdownPreview() {
   const preview = useMarkdownPreview();
@@ -82,7 +80,13 @@ export function MarkdownPreview() {
                 <Download className="size-4" />
               </Button>
               <DialogClose asChild>
-                <Button variant="ghost" size="icon" className="size-7" aria-label="Close" title="Close">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  aria-label="Close"
+                  title="Close"
+                >
                   <X className="size-4" />
                 </Button>
               </DialogClose>

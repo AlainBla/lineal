@@ -110,33 +110,36 @@ test("S-01: a deep hostile tree is rejected and the server survives", async ({ p
   const health = await page.request.get("/healthz");
   expect(health.status()).toBe(200);
 
-  const rejoin = await page.evaluate(({ id }) => {
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${scheme}://${location.host}/collab/document/${id}`;
-    return new Promise<{ helloSeen: boolean }>((resolve) => {
-      const ws = new WebSocket(url);
-      ws.binaryType = "arraybuffer";
-      const timer = setTimeout(() => {
-        try {
-          ws.close();
-        } catch {
-          /* egal */
-        }
-        resolve({ helloSeen: false });
-      }, 15_000);
-      ws.onmessage = (ev) => {
-        if (typeof ev.data === "string") {
-          clearTimeout(timer);
+  const rejoin = await page.evaluate(
+    ({ id }) => {
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      const url = `${scheme}://${location.host}/collab/document/${id}`;
+      return new Promise<{ helloSeen: boolean }>((resolve) => {
+        const ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+        const timer = setTimeout(() => {
           try {
             ws.close();
           } catch {
             /* egal */
           }
-          resolve({ helloSeen: true });
-        }
-      };
-    });
-  }, { id: docId });
+          resolve({ helloSeen: false });
+        }, 15_000);
+        ws.onmessage = (ev) => {
+          if (typeof ev.data === "string") {
+            clearTimeout(timer);
+            try {
+              ws.close();
+            } catch {
+              /* egal */
+            }
+            resolve({ helloSeen: true });
+          }
+        };
+      });
+    },
+    { id: docId },
+  );
   expect(rejoin.helloSeen).toBe(true);
 
   const after = sqlValue(

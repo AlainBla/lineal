@@ -18,7 +18,9 @@ function actions(): IssueActions {
 describe("Parent setzen (F.11)", () => {
   it("sucht ein Issue und setzt es per Tastatur als Parent (ohne Issue und Kinder)", async () => {
     const gql = mockGraphql({
-      IssueExtras: () => ({ issue: { id: "i1", children: [makeIssue({ id: "c1", identifier: "ENG-9" })] } }),
+      IssueExtras: () => ({
+        issue: { id: "i1", children: [makeIssue({ id: "c1", identifier: "ENG-9" })] },
+      }),
       IssuePickerSearch: () => ({
         searchIssues: {
           nodes: [

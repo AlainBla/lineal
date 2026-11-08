@@ -172,20 +172,21 @@ describe("Team-Issues", () => {
     ]);
     expect(list.querySelector("[data-sortable-id]")).toBeNull();
 
-    const setOrdering = async (value: string) => {
+    const setOrdering = async (label: string) => {
       await userEvent.keyboard("{Shift>}V{/Shift}");
       const dialog = await screen.findByRole("dialog", { name: "Display options" });
-      await userEvent.selectOptions(within(dialog).getByLabelText("Ordering"), value);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Ordering" }));
+      await userEvent.click(await screen.findByRole("option", { name: label }));
       await userEvent.keyboard("{Escape}");
     };
     expect(screen.queryByRole("button", { name: "Ascending order" })).toBeNull();
-    await setOrdering("title");
+    await setOrdering("Title");
     expect(titles().map((t) => /Dringend|Mittel|Ohne/.exec(t)?.[0])).toEqual([
       "Dringend",
       "Mittel",
       "Ohne",
     ]);
-    await setOrdering("manual");
+    await setOrdering("Manual");
     await waitFor(() =>
       expect(gql.of("ViewPrefsUpdate").at(-1)!.variables).toMatchObject({
         teamId: TEAM_META.team.id,

@@ -309,10 +309,7 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
             actionId="issue.copy-title"
             onSelect={copyAll("Issue title", (i) => i.title)}
           />
-          <MenuItem
-            label="Git branch name"
-            onSelect={() => void copyBranchNames()}
-          />
+          <MenuItem label="Git branch name" onSelect={() => void copyBranchNames()} />
         </SubmenuItem>
         {!multi && (
           <>
