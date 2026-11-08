@@ -6,9 +6,10 @@ use crate::graphql::LinealSchema;
 use crate::middleware::auth::{AuthState, CredentialClass};
 use crate::rate_limit::{RateHandle, complexity_headers, denied_error};
 use async_graphql::parser::types::{
-    DocumentOperations, ExecutableDocument, OperationType, Selection, SelectionSet,
+    DocumentOperations, ExecutableDocument, OperationDefinition, OperationType, Selection,
+    SelectionSet,
 };
-use async_graphql::{Name, Request, Response as GqlResponse, Value};
+use async_graphql::{Name, Request, Response as GqlResponse, Value, Variables};
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
@@ -64,8 +65,26 @@ fn plain_list_size(name: &str) -> Option<u64> {
     }
 }
 
+/// Variablen-Defaults der Operation vor der Kostenrechnung auflösen (S-19): `int_arg`/`batch_ids`
+/// lesen `first`/`ids` über die Variablen. Fehlt eine Variable in den übergebenen Werten, griff
+/// vorher der günstige Standard (50 bzw. 0) — obwohl die Ausführung den in der Operation
+/// deklarierten Default (`$first: Int = 1000`) einsetzt. Hier werden diese Defaults in die
+/// Variablenkarte gelegt, sodass Kostenrechnung und Ausführung dieselben Werte sehen.
+fn resolved_variables(op: &OperationDefinition, request: &Request) -> Variables {
+    let mut vars = request.variables.clone();
+    for def in &op.variable_definitions {
+        let def = &def.node;
+        if let Some(default) = &def.default_value
+            && vars.get(&def.name.node).is_none()
+        {
+            vars.insert(def.name.node.clone(), default.node.clone());
+        }
+    }
+    vars
+}
+
 /// Anzahl der Einträge in `ids`-Listen der Argumente (`ids: [...]` oder `input: {ids: [...]}`).
-fn batch_ids(field: &async_graphql::parser::types::Field, request: &Request) -> u64 {
+fn batch_ids(field: &async_graphql::parser::types::Field, vars: &Variables) -> u64 {
     fn count(name: Option<&str>, v: &Value) -> u64 {
         match v {
             Value::List(items) if name == Some("ids") => items.len() as u64,
@@ -80,7 +99,7 @@ fn batch_ids(field: &async_graphql::parser::types::Field, request: &Request) -> 
             let value = v
                 .node
                 .clone()
-                .into_const_with(|var| request.variables.get(&var).cloned().ok_or(()))
+                .into_const_with(|var| vars.get(&var).cloned().ok_or(()))
                 .ok()?;
             Some(count(Some(n.node.as_str()), &value))
         })
@@ -89,9 +108,41 @@ fn batch_ids(field: &async_graphql::parser::types::Field, request: &Request) -> 
 
 /// Statische Komplexität nach 09 §3.2 (aufgerundet). Intern in Zehntelpunkten gerechnet,
 /// damit Gleitkomma-Rauschen das Aufrunden nicht verfälscht.
-pub fn complexity(doc: &ExecutableDocument, operation: &SelectionSet, request: &Request) -> u64 {
+pub fn complexity(
+    doc: &ExecutableDocument,
+    operation: &OperationDefinition,
+    request: &Request,
+) -> u64 {
+    let vars = resolved_variables(operation, request);
     let mut walk = Walk::default();
-    selection_cost(doc, operation, request, &mut walk).div_ceil(10)
+    selection_cost(doc, &operation.selection_set.node, &vars, &mut walk).div_ceil(10)
+}
+
+/// Höchstzahl der Wurzelfelder (ggf. mit Alias) je Operation (S-19). Wurzelfelder laufen
+/// nebenläufig, jedes in einer eigenen Transaktion; viele günstige Aliase (etwa `a: issueCreate …`
+/// hundertfach) blieben sonst knapp unter dem Komplexitätsbudget, belasten aber den Pool stark.
+pub const MAX_ROOT_FIELDS: usize = 50;
+
+/// Zählt die Wurzelfelder einer Operation, Wurzel-Fragmente (inline und benannt) eingeschlossen.
+fn root_field_count(doc: &ExecutableDocument, set: &SelectionSet, depth: usize) -> usize {
+    if depth > MAX_FRAGMENT_DEPTH {
+        return 0;
+    }
+    set.items
+        .iter()
+        .map(|sel| match &sel.node {
+            Selection::Field(_) => 1,
+            Selection::InlineFragment(f) => {
+                root_field_count(doc, &f.node.selection_set.node, depth + 1)
+            }
+            Selection::FragmentSpread(s) => doc
+                .fragments
+                .get(&s.node.fragment_name.node)
+                .map_or(0, |frag| {
+                    root_field_count(doc, &frag.node.selection_set.node, depth + 1)
+                }),
+        })
+        .sum()
 }
 
 /// Zustand der Kostenberechnung. Fragmentkosten sind kontextfrei (Multiplikatoren wendet der
@@ -106,13 +157,13 @@ struct Walk {
 fn int_arg(
     value: &async_graphql::parser::types::Field,
     name: &str,
-    request: &Request,
+    vars: &Variables,
 ) -> Option<u64> {
     let (_, v) = value.arguments.iter().find(|(n, _)| n.node == name)?;
     let value = v
         .node
         .clone()
-        .into_const_with(|var| request.variables.get(&var).cloned().ok_or(()))
+        .into_const_with(|var| vars.get(&var).cloned().ok_or(()))
         .ok()?;
     match value {
         Value::Number(n) => n.as_u64(),
@@ -137,7 +188,7 @@ fn is_connection(field: &async_graphql::parser::types::Field) -> bool {
 fn selection_cost(
     doc: &ExecutableDocument,
     set: &SelectionSet,
-    request: &Request,
+    vars: &Variables,
     walk: &mut Walk,
 ) -> u64 {
     let mut total: u64 = 0;
@@ -147,8 +198,7 @@ fn selection_cost(
                 let field = &f.node;
                 let children = &field.selection_set.node;
                 let name = field.name.node.as_str();
-                total =
-                    total.saturating_add(batch_ids(field, request).saturating_mul(BATCH_ID_COST));
+                total = total.saturating_add(batch_ids(field, vars).saturating_mul(BATCH_ID_COST));
                 if children.items.is_empty() {
                     total += if is_heavy_text(name) {
                         HEAVY_TEXT_COST
@@ -156,29 +206,29 @@ fn selection_cost(
                         1
                     };
                 } else if matches!(name, "nodes" | "edges" | "node") {
-                    total = total.saturating_add(selection_cost(doc, children, request, walk));
+                    total = total.saturating_add(selection_cost(doc, children, vars, walk));
                 } else if is_connection(field) {
-                    let n = int_arg(field, "first", request)
-                        .or_else(|| int_arg(field, "last", request))
+                    let n = int_arg(field, "first", vars)
+                        .or_else(|| int_arg(field, "last", vars))
                         .unwrap_or(DEFAULT_CONNECTION_SIZE);
-                    let inner = selection_cost(doc, children, request, walk);
+                    let inner = selection_cost(doc, children, vars, walk);
                     total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
                 } else if let Some(n) = plain_list_size(name) {
-                    let inner = selection_cost(doc, children, request, walk);
+                    let inner = selection_cost(doc, children, vars, walk);
                     total = total.saturating_add(10u64.saturating_add(n.saturating_mul(inner)));
                 } else if name == "history" {
                     // Aktivitätsverlauf: bis zu 1000 Zeilen je Issue, pauschal mit Faktor 100.
-                    let inner = selection_cost(doc, children, request, walk);
+                    let inner = selection_cost(doc, children, vars, walk);
                     total = total.saturating_add(10u64.saturating_add(inner.saturating_mul(100)));
                 } else {
-                    total = total.saturating_add(10 + selection_cost(doc, children, request, walk));
+                    total = total.saturating_add(10 + selection_cost(doc, children, vars, walk));
                 }
             }
             Selection::InlineFragment(f) => {
                 total = total.saturating_add(selection_cost(
                     doc,
                     &f.node.selection_set.node,
-                    request,
+                    vars,
                     walk,
                 ));
             }
@@ -194,7 +244,7 @@ fn selection_cost(
                 }
                 if let Some(frag) = doc.fragments.get(name) {
                     walk.stack.push(name.clone());
-                    let cost = selection_cost(doc, &frag.node.selection_set.node, request, walk);
+                    let cost = selection_cost(doc, &frag.node.selection_set.node, vars, walk);
                     walk.stack.pop();
                     walk.memo.insert(name.clone(), cost);
                     total = total.saturating_add(cost);
@@ -297,7 +347,7 @@ pub async fn execute(
         Ok(ctx) => ctx.clone(),
         Err(e) => return graphql_error_response(&e),
     };
-    let (is_mutation, cost) = {
+    let (is_mutation, cost, root_fields) = {
         let name = request.operation_name.clone();
         // Parse-Fehler: Ausführung liefert die ordentliche Fehlerantwort (400, invalid_request).
         let parsed = request.parsed_query().ok().cloned();
@@ -307,13 +357,22 @@ pub async fn execute(
         match operation(&doc, name.as_deref()) {
             Some(op) => (
                 op.ty == OperationType::Mutation,
-                complexity(&doc, &op.selection_set.node, &request),
+                complexity(&doc, op, &request),
+                root_field_count(&doc, &op.selection_set.node, 0),
             ),
             None => return run(schema, request, &ctx.request_id, None, false).await,
         }
     };
     if is_mutation && !ctx.scopes.write {
         return graphql_error_response(&AppError::forbidden("Token has no write scope."));
+    }
+    if root_fields > MAX_ROOT_FIELDS {
+        return graphql_error_response(
+            &AppError::invalid_request(format!(
+                "Operation has {root_fields} root fields, exceeding the maximum {MAX_ROOT_FIELDS}."
+            ))
+            .with_details(json!({ "rootFields": root_fields, "max": MAX_ROOT_FIELDS })),
+        );
     }
     let max = rate.as_ref().map_or(10_000, |r| r.max_query_complexity);
     if cost > max {
@@ -401,7 +460,13 @@ mod tests {
         let request = Request::new(query).variables(async_graphql::Variables::from_json(variables));
         let doc = parse_query(query).unwrap();
         let op = operation(&doc, None).unwrap();
-        complexity(&doc, &op.selection_set.node, &request)
+        complexity(&doc, op, &request)
+    }
+
+    fn root_fields_of(query: &str) -> usize {
+        let doc = parse_query(query).unwrap();
+        let op = operation(&doc, None).unwrap();
+        root_field_count(&doc, &op.selection_set.node, 0)
     }
 
     #[test]
@@ -540,5 +605,40 @@ mod tests {
         let q = "{ issues { nodes { id } } }";
         assert_eq!(cost_of(q, json!({})), 6); // 1 + 50 * 0,1
         assert_eq!(cost_of("{ __typename }", json!({})), 1); // 0,1 aufgerundet
+    }
+
+    #[test]
+    fn variable_defaults_are_resolved_for_cost() {
+        // S-19: Ein in der Operation deklarierter Default für `first` wird gewogen, auch wenn keine
+        // Variable übergeben wird. Vorher griff der günstige Standard (50) und unterschätzte die
+        // Kosten um den Faktor des Defaults.
+        let q = "query($n: Int = 250) { issues(first: $n) { nodes { description } } }";
+        // Ohne übergebene Variable: 1 + 250 * (0,1 + HEAVY_TEXT 10) ≈ 2525.
+        assert!(cost_of(q, json!({})) > 2_000, "{}", cost_of(q, json!({})));
+        // Eine übergebene Variable überschreibt den Default.
+        assert!(cost_of(q, json!({ "n": 1 })) < 100);
+
+        // Gleiches für Batch-Ids über einen Variablen-Default.
+        let ids: Vec<String> = (0..250).map(|i| format!("{i}")).collect();
+        let q = "mutation($i: IssueBatchUpdateInput! = { ids: [], priority: 1 }) \
+                 { issueBatchUpdate(input: $i) { updated } }";
+        let _ = &ids; // Default im Query selbst trägt die 250 nicht; separat geprüft über Variable.
+        let q2 = "mutation($i: IssueBatchUpdateInput!) { issueBatchUpdate(input: $i) { updated } }";
+        assert!(cost_of(q2, json!({ "i": { "ids": ids, "priority": 1 } })) >= 2_500);
+        // Default-Objekt ohne Ids bleibt günstig.
+        assert!(cost_of(q, json!({})) < 100);
+    }
+
+    #[test]
+    fn root_field_count_covers_aliases_and_fragments() {
+        assert_eq!(root_fields_of("{ a: __typename b: __typename }"), 2);
+        let many = (0..60)
+            .map(|i| format!("a{i}: __typename"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(root_fields_of(&format!("{{ {many} }}")), 60);
+        // Wurzel-Fragmente zählen ihre Felder mit.
+        let q = "{ ...F } fragment F on Query { a: __typename b: __typename c: __typename }";
+        assert_eq!(root_fields_of(q), 3);
     }
 }

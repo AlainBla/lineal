@@ -72,12 +72,20 @@ pub async fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// Verbindung, Store und `App` aus der Umgebung.
-pub(crate) async fn connect() -> Result<(Config, PgPool, Arc<App>)> {
+/// Verbindung, Store und `App` aus der Umgebung. `enforce_statement_timeout` gilt nur für den
+/// Request-bedienenden Pool (serve); Migrationen, Import und Worker verbinden ohne `statement_timeout`.
+pub(crate) async fn connect(enforce_statement_timeout: bool) -> Result<(Config, PgPool, Arc<App>)> {
     let config = Config::from_env()?;
-    let pool = lineal_db::connect(&config.database_url, config.db_max_connections)
-        .await
-        .context("cannot connect to the database (is `docker compose up -d` running?)")?;
+    let statement_timeout = enforce_statement_timeout
+        .then_some(config.db_statement_timeout_ms)
+        .flatten();
+    let pool = lineal_db::connect(
+        &config.database_url,
+        config.db_max_connections,
+        statement_timeout,
+    )
+    .await
+    .context("cannot connect to the database (is `docker compose up -d` running?)")?;
     let app = build_app(Arc::new(PgStore::new(pool.clone())), &config);
     Ok((config, pool, app))
 }

@@ -167,3 +167,45 @@ async fn cancelled_begin_leaves_no_open_transaction(pool: PgPool) {
         );
     }
 }
+
+/// S-19: Der Request-Pool setzt ein `statement_timeout`, das lange Einzelabfragen abbricht.
+#[sqlx::test(migrations = "./migrations")]
+async fn statement_timeout_cancels_long_queries(pool: PgPool) {
+    let opts = (*pool.connect_options()).clone();
+    let p = lineal_db::pool_options_with_timeout(1, Some(200))
+        .connect_with(opts)
+        .await
+        .unwrap();
+    // Die Einstellung ist je Verbindung gesetzt.
+    let setting: String = sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+        .fetch_one(&p)
+        .await
+        .unwrap();
+    assert_eq!(setting, "200ms");
+    // Eine Abfrage über dem Limit wird vom Server abgebrochen (SQLSTATE 57014).
+    let e = sqlx::query("SELECT pg_sleep(2)")
+        .execute(&p)
+        .await
+        .unwrap_err();
+    let code = e.as_database_error().and_then(|d| d.code());
+    assert_eq!(
+        code.as_deref(),
+        Some("57014"),
+        "erwartet query_canceled: {e}"
+    );
+}
+
+/// Ohne `statement_timeout` (None) bleibt die Verbindung ungebremst (Default 0).
+#[sqlx::test(migrations = "./migrations")]
+async fn no_statement_timeout_by_default(pool: PgPool) {
+    let opts = (*pool.connect_options()).clone();
+    let p = lineal_db::pool_options_with_timeout(1, None)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    let setting: String = sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+        .fetch_one(&p)
+        .await
+        .unwrap();
+    assert_eq!(setting, "0");
+}

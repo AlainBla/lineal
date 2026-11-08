@@ -17,7 +17,7 @@ fn heartbeat_path() -> Option<String> {
 }
 
 pub async fn run() -> Result<()> {
-    let (_config, _pool, app) = connect().await?;
+    let (_config, _pool, app) = connect(false).await?;
     tracing::info!("worker started");
     if let Some(path) = heartbeat_path() {
         tokio::spawn(async move {

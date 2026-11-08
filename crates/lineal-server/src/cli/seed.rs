@@ -25,7 +25,7 @@ pub fn check_allowed(dev: bool, allow_insecure: bool) -> Result<()> {
 #[cfg(feature = "seed")]
 pub async fn run(demo: bool, allow_insecure: bool) -> Result<()> {
     check_allowed(crate::config::dev_from_env(), allow_insecure)?;
-    let (_config, _pool, app) = super::connect().await?;
+    let (_config, _pool, app) = super::connect(false).await?;
     let org = lineal_testkit::seed::SeedData::acme().org;
     // Die Repos arbeiten im Org-Kontext; mit begin_system() bekämen sie die nil-Org.
     let mut tx = app

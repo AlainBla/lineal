@@ -390,6 +390,30 @@ async fn ping_and_batch() {
 }
 
 #[tokio::test]
+async fn oversized_batch_is_rejected() {
+    // S-19/F-26: Ein Batch mit mehr als 50 Aufrufen wird als ungültiger Request abgelehnt, statt
+    // alle Aufrufe (je eine Transaktion) unter einem Rate-Limit-Request auszuführen.
+    let router = app();
+    let calls: Vec<_> = (0..51)
+        .map(|i| json!({ "jsonrpc": "2.0", "id": i, "method": "ping" }))
+        .collect();
+    let resp = rpc(&router, RW, json!(calls)).await;
+    assert_eq!(resp["error"]["code"], -32600);
+    assert!(
+        resp["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("exceeds the maximum")),
+        "{resp}"
+    );
+    // Genau 50 Aufrufe bleiben erlaubt.
+    let ok: Vec<_> = (0..50)
+        .map(|i| json!({ "jsonrpc": "2.0", "id": i, "method": "ping" }))
+        .collect();
+    let resp = rpc(&router, RW, json!(ok)).await;
+    assert_eq!(resp.as_array().map(Vec::len), Some(50));
+}
+
+#[tokio::test]
 async fn sse_when_client_accepts_only_event_stream() {
     let router = app();
     let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });

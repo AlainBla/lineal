@@ -91,6 +91,7 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 | `LINEAL_BIND` | `127.0.0.1:8080` | Adresse des HTTP-Servers |
 | `LINEAL_BLOB_DIR` | `./var/blobs` | Verzeichnis des lokalen Objektspeichers |
 | `LINEAL_DB_MAX_CONNECTIONS` | `10` | Größe des Verbindungspools |
+| `LINEAL_DB_STATEMENT_TIMEOUT_MS` | `30000` | `statement_timeout` (ms) des Request-Pools; `0` = aus. Migrationen, Import und Worker laufen ohne Grenze |
 | `LINEAL_ALLOWED_ORIGINS` | Origin von `LINEAL_BASE_URL` | Komma-Liste erlaubter Origins für Cookie-Sessions (CSRF) |
 | `LINEAL_TRUSTED_PROXIES` | leer | Komma-Liste von CIDR-Bereichen; nur von dort wird `X-Forwarded-For` ausgewertet |
 | `LINEAL_WORKSPACE_CREATION` | `all` mit `LINEAL_DEV`, sonst `disabled` | wer per GraphQL `createWorkspace` weitere Workspaces anlegen darf: `disabled`, `admins`, `all`; ungültiger Wert verhindert den Start. Das CLI `create-workspace` ist ausgenommen |

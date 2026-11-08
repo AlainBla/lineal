@@ -18,6 +18,9 @@ pub struct Config {
     /// Entwicklungsmodus (GraphiQL, lockere Defaults).
     pub dev: bool,
     pub db_max_connections: u32,
+    /// `LINEAL_DB_STATEMENT_TIMEOUT_MS`: `statement_timeout` (ms) des Request-Pools (S-19). `0`
+    /// schaltet es ab; Default 30000. Migrationen, Import und Worker laufen ohne Grenze.
+    pub db_statement_timeout_ms: Option<u32>,
     /// `LINEAL_ALLOWED_ORIGINS` (Komma-Liste); leer = Origin von `base_url`.
     pub allowed_origins: Vec<String>,
     /// `LINEAL_TRUSTED_PROXIES` (CIDR-Liste); leer = `X-Forwarded-For` wird ignoriert.
@@ -154,6 +157,14 @@ impl Config {
                 .transpose()
                 .context("LINEAL_DB_MAX_CONNECTIONS must be a number")?
                 .unwrap_or(10),
+            db_statement_timeout_ms: {
+                let ms = get("LINEAL_DB_STATEMENT_TIMEOUT_MS")
+                    .map(|v| v.parse())
+                    .transpose()
+                    .context("LINEAL_DB_STATEMENT_TIMEOUT_MS must be a number")?
+                    .unwrap_or(30_000u32);
+                (ms > 0).then_some(ms)
+            },
         })
     }
 }

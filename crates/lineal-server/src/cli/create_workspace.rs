@@ -68,7 +68,7 @@ fn read_password(env: Option<String>) -> Result<String> {
 }
 
 pub async fn run(args: CreateWorkspaceArgs) -> Result<()> {
-    let (_config, _pool, app) = super::connect().await?;
+    let (_config, _pool, app) = super::connect(false).await?;
     let password = read_password(std::env::var("LINEAL_OWNER_PASSWORD").ok())?;
     println!("{}", execute(&app, &args, password).await?);
     Ok(())

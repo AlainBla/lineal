@@ -45,9 +45,37 @@ pub fn pool_options(max_connections: u32) -> PgPoolOptions {
         .before_acquire(|conn, _meta| connection_is_clean(conn))
 }
 
-/// Öffnet einen Verbindungspool.
-pub async fn connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
-    pool_options(max_connections).connect(database_url).await
+/// Pool-Optionen mit optionalem `statement_timeout` (S-19): setzt je Verbindung ein
+/// `statement_timeout` (ms), das lange Einzelabfragen abbricht. Nur der Request-bedienende Pool
+/// (serve) sollte das setzen; Migrationen, Import und Worker laufen ohne Grenze.
+pub fn pool_options_with_timeout(
+    max_connections: u32,
+    statement_timeout_ms: Option<u32>,
+) -> PgPoolOptions {
+    let mut options = pool_options(max_connections);
+    if let Some(ms) = statement_timeout_ms {
+        options = options.after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                // `ms` ist eine u32 aus der Konfiguration; der Wert ist eine Zahl, keine Eingabe.
+                sqlx::query(&format!("SET statement_timeout = {ms}"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        });
+    }
+    options
+}
+
+/// Öffnet einen Verbindungspool (siehe [`pool_options_with_timeout`] zu `statement_timeout_ms`).
+pub async fn connect(
+    database_url: &str,
+    max_connections: u32,
+    statement_timeout_ms: Option<u32>,
+) -> Result<PgPool, sqlx::Error> {
+    pool_options_with_timeout(max_connections, statement_timeout_ms)
+        .connect(database_url)
+        .await
 }
 
 /// Wendet alle ausstehenden Migrationen an.

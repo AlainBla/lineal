@@ -25,7 +25,7 @@ pub async fn has_workspace(pool: &PgPool) -> Result<bool, sqlx::Error> {
 }
 
 pub async fn run() -> Result<()> {
-    let (config, pool, app) = connect().await?;
+    let (config, pool, app) = connect(true).await?;
     warn_if_no_workspace(&pool).await;
     let router = build_router(app, config.dev);
     let listener = tokio::net::TcpListener::bind(config.bind)

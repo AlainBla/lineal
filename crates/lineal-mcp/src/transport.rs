@@ -28,6 +28,10 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
 /// Hinweis aus `initialize.instructions` (docs/07 §1.2).
 pub const INSTRUCTIONS: &str = "When passing string values to tools, send the content directly without escape sequences. For example, use real newlines in markdown content rather than literal backslash-n (\\n) characters.";
 
+/// Höchstzahl einzelner JSON-RPC-Aufrufe in einem Batch-Request (S-19/F-26). Ein Batch zählt im
+/// Rate-Limit als ein Request; diese Grenze verhindert gebündelte Lastangriffe.
+const MAX_BATCH_CALLS: usize = 50;
+
 const SESSION_HEADER: HeaderName = HeaderName::from_static("mcp-session-id");
 const PROTOCOL_HEADER: &str = "mcp-protocol-version";
 
@@ -210,6 +214,19 @@ pub async fn post_mcp(State(app): State<Arc<App>>, headers: HeaderMap, body: Byt
                 Value::Null,
                 INVALID_REQUEST,
                 "Invalid Request: empty batch",
+            )),
+            false,
+        ),
+        // S-19/F-26: Ein Batch zählt im Rate-Limit als ein Request. Ohne Obergrenze ließen sich
+        // darüber beliebig viele Aufrufe (jeder eine eigene Transaktion) in einem Request bündeln.
+        Value::Array(items) if items.len() > MAX_BATCH_CALLS => (
+            Some(rpc_error(
+                Value::Null,
+                INVALID_REQUEST,
+                format!(
+                    "Invalid Request: batch of {} exceeds the maximum of {MAX_BATCH_CALLS}",
+                    items.len()
+                ),
             )),
             false,
         ),
