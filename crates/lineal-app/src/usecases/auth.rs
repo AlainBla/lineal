@@ -15,6 +15,7 @@ use crate::ports::Tx;
 use crate::ports::repos::Principal;
 use crate::ports::repos::auth::LoginCandidate;
 use crate::ports::repos::auth::{ApiKeyRecord, NewApiKey, NewSession};
+use crate::ports::services::PasswordHasher;
 use crate::resolve;
 use crate::resolve::team::Visibility;
 use chrono::{DateTime, Duration, Utc};
@@ -22,6 +23,7 @@ use lineal_domain::enums::UserRole;
 use lineal_domain::ids::{ApiKeyId, OrgId, UserId};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 /// Gültigkeit einer Web-Session.
@@ -92,12 +94,23 @@ pub struct CreatedApiKey {
     pub key: String,
 }
 
+/// Eine Dummy-Passwortprüfung, die genau so viel Arbeit macht wie eine echte: **eine** Verify
+/// gegen einen zwischengespeicherten Dummy-Hash. S-20: Vorher wurde bei jeder Dummy-Prüfung neu
+/// gehasht **und** verifiziert (zwei Argon2-Läufe), echte Kandidaten liefen nur durch eine Verify
+/// (ein Lauf) — das war ein Timing-Orakel, das unbekannte von bekannten Adressen unterschied. Der
+/// Hash wird einmal je Prozess berechnet, danach läuft nur noch die Verify.
+fn burn_verify_impl(hasher: &dyn PasswordHasher, password: &str, cache: &OnceLock<String>) {
+    let dummy = cache.get_or_init(|| hasher.hash("lineal-dummy-password").unwrap_or_default());
+    if !dummy.is_empty() {
+        let _ = hasher.verify(password, dummy);
+    }
+}
+
 impl App {
-    /// Eine Passwortprüfung gegen einen frisch erzeugten Hash (gleicher Aufwand wie eine echte).
+    /// Eine Passwortprüfung mit demselben Aufwand wie eine echte (siehe [`burn_verify_impl`]).
     pub(crate) fn burn_verify(&self, password: &str) {
-        if let Ok(h) = self.hasher.hash("lineal-dummy-password") {
-            let _ = self.hasher.verify(password, &h);
-        }
+        static DUMMY: OnceLock<String> = OnceLock::new();
+        burn_verify_impl(self.hasher.as_ref(), password, &DUMMY);
     }
 
     /// Passwort-Login (docs/11 `POST /auth/login`). Unbekannte E-Mail, falsches Passwort,
@@ -519,6 +532,39 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// S-20: Die Dummy-Prüfung berechnet den Hash nur einmal je Prozess und macht danach genau
+    /// eine Verify pro Aufruf — gleicher Aufwand wie eine echte Prüfung (eine Verify, kein Hash).
+    #[test]
+    fn burn_verify_hashes_once_then_only_verifies() {
+        #[derive(Default)]
+        struct Counting {
+            hashes: AtomicUsize,
+            verifies: AtomicUsize,
+        }
+        impl PasswordHasher for Counting {
+            fn hash(&self, password: &str) -> AppResult<String> {
+                self.hashes.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("h:{password}"))
+            }
+            fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
+                self.verifies.fetch_add(1, Ordering::SeqCst);
+                Ok(hash == format!("h:{password}"))
+            }
+        }
+        let hasher = Counting::default();
+        let cache = OnceLock::new();
+        burn_verify_impl(&hasher, "a", &cache);
+        burn_verify_impl(&hasher, "b", &cache);
+        burn_verify_impl(&hasher, "c", &cache);
+        assert_eq!(hasher.hashes.load(Ordering::SeqCst), 1, "Hash nur einmal");
+        assert_eq!(
+            hasher.verifies.load(Ordering::SeqCst),
+            3,
+            "Verify je Aufruf"
+        );
+    }
 
     #[test]
     fn hash_is_sha256_hex_lowercase_over_the_full_token() {
