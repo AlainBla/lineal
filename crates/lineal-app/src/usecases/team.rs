@@ -422,7 +422,7 @@ impl App {
             .filter(|t| input.created_after.is_none_or(|a| t.created_at > a))
             .filter(|t| input.updated_after.is_none_or(|a| t.updated_at > a))
             .collect();
-        teams.sort_by(|a, b| (sort_key(b), b.id.0).cmp(&(sort_key(a), a.id.0)));
+        teams.sort_by_key(|t| std::cmp::Reverse((sort_key(t), t.id.0)));
         if let Some(c) = input.page.cursor {
             teams.retain(|t| (sort_key(t), t.id.0) < (c.key, c.id));
         }

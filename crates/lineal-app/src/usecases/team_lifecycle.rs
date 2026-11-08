@@ -414,7 +414,7 @@ impl App {
                 sub_team_count,
             });
         }
-        out.sort_by(|a, b| (b.trashed_at, b.view.team.id.0).cmp(&(a.trashed_at, a.view.team.id.0)));
+        out.sort_by_key(|t| std::cmp::Reverse((t.trashed_at, t.view.team.id.0)));
         Ok(out)
     }
 

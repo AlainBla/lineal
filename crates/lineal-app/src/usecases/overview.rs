@@ -301,7 +301,7 @@ fn tree_order(snap: &PolicySnapshot, visible: &BTreeSet<TeamId>) -> Vec<(TeamId,
             .all()
             .filter(|t| visible.contains(&t.id) && !t.trashed && t.parent_id == parent)
             .collect();
-        kids.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        kids.sort_by_key(|k| k.name.to_lowercase());
         for k in kids {
             out.push((k.id, depth));
             walk(snap, visible, Some(k.id), depth + 1, out);
@@ -317,7 +317,7 @@ fn tree_order(snap: &PolicySnapshot, visible: &BTreeSet<TeamId>) -> Vec<(TeamId,
                 && t.parent_id.is_none_or(|p| !visible.contains(&p))
         })
         .collect();
-    roots.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    roots.sort_by_key(|r| r.name.to_lowercase());
     for r in roots {
         out.push((r.id, 0));
         walk(snap, visible, Some(r.id), 1, &mut out);

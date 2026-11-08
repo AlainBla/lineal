@@ -476,10 +476,10 @@ pub fn strip_hidden_teams(data: &mut Value, hidden: &BTreeSet<String>) {
         a.retain(|v| !is_hidden(v));
     }
     if let Some(Value::Array(a)) = obj.get_mut("teams") {
-        a.retain(|t| !t.get("id").is_some_and(&is_hidden));
+        a.retain(|t| !t.get("id").is_some_and(is_hidden));
     }
     for (id_key, obj_key) in [("leadTeamId", "leadTeam"), ("teamId", "team")] {
-        if obj.get(id_key).is_some_and(&is_hidden) {
+        if obj.get(id_key).is_some_and(is_hidden) {
             obj.insert(id_key.into(), Value::Null);
             obj.insert(obj_key.into(), Value::Null);
         }

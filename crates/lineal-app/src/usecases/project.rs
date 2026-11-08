@@ -291,7 +291,7 @@ pub(crate) async fn resolve_labels(
             tx.projects()
                 .get_label(id)
                 .await?
-                .filter(&is_available)
+                .filter(is_available)
                 // Stillgelegte Labels nur behalten, nicht neu zuordnen (B5.17).
                 .filter(|l| !l.retired || existing.iter().any(|e| e.id == l.id))
         } else {
