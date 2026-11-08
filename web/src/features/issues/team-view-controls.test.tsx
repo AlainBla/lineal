@@ -78,7 +78,8 @@ describe("Team-Seiten: Filterleiste und Display options (F.18)", () => {
     await screen.findByText("Im Backlog");
     await user.keyboard("{Shift>}V{/Shift}");
     const dialog = await screen.findByRole("dialog", { name: "Display options" });
-    await user.selectOptions(within(dialog).getByLabelText("Grouping"), "priority");
+    await user.click(within(dialog).getByRole("button", { name: "Grouping" }));
+    await user.click(await screen.findByRole("option", { name: "Priority" }));
     await user.keyboard("{Escape}");
     const list = await screen.findByRole("list", { name: "Issues" });
     expect(await within(list).findByRole("region", { name: "Urgent" })).toBeInTheDocument();

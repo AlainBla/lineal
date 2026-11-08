@@ -1,11 +1,12 @@
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  ChevronDown,
   LayoutGrid,
   List,
   SlidersHorizontal,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -66,6 +67,123 @@ const PROPERTY_LABEL: Record<DisplayProperty, string> = {
 };
 
 const selectCls = "h-8 min-w-36 rounded-md border border-input bg-transparent px-2 text-sm";
+
+/**
+ * Auswahl, deren Optionsliste bei Hover (und Klick/Fokus/Tastatur) als Flyout aufklappt (LIN-44) —
+ * ersetzt das native `<select>`. Das innere Popover ist portaliert; der Aufrufer schützt das äußere
+ * Display-Popover per `onPointerDownOutside`/`onFocusOutside` vor dem Schließen (`data-hoverselect`).
+ */
+function HoverSelect<T extends string>({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  disabled?: boolean;
+  onChange: (v: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const clear = () => {
+    clearTimeout(openTimer.current);
+    clearTimeout(closeTimer.current);
+  };
+  const hoverOpen = () => {
+    if (disabled) return;
+    clear();
+    openTimer.current = setTimeout(() => setOpen(true), 100);
+  };
+  const scheduleClose = () => {
+    clearTimeout(openTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
+  const current = options.find((o) => o.value === value)?.label ?? value;
+  return (
+    <Popover
+      open={open && !disabled}
+      onOpenChange={(o) => {
+        clear();
+        setOpen(o);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          disabled={disabled}
+          onMouseEnter={hoverOpen}
+          onMouseLeave={scheduleClose}
+          onClick={() => {
+            clear();
+            setOpen((v) => !v);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              clear();
+              setOpen(true);
+            }
+          }}
+          className={cn(selectCls, "flex items-center justify-between gap-2 disabled:opacity-50")}
+        >
+          <span className="truncate">{current}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        data-hoverselect=""
+        role="listbox"
+        aria-label={label}
+        align="end"
+        side="bottom"
+        sideOffset={4}
+        className="w-44 p-1"
+        onMouseEnter={clear}
+        onMouseLeave={scheduleClose}
+        onKeyDown={(e) => {
+          const items = Array.from(
+            e.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'),
+          );
+          const idx = items.indexOf(document.activeElement as HTMLElement);
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            items[Math.min(idx + 1, items.length - 1)]?.focus();
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            items[Math.max(idx - 1, 0)]?.focus();
+          }
+        }}
+      >
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="option"
+            aria-selected={o.value === value}
+            className={cn(
+              "flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-hover",
+              o.value === value && "bg-surface-active",
+            )}
+            onClick={() => {
+              onChange(o.value);
+              clear();
+              setOpen(false);
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -150,7 +268,19 @@ export function DisplayMenu({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent aria-label="Display options" className="w-80">
+      <PopoverContent
+        aria-label="Display options"
+        className="w-80"
+        onPointerDownOutside={(e) => {
+          // LIN-44: Klick in ein offenes HoverSelect-Flyout schließt das Display-Popover nicht.
+          if ((e.detail.originalEvent.target as Element | null)?.closest?.("[data-hoverselect]"))
+            e.preventDefault();
+        }}
+        onFocusOutside={(e) => {
+          if ((e.detail.originalEvent.target as Element | null)?.closest?.("[data-hoverselect]"))
+            e.preventDefault();
+        }}
+      >
         <div className="flex flex-col gap-3">
           {showLayout && (
             <div role="group" aria-label="Layout" className="grid grid-cols-2 gap-2">
@@ -173,38 +303,27 @@ export function DisplayMenu({
             </div>
           )}
           <Row label="Grouping">
-            <select
-              aria-label="Grouping"
-              className={selectCls}
+            <HoverSelect
+              label="Grouping"
               value={options.grouping}
-              onChange={(e) => onChange({ grouping: e.target.value as DisplayOptions["grouping"] })}
-            >
-              {GROUPINGS.map((g) => (
-                <option key={g} value={g}>
-                  {LABEL[g]}
-                </option>
-              ))}
-            </select>
+              options={GROUPINGS.map((g) => ({ value: g, label: LABEL[g] ?? g }))}
+              onChange={(grouping) => onChange({ grouping })}
+            />
           </Row>
           <Row label="Sub-grouping">
-            <select
-              aria-label="Sub-grouping"
-              className={selectCls}
+            <HoverSelect
+              label="Sub-grouping"
               value={options.subGrouping}
               disabled={options.grouping === "none"}
-              onChange={(e) =>
-                onChange({ subGrouping: e.target.value as DisplayOptions["subGrouping"] })
-              }
-            >
-              {GROUPINGS.filter((g) => g !== options.grouping).map((g) => (
-                <option key={g} value={g}>
-                  {LABEL[g]}
-                </option>
-              ))}
-            </select>
+              options={GROUPINGS.filter((g) => g !== options.grouping).map((g) => ({
+                value: g,
+                label: LABEL[g] ?? g,
+              }))}
+              onChange={(subGrouping) => onChange({ subGrouping })}
+            />
           </Row>
           <div className="flex items-center justify-between gap-4 text-sm">
-            <label htmlFor="display-ordering">Ordering</label>
+            <span>Ordering</span>
             <span className="flex items-center gap-1">
               <Button
                 variant="ghost"
@@ -216,42 +335,27 @@ export function DisplayMenu({
               >
                 {desc ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
               </Button>
-              <select
-                id="display-ordering"
-                aria-label="Ordering"
-                className={selectCls}
+              <HoverSelect
+                label="Ordering"
                 value={options.ordering}
-                onChange={(e) => {
-                  const ordering = e.target.value as DisplayOptions["ordering"];
-                  onChange({ ordering, orderDirection: defaultDirection(ordering) });
-                }}
-              >
-                {ORDERINGS.map((g) => (
-                  <option key={g} value={g}>
-                    {LABEL[g] ?? "Priority"}
-                  </option>
-                ))}
-              </select>
+                options={ORDERINGS.map((g) => ({ value: g, label: LABEL[g] ?? "Priority" }))}
+                onChange={(ordering) =>
+                  onChange({ ordering, orderDirection: defaultDirection(ordering) })
+                }
+              />
             </span>
           </div>
           <hr className="border-border" />
           <Row label="Completed issues">
-            <select
-              aria-label="Completed issues"
-              className={selectCls}
+            <HoverSelect
+              label="Completed issues"
               value={options.showCompletedIssues}
-              onChange={(e) =>
-                onChange({
-                  showCompletedIssues: e.target.value as DisplayOptions["showCompletedIssues"],
-                })
-              }
-            >
-              {COMPLETED_WINDOWS.map((w) => (
-                <option key={w} value={w}>
-                  {w === "none" ? "None" : LABEL[w]}
-                </option>
-              ))}
-            </select>
+              options={COMPLETED_WINDOWS.map((w) => ({
+                value: w,
+                label: w === "none" ? "None" : (LABEL[w] ?? w),
+              }))}
+              onChange={(showCompletedIssues) => onChange({ showCompletedIssues })}
+            />
           </Row>
           <Toggle
             label="Show sub-issues"
@@ -261,20 +365,15 @@ export function DisplayMenu({
           <hr className="border-border" />
           <div className="text-sm font-medium">List options</div>
           <Row label="Nested sub-issues">
-            <select
-              aria-label="Nested sub-issues"
-              className={selectCls}
+            <HoverSelect
+              label="Nested sub-issues"
               value={options.nestedSubIssues}
-              onChange={(e) =>
-                onChange({ nestedSubIssues: e.target.value as DisplayOptions["nestedSubIssues"] })
-              }
-            >
-              {(["showMatching", "showAll", "hide"] as const).map((v) => (
-                <option key={v} value={v}>
-                  {LABEL[v]}
-                </option>
-              ))}
-            </select>
+              options={(["showMatching", "showAll", "hide"] as const).map((v) => ({
+                value: v,
+                label: LABEL[v] ?? v,
+              }))}
+              onChange={(nestedSubIssues) => onChange({ nestedSubIssues })}
+            />
           </Row>
           <Toggle
             label="Show empty groups"

@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PRIORITIES, STATE_TYPE_LABEL, STATE_TYPE_ORDER } from "@/features/issues/model";
+import { cn } from "@/lib/cn";
 
 import {
   describeChip,
@@ -156,19 +157,27 @@ function inputType(field: FilterField, text: string): "text" | "number" | "date"
   return text.startsWith("-P") || text.startsWith("P") ? "text" : "date";
 }
 
-function AddFilterDialog({
+/**
+ * Operator + Werteauswahl eines Feldes. Gemeinsam genutzt vom Hover-Flyout im Filtermenü (LIN-44)
+ * und vom Bearbeiten-Dialog eines bestehenden Chips. `onApply` bekommt den fertigen Chip,
+ * `onCancel` schließt ohne Änderung.
+ */
+function FilterValueForm({
   field,
   sources,
   initial,
-  onClose,
-  onAdd,
+  autoFocus = false,
+  onApply,
+  onCancel,
 }: {
   field: FilterField;
   sources: FilterSources;
   /** Vorhandener Chip, der bearbeitet wird. */
   initial?: FilterChip;
-  onClose: () => void;
-  onAdd: (c: FilterChip) => void;
+  /** Erstes Bedienelement fokussieren (bei Öffnen per Klick/Tastatur, nicht per Hover). */
+  autoFocus?: boolean;
+  onApply: (c: FilterChip) => void;
+  onCancel: () => void;
 }) {
   const options = fieldOptions(field, sources);
   const ops = FIELD_OPS[field];
@@ -184,82 +193,113 @@ function AddFilterDialog({
   const toggle = (v: string) =>
     setValues((cur) => (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]));
   const final = freeText ? (text ? [text] : []) : values;
+  const apply = () => {
+    if (final.length === 0) return;
+    onApply({
+      id: initial?.id ?? newChipId(),
+      field,
+      op,
+      values: final,
+      ...(field === "team" ? { subTeams } : {}),
+    });
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      {ops.length > 1 && (
+        <select
+          aria-label="Operator"
+          value={op}
+          onChange={(e) => setOp(e.target.value as FilterOp)}
+          className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
+        >
+          {ops.map((o) => (
+            <option key={o} value={o}>
+              {OP_LABEL[o]}
+            </option>
+          ))}
+        </select>
+      )}
+      {freeText ? (
+        <Input
+          aria-label="Value"
+          autoFocus={autoFocus}
+          type={inputType(field, text)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") apply();
+          }}
+        />
+      ) : (
+        <ul className="flex max-h-60 flex-col overflow-auto" aria-label="Values">
+          {options.map((o, i) => (
+            <li key={o.value}>
+              <label className="flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-surface-hover">
+                <input
+                  type="checkbox"
+                  autoFocus={autoFocus && i === 0}
+                  checked={values.includes(o.value)}
+                  onChange={() => toggle(o.value)}
+                />
+                {o.label}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      {field === "team" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={subTeams}
+            onChange={(e) => setSubTeams(e.target.checked)}
+          />
+          Include sub-teams
+        </label>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={final.length === 0} onClick={apply}>
+          Apply
+        </Button>
+      </div>
+    </div>
+  );
+}
 
+/** Bestehenden Chip bearbeiten: derselbe Werte-Picker in einem modalen Dialog. */
+function AddFilterDialog({
+  field,
+  sources,
+  initial,
+  onClose,
+  onAdd,
+}: {
+  field: FilterField;
+  sources: FilterSources;
+  /** Vorhandener Chip, der bearbeitet wird. */
+  initial?: FilterChip;
+  onClose: () => void;
+  onAdd: (c: FilterChip) => void;
+}) {
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-sm" aria-describedby={undefined}>
         <DialogTitle>Filter by {FIELD_LABEL[field].toLowerCase()}</DialogTitle>
         <DialogDescription className="sr-only">Choose an operator and values.</DialogDescription>
-        <div className="flex flex-col gap-3">
-          {ops.length > 1 && (
-            <select
-              aria-label="Operator"
-              value={op}
-              onChange={(e) => setOp(e.target.value as FilterOp)}
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
-            >
-              {ops.map((o) => (
-                <option key={o} value={o}>
-                  {OP_LABEL[o]}
-                </option>
-              ))}
-            </select>
-          )}
-          {freeText ? (
-            <Input
-              aria-label="Value"
-              type={inputType(field, text)}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-          ) : (
-            <ul className="flex max-h-60 flex-col overflow-auto" aria-label="Values">
-              {options.map((o) => (
-                <li key={o.value}>
-                  <label className="flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-surface-hover">
-                    <input
-                      type="checkbox"
-                      checked={values.includes(o.value)}
-                      onChange={() => toggle(o.value)}
-                    />
-                    {o.label}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-          {field === "team" && (
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={subTeams}
-                onChange={(e) => setSubTeams(e.target.checked)}
-              />
-              Include sub-teams
-            </label>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              disabled={final.length === 0}
-              onClick={() => {
-                onAdd({
-                  id: initial?.id ?? newChipId(),
-                  field,
-                  op,
-                  values: final,
-                  ...(field === "team" ? { subTeams } : {}),
-                });
-                onClose();
-              }}
-            >
-              Apply
-            </Button>
-          </div>
-        </div>
+        <FilterValueForm
+          field={field}
+          sources={sources}
+          initial={initial}
+          autoFocus
+          onApply={(c) => {
+            onAdd(c);
+            onClose();
+          }}
+          onCancel={onClose}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -442,15 +482,40 @@ export function FilterMenu({
   }, []);
   const [query, setQuery] = useState("");
   const [dates, setDates] = useState(false);
-  const [adding, setAdding] = useState<FilterField | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // LIN-44: Das Werte-Submenü je Kategorie öffnet als Flyout bei Hover, Fokus oder Klick (kein Modal).
+  const [activeField, setActiveField] = useState<FilterField | null>(null);
+  // Fokus nur ins Flyout, wenn per Klick/Tastatur geöffnet (bei Hover würde der Fokus wegspringen).
+  const [flyoutFocus, setFlyoutFocus] = useState(false);
+  const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const clearTimers = () => {
+    clearTimeout(openTimer.current);
+    clearTimeout(closeTimer.current);
+  };
+  const hoverOpen = (f: FilterField) => {
+    clearTimers();
+    openTimer.current = setTimeout(() => {
+      setActiveField(f);
+      setFlyoutFocus(false);
+    }, 100);
+  };
+  const openNow = (f: FilterField, focus: boolean) => {
+    clearTimers();
+    setActiveField(f);
+    setFlyoutFocus(focus);
+  };
+  const scheduleClose = () => {
+    clearTimeout(openTimer.current);
+    closeTimer.current = setTimeout(() => setActiveField(null), 150);
+  };
+  const closeFlyout = () => {
+    clearTimers();
+    setActiveField(null);
+  };
   const active = chips.length + advanced.length;
   const q = query.trim().toLowerCase();
   const matches = (f: FilterField) => !q || FIELD_LABEL[f].toLowerCase().includes(q);
-  const pick = (f: FilterField) => {
-    setOpen(false);
-    setAdding(f);
-  };
   const groups = MENU_GROUPS.map((g) =>
     g.flatMap((e): Array<FilterField | "dates"> => {
       if (e === "dates") {
@@ -473,6 +538,7 @@ export function FilterMenu({
           if (!o) {
             setQuery("");
             setDates(false);
+            closeFlyout();
           }
         }}
       >
@@ -492,80 +558,122 @@ export function FilterMenu({
             )}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-64 p-1" aria-label="Add filter">
-          <div role="menu" aria-label="Filter categories" className="flex flex-col">
-            <div className="flex items-center gap-2 border-b border-border px-2 pt-1 pb-1.5">
-              <Search className="size-4 text-muted-foreground" />
-              <input
-                autoFocus
-                aria-label="Search filters"
-                placeholder="Add filter…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && first && first !== "dates") pick(first);
-                }}
-                className="h-6 flex-1 bg-transparent text-sm outline-none"
-              />
-              <kbd className="rounded border border-border px-1 text-xs text-muted-foreground">
-                F
-              </kbd>
+        <PopoverContent align="start" className="w-auto p-0" aria-label="Add filter">
+          <div className="flex items-stretch">
+            <div
+              role="menu"
+              aria-label="Filter categories"
+              className="flex w-64 flex-col p-1"
+              onMouseLeave={scheduleClose}
+            >
+              <div className="flex items-center gap-2 border-b border-border px-2 pt-1 pb-1.5">
+                <Search className="size-4 text-muted-foreground" />
+                <input
+                  autoFocus
+                  aria-label="Search filters"
+                  placeholder="Add filter…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && first && first !== "dates") openNow(first, true);
+                  }}
+                  className="h-6 flex-1 bg-transparent text-sm outline-none"
+                />
+                <kbd className="rounded border border-border px-1 text-xs text-muted-foreground">
+                  F
+                </kbd>
+              </div>
+              {onAdvancedChange && (!q || "advanced filter".includes(q)) && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={item}
+                  onMouseEnter={closeFlyout}
+                  onClick={() => {
+                    setOpen(false);
+                    setAdvancedOpen(true);
+                  }}
+                >
+                  Advanced filter
+                </button>
+              )}
+              {groups.map((g, i) => (
+                <div key={i} className="mt-1 border-t border-border pt-1">
+                  {g.map((e) =>
+                    e === "dates" ? (
+                      <button
+                        key="dates"
+                        type="button"
+                        role="menuitem"
+                        className={item}
+                        onMouseEnter={closeFlyout}
+                        onClick={() => setDates(true)}
+                      >
+                        Dates <ChevronRight className="ml-auto size-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        key={e}
+                        type="button"
+                        role="menuitem"
+                        aria-haspopup="menu"
+                        aria-expanded={activeField === e}
+                        className={cn(item, activeField === e && "bg-surface-hover")}
+                        onMouseEnter={() => hoverOpen(e)}
+                        onFocus={() => openNow(e, false)}
+                        onClick={() => openNow(e, true)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === "ArrowRight" || ev.key === "Enter") {
+                            ev.preventDefault();
+                            openNow(e, true);
+                          } else if (ev.key === "ArrowLeft" && activeField === e) {
+                            ev.preventDefault();
+                            closeFlyout();
+                          }
+                        }}
+                      >
+                        {FIELD_LABEL[e]}
+                        <ChevronRight className="ml-auto size-3.5" />
+                      </button>
+                    ),
+                  )}
+                </div>
+              ))}
+              {groups.length === 0 && (
+                <p className="px-2 py-2 text-xs text-muted-foreground">No matching filters.</p>
+              )}
             </div>
-            {onAdvancedChange && (!q || "advanced filter".includes(q)) && (
-              <button
-                type="button"
-                role="menuitem"
-                className={item}
-                onClick={() => {
-                  setOpen(false);
-                  setAdvancedOpen(true);
+            {activeField && (
+              <div
+                role="menu"
+                aria-label={`${FIELD_LABEL[activeField]} values`}
+                className="w-56 border-l border-border p-2"
+                onMouseEnter={clearTimers}
+                onMouseLeave={scheduleClose}
+                onKeyDown={(ev) => {
+                  if (ev.key === "ArrowLeft") {
+                    ev.preventDefault();
+                    closeFlyout();
+                  }
                 }}
               >
-                Advanced filter
-              </button>
-            )}
-            {groups.map((g, i) => (
-              <div key={i} className="mt-1 border-t border-border pt-1">
-                {g.map((e) =>
-                  e === "dates" ? (
-                    <button
-                      key="dates"
-                      type="button"
-                      role="menuitem"
-                      className={item}
-                      onClick={() => setDates(true)}
-                    >
-                      Dates <ChevronRight className="ml-auto size-3.5" />
-                    </button>
-                  ) : (
-                    <button
-                      key={e}
-                      type="button"
-                      role="menuitem"
-                      className={item}
-                      onClick={() => pick(e)}
-                    >
-                      {FIELD_LABEL[e]}
-                      <ChevronRight className="ml-auto size-3.5" />
-                    </button>
-                  ),
-                )}
+                <FilterValueForm
+                  key={activeField}
+                  field={activeField}
+                  sources={sources}
+                  autoFocus={flyoutFocus}
+                  onApply={(c) => {
+                    onChange([...chips, c]);
+                    closeFlyout();
+                    setOpen(false);
+                  }}
+                  onCancel={closeFlyout}
+                />
               </div>
-            ))}
-            {groups.length === 0 && (
-              <p className="px-2 py-2 text-xs text-muted-foreground">No matching filters.</p>
             )}
           </div>
         </PopoverContent>
       </Popover>
-      {adding && (
-        <AddFilterDialog
-          field={adding}
-          sources={sources}
-          onClose={() => setAdding(null)}
-          onAdd={(c) => onChange([...chips, c])}
-        />
-      )}
       {advancedOpen && onAdvancedChange && (
         <AdvancedFilterDialog
           initial={advanced}

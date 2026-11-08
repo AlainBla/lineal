@@ -199,7 +199,8 @@ describe("Projekt-Issues (docs/08 §2.7)", () => {
     await screen.findByText("Erstes");
     await user.click(screen.getByRole("button", { name: "Display options" }));
     const dialog = await screen.findByRole("dialog", { name: "Display options" });
-    await user.selectOptions(within(dialog).getByLabelText("Grouping"), "priority");
+    await user.click(within(dialog).getByRole("button", { name: "Grouping" }));
+    await user.click(await screen.findByRole("option", { name: "Priority" }));
     await waitFor(() =>
       expect(log.at(-1)).toMatchObject({
         viewType: "projectIssues",
