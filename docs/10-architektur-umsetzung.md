@@ -770,8 +770,8 @@ Die konkrete Struktur von Repository, Crates und Modulen steht in [11-implementi
 | Jobs / Queue | Tabelle `job` in PostgreSQL mit `FOR UPDATE SKIP LOCKED`, eigener Worker-Prozess |
 | Outbox | Tabelle `outbox_event`, Konsumenten idempotent (siehe [1.7](#17-outbox-lastsyncid-und-konsumenten)) |
 | Auslieferung | ein Server-Binary (API, MCP, Sync) + ein Worker-Binary, Frontend als statische Dateien |
-| CI | `scripts/check.sh`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `npm run typecheck`, `npm run lint`, `npm test` |
-| Lieferkette | `cargo-deny` (Lizenzen, Advisories), `npm audit`, Renovate |
+| CI | GitHub Actions (`.github/workflows/ci.yml`) bei Push und Pull Request: dieselben Prüfungen wie `scripts/check.sh`, in unabhängigen Jobs – Rust (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, Schema-Export-Diff auf `web/schema.graphql`), Web (`npm ci`, `typecheck`, `lint`, `test`, `npm audit --omit=dev --audit-level=high`), nginx-Konfigtest. Lokal identisch über `scripts/check.sh` |
+| Lieferkette | `cargo-deny` (Lizenzen, Advisories) und `npm audit` als eigene CI-Jobs, zusätzlich als täglicher Scan (`schedule`), damit neue Advisories auch ohne Commit auffallen; Renovate |
 
 ### 11.4 Sicherheitsvorgaben für die Umsetzung
 

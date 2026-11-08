@@ -90,6 +90,11 @@ runs `docker compose --profile dev up -d --wait`, `cargo fmt --check`, `cargo cl
 `cargo test`, `cargo deny`, the schema export to `web/schema.graphql` (regenerated), `npm ci`,
 `typecheck`, `lint` and `test`. End-to-end tests: `scripts/e2e.sh`.
 
+The same checks run in CI on every push and pull request via GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), split into independent jobs (Rust,
+cargo-deny, Web, nginx). The supply-chain scan (`cargo deny` advisories and `npm audit`) also runs
+on a daily schedule so new advisories surface without a commit.
+
 ## Structure
 
 | Path | Contents |
