@@ -1,0 +1,96 @@
+name: CI
+
+# S-07/LIN-34: Tests, Abhängigkeits-Audit und nginx-Prüfung bei jedem Push und PR auf `main`,
+# dazu ein täglicher Lauf, damit neue Sicherheitsmeldungen (RUSTSEC, npm) auch ohne Commit
+# auffallen. Die Jobs laufen unabhängig: rote Tests verhindern nicht, dass `cargo deny` läuft.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Täglich 05:17 UTC: Advisory-Datenbanken gegen den aktuellen Stand prüfen.
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://lineal:lineal@localhost:5440/lineal
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: lineal
+          POSTGRES_PASSWORD: lineal
+          POSTGRES_DB: lineal
+        ports:
+          - 5440:5432
+        options: >-
+          --health-cmd "pg_isready -U lineal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+      - name: Schema-Export ist aktuell
+        run: |
+          cargo run -q -p lineal-server -- schema-export --out web/schema.graphql
+          git diff --exit-code web/schema.graphql
+
+  deny:
+    name: cargo-deny (advisories, bans, licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - run: cargo deny check advisories bans licenses
+
+  web:
+    name: Web (typecheck, lint, test, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: npm audit (Laufzeit-Abhängigkeiten)
+        run: npm audit --omit=dev --audit-level=high
+
+  nginx:
+    name: nginx-Konfiguration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/nginx-check.sh
