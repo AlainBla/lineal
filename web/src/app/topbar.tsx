@@ -71,10 +71,17 @@ function QuickSearch() {
   // Nur auf schmalen Fenstern relevant: Eingabefeld ausgeklappt (ab `sm` immer sichtbar).
   const [open, setOpen] = useState(false);
 
-  // Seitenwechsel verwirft den Filter.
+  // Seitenwechsel klappt das Feld wieder ein — beim Rendern, nicht im Effect, um
+  // kaskadierende Re-Renders (react-hooks/set-state-in-effect) zu vermeiden.
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (pathname !== prevPath) {
+    setPrevPath(pathname);
+    setOpen(false);
+  }
+
+  // Seitenwechsel verwirft den Filter (externer Store).
   useEffect(() => {
     clearQuickFilter();
-    setOpen(false);
   }, [pathname]);
 
   // Cmd/Ctrl+F klappt das Feld auf und fokussiert es (synchron, damit der Fokus greift).
