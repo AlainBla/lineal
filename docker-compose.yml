@@ -1,6 +1,8 @@
 name: lineal
-# Standard (`docker compose up -d`): nur PostgreSQL für Entwicklung und Tests (Port 5440).
+# Entwicklung und Tests: `docker compose --profile dev up -d --wait` (nur PostgreSQL, Port 5440).
 # Komplette Anwendung: `docker compose --profile app up -d --build` (siehe docs/15 §3.4).
+# Die Entwicklungs-DB liegt im Profil `dev`, damit sie beim Prod-Deploy (`--profile app`) nicht
+# mitstartet (S-41/LIN-41); sonst lief kurzzeitig ein Postgres mit dem Passwort `lineal` mit.
 # Log-Rotation für alle App-Dienste (sonst wächst das json-file-Log unbegrenzt: ~9 MB/h im Test).
 x-logging: &logging
   driver: json-file
@@ -10,6 +12,7 @@ x-logging: &logging
 
 services:
   postgres:
+    profiles: [dev]
     image: postgres:16
     environment:
       POSTGRES_USER: lineal

@@ -14,7 +14,7 @@ if ! command -v cargo-fmt >/dev/null || ! command -v cargo-clippy >/dev/null; th
 fi
 
 step "PostgreSQL starten (docker compose, Port 5440)"
-docker compose up -d --wait
+docker compose --profile dev up -d --wait
 
 step "cargo fmt --check"
 cargo fmt --all -- --check

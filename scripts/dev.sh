@@ -11,7 +11,7 @@ set -a
 set +a
 export LINEAL_DEV=1
 
-docker compose up -d --wait
+docker compose --profile dev up -d --wait
 cargo run -q -p lineal-server -- migrate
 if [ "${SEED:-0}" = "1" ]; then
   cargo run -q -p lineal-server -- seed

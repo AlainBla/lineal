@@ -32,7 +32,7 @@ E2E_DB_URL="postgres://lineal:lineal@127.0.0.1:5440/$E2E_DB"
 export LINEAL_E2E_PSQL="docker compose exec -T postgres psql -U lineal -d $E2E_DB"
 
 step "PostgreSQL starten und Datenbank $E2E_DB neu anlegen"
-docker compose up -d --wait
+docker compose --profile dev up -d --wait
 docker compose exec -T postgres psql -U lineal -d postgres -v ON_ERROR_STOP=1 \
   -c "DROP DATABASE IF EXISTS $E2E_DB WITH (FORCE)" -c "CREATE DATABASE $E2E_DB"
 

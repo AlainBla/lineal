@@ -62,7 +62,7 @@ Environment variables, TLS, backups and updates: [`docs/15-umsetzungsstand.md`](
 
 ```bash
 cp .env.example .env
-docker compose up -d --wait               # project name "lineal", Postgres :5440
+docker compose --profile dev up -d --wait # project name "lineal", Postgres :5440
 cargo run -p lineal-server -- migrate     # apply migrations
 cargo run -p lineal-server -- seed        # sample workspace acme (LINEAL_DEV=1 only, password lineal-dev)
 cargo run -p lineal-server -- serve       # http://localhost:8080  (GET /healthz)
@@ -86,7 +86,7 @@ set `LINEAL_BIND=127.0.0.1:18080` and, for the web app, `LINEAL_BACKEND=http://l
 scripts/check.sh
 ```
 
-runs `docker compose up -d --wait`, `cargo fmt --check`, `cargo clippy -D warnings`,
+runs `docker compose --profile dev up -d --wait`, `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo test`, `cargo deny`, the schema export to `web/schema.graphql` (regenerated), `npm ci`,
 `typecheck`, `lint` and `test`. End-to-end tests: `scripts/e2e.sh`.
 

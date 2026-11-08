@@ -279,7 +279,7 @@ flowchart LR
 
 ```bash
 cp .env.example .env
-docker compose up -d                      # Projektname "lineal": in allen Worktrees derselbe Container auf :5440
+docker compose --profile dev up -d        # Projektname "lineal": in allen Worktrees derselbe Container auf :5440
 cargo run -p lineal-server -- migrate     # Migrationen
 cargo run -p lineal-server -- seed        # Beispiel-Workspace acme
 cargo run -p lineal-server -- serve       # http://localhost:8080
