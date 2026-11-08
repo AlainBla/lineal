@@ -483,6 +483,14 @@ impl App {
                 ctx,
             ))
             .await?;
+        // S-13/S-14: Die Reservierung ist nach dem Anlegen des Anhangs redundant — der
+        // attachment-Datensatz hält den storage_key. Bliebe sie stehen, blockierte sie dauerhaft
+        // das physische Aufräumen gelöschter Dateien (unreferenced_storage_keys) und ließ
+        // resolve_assets als Fallback für jedes Mitglied signieren. Löschen passiert in derselben
+        // Transaktion wie das Anlegen (atomar; finalize_reservation bleibt der Nebenläufigkeits-Riegel).
+        tx.attachments()
+            .delete_reservations(&[reservation.id])
+            .await?;
         let last_sync_id = tx.last_sync_id().await?;
         let view = self
             .attachment_view(&mut *tx, attachment, issue.identifier)

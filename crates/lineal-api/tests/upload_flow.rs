@@ -97,6 +97,18 @@ async fn upload_flow_through_the_real_put_endpoint(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(done.view.attachment.size, Some(12));
+    // S-13/S-14: Nach dem Finalisieren bleibt keine finalisierte Reservierung stehen (sie blockierte
+    // sonst das Aufräumen und ließ resolve_assets als Fallback signieren).
+    let finalized: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM upload_reservation WHERE finalized_at IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        finalized, 0,
+        "finalisierte Reservierung wird beim Anlegen gelöscht"
+    );
     let get = router
         .clone()
         .oneshot(
@@ -270,12 +282,13 @@ async fn milestone_file_flow_follows_project_access(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(get.status(), StatusCode::OK);
 
-    // Ein zweites Mal lässt sich derselbe Upload nicht anhängen.
+    // Ein zweites Mal lässt sich derselbe Upload nicht anhängen. Die Reservierung wird beim
+    // Finalisieren gelöscht (S-13/S-14), daher jetzt `upload_unknown` statt `upload_finalized`.
     let again = app
         .add_resource_file(&bob, &project, Some(&milestone), &asset, None)
         .await
         .unwrap_err();
-    assert_eq!(again.details["reason"], "upload_finalized");
+    assert_eq!(again.details["reason"], "upload_unknown");
 
     // Wer das Projekt nicht sieht, bekommt weder Liste noch Download-URL.
     assert!(app.list_resources(&alice, &project, None).await.is_err());

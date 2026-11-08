@@ -1,0 +1,12 @@
+-- S-13/S-14 (LIN-37): Finalisierte Upload-Reservierungen sind nach dem Anlegen des Anhangs
+-- redundant — der attachment-Datensatz hält den storage_key. Sie blieben aber stehen und
+-- blockierten `unreferenced_storage_keys` (gelöschte Dateien wurden nie physisch entfernt) und
+-- ließen resolve_assets als Fallback signieren. Ab jetzt löscht create_attachment_from_upload die
+-- Reservierung beim Finalisieren; diese Migration räumt den Bestand auf.
+--
+-- Es werden ausschließlich FINALISIERTE Reservierungen entfernt. Eine finalisierte Reservierung
+-- bedeutet, dass der Upload abgeschlossen wurde und ein attachment- bzw. project_file-Datensatz
+-- entstand: existiert er noch, schützt er den storage_key weiterhin; wurde die Datei gelöscht, ist
+-- die Reservierung der übrig gebliebene Blocker und soll weg. Editor-Bilder und Avatare werden nie
+-- finalisiert (finalized_at IS NULL) und bleiben unberührt; laufende Uploads ebenso.
+DELETE FROM upload_reservation WHERE finalized_at IS NOT NULL;

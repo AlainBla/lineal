@@ -288,6 +288,12 @@ impl App {
             .await?;
         self.emit_resources_changed(&mut *tx, ctx, r.project.id, scope)
             .await?;
+        // S-13/S-14: Reservierung nach dem Anlegen der Projektdatei löschen — project_file hält den
+        // storage_key. Bliebe sie stehen, blockierte sie (wie bei Issue-Anhängen) dauerhaft das
+        // physische Aufräumen gelöschter Dateien.
+        tx.attachments()
+            .delete_reservations(&[reservation.id])
+            .await?;
         tx.commit().await?;
         Ok(id)
     }

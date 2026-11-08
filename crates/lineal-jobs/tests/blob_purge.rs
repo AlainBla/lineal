@@ -131,6 +131,31 @@ async fn reserve(
     .unwrap();
 }
 
+/// S-14 (LIN-37): Die Aufräum-Migration (5000) entfernt nur finalisierte Reservierungen. Editor-
+/// Bilder und Avatare werden nie finalisiert und bleiben erhalten.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn cleanup_removes_only_finalized_reservations(pool: PgPool) {
+    let fx = setup(pool).await;
+    reserve(&fx, None, "acme/finalized.png", t0(), true).await; // fertiger Upload
+    reserve(&fx, None, "acme/editor.png", t0(), false).await; // Editor-Bild/Avatar, nie finalisiert
+    // Migration 5000 lief beim Testaufbau auf leerer DB; die Anweisung hier erneut ausführen
+    // (idempotent), um sie gegen die frisch eingefügten Zeilen zu prüfen.
+    sqlx::query("DELETE FROM upload_reservation WHERE finalized_at IS NOT NULL")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let remaining: Vec<String> =
+        sqlx::query_scalar("SELECT storage_key FROM upload_reservation ORDER BY storage_key")
+            .fetch_all(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining,
+        ["acme/editor.png"],
+        "nur unfinalisierte Reservierungen bleiben"
+    );
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn issue_purge_deletes_blobs_but_keeps_shared_keys(pool: PgPool) {
     let fx = setup(pool).await;
