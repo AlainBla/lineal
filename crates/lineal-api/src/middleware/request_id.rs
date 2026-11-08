@@ -30,10 +30,11 @@ pub fn generate() -> String {
     format!("req_{}", Uuid::now_v7().simple())
 }
 
-/// Pfad fürs Log: Fähigkeits-URLs (`/files/<Token>`, `/uploads/<Token>`) enthalten ein
-/// signiertes Token, das 1-5 min als Zugriffsrecht gilt, und werden nie im Klartext geloggt.
+/// Pfad fürs Log: Fähigkeits-URLs enthalten ein Token, das als Zugriffsrecht gilt, und werden nie
+/// im Klartext geloggt. `/files/<Token>` und `/uploads/<Token>` tragen ein kurzlebiges signiertes
+/// Token; `/calendar/<Token>.ics` (S-12) trägt den langlebigen, nicht ablaufenden Kalender-Token.
 pub fn loggable_path(path: &str) -> String {
-    for prefix in ["/files/", "/uploads/"] {
+    for prefix in ["/files/", "/uploads/", "/calendar/"] {
         if path.starts_with(prefix) {
             return format!("{prefix}<redacted>");
         }
@@ -81,7 +82,13 @@ mod tests {
     fn capability_urls_are_redacted_in_the_log() {
         assert_eq!(loggable_path("/files/abc.def"), "/files/<redacted>");
         assert_eq!(loggable_path("/uploads/abc.def"), "/uploads/<redacted>");
+        // S-12: Kalender-Token (langlebig) nie im Klartext ins Log.
+        assert_eq!(
+            loggable_path("/calendar/secret-token.ics"),
+            "/calendar/<redacted>"
+        );
         assert_eq!(loggable_path("/graphql"), "/graphql");
         assert_eq!(loggable_path("/filesystem"), "/filesystem");
+        assert_eq!(loggable_path("/calendars"), "/calendars");
     }
 }
