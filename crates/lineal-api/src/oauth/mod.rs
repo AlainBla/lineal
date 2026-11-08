@@ -22,7 +22,6 @@ use lineal_app::ports::repos::webhook::{
 };
 use lineal_app::usecases::audit::AuditEvent;
 use lineal_app::{Actor, App, AppResult};
-use lineal_domain::enums::UserRole;
 use lineal_domain::events::{DomainEvent, EventOrigin};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -158,6 +157,14 @@ fn oauth_error(status: StatusCode, code: &str, description: &str) -> Response {
 }
 
 /// `POST /oauth/register`.
+/// Steuer- oder Bidi-/Richtungs-Zeichen, die einen angezeigten Namen verschleiern könnten (S-22).
+fn is_unsafe_name_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200E}' | '\u{200F}')
+        || ('\u{202A}'..='\u{202E}').contains(&c)
+        || ('\u{2066}'..='\u{2069}').contains(&c)
+}
+
 pub async fn register(State(app): State<Arc<App>>, body: Bytes) -> Response {
     let bad = |d: &str| oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata", d);
     if body.len() > 16 * 1024 {
@@ -204,6 +211,11 @@ pub async fn register(State(app): State<Arc<App>>, body: Bytes) -> Response {
         .unwrap_or("MCP client");
     if name.chars().count() > 200 {
         return bad("client_name too long");
+    }
+    // S-22: Steuer- und Bidi-Zeichen können den auf der Consent-Seite angezeigten Namen
+    // verschleiern (Spoofing); solche Namen werden abgelehnt.
+    if name.chars().any(is_unsafe_name_char) {
+        return bad("client_name contains control or bidirectional characters");
     }
     let client = ClientRegistration {
         client_id: format!("lin_client_{}", Uuid::new_v4().simple()),
@@ -526,7 +538,7 @@ async fn authorize_inner(
             "resource must be the MCP resource of this server",
         );
     }
-    let Some(mut scopes) = parse_scopes(get("scope")) else {
+    let Some(scopes) = parse_scopes(get("scope")) else {
         return err(
             "invalid_scope",
             "scope must be a subset of read, write, admin",
@@ -548,13 +560,17 @@ async fn authorize_inner(
             return no_store(Redirect::to(&login).into_response());
         }
     };
-    let role = match ctx.actor {
-        Actor::User { role, .. } => role,
-        _ => return error_page("only users can authorize applications"),
-    };
-    // admin-Scope nur für Admins/Owner.
-    if scopes.iter().any(|s| s == "admin") && !matches!(role, UserRole::Owner | UserRole::Admin) {
-        scopes.retain(|s| s != "admin");
+    if !matches!(ctx.actor, Actor::User { .. }) {
+        return error_page("only users can authorize applications");
+    }
+    // S-22: Alle OAuth-Clients registrieren sich selbst (offene DCR). Admin-Scope ist für solche
+    // Clients zu mächtig und überlebt sogar den Passwortwechsel; er wird abgelehnt — statt ihn still
+    // zu entfernen (verwirrter Stellvertreter). Fehler geht an die bereits validierte redirect_uri.
+    if scopes.iter().any(|s| s == "admin") {
+        return err(
+            "invalid_scope",
+            "admin is not available to dynamically registered applications",
+        );
     }
     let now = app.clock.now();
     // 3. Consent: nur ein POST mit gültigem Nonce zählt als Zustimmung; sonst Formular zeigen.

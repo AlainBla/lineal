@@ -533,13 +533,12 @@ async fn refresh_rotation_and_family_revocation_on_reuse(pool: PgPool) {
 async fn revoke_endpoint_and_scope_clamping(pool: PgPool) {
     let fx = setup(pool).await;
     let client = register_client(&fx).await;
-    // Bob (User) bekommt keinen admin-Scope; Alice (Owner) schon.
-    let code = obtain_code(&fx, &client, &fx.bob_cookie, "read%20write%20admin").await;
+    // S-22: admin-Scope wird für selbst registrierte Clients abgelehnt (früher geclampt; siehe
+    // authorize_rejects_admin_scope_for_dynamic_clients). Ein normaler Grant (read write)
+    // funktioniert weiterhin und lässt sich widerrufen.
+    let code = obtain_code(&fx, &client, &fx.alice_cookie, "read%20write").await;
     let (_, v) = exchange(&fx, &client, &code, VERIFIER).await;
     assert_eq!(v["scope"], "read write");
-    let code = obtain_code(&fx, &client, &fx.alice_cookie, "admin").await;
-    let (_, v) = exchange(&fx, &client, &code, VERIFIER).await;
-    assert_eq!(v["scope"], "read admin");
     let access = v["access_token"].as_str().unwrap().to_string();
     assert_eq!(mcp_call(&fx, &access).await.0, StatusCode::OK);
     // Widerruf.
@@ -701,5 +700,47 @@ async fn suspending_a_user_kills_codes_refresh_tokens_and_stays_dead(pool: PgPoo
     assert_eq!(
         exchange(&fx, &client, &open_code, VERIFIER).await.0,
         StatusCode::BAD_REQUEST
+    );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn registration_rejects_bidi_client_name(pool: PgPool) {
+    let fx = setup(pool).await;
+    // S-22: Ein Bidi-Override im Namen würde die Consent-Anzeige verschleiern → abgelehnt.
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/register")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "client_name": "Good\u{202E}daB", "redirect_uris": [REDIRECT] }).to_string(),
+        ))
+        .unwrap();
+    let (status, _, body) = send(&fx.api, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("bidirectional"), "{body}");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn authorize_rejects_admin_scope_for_dynamic_clients(pool: PgPool) {
+    let fx = setup(pool).await;
+    let client = register_client(&fx).await;
+    // S-22: admin-Scope ist für selbst registrierte Clients nicht verfügbar — auch nicht für einen
+    // Owner. Statt den Scope still zu entfernen, wird abgelehnt; keine Consent-Seite.
+    let (s, h, _) = send(
+        &fx.api,
+        get(
+            &authorize_uri(&client, "&scope=admin"),
+            Some(&fx.alice_cookie),
+        ),
+    )
+    .await;
+    assert!(s.is_redirection(), "{s}");
+    assert!(
+        h.get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("error=invalid_scope"),
+        "admin muss abgelehnt werden"
     );
 }
