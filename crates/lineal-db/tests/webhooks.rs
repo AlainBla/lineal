@@ -1809,3 +1809,31 @@ async fn invitation_into_a_private_team_fails_after_the_inviter_was_removed(pool
     .unwrap();
     assert_eq!(members, 0);
 }
+
+/// S-17 (LIN-38): Ein team-beschränkter Admin-Key darf keinen workspace-weiten Webhook
+/// (allPublicTeams) anlegen — er läse sonst alle öffentlichen Teams mit, auch nach Widerruf des
+/// Keys. Ein Team-Webhook seines Teams bleibt erlaubt.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn team_scoped_key_cannot_create_workspace_webhooks(pool: PgPool) {
+    let fx = setup(pool).await;
+    let mut scoped = alice();
+    scoped.team_scope = Some(vec![fx.data.eng]);
+
+    assert_eq!(
+        kind(fx.app.create_webhook(&scoped, ws_hook(&["Issue"])).await),
+        ErrorKind::Forbidden,
+        "workspace-weiter Webhook mit team-beschränktem Key"
+    );
+
+    // Team-Webhook für das Team im Scope bleibt erlaubt.
+    fx.app
+        .create_webhook(&scoped, team_hook("ENG", &["Issue"]))
+        .await
+        .unwrap();
+
+    // Ohne Scope legt derselbe Admin den Workspace-Webhook an.
+    fx.app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap();
+}

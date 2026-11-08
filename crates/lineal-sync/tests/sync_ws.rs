@@ -7,6 +7,7 @@ use axum::http::{Request, StatusCode};
 use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::{SinkExt, StreamExt};
 use lineal_app::App;
+use lineal_app::policy::PolicySnapshot;
 use lineal_app::ports::Store;
 use lineal_app::ports::repos::auth::NewSession;
 use lineal_app::ports::repos::outbox::NewSyncAction;
@@ -1356,4 +1357,36 @@ async fn bootstrap_manipulated_cursors_cannot_skip_the_filter_or_fake_the_head(p
     assert_eq!(status, StatusCode::OK);
     let (objs, _) = split(&lines);
     assert!(objs.is_empty(), "Carol sieht keine Issues");
+}
+
+/// S-18 (LIN-38): Ein team-beschränkter Key erhält über /sync nur die Gruppen seiner Teams
+/// (team:/iteam:) und orgpub — nicht org (alle Nicht-Gast-Inhalte) oder user: (persönlich).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn team_scoped_key_sync_groups_exclude_org_and_personal(pool: PgPool) {
+    let e = env(pool).await;
+    let base = lineal_testkit::ctx_for(lineal_testkit::SeedUser::Bob);
+    let mut tx = e.app.store.begin(e.d.org).await.unwrap();
+
+    // Unbeschränkt: org und user: sind dabei.
+    let snap = PolicySnapshot::load(&mut *tx, &base).await.unwrap();
+    let full = lineal_sync::allowed_groups(&snap, &base);
+    assert!(full.iter().any(|g| g == "org"), "{full:?}");
+    assert!(full.iter().any(|g| g.starts_with("user:")), "{full:?}");
+
+    // Team-beschränkt auf ENG: nur team:/iteam: von ENG und orgpub.
+    let mut scoped = base.clone();
+    scoped.team_scope = Some(vec![e.d.eng]);
+    let snap = PolicySnapshot::load(&mut *tx, &scoped).await.unwrap();
+    let groups = lineal_sync::allowed_groups(&snap, &scoped);
+    assert!(
+        groups.iter().any(|g| *g == format!("team:{}", e.d.eng.0)),
+        "{groups:?}"
+    );
+    assert!(groups.iter().any(|g| g == "orgpub"));
+    assert!(!groups.iter().any(|g| g == "org"), "kein org: {groups:?}");
+    assert!(
+        !groups.iter().any(|g| g.starts_with("user:")),
+        "kein user: {groups:?}"
+    );
+    assert!(!groups.iter().any(|g| g.starts_with("tmem:")));
 }

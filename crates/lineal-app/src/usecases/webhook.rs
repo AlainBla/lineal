@@ -567,6 +567,18 @@ fn webhook_not_found() -> AppError {
         .with_details(json!({ "type": "Webhook" }))
 }
 
+/// S-17: Ein team-beschränkter Key (API-Key mit `team_scope`) darf keine workspace-weiten
+/// (`allPublicTeams`) Webhooks anlegen oder ändern — er läse damit alle öffentlichen Teams mit,
+/// und das überlebte den Widerruf des Keys. Team-Webhooks bleiben erlaubt (eigenes Team-Recht).
+fn reject_team_scoped_workspace_webhook(ctx: &RequestCtx) -> AppResult<()> {
+    if ctx.team_scope.is_some() {
+        return Err(AppError::forbidden(
+            "A team-restricted key cannot manage workspace-wide webhooks.",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_label(label: &Option<String>) -> AppResult<Option<String>> {
     match label.as_deref().map(str::trim) {
         None | Some("") => Ok(None),
@@ -624,7 +636,10 @@ impl App {
             Some(t) => snap
                 .require_team(ctx, Action::CreateTeamWebhook, t)
                 .map(|_| ()),
-            None => snap.require_workspace(ctx, Action::ManageWebhooks),
+            None => {
+                reject_team_scoped_workspace_webhook(ctx)?;
+                snap.require_workspace(ctx, Action::ManageWebhooks)
+            }
         }
     }
 
@@ -659,6 +674,7 @@ impl App {
                 Some(team.id)
             }
             None => {
+                reject_team_scoped_workspace_webhook(ctx)?;
                 snap.require_workspace(ctx, Action::ManageWebhooks)?;
                 None
             }

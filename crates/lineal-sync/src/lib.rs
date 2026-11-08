@@ -658,27 +658,40 @@ async fn drive(
 }
 
 /// Erlaubte Gruppen eines Users **jetzt**: sichtbare Teams, Workspace (nicht für Gäste), persönlich.
-fn allowed_groups(snap: &PolicySnapshot, ctx: &RequestCtx) -> Vec<String> {
+///
+/// S-18: Ein team-beschränkter Key (`ctx.team_scope`) erhält nur die Gruppen seiner Teams
+/// (`team:`/`iteam:`, über `visible_team_ids` bereits auf den Scope eingeschränkt) und die
+/// öffentlichen Workspace-Metadaten (`orgpub`). `org` (alle Nicht-Gast-Inhalte), `user:`
+/// (persönlich) und `tmem:` entfallen, sonst läse der Key über `/sync` am Scope vorbei.
+pub fn allowed_groups(snap: &PolicySnapshot, ctx: &RequestCtx) -> Vec<String> {
     let visible = snap.visible_team_ids();
     let mut groups: Vec<String> = visible.iter().map(|t| format!("team:{}", t.0)).collect();
     // Workspace-Metadaten und Workspace-Labels sehen alle, auch Gäste.
     groups.push("orgpub".to_owned());
+    let is_guest = matches!(
+        ctx.actor,
+        Actor::User {
+            role: UserRole::Guest,
+            ..
+        }
+    );
     // Nicht-Gäste sehen Initiativen ihrer sichtbaren Teams (docs/04 §4.6): `iteam:<team>`.
-    let add_initiative_groups = |groups: &mut Vec<String>| {
+    if !is_guest && matches!(ctx.actor, Actor::User { .. } | Actor::App { .. }) {
         groups.extend(visible.iter().map(|t| format!("iteam:{}", t.0)));
-    };
+    }
+    if ctx.team_scope.is_some() {
+        return groups;
+    }
     if let Actor::User { id, role } = ctx.actor {
         if role == UserRole::Guest {
             // Gäste sehen nur Personen ihrer eigenen Teams (docs/02 §6.5).
             groups.extend(visible.iter().map(|t| format!("tmem:{}", t.0)));
         } else {
             groups.push("org".to_owned());
-            add_initiative_groups(&mut groups);
         }
         groups.push(format!("user:{}", id.0));
     } else if let Actor::App { id } = ctx.actor {
         groups.push("org".to_owned());
-        add_initiative_groups(&mut groups);
         groups.push(format!("user:{}", id.0));
     }
     groups
