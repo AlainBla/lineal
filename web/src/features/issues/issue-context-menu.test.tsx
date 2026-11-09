@@ -104,8 +104,9 @@ describe("Kontextmenü auf Tickets", () => {
     await screen.findByText("Erstes Ticket");
     const user = userEvent.setup();
     await openMenu("Erstes Ticket");
+    // Status… ist jetzt ein Hover-Flyout (LIN-53): Zeile öffnet das Submenü, Option wählt.
     await user.click(screen.getByRole("menuitem", { name: /^Status…/ }));
-    await user.click(await screen.findByRole("option", { name: /In Progress/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /In Progress/ }));
     await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
     expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({
       id: "a",
@@ -123,7 +124,7 @@ describe("Kontextmenü auf Tickets", () => {
     const user = userEvent.setup();
     await openMenu("Zweites");
     await user.click(screen.getByRole("menuitem", { name: /^Priority…/ }));
-    await user.click(await screen.findByRole("option", { name: /Urgent/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Urgent/ }));
     await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
     expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({ id: "b", input: { priority: 1 } });
 
@@ -134,6 +135,56 @@ describe("Kontextmenü auf Tickets", () => {
       id: "b",
       input: { assigneeId: "user-bob" },
     });
+  });
+
+  it("Status-Flyout: → öffnet und fokussiert die Suche, ← schließt (LIN-53)", async () => {
+    mockGraphql(base);
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    const menu = await openMenu("Erstes Ticket");
+    within(menu).getByRole("menuitem", { name: /^Status…/ }).focus();
+    await user.keyboard("{ArrowRight}");
+    const input = await screen.findByPlaceholderText("Change status…");
+    await waitFor(() => expect(input).toHaveFocus());
+    await user.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(screen.queryByRole("option", { name: /In Progress/ })).toBeNull());
+  });
+
+  it("Priority-Flyout: Ziffer 3 wählt Medium direkt (LIN-53)", async () => {
+    const gql = mockGraphql({
+      ...base,
+      IssueUpdate: (v) => ({ issueUpdate: { issue: { ...ISSUES[0]!, id: v.id as string } } }),
+    });
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Priority…/ }));
+    const input = await screen.findByPlaceholderText("Set priority…");
+    fireEvent.keyDown(input, { key: "3" });
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({ id: "a", input: { priority: 3 } });
+  });
+
+  it("Labels-Flyout: Mehrfachauswahl schaltet um und bleibt offen (LIN-53)", async () => {
+    const gql = mockGraphql({
+      ...base,
+      IssueUpdate: (v) => ({ issueUpdate: { issue: { ...ISSUES[0]!, id: v.id as string } } }),
+    });
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Labels…/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Bug/ }));
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({
+      id: "a",
+      input: { labelIds: ["l-bug"] },
+    });
+    // multi: Options-Flyout bleibt offen — die Option ist weiter sichtbar (Flyout nicht geschlossen).
+    expect(screen.getByRole("option", { name: /Bug/ })).toBeInTheDocument();
   });
 
   it("Due-date-Untermenü setzt eine Voreinstellung", async () => {

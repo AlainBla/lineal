@@ -46,15 +46,27 @@ import type { Issue } from "@/gql/graphql";
 import { gqlRequest } from "@/lib/graphql";
 import { useShortcutContext } from "@/lib/shortcuts";
 
+import { useSession } from "@/app/auth";
+
 import { BulkActions, type BulkKind } from "./bulk-actions";
 import { closeIssueMenu, useIssueMenuRequest, type IssueMenuRequest } from "./context-menu-store";
 import { useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { copyText, issueUrl, useIssueOps } from "./issue-extra-shortcuts";
-import { duePresets, type RelationChoice } from "./model";
+import { duePresets, toggleLabel, type RelationChoice } from "./model";
+import { PickerBody, type PickerOption } from "./picker";
+import {
+  assigneeOptions,
+  labelOptions,
+  NONE,
+  priorityOptions,
+  projectOptions,
+  statusOptions,
+} from "./property-options";
 import { fetchBranchName } from "./queries";
 import { RelationDialog } from "./relation-dialog";
 import { IssuePickerHost, type PickerKind, type PickerRequest } from "./picker-host";
+import { useAssignableUsers } from "./users";
 
 function MenuItem({
   icon,
@@ -114,6 +126,72 @@ function SubmenuItem({
   );
 }
 
+/**
+ * Eigenschafts-Zeile (Status/Priority/Assignee/Labels/Project) als Hover-Flyout statt Picker-Dialog
+ * (LIN-53): Beim Überfahren/Klick klappt rechts der `PickerBody` auf (Suche, Häkchen, Ziffern). Der
+ * cmdk-Fokus wird vom Roving-Focus des Radix-Menüs entkoppelt: `onOpenAutoFocus` unterbunden, das
+ * Suchfeld selbst fokussiert (`autoFocus`), und Tastendrücke bleiben im Flyout — nur `←`/`Esc`
+ * dürfen zum Schließen an Radix durch. Einzelwahl schließt das Menü, Mehrfachauswahl (Labels) hält es
+ * offen. Optionen werden erst berechnet, wenn das Flyout offen ist (`open && …`).
+ */
+function PropertySubmenu({
+  icon,
+  label,
+  actionId,
+  title,
+  options,
+  selected,
+  multi,
+  onSelect,
+}: {
+  icon?: ReactNode;
+  label: string;
+  actionId?: string;
+  title: string;
+  options: () => PickerOption[];
+  selected: string | string[] | null;
+  multi?: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const cmds = useCommands();
+  const keys = actionId ? cmds.find((c) => c.id === actionId)?.shortcut : undefined;
+  const [open, setOpen] = useState(false);
+  return (
+    <DropdownMenuSub open={open} onOpenChange={setOpen}>
+      <DropdownMenuSubTrigger>
+        {icon}
+        {label}
+        {keys && (
+          <DropdownMenuShortcut className="mr-1">
+            <Keys keys={keys} />
+          </DropdownMenuShortcut>
+        )}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        className="w-64 p-0"
+        onKeyDown={(e) => {
+          // cmdk braucht Pfeile/Enter/Typeahead/Ziffern im Suchfeld; nur ← und Esc schließen (Radix).
+          if (e.key !== "Escape" && e.key !== "ArrowLeft") e.stopPropagation();
+        }}
+      >
+        {open && (
+          <PickerBody
+            autoFocus
+            title={title}
+            options={options()}
+            selected={selected}
+            multi={multi}
+            onSelect={(id) => {
+              onSelect(id);
+              if (!multi) closeIssueMenu();
+            }}
+          />
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
 interface MenuProps {
   req: IssueMenuRequest;
   /** Aktionen und Favorit/Abo-Umschalter leben im Host: sie müssen das Schließen des Menüs überdauern. */
@@ -130,6 +208,10 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
   const { issue, targets } = req;
   const multi = targets.length > 1;
   const meta = useTeamMeta(issue.teamId);
+  const session = useSession();
+  const users = useAssignableUsers(issue.teamId);
+  // Mehrfachauswahl der Labels im Flyout: lokaler Zwischenstand, bis der Cache die Änderung zeigt.
+  const [labelOverride, setLabelOverride] = useState<string[] | null>(null);
   const { toggleFavorite, toggleSubscription, isFavorite } = ops;
   useShortcutContext("modal", true);
 
@@ -163,6 +245,40 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
     copyText(names.join("\n"), multi ? "Branch names" : "Branch name");
   };
 
+  // Daten für die Flyout-Eigenschaften (Einzel-Ticket). Mehrfachauswahl nutzt weiter den Bulk-Picker.
+  const me = session ? { id: session.user.id, name: session.user.name } : null;
+  const states = meta.data?.states ?? [];
+  const allLabels = meta.data?.labels ?? [];
+  const projects = meta.data?.projects ?? [];
+  const labelIds = labelOverride ?? issue.labelIds ?? [];
+
+  /** Einzel-Ticket: Hover-Flyout (LIN-53); Mehrfachauswahl: bisheriger Bulk-Picker. */
+  const propertyRow = (
+    kind: "status" | "priority" | "assignee" | "labels" | "project",
+    icon: ReactNode,
+    menuLabel: string,
+    actionId: string,
+    title: string,
+    options: () => PickerOption[],
+    selected: string | string[] | null,
+    onSelect: (id: string) => void,
+    isMulti = false,
+  ) =>
+    multi ? (
+      <MenuItem icon={icon} label={menuLabel} actionId={actionId} onSelect={prop(kind)} />
+    ) : (
+      <PropertySubmenu
+        icon={icon}
+        label={menuLabel}
+        actionId={actionId}
+        title={title}
+        options={options}
+        selected={selected}
+        multi={isMulti}
+        onSelect={onSelect}
+      />
+    );
+
   return (
     <DropdownMenu open modal onOpenChange={(o) => !o && closeIssueMenu()}>
       <DropdownMenuTrigger asChild>
@@ -186,42 +302,67 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
         }}
       >
         <DropdownMenuLabel>{label}</DropdownMenuLabel>
-        <MenuItem
-          icon={<CircleDot />}
-          label="Status…"
-          actionId="issue.status"
-          onSelect={prop("status")}
-        />
-        <MenuItem
-          icon={<SignalHigh />}
-          label="Priority…"
-          actionId="issue.priority"
-          onSelect={prop("priority")}
-        />
-        <MenuItem
-          icon={<User />}
-          label="Assignee…"
-          actionId="issue.assignee"
-          onSelect={prop("assignee")}
-        />
+        {propertyRow(
+          "status",
+          <CircleDot />,
+          "Status…",
+          "issue.status",
+          "Change status…",
+          () => statusOptions(states),
+          issue.stateId,
+          (id) => actions.setState(issue, id, states),
+        )}
+        {propertyRow(
+          "priority",
+          <SignalHigh />,
+          "Priority…",
+          "issue.priority",
+          "Set priority…",
+          priorityOptions,
+          String(issue.priority),
+          (id) => actions.setPriority(issue, Number(id)),
+        )}
+        {propertyRow(
+          "assignee",
+          <User />,
+          "Assignee…",
+          "issue.assignee",
+          "Assign to…",
+          () => assigneeOptions(users, me),
+          issue.assigneeId ?? NONE,
+          (id) => actions.setAssignee(issue, id === NONE ? null : id),
+        )}
         <MenuItem
           icon={<UserCheck />}
           label="Assign to me"
           actionId="issue.assign-me"
           onSelect={() => after(() => targets.forEach((t) => actions.assignToMe(t)))}
         />
-        <MenuItem
-          icon={<Tag />}
-          label="Labels…"
-          actionId="issue.labels"
-          onSelect={prop("labels")}
-        />
-        <MenuItem
-          icon={<FolderKanban />}
-          label="Project…"
-          actionId="issue.project"
-          onSelect={prop("project")}
-        />
+        {propertyRow(
+          "labels",
+          <Tag />,
+          "Labels…",
+          "issue.labels",
+          "Change labels…",
+          () => labelOptions(allLabels),
+          labelIds,
+          (id) => {
+            const next = toggleLabel(labelIds, id, allLabels);
+            setLabelOverride(next);
+            actions.setLabels(issue, next);
+          },
+          true,
+        )}
+        {propertyRow(
+          "project",
+          <FolderKanban />,
+          "Project…",
+          "issue.project",
+          "Add to project…",
+          () => projectOptions(projects),
+          issue.projectId ?? NONE,
+          (id) => actions.setProject(issue, id === NONE ? null : id),
+        )}
         {!cyclesOff && (
           <MenuItem
             icon={<RefreshCw />}
