@@ -2,8 +2,20 @@ import { applyQuickFilter, useQuickFilter, useQuickFilterCount } from "@/lib/qui
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 import { useIssueActions } from "@/features/issues/issue-actions";
 import { useIssueLookup } from "@/features/issues/issue-lookup";
 import { issueMenuHandlers } from "@/features/issues/context-menu-store";
@@ -48,6 +60,28 @@ import { useFilterSources } from "./use-filter-sources";
 import { TransferOwnerButton, ViewSubscriptionButton } from "./view-actions";
 import { ViewBuilderDialog } from "./view-builder";
 
+const DROP_PREFIX = "group-drop:";
+
+/** Ziehbare Zeile (LIN-46): die Maus zieht erst ab 6px, Klick/Rechtsklick auf die Zeile bleiben. */
+function DraggableRow({ id, children }: { id: string; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id });
+  return (
+    <div ref={setNodeRef} {...attributes} {...listeners} className={cn(isDragging && "opacity-40")}>
+      {children}
+    </div>
+  );
+}
+
+/** Ablegezone einer Gruppe (Meilenstein): beim Überfahren hervorgehoben (LIN-46). */
+function DroppableGroup({ id, children }: { id: string; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: DROP_PREFIX + id });
+  return (
+    <div ref={setNodeRef} className={cn(isOver && "rounded bg-surface-hover ring-1 ring-primary")}>
+      {children}
+    </div>
+  );
+}
+
 /**
  * Issue-Ansicht über `viewIssues`: Filter-Bar + Anzeigeoptionen + gruppierte Liste (docs/05 §1.6, §2).
  * Mit `view` sind Filter und Optionen die der gespeicherten View (Optionen persönlich speicherbar);
@@ -65,6 +99,7 @@ export function IssueView({
   trailingControls,
   emptyGroups,
   renderGroupExtra,
+  onDropToGroup,
 }: {
   ws: string;
   view?: CustomView;
@@ -84,6 +119,12 @@ export function IssueView({
   emptyGroups?: Partial<Record<Grouping, Array<{ key: string; label: string }>>>;
   /** Zusatz im Gruppenkopf (Datum, „+“ …). */
   renderGroupExtra?: (g: IssueGroup) => ReactNode;
+  /**
+   * Ein Issue per Drag-and-Drop in eine andere Gruppe ziehen (LIN-46): nur in der Listenansicht und
+   * nur bei Gruppierung nach Meilenstein aktiv. `groupKey` ist der Gruppenschlüssel (Meilenstein-ID
+   * bzw. „none“ für „Ohne Meilenstein“).
+   */
+  onDropToGroup?: (issue: Issue, groupKey: string) => void;
 }) {
   // Gespeicherte Views: filterData → Chips (+ „erweiterter Filter“ für Nicht-Darstellbares).
   const initial = useMemo(() => filterToChips(view?.filterData), [view?.filterData]);
@@ -195,22 +236,48 @@ export function IssueView({
   useFocusNav([flat.map((i) => i.id)], focused?.id ?? null, setFocusedId);
   useIssueShortcuts({ context: "list", target: focused, open: setRequest, actions });
 
+  // Drag-and-Drop „Ticket → Meilenstein“ (LIN-46): nur Liste + Gruppierung nach Meilenstein.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  );
+  const dndList =
+    !!onDropToGroup && options.grouping === "milestone" && options.layout !== "board";
+  const onDropEnd = (e: DragEndEvent) => {
+    const overId = e.over ? String(e.over.id) : null;
+    if (!overId?.startsWith(DROP_PREFIX)) return;
+    const key = overId.slice(DROP_PREFIX.length);
+    const issue = flat.find((i) => i.id === String(e.active.id));
+    if (!issue) return;
+    // Nur bei echter Änderung senden; derselbe Meilenstein (inkl. „none“) ist ein No-op.
+    if ((issue.projectMilestoneId ?? "none") !== key) onDropToGroup?.(issue, key);
+  };
+
   const rows = (list: Issue[]) =>
     (options.nestedSubIssues === "hide"
       ? list.map((issue) => ({ issue, depth: 0 }))
       : nestIssues(list)
-    ).map(({ issue, depth }) => (
-      <IssueRow
-        key={issue.id}
-        issue={issue}
-        ws={ws}
-        lookup={lookup}
-        focused={focused?.id === issue.id}
-        onFocus={setFocusedId}
-        display={options.displayProperties}
-        depth={depth}
-      />
-    ));
+    ).map(({ issue, depth }) => {
+      const row = (
+        <IssueRow
+          key={issue.id}
+          issue={issue}
+          ws={ws}
+          lookup={lookup}
+          focused={focused?.id === issue.id}
+          onFocus={setFocusedId}
+          display={options.displayProperties}
+          depth={depth}
+        />
+      );
+      return dndList ? (
+        <DraggableRow key={issue.id} id={issue.id}>
+          {row}
+        </DraggableRow>
+      ) : (
+        row
+      );
+    });
   const toggle = (key: string) =>
     setCollapsed((c) => {
       const n = new Set(c);
@@ -279,21 +346,38 @@ export function IssueView({
         ))}
       </div>
     );
-  else
-    body = groups.map((g) => (
-      <section key={g.key} aria-label={g.label}>
-        {header(g)}
-        {!collapsed.has(g.key) &&
-          (g.subGroups
-            ? g.subGroups.map((sg) => (
-                <section key={sg.key} aria-label={`${g.label} / ${sg.label}`}>
-                  {header({ ...sg, key: `${g.key}/${sg.key}` }, true)}
-                  {!collapsed.has(`${g.key}/${sg.key}`) && rows(sg.issues)}
-                </section>
-              ))
-            : rows(g.issues))}
-      </section>
-    ));
+  else {
+    const sections = groups.map((g) => {
+      const section = (
+        <section key={g.key} aria-label={g.label}>
+          {header(g)}
+          {!collapsed.has(g.key) &&
+            (g.subGroups
+              ? g.subGroups.map((sg) => (
+                  <section key={sg.key} aria-label={`${g.label} / ${sg.label}`}>
+                    {header({ ...sg, key: `${g.key}/${sg.key}` }, true)}
+                    {!collapsed.has(`${g.key}/${sg.key}`) && rows(sg.issues)}
+                  </section>
+                ))
+              : rows(g.issues))}
+        </section>
+      );
+      return dndList ? (
+        <DroppableGroup key={g.key} id={g.key}>
+          {section}
+        </DroppableGroup>
+      ) : (
+        section
+      );
+    });
+    body = dndList ? (
+      <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onDropEnd}>
+        {sections}
+      </DndContext>
+    ) : (
+      sections
+    );
+  }
 
   const filterActive = chips.length + advanced.length > 0;
   const showHeader = !embedded || filterActive || (!!view && touched) || setDefault.isError;

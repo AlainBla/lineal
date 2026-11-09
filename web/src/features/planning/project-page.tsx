@@ -26,6 +26,7 @@ import { CommentsSection } from "@/features/comments/comments-section";
 import { DocumentsSection } from "@/features/docs/documents-section";
 import { errorText } from "@/features/issues/error-text";
 import { openCreateIssue, setCreateContext } from "@/features/issues/create-store";
+import { useIssueActions } from "@/features/issues/issue-actions";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
@@ -426,6 +427,7 @@ function ProjectIssues({
   panelOpen: boolean;
   setPanelOpen: (v: boolean) => void;
 }) {
+  const actions = useIssueActions();
   const teamKey = project.leadTeam?.key ?? project.teams[0]?.key ?? undefined;
   const scope = useMemo(() => ({ project: { id: { in: [project.id] } } }), [project.id]);
   const prefsTarget = useMemo(
@@ -456,6 +458,9 @@ function ProjectIssues({
           embedded
           toolbarSlot={toolbarSlot}
           emptyGroups={emptyGroups}
+          onDropToGroup={(issue, key) =>
+            actions.setMilestone(issue, key === "none" ? null : key)
+          }
           trailingControls={
             <Button
               variant="ghost"

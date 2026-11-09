@@ -168,6 +168,20 @@ describe("Projekt-Issues (docs/08 §2.7)", () => {
     expect(within(progress).getAllByText("3").length).toBeGreaterThan(0);
   });
 
+  it("Issues sind bei Gruppierung nach Meilenstein ziehbar (LIN-46)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(
+      <ProjectPage ws="acme" projectRef="P-ENG-1" tab="issues" />,
+      newClient(),
+      "/acme/project/P-ENG-1/issues",
+    );
+    await screen.findByText("Erstes");
+    // Die Zeile hängt in einem @dnd-kit-Draggable (Ablegen auf einen Meilenstein setzt diesen).
+    expect(
+      screen.getByText("Erstes").closest('[aria-roledescription="draggable"]'),
+    ).not.toBeNull();
+  });
+
   it("Seitenpanel ein/aus und Abschnitte einklappen", async () => {
     mockGraphql(handlers());
     await renderWithApp(
