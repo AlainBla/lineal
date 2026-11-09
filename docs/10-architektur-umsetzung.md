@@ -723,7 +723,7 @@ Die konkrete Struktur von Repository, Crates und Modulen steht in [11-implementi
 
 | Zweck | Wahl | Begründung |
 |---|---|---|
-| Sprache | Rust stable (≥ 1.85, Edition 2024) | Speichersicherheit, Typsystem für Invarianten |
+| Sprache | Rust, Edition 2024 – in `rust-toolchain.toml` auf eine Version gepinnt (aktuell 1.93.1), damit `cargo clippy -D warnings` lokal und in CI deterministisch ist; bewusst anheben | Speichersicherheit, Typsystem für Invarianten |
 | Async-Runtime | `tokio` | Standard, von allen Bibliotheken unterstützt |
 | HTTP | `axum` + `tower` / `tower-http` | modular, Middleware für Auth, Tracing, Limits, CORS |
 | Datenbank | PostgreSQL ≥ 16 über `sqlx` | Transaktionen, `FOR UPDATE`, Volltextsuche (`tsvector`) |

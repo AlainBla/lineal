@@ -54,7 +54,8 @@ Environment variables, TLS, backups and updates: [`docs/15-umsetzungsstand.md`](
 
 ### Requirements
 
-- Rust stable (edition 2024, `rustfmt` and `clippy`; a `rust-toolchain.toml` is included)
+- Rust 1.93.1 (edition 2024, `rustfmt` and `clippy`) — pinned in `rust-toolchain.toml` so local
+  checks and CI use the same compiler; `rustup` installs it automatically. Bump deliberately.
 - Node 22+ with npm
 - Docker (PostgreSQL 16 on `127.0.0.1:5440`)
 
