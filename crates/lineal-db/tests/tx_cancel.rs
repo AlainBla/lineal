@@ -40,6 +40,13 @@ async fn idle_in_transaction(pool: &PgPool) -> i64 {
 /// Die Ursache, deterministisch und direkt auf sqlx: `BEGIN` wird gesendet, die Future danach
 /// (vor der Antwort) verworfen; die zurückgegebene Verbindung steht weiter in einer Transaktion.
 /// Schlägt dieser Test eines Tages fehl, ist sqlx behoben und der Umweg in `PgStore` entbehrlich.
+// Timing-fragil: pollt `begin()` genau einmal und erwartet im ersten Poll `Pending`
+// (BEGIN gesendet, Antwort offen). Gegen eine lokale Socket-Verbindung stimmt das, gegen
+// containerisiertes Postgres (CI) kann der erste Poll schon weiter sein -> in CI/Default
+// uebersprungen. Reiner Diagnose-Canary fuer den sqlx-0.8.6-Bug; die eigentliche Garantie
+// prueft `cancelled_store_begin_never_leaves_an_open_transaction` (laeuft in CI). Lokal mit
+// `cargo test -p lineal-db --test tx_cancel -- --ignored` ausfuehren.
+#[ignore = "timing-fragil gegen containerisiertes Postgres; lokal mit --ignored"]
 #[sqlx::test(migrations = "./migrations")]
 async fn sqlx_begin_dropped_after_sending_begin_leaves_the_server_in_a_transaction(pool: PgPool) {
     use sqlx::Connection;
