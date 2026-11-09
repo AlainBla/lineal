@@ -36,6 +36,7 @@ import type { Issue, Project } from "@/gql/graphql";
 
 import { ProjectActions, ProjectDetails } from "./project-details";
 import { ProjectPanel } from "./project-panel";
+import { dropKeyFromId } from "./milestone-drop";
 import { milestoneDropSortOrder } from "./milestone-reorder";
 import { ResourcesSection } from "./resources";
 import {
@@ -49,7 +50,7 @@ import {
   type Health,
 } from "./queries";
 import { useRemindAction } from "@/features/inbox/remind";
-import { DROP_PREFIX, IssueView } from "@/features/views/issue-view";
+import { IssueView } from "@/features/views/issue-view";
 import { cn } from "@/lib/cn";
 import {
   HealthBadge,
@@ -460,17 +461,16 @@ function ProjectIssues({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   );
-  // Nur ein Treffer, wenn der Zeiger wirklich über einem Ziel ist – sonst „gewänne“ eine schmale
-  // Panel-Zeile am Listenrand über die hohe Listengruppe. Tastatur (ohne Zeiger) → closestCenter.
-  const collisionDetection = (args: Parameters<typeof closestCenter>[0]) => {
-    const hits = pointerWithin(args);
-    return hits.length ? hits : closestCenter(args);
-  };
+  // Nur per Zeiger: ausschließlich das Ziel unter dem Zeiger zählt. Kein Fallback auf closestCenter –
+  // sonst landet ein Drop auf Panel-Leerraum (Lücke, Überschrift, Padding) auf der nächstgelegenen
+  // Listengruppe und weist falsch zu. Ohne Zeiger (Tastatur) greift closestCenter wie gehabt.
+  const collisionDetection = (args: Parameters<typeof closestCenter>[0]) =>
+    args.pointerCoordinates ? pointerWithin(args) : closestCenter(args);
   const onDragEnd = (e: DragEndEvent) => {
-    const overId = e.over ? String(e.over.id) : null;
-    if (!overId?.startsWith(DROP_PREFIX)) return;
+    const key = dropKeyFromId(e.over ? String(e.over.id) : null);
+    if (key === null) return;
     const issue = e.active.data.current?.issue as Issue | undefined;
-    if (issue) assign(issue, overId.slice(DROP_PREFIX.length));
+    if (issue) assign(issue, key);
   };
   return (
     <DndContext sensors={dndSensors} collisionDetection={collisionDetection} onDragEnd={onDragEnd}>

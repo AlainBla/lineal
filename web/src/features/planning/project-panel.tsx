@@ -16,7 +16,7 @@ import type { Project } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 import { useViewIssues } from "@/features/views/queries";
 
-import { DROP_PREFIX } from "@/features/views/issue-view";
+import { PANEL_DROP_PREFIX } from "./milestone-drop";
 
 import { ProjectProperties } from "./project-details";
 import { useCreateMilestone, useDeleteMilestone, useUpdateMilestone } from "./queries";
@@ -36,7 +36,7 @@ function MilestoneDrop({
   className?: string;
   children: ReactNode;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: DROP_PREFIX + dropKey });
+  const { setNodeRef, isOver } = useDroppable({ id: PANEL_DROP_PREFIX + dropKey });
   return (
     <li
       ref={setNodeRef}
