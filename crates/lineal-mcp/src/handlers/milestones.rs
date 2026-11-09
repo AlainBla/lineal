@@ -67,6 +67,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                         name: arg_str(&args, "name").map(str::to_owned),
                         description: arg_str(&args, "description").map(str::to_owned),
                         target_date,
+                        sort_order: args.get("sortOrder").and_then(Value::as_f64),
                     },
                 )
                 .await?;

@@ -50,6 +50,9 @@ pub struct SaveMilestoneInput {
     pub description: Option<String>,
     /// `Some(None)` leert das Zieldatum.
     pub target_date: Option<Option<NaiveDate>>,
+    /// Neue Sortier-Position (Drag-and-Drop, LIN-47). Nur beim Update wirksam; der Client berechnet
+    /// den Zwischenwert (`between`) wie bei Issues. Beim Anlegen wird ans Ende sortiert.
+    pub sort_order: Option<f64>,
 }
 
 /// Was beim Abschließen mit offenen Issues geschieht.
@@ -178,6 +181,10 @@ impl App {
                 let m =
                     resolve::project::resolve_milestone(&mut *tx, r.project.id, reference).await?;
                 let name = input.name.as_deref().map(validate_name).transpose()?;
+                let sort_order = input
+                    .sort_order
+                    .map(|v| lineal_domain::rules::sort_order::validate("sortOrder", v))
+                    .transpose()?;
                 if let Some(to_date) = input.target_date {
                     if to_date != m.target_date {
                         tx.projects()
@@ -198,7 +205,7 @@ impl App {
                             name,
                             description,
                             target_date: input.target_date,
-                            sort_order: None,
+                            sort_order,
                         },
                         now,
                     )

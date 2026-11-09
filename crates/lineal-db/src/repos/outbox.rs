@@ -649,7 +649,8 @@ fn model_sql(model: &str) -> Option<String> {
         ),
         "ProjectMilestone" => format!(
             "SELECT jsonb_build_object('id', m.id, 'projectId', m.project_id, 'name', m.name, \
-              'targetDate', to_char(m.target_date, 'YYYY-MM-DD'), 'updatedAt', sync_ts(m.updated_at)), {} \
+              'targetDate', to_char(m.target_date, 'YYYY-MM-DD'), 'sortOrder', m.sort_order, \
+              'updatedAt', sync_ts(m.updated_at)), {} \
             FROM project_milestone m WHERE m.organization_id = $1 AND m.id = ANY($2)",
             project_groups("m.project_id")
         ),

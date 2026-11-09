@@ -450,6 +450,9 @@ pub struct MilestoneInput {
     pub name: Option<String>,
     pub description: Option<String>,
     pub target_date: MaybeUndefined<String>,
+    /// Neue Sortier-Position beim Umordnen per Drag-and-Drop (LIN-47); der Client berechnet den
+    /// Zwischenwert wie bei Issues.
+    pub sort_order: Option<f64>,
 }
 
 /// Dokument in der Ressourcenliste.
@@ -1180,6 +1183,7 @@ impl ProjectMutation {
                     name: input.name,
                     description: input.description,
                     target_date: date("targetDate", input.target_date)?,
+                    sort_order: input.sort_order,
                 },
             )
             .await

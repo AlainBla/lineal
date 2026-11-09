@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ISSUE_FIELDS, type IssueList } from "@/features/issues/queries";
+import { errorMessage, showToast } from "@/features/issues/toast-store";
 import type {
   Cycle,
   DocumentConnection,
@@ -724,5 +725,40 @@ export function useUpdateMilestone(projectId: string) {
         { projectId, ...v },
       ),
     onSuccess: () => invalidatePlanning(qc),
+  });
+}
+
+/**
+ * Meilensteine per Drag-and-Drop umsortieren (LIN-47): schreibt die neue `sortOrder` optimistisch in
+ * alle Projekt-Caches (sofort sichtbar), rollt bei Fehler zurück und zeigt einen Toast. Der Aufrufer
+ * berechnet den Zwischenwert mit `between()`.
+ */
+export function useReorderMilestone(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; sortOrder: number }) =>
+      gqlRequest(
+        `mutation PlanningMilestoneReorder($projectId: String!, $id: String!, $input: MilestoneInput!) {
+          projectMilestoneUpdate(projectId: $projectId, id: $id, input: $input) { success }
+        }`,
+        { projectId, id: v.id, input: { sortOrder: v.sortOrder } },
+      ),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: ["planning", "project"] });
+      const prev = qc.getQueriesData<Project>({ queryKey: ["planning", "project"] });
+      qc.setQueriesData<Project>({ queryKey: ["planning", "project"] }, (p) => {
+        if (!p || p.id !== projectId) return p;
+        const milestones = p.milestones
+          .map((m) => (m.id === v.id ? { ...m, sortOrder: v.sortOrder } : m))
+          .sort((a, b) => a.sortOrder - b.sortOrder);
+        return { ...p, milestones };
+      });
+      return { prev };
+    },
+    onError: (err, _v, ctx) => {
+      ctx?.prev.forEach(([key, data]) => qc.setQueryData(key, data));
+      showToast({ message: errorMessage(err, "Could not reorder milestone."), tone: "error" });
+    },
+    onSettled: () => invalidatePlanning(qc),
   });
 }

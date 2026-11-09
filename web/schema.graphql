@@ -1404,6 +1404,11 @@ input MilestoneInput {
 	name: String
 	description: String
 	targetDate: String
+	"""
+	Neue Sortier-Position beim Umordnen per Drag-and-Drop (LIN-47); der Client berechnet den
+	Zwischenwert wie bei Issues.
+	"""
+	sortOrder: Float
 }
 
 """

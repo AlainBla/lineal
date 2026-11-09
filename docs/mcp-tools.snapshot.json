@@ -1754,6 +1754,10 @@
           "description": "Project name, ID, identifier (e.g., P-ENG-123), or slug",
           "type": "string"
         },
+        "sortOrder": {
+          "description": "Sort position for ordering milestones within the project (lower sorts first); only applied when updating",
+          "type": "number"
+        },
         "targetDate": {
           "description": "Target completion date (ISO format, null to remove)",
           "type": [

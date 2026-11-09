@@ -1,6 +1,18 @@
-import { Diamond, MoreHorizontal, PanelRight, Plus } from "lucide-react";
+import { Diamond, GripVertical, MoreHorizontal, PanelRight, Plus } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +33,7 @@ import type { Project } from "@/gql/graphql";
 
 import { ProjectActions, ProjectDetails } from "./project-details";
 import { ProjectPanel } from "./project-panel";
+import { milestoneDropSortOrder } from "./milestone-reorder";
 import { ResourcesSection } from "./resources";
 import {
   HEALTH_LABEL,
@@ -29,6 +42,7 @@ import {
   usePostProjectUpdate,
   useProject,
   useProjectUpdates,
+  useReorderMilestone,
   type Health,
 } from "./queries";
 import { useRemindAction } from "@/features/inbox/remind";
@@ -185,95 +199,150 @@ function UpdatesFeed({ projectId }: { projectId: string }) {
   );
 }
 
+type Milestone = Project["milestones"][number];
+
+/** Eine Meilenstein-Zeile, per Griff (nur dort, damit Links/Menü klickbar bleiben) ziehbar (LIN-47). */
+function SortableMilestoneRow({
+  m,
+  ws,
+  project,
+  onDelete,
+}: {
+  m: Milestone;
+  ws: string;
+  project: Project;
+  onDelete: (m: Milestone) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: m.id,
+  });
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn("hover:bg-surface-hover", isDragging && "relative z-10 bg-surface opacity-80")}
+    >
+      <td className="w-6 px-1 py-2">
+        <button
+          type="button"
+          aria-label={`Reorder ${m.name}`}
+          className="flex touch-none items-center text-muted-foreground hover:text-foreground"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="size-4 cursor-grab" />
+        </button>
+      </td>
+      <td className="px-3 py-2">
+        <span className="flex items-center gap-2">
+          <Diamond className={cn("size-3.5 shrink-0 fill-current", MILESTONE_COLOR[m.status])} />
+          <Link
+            to={milestonePath(ws, project.identifier, m.id) as "/"}
+            className="truncate font-medium hover:underline"
+          >
+            {m.name}
+          </Link>
+          <MilestoneStatusBadge status={m.status} />
+        </span>
+      </td>
+      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+        {shortDate(m.targetDate)}
+        {targetShift(m) !== null && (
+          <span className="ml-1 text-amber-500">{shiftLabel(targetShift(m)!)}</span>
+        )}
+      </td>
+      <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+        {m.completedIssueCount} of {m.issueCount}
+      </td>
+      <td className="px-3 py-2">
+        <MilestoneBar
+          done={m.completedIssueCount}
+          started={m.startedIssueCount}
+          total={m.issueCount}
+        />
+      </td>
+      <td className="px-3 py-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={`Milestone actions ${m.name}`}>
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => onDelete(m)}>Delete</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </td>
+    </tr>
+  );
+}
+
 function Milestones({ ws, project }: { ws: string; project: Project }) {
   const create = useCreateMilestone(project.id);
   const del = useDeleteMilestone(project.id);
+  const reorder = useReorderMilestone(project.id);
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
+  // Maus: sofort ab 6px; Touch: langes Drücken (250ms); Tastatur: Space greift/ablegt (LIN-47).
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(KeyboardSensor),
+  );
+  const ids = project.milestones.map((m) => m.id);
+  const onDragEnd = (e: DragEndEvent) => {
+    const activeId = String(e.active.id);
+    const overId = e.over ? String(e.over.id) : null;
+    const sortOrder = milestoneDropSortOrder(project.milestones, activeId, overId);
+    if (sortOrder !== null) reorder.mutate({ id: activeId, sortOrder });
+  };
+  const onDelete = (m: Milestone) => {
+    if (
+      window.confirm(
+        `Delete milestone "${m.name}"? Its issues stay in the project without a milestone.`,
+      )
+    )
+      del.mutate(m.id);
+  };
   return (
     <div className="flex flex-col gap-3 p-4">
       {project.milestones.length === 0 ? (
         <p className="text-sm text-muted-foreground">No milestones.</p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="text-left text-xs text-muted-foreground">
-              <tr className="border-b border-border">
-                <th className="px-3 py-2 font-medium">Milestone</th>
-                <th className="px-3 py-2 font-medium">Target date</th>
-                <th className="px-3 py-2 font-medium">Issues</th>
-                <th className="w-1/4 px-3 py-2 font-medium">
-                  <span className="sr-only">Progress</span>
-                </th>
-                <th className="w-10 px-3 py-2">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {project.milestones.map((m) => (
-                <tr key={m.id} className="hover:bg-surface-hover">
-                  <td className="px-3 py-2">
-                    <span className="flex items-center gap-2">
-                      <Diamond
-                        className={cn("size-3.5 shrink-0 fill-current", MILESTONE_COLOR[m.status])}
-                      />
-                      <Link
-                        to={milestonePath(ws, project.identifier, m.id) as "/"}
-                        className="truncate font-medium hover:underline"
-                      >
-                        {m.name}
-                      </Link>
-                      <MilestoneStatusBadge status={m.status} />
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
-                    {shortDate(m.targetDate)}
-                    {targetShift(m) !== null && (
-                      <span className="ml-1 text-amber-500">{shiftLabel(targetShift(m)!)}</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">
-                    {m.completedIssueCount} of {m.issueCount}
-                  </td>
-                  <td className="px-3 py-2">
-                    <MilestoneBar
-                      done={m.completedIssueCount}
-                      started={m.startedIssueCount}
-                      total={m.issueCount}
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Milestone actions ${m.name}`}
-                        >
-                          <MoreHorizontal />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            if (
-                              window.confirm(
-                                `Delete milestone "${m.name}"? Its issues stay in the project without a milestone.`,
-                              )
-                            )
-                              del.mutate(m.id);
-                          }}
-                        >
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr className="border-b border-border">
+                  <th className="w-6 px-1 py-2">
+                    <span className="sr-only">Reorder</span>
+                  </th>
+                  <th className="px-3 py-2 font-medium">Milestone</th>
+                  <th className="px-3 py-2 font-medium">Target date</th>
+                  <th className="px-3 py-2 font-medium">Issues</th>
+                  <th className="w-1/4 px-3 py-2 font-medium">
+                    <span className="sr-only">Progress</span>
+                  </th>
+                  <th className="w-10 px-3 py-2">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                  {project.milestones.map((m) => (
+                    <SortableMilestoneRow
+                      key={m.id}
+                      m={m}
+                      ws={ws}
+                      project={project}
+                      onDelete={onDelete}
+                    />
+                  ))}
+                </SortableContext>
+              </tbody>
+            </table>
+          </DndContext>
         </div>
       )}
       <form
@@ -311,9 +380,9 @@ function Milestones({ ws, project }: { ws: string; project: Project }) {
           <Plus /> Add milestone
         </Button>
       </form>
-      {(create.isError || del.isError) && (
+      {(create.isError || del.isError || reorder.isError) && (
         <p role="alert" className="text-xs text-destructive">
-          {errorText(create.error ?? del.error)}
+          {errorText(create.error ?? del.error ?? reorder.error)}
         </p>
       )}
     </div>
