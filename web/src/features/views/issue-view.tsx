@@ -149,7 +149,7 @@ export function IssueView({
     teamId,
     includeSubTeams: !!teamId,
   });
-  const { sources, metas, teams } = useFilterSources();
+  const { sources, metas, teams } = useFilterSources(teamId);
   const lookup = useIssueLookup(metas);
   const actions = useIssueActions();
 

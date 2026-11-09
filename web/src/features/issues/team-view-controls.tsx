@@ -38,6 +38,8 @@ const VIEW_TYPE: Record<TeamView, string> = {
 };
 
 export interface TeamViewControlsState {
+  /** Team dieser Ansicht; scopt die Filter-Wertevorräte auf dieses Team und seine Unter-Teams. */
+  teamId: string | undefined;
   chips: FilterChip[];
   setChips: (c: FilterChip[]) => void;
   advanced: Filter[];
@@ -68,6 +70,7 @@ export function useTeamViewControls(
   }, [prefs.data, local]);
   const filter = useMemo(() => combineFilter(buildFilter(chips), advanced), [chips, advanced]);
   return {
+    teamId,
     chips,
     setChips,
     advanced,
@@ -101,7 +104,7 @@ export function TeamViewControls({
   /** Board-Layout aktiv: bietet die „Board options“ an. */
   board?: boolean;
 }) {
-  const { sources } = useFilterSources();
+  const { sources } = useFilterSources(controls.teamId);
   const root = useRef<HTMLDivElement>(null);
   useActions([
     {
