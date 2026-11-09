@@ -1265,7 +1265,9 @@ async fn upload_flow_prepare_put_finalize(pool: PgPool) {
         .unwrap();
     assert!(got.url.starts_with("mem://get/"));
 
-    // zweites Finalisieren: conflict
+    // zweites Finalisieren schlägt fehl: seit LIN-37 wird die Reservierung beim
+    // Finalisieren gelöscht, der Storage-Key gehört jetzt dem Anhang. Der zweite
+    // Versuch findet keine Reservierung mehr -> upload_unknown (InvalidRequest).
     assert_eq!(
         kind(
             env.app
@@ -1278,7 +1280,7 @@ async fn upload_flow_prepare_put_finalize(pool: PgPool) {
                 )
                 .await
         ),
-        ErrorKind::Conflict
+        ErrorKind::InvalidRequest
     );
 }
 
