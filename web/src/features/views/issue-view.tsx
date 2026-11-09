@@ -60,11 +60,16 @@ import { useFilterSources } from "./use-filter-sources";
 import { TransferOwnerButton, ViewSubscriptionButton } from "./view-actions";
 import { ViewBuilderDialog } from "./view-builder";
 
-const DROP_PREFIX = "group-drop:";
+export const DROP_PREFIX = "group-drop:";
 
-/** Ziehbare Zeile (LIN-46): die Maus zieht erst ab 6px, Klick/Rechtsklick auf die Zeile bleiben. */
-function DraggableRow({ id, children }: { id: string; children: ReactNode }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id });
+/** Ziehbare Zeile (LIN-46): die Maus zieht erst ab 6px, Klick/Rechtsklick auf die Zeile bleiben.
+ * Das Issue reist als `data` mit, damit auch eine übergeordnete DndContext (Projekt-Seitenpanel,
+ * LIN-46 Teil B) den Ablage-Handler ohne Zugriff auf die Liste bedienen kann. */
+function DraggableRow({ issue, children }: { issue: Issue; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: issue.id,
+    data: { issue },
+  });
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} className={cn(isDragging && "opacity-40")}>
       {children}
@@ -100,6 +105,7 @@ export function IssueView({
   emptyGroups,
   renderGroupExtra,
   onDropToGroup,
+  externalDndContext,
 }: {
   ws: string;
   view?: CustomView;
@@ -125,6 +131,12 @@ export function IssueView({
    * bzw. „none“ für „Ohne Meilenstein“).
    */
   onDropToGroup?: (issue: Issue, groupKey: string) => void;
+  /**
+   * Die DndContext stellt der Aufrufer bereit (z. B. die Projekt-Seite, deren Seitenpanel ebenfalls
+   * Ablageziele hat, LIN-46 Teil B). Dann baut diese Ansicht keine eigene Context auf; die Zeilen
+   * sind trotzdem ziehbar, und der Aufrufer wertet `active.data.issue` in seinem `onDragEnd` aus.
+   */
+  externalDndContext?: boolean;
 }) {
   // Gespeicherte Views: filterData → Chips (+ „erweiterter Filter“ für Nicht-Darstellbares).
   const initial = useMemo(() => filterToChips(view?.filterData), [view?.filterData]);
@@ -241,8 +253,12 @@ export function IssueView({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   );
-  const dndList =
-    !!onDropToGroup && options.grouping === "milestone" && options.layout !== "board";
+  // Zeilen sind ziehbar, sobald ein Ablageziel existiert (eigene Gruppen oder ein externes Panel);
+  // nur Gruppen der Liste sind Ablageziele, und auch nur bei Gruppierung nach Meilenstein. Eine
+  // eigene DndContext baut die Ansicht nur, wenn der Aufrufer keine bereitstellt.
+  const dndRows = (!!onDropToGroup || !!externalDndContext) && options.layout !== "board";
+  const dndGroups = dndRows && options.grouping === "milestone";
+  const ownContext = dndRows && !externalDndContext;
   const onDropEnd = (e: DragEndEvent) => {
     const overId = e.over ? String(e.over.id) : null;
     if (!overId?.startsWith(DROP_PREFIX)) return;
@@ -270,8 +286,8 @@ export function IssueView({
           depth={depth}
         />
       );
-      return dndList ? (
-        <DraggableRow key={issue.id} id={issue.id}>
+      return dndRows ? (
+        <DraggableRow key={issue.id} issue={issue}>
           {row}
         </DraggableRow>
       ) : (
@@ -362,7 +378,7 @@ export function IssueView({
               : rows(g.issues))}
         </section>
       );
-      return dndList ? (
+      return dndGroups ? (
         <DroppableGroup key={g.key} id={g.key}>
           {section}
         </DroppableGroup>
@@ -370,7 +386,7 @@ export function IssueView({
         section
       );
     });
-    body = dndList ? (
+    body = ownContext ? (
       <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onDropEnd}>
         {sections}
       </DndContext>

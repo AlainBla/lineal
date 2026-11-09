@@ -6,8 +6,10 @@ import {
   type DragEndEvent,
   KeyboardSensor,
   MouseSensor,
+  PointerSensor,
   TouchSensor,
   closestCenter,
+  pointerWithin,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -30,7 +32,7 @@ import { useIssueActions } from "@/features/issues/issue-actions";
 import { relativeTime } from "@/features/issues/model";
 import { RichEditor } from "@/features/issues/rich-editor";
 import { ErrorState, ListSkeleton } from "@/features/issues/states";
-import type { Project } from "@/gql/graphql";
+import type { Issue, Project } from "@/gql/graphql";
 
 import { ProjectActions, ProjectDetails } from "./project-details";
 import { ProjectPanel } from "./project-panel";
@@ -47,7 +49,7 @@ import {
   type Health,
 } from "./queries";
 import { useRemindAction } from "@/features/inbox/remind";
-import { IssueView } from "@/features/views/issue-view";
+import { DROP_PREFIX, IssueView } from "@/features/views/issue-view";
 import { cn } from "@/lib/cn";
 import {
   HealthBadge,
@@ -447,58 +449,81 @@ function ProjectIssues({
     () => new Map(project.milestones.map((m) => [m.id, m.targetDate] as const)),
     [project.milestones],
   );
+  // Drag-and-Drop „Ticket → Meilenstein“ (LIN-46): Die DndContext liegt hier, damit sie sowohl die
+  // Listenzeilen (in IssueView) als auch die Meilenstein-Zeilen im Seitenpanel umspannt. IssueView
+  // baut daher keine eigene Context (externalDndContext); das gezogene Issue reist in `active.data`.
+  const assign = (issue: Issue, key: string) => {
+    if ((issue.projectMilestoneId ?? "none") !== key)
+      actions.setMilestone(issue, key === "none" ? null : key);
+  };
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  );
+  // Nur ein Treffer, wenn der Zeiger wirklich über einem Ziel ist – sonst „gewänne“ eine schmale
+  // Panel-Zeile am Listenrand über die hohe Listengruppe. Tastatur (ohne Zeiger) → closestCenter.
+  const collisionDetection = (args: Parameters<typeof closestCenter>[0]) => {
+    const hits = pointerWithin(args);
+    return hits.length ? hits : closestCenter(args);
+  };
+  const onDragEnd = (e: DragEndEvent) => {
+    const overId = e.over ? String(e.over.id) : null;
+    if (!overId?.startsWith(DROP_PREFIX)) return;
+    const issue = e.active.data.current?.issue as Issue | undefined;
+    if (issue) assign(issue, overId.slice(DROP_PREFIX.length));
+  };
   return (
-    <div className="flex h-full min-h-0">
-      <div className="min-w-0 flex-1">
-        <IssueView
-          ws={ws}
-          title="Issues"
-          scope={scope}
-          prefsTarget={prefsTarget}
-          embedded
-          toolbarSlot={toolbarSlot}
-          emptyGroups={emptyGroups}
-          onDropToGroup={(issue, key) =>
-            actions.setMilestone(issue, key === "none" ? null : key)
-          }
-          trailingControls={
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={panelOpen ? "Hide side panel" : "Show side panel"}
-              aria-pressed={panelOpen}
-              title="Toggle side panel"
-              className={cn(panelOpen && "bg-surface-active")}
-              onClick={() => setPanelOpen(!panelOpen)}
-            >
-              <PanelRight />
-            </Button>
-          }
-          renderGroupExtra={(g) => {
-            const milestoneId = dates.has(g.key) ? g.key : undefined;
-            const date = dates.get(g.key);
-            return (
-              <>
-                {date && (
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {shortDate(date).replace(/ \d{4}$/, "")}
-                  </span>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`New issue in ${g.label}`}
-                  onClick={() => openCreateIssue({ teamKey, projectId: project.id, milestoneId })}
-                >
-                  <Plus />
-                </Button>
-              </>
-            );
-          }}
-        />
+    <DndContext sensors={dndSensors} collisionDetection={collisionDetection} onDragEnd={onDragEnd}>
+      <div className="flex h-full min-h-0">
+        <div className="min-w-0 flex-1">
+          <IssueView
+            ws={ws}
+            title="Issues"
+            scope={scope}
+            prefsTarget={prefsTarget}
+            embedded
+            toolbarSlot={toolbarSlot}
+            emptyGroups={emptyGroups}
+            externalDndContext
+            trailingControls={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={panelOpen ? "Hide side panel" : "Show side panel"}
+                aria-pressed={panelOpen}
+                title="Toggle side panel"
+                className={cn(panelOpen && "bg-surface-active")}
+                onClick={() => setPanelOpen(!panelOpen)}
+              >
+                <PanelRight />
+              </Button>
+            }
+            renderGroupExtra={(g) => {
+              const milestoneId = dates.has(g.key) ? g.key : undefined;
+              const date = dates.get(g.key);
+              return (
+                <>
+                  {date && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {shortDate(date).replace(/ \d{4}$/, "")}
+                    </span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`New issue in ${g.label}`}
+                    onClick={() => openCreateIssue({ teamKey, projectId: project.id, milestoneId })}
+                  >
+                    <Plus />
+                  </Button>
+                </>
+              );
+            }}
+          />
+        </div>
+        {panelOpen && <ProjectPanel project={project} ws={ws} />}
       </div>
-      {panelOpen && <ProjectPanel project={project} ws={ws} />}
-    </div>
+    </DndContext>
   );
 }
 

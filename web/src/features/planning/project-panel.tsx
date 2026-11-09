@@ -1,3 +1,4 @@
+import { useDroppable } from "@dnd-kit/core";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Diamond, MoreHorizontal, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -15,9 +16,37 @@ import type { Project } from "@/gql/graphql";
 import { cn } from "@/lib/cn";
 import { useViewIssues } from "@/features/views/queries";
 
+import { DROP_PREFIX } from "@/features/views/issue-view";
+
 import { ProjectProperties } from "./project-details";
 import { useCreateMilestone, useDeleteMilestone, useUpdateMilestone } from "./queries";
 import { MILESTONE_COLOR, milestonePath, shortDate } from "./ui";
+
+/**
+ * Ablage-`<li>` für einen Meilenstein im Seitenpanel (LIN-46 Teil B): Ein Ticket aus der Liste lässt
+ * sich direkt auf den Meilenstein ziehen. `dropKey` ist die Meilenstein-ID bzw. „none". Die DndContext
+ * stellt die Projekt-Seite bereit; ohne sie ist `useDroppable` ein No-op, bleibt also unschädlich.
+ */
+function MilestoneDrop({
+  dropKey,
+  className,
+  children,
+}: {
+  dropKey: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: DROP_PREFIX + dropKey });
+  return (
+    <li
+      ref={setNodeRef}
+      data-drop-key={dropKey}
+      className={cn(className, isOver && "rounded bg-surface-hover ring-1 ring-primary ring-inset")}
+    >
+      {children}
+    </li>
+  );
+}
 
 /** Einklappbarer Abschnitt des Seitenpanels (▾), optional mit „+“ rechts. */
 function Section({
@@ -83,7 +112,7 @@ function MilestonesSection({
     >
       <ul className="flex flex-col gap-1.5 text-sm">
         {project.milestones.map((m) => (
-          <li key={m.id} className="flex items-center gap-2">
+          <MilestoneDrop key={m.id} dropKey={m.id} className="flex items-center gap-2">
             <Diamond className={cn("size-3.5 shrink-0", MILESTONE_COLOR[m.status])} />
             <Link
               to={milestonePath(ws, project.identifier, m.id) as "/"}
@@ -133,15 +162,15 @@ function MilestonesSection({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </li>
+          </MilestoneDrop>
         ))}
-        <li className="flex items-center gap-2 text-muted-foreground">
+        <MilestoneDrop dropKey="none" className="flex items-center gap-2 text-muted-foreground">
           <Diamond className="size-3.5 shrink-0 opacity-50" />
           <button type="button" className="hover:underline" onClick={() => onSelect?.("none")}>
             No milestone
           </button>
           <span className="text-xs tabular-nums">{without}</span>
-        </li>
+        </MilestoneDrop>
       </ul>
       {adding && (
         <form

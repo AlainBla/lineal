@@ -177,9 +177,23 @@ describe("Projekt-Issues (docs/08 §2.7)", () => {
     );
     await screen.findByText("Erstes");
     // Die Zeile hängt in einem @dnd-kit-Draggable (Ablegen auf einen Meilenstein setzt diesen).
-    expect(
-      screen.getByText("Erstes").closest('[aria-roledescription="draggable"]'),
-    ).not.toBeNull();
+    expect(screen.getByText("Erstes").closest('[aria-roledescription="draggable"]')).not.toBeNull();
+  });
+
+  it("Seitenpanel-Meilensteine sind Ablageziele fürs Ziehen (LIN-46 Teil B)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(
+      <ProjectPage ws="acme" projectRef="P-ENG-1" tab="issues" />,
+      newClient(),
+      "/acme/project/P-ENG-1/issues",
+    );
+    await screen.findByText("Erstes");
+    const panel = screen.getByRole("complementary", { name: "Project details" });
+    // Jeder Meilenstein im Panel plus „No milestone" trägt ein Ablageziel mit seinem Gruppenschlüssel.
+    const keys = Array.from(panel.querySelectorAll("[data-drop-key]")).map((el) =>
+      el.getAttribute("data-drop-key"),
+    );
+    expect(keys).toEqual(expect.arrayContaining(["m-1", "m-2", "none"]));
   });
 
   it("Seitenpanel ein/aus und Abschnitte einklappen", async () => {
