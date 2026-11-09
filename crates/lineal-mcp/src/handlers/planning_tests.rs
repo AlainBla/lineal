@@ -761,6 +761,44 @@ async fn milestone_resources_stay_with_the_project(pool: sqlx::PgPool) {
     assert!(left.documents.iter().any(|d| d.title == "Checkliste"));
 }
 
+/// LIN-45: Ohne `milestone` hängen Ressourcen am Projekt selbst und erscheinen in `get_project`.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_resources_without_milestone(pool: sqlx::PgPool) {
+    let app = setup(pool).await;
+    let who = SeedUser::Alice;
+    // Link direkt am Projekt (kein `milestone`-Argument).
+    call(
+        &app,
+        who,
+        "save_milestone_resource",
+        json!({ "project": "P-ENG-1", "url": "https://example.com/spec", "title": "Spec" }),
+    )
+    .await
+    .unwrap();
+    // Auflisten auf Projekt-Ebene (ohne `milestone`).
+    let r = call(
+        &app,
+        who,
+        "get_milestone_resources",
+        json!({ "project": "P-ENG-1" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["links"][0]["title"], "Spec");
+    // `get_project` liefert die Projekt-Ressourcen mit (inkl. Anhänge/Dateien).
+    let g = call(
+        &app,
+        who,
+        "get_project",
+        json!({ "query": "P-ENG-1", "includeResources": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(g["resources"]["links"][0]["title"], "Spec");
+    assert_eq!(g["resources"]["attachments"], json!([]));
+    assert_eq!(g["resourceCount"], 1);
+}
+
 /// LIN-25: Abschließen ist bewusst, friert die Liste ein und behält den Terminverlauf.
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn milestone_completion_is_deliberate(pool: sqlx::PgPool) {

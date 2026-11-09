@@ -116,12 +116,9 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             Ok(json!({ "id": v.project.id.to_string(), "name": v.project.name }))
         }
         "get_milestone_resources" => {
+            // Ohne `milestone`: Ressourcen/Anhänge des Projekts selbst (LIN-45).
             let r = app
-                .list_resources(
-                    ctx,
-                    required(&args, "project")?,
-                    Some(required(&args, "milestone")?),
-                )
+                .list_resources(ctx, required(&args, "project")?, arg_str(&args, "milestone"))
                 .await?;
             Ok(json!({
                 "documents": r.documents.iter().map(|d| json!({
@@ -139,7 +136,8 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
         }
         "save_milestone_resource" => {
             let project = required(&args, "project")?;
-            let milestone = required(&args, "milestone")?;
+            // Ohne `milestone`: Ressource/Anhang am Projekt selbst (LIN-45).
+            let milestone = arg_str(&args, "milestone");
             let title = arg_str(&args, "title");
             let given = [
                 arg_str(&args, "url"),
@@ -148,15 +146,15 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             ];
             match given {
                 [Some(url), None, None] => {
-                    app.add_resource_link(ctx, project, Some(milestone), url, title.unwrap_or(url))
+                    app.add_resource_link(ctx, project, milestone, url, title.unwrap_or(url))
                         .await?;
                 }
                 [None, Some(document), None] => {
-                    app.set_document_milestone(ctx, project, document, Some(milestone))
+                    app.set_document_milestone(ctx, project, document, milestone)
                         .await?;
                 }
                 [None, None, Some(asset)] => {
-                    app.add_resource_file(ctx, project, Some(milestone), asset, title)
+                    app.add_resource_file(ctx, project, milestone, asset, title)
                         .await?;
                 }
                 _ => {

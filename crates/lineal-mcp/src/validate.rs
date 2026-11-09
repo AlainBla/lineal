@@ -102,14 +102,14 @@ fn milestone_tool(name: &str) -> (&'static str, Value) {
     let milestone = json!({ "description": "Milestone name or ID", "type": "string" });
     match name {
         "get_milestone_resources" => (
-            "List the documents, links and files of a milestone (Lineal extension)",
+            "List the documents, links and files of a milestone, or of the project itself when `milestone` is omitted (Lineal extension)",
             base(
                 json!({ "project": project, "milestone": milestone }),
-                json!(["project", "milestone"]),
+                json!(["project"]),
             ),
         ),
         "save_milestone_resource" => (
-            "Add a resource to a milestone: a link (`url`, `title`), an existing project document (`document`) or an uploaded file (`assetUrl` from prepare_milestone_upload). Exactly one of url, document or assetUrl (Lineal extension)",
+            "Add a resource to a milestone, or to the project itself when `milestone` is omitted: a link (`url`, `title`), an existing project document (`document`) or an uploaded file (`assetUrl` from prepare_milestone_upload). Exactly one of url, document or assetUrl (Lineal extension)",
             base(
                 json!({
                     "project": project,
@@ -119,7 +119,7 @@ fn milestone_tool(name: &str) -> (&'static str, Value) {
                     "document": { "description": "Document ID of a document in this project", "type": "string" },
                     "assetUrl": { "description": "assetUrl returned by prepare_milestone_upload", "type": "string" }
                 }),
-                json!(["project", "milestone"]),
+                json!(["project"]),
             ),
         ),
         "delete_milestone_resource" => (

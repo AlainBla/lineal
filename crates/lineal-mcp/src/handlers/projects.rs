@@ -361,6 +361,8 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
             let mut j = project_json(&ws, &v, opts.members, opts.milestones);
             if arg_bool(&args, "includeResources") {
                 let r = app.get_project_resources(ctx, query).await?;
+                // Dateianhänge des Projekts (LIN-45): Projekt-Ebene = `milestone` None.
+                let files = app.list_resources(ctx, query, None).await?.files;
                 j.insert(
                     "resources".into(),
                     json!({
@@ -368,10 +370,14 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                             "id": id.to_string(), "title": title, "url": url_of(&ws, "document", title, slug),
                         })).collect::<Vec<_>>(),
                         "links": r.links.iter().map(link_json).collect::<Vec<_>>(),
-                        "attachments": [],
+                        "attachments": files.iter().map(|f| json!({
+                            "id": f.file.id.to_string(), "title": f.file.title,
+                            "contentType": f.file.content_type, "size": f.file.size,
+                            "url": f.download_url,
+                        })).collect::<Vec<_>>(),
                     }),
                 );
-                j.insert("resourceCount".into(), json!(r.resource_count));
+                j.insert("resourceCount".into(), json!(r.resource_count + files.len() as i64));
             }
             Ok(Value::Object(j))
         }

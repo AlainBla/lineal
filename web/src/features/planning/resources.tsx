@@ -4,8 +4,8 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { FileText, Link2, Paperclip, Plus, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { Download, FileText, Image as ImageIcon, Link2, Paperclip, Plus, X } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +19,9 @@ import { useCreateDocument } from "@/features/docs/list-queries";
 import { sameOrigin, uploadFile } from "@/features/issues/assets";
 import { formatBytes } from "@/features/issues/attachments";
 import { errorText } from "@/features/issues/error-text";
+import { downloadUrl, openLightbox } from "@/features/issues/image-lightbox-store";
+import { isMarkdown, openMarkdownPreview } from "@/features/issues/markdown-preview-store";
+import { cn } from "@/lib/cn";
 import type { Resources } from "@/gql/graphql";
 import { gqlRequest } from "@/lib/graphql";
 
@@ -119,12 +122,15 @@ function Row({
   icon,
   meta,
   children,
+  extra,
   removeLabel,
   onRemove,
 }: {
   icon: React.ReactNode;
   meta: string;
   children: React.ReactNode;
+  /** Zusätzliche Aktion vor dem Entfernen-Knopf (z. B. Herunterladen bei Vorschau-Dateien). */
+  extra?: ReactNode;
   removeLabel: string;
   onRemove: () => void;
 }) {
@@ -137,6 +143,7 @@ function Row({
         <span className="truncate text-sm">{children}</span>
         <span className="text-xs text-muted-foreground">{meta}</span>
       </span>
+      {extra}
       <Button
         variant="ghost"
         size="icon"
@@ -170,6 +177,7 @@ export function ResourcesSection({
   const [adding, setAdding] = useState<Adding>(null);
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
+  const [over, setOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const failed =
     m.addLink.error ??
@@ -187,7 +195,25 @@ export function ResourcesSection({
   const documents = milestoneId ? (q.data?.documents ?? []) : [];
   const empty = q.data && !documents.length && !q.data.links.length && !q.data.files.length;
   return (
-    <section aria-label="Resources" className="flex flex-col gap-1">
+    <section
+      aria-label="Resources"
+      className={cn(
+        "flex flex-col gap-1 rounded-md",
+        over && "outline-2 -outline-offset-2 outline-primary/60 outline-dashed",
+      )}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        if (e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        for (const file of e.dataTransfer.files) m.addFile.mutate(file);
+      }}
+    >
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-medium text-muted-foreground">Resources</h2>
         <DropdownMenu>
@@ -336,21 +362,61 @@ export function ResourcesSection({
             </Link>
           </Row>
         ))}
-        {q.data?.files.map((f) => (
-          <Row
-            key={f.id}
-            icon={<Paperclip />}
-            meta={fileMeta(f.contentType, f.size)}
-            removeLabel={`Delete ${f.title}`}
-            onRemove={() => {
-              if (window.confirm(`Delete file "${f.title}"?`)) m.removeFile.mutate(f.id);
-            }}
-          >
-            <a href={sameOrigin(f.downloadUrl)} download={f.title} className="hover:underline">
-              {f.title}
-            </a>
-          </Row>
-        ))}
+        {q.data?.files.map((f) => {
+          const href = sameOrigin(f.downloadUrl);
+          // Bilder öffnen groß (LIN-21), Markdown wird gerendert (LIN-43); sonst herunterladen.
+          const image = !!f.contentType?.startsWith("image/");
+          const markdown = isMarkdown(f.contentType, f.title);
+          const openInApp = image
+            ? () => openLightbox({ src: href, alt: f.title, filename: f.title })
+            : markdown
+              ? () => openMarkdownPreview({ src: href, title: f.title })
+              : undefined;
+          return (
+            <Row
+              key={f.id}
+              icon={image ? <ImageIcon /> : <Paperclip />}
+              meta={fileMeta(f.contentType, f.size)}
+              extra={
+                openInApp ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                    aria-label={`Download ${f.title}`}
+                    title="Download"
+                    onClick={() => void downloadUrl(href, f.title)}
+                  >
+                    <Download className="size-3.5" />
+                  </Button>
+                ) : undefined
+              }
+              removeLabel={`Delete ${f.title}`}
+              onRemove={() => {
+                if (window.confirm(`Delete file "${f.title}"?`)) m.removeFile.mutate(f.id);
+              }}
+            >
+              <a
+                href={href}
+                download={openInApp ? undefined : f.title}
+                target={openInApp ? undefined : "_blank"}
+                rel="noreferrer"
+                className="hover:underline"
+                onClick={
+                  openInApp
+                    ? (e) => {
+                        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                        e.preventDefault();
+                        openInApp();
+                      }
+                    : undefined
+                }
+              >
+                {f.title}
+              </a>
+            </Row>
+          );
+        })}
         {q.data?.links.map((l) => (
           <Row
             key={l.id}
