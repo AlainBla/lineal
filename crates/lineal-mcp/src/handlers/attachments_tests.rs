@@ -103,6 +103,8 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
     assert_eq!(att["size"], 48213);
     assert_eq!(att["creator"]["name"], "Bob Example");
     assert!(att["url"].as_str().unwrap().starts_with("mem://get/"));
+    // Zweites Finalisieren: seit LIN-37 wird die Reservierung beim Finalisieren
+    // geloescht, der zweite Versuch findet keine mehr -> upload_unknown (InvalidRequest).
     assert_eq!(
         kind(
             call(
@@ -113,7 +115,7 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
             )
             .await
         ),
-        ErrorKind::Conflict
+        ErrorKind::InvalidRequest
     );
 
     // get_attachment (url und content): signierte URL, Ablauf, Hinweis
