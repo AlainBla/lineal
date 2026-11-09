@@ -231,7 +231,14 @@ function FilterValueForm({
           }}
         />
       ) : (
-        <ul className="flex max-h-60 flex-col overflow-auto" aria-label="Values">
+        <ul
+          className="flex flex-col overflow-auto"
+          style={{
+            maxHeight:
+              "min(28rem, calc(var(--radix-popover-content-available-height, 28rem) - 6rem))",
+          }}
+          aria-label="Values"
+        >
           {options.map((o, i) => (
             <li key={o.value}>
               <label className="flex items-center gap-2 rounded px-1 py-1 text-sm hover:bg-surface-hover">
