@@ -6,14 +6,26 @@ use axum::http::header::{
     CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
     X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
+
+// Header ohne eigene Konstante in `http`.
+static PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+static CROSS_ORIGIN_OPENER_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-opener-policy");
+static CROSS_ORIGIN_RESOURCE_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-resource-policy");
+
+/// Browser-Funktionen, die die App nicht nutzt, komplett sperren (deckt sich mit nginx für die
+/// statisch ausgelieferten Dokumente, deploy/security-headers.conf).
+const PERMISSIONS_POLICY_VALUE: &str = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), \
+payment=(), usb=()";
 
 /// CSP der Web-App: nur eigene Skripte; Styles inline erlaubt (Tailwind/Radix setzen
 /// `style`-Attribute); Verbindungen inkl. WebSocket (`/sync`) nur zum eigenen Ursprung.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; \
+img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; \
 object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 /// Einstellungen der Header-Middleware.
@@ -41,6 +53,15 @@ pub fn apply_headers(headers: &mut HeaderMap, cfg: &SecurityConfig, path: &str) 
     headers
         .entry(X_FRAME_OPTIONS)
         .or_insert(HeaderValue::from_static("DENY"));
+    headers
+        .entry(PERMISSIONS_POLICY.clone())
+        .or_insert(HeaderValue::from_static(PERMISSIONS_POLICY_VALUE));
+    headers
+        .entry(CROSS_ORIGIN_OPENER_POLICY.clone())
+        .or_insert(HeaderValue::from_static("same-origin"));
+    headers
+        .entry(CROSS_ORIGIN_RESOURCE_POLICY.clone())
+        .or_insert(HeaderValue::from_static("same-origin"));
     if cfg.hsts {
         headers
             .entry(STRICT_TRANSPORT_SECURITY)

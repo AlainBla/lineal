@@ -61,5 +61,8 @@ CMD ["serve"]
 # Laufzeit Web: nginx (unprivilegiert, Port 8080) liefert die SPA aus und leitet API-Pfade weiter.
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS web
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+# Snippet mit den Sicherheits-Headern NUR nach snippets/ (nicht conf.d/, siehe Datei-Kopf):
+# conf.d/*.conf würde auf http-Ebene gelten und die Header auf jede Antwort doppeln.
+COPY deploy/security-headers.conf /etc/nginx/snippets/lineal-security-headers.conf
 COPY --from=web-build /web/dist /usr/share/nginx/html
 EXPOSE 8080

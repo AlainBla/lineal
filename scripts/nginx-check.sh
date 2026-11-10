@@ -31,12 +31,16 @@ echo '<!doctype html><title>x</title><div id=root></div>' > "$TMP/html/index.htm
 echo 'console.log(1)' > "$TMP/html/assets/app-abc.js"
 chmod -R a+rX "$TMP"
 
+# Der Security-Header-Snippet liegt im Image unter snippets/ (siehe Dockerfile); hier mitmounten,
+# sonst scheitert `nginx -t` am `include`.
+SNIP="-v $PWD/deploy/security-headers.conf:/etc/nginx/snippets/lineal-security-headers.conf:ro"
+
 echo "== nginx -t"
-docker run --rm -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" "$IMAGE" nginx -t 2>&1 | tail -2
+docker run --rm -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" $SNIP "$IMAGE" nginx -t 2>&1 | tail -2
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$NAME" --network "$NET" \
-  -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" $SNIP \
   -v "$TMP/html:/usr/share/nginx/html:ro" "$IMAGE" >/dev/null
 
 curl_in() { docker run --rm --network "$NET" curlimages/curl:8.10.1 -s -m 15 "$@"; }
@@ -64,6 +68,44 @@ for p in /robots.txt /.env /missing.js /assets/missing.js; do
 done
 check "Client-Route ohne Endung liefert index.html (200)" \
   bash -c "head -1 <<<\"\$1\" | grep -q ' 200'" _ "$(hdr /acme/inbox)"
+
+# LIN-49: jeder Sicherheits-Header steht GENAU EINMAL (eine Ebene zuständig – keine Doppelheader),
+# inkl. der bisher fehlenden HSTS/Permissions-Policy/COOP/CORP.
+once() { # headers, header-name
+  local n; n="$(grep -ci "^$2:" <<<"$1" || true)"; [[ "$n" == "1" ]]
+}
+for route in / /assets/app-abc.js /acme/inbox "/invite/x"; do
+  h="$(hdr "$route")"
+  for H in content-security-policy strict-transport-security referrer-policy x-frame-options \
+           x-content-type-options permissions-policy cross-origin-opener-policy \
+           cross-origin-resource-policy; do
+    check "$route: $H genau einmal" once "$h" "$H"
+  done
+done
+check "/invite/x setzt Referrer-Policy: no-referrer" \
+  bash -c "grep -qi 'referrer-policy: *no-referrer' <<<\"\$1\"" _ "$(hdr /invite/x)"
+check "/ setzt HSTS und CSP mit connect-src 'self' (nicht ws: wss:)" \
+  bash -c "grep -qi 'strict-transport-security' <<<\"\$1\" && grep -qi \"connect-src 'self'[;\\\"]\" <<<\"\$1\" && ! grep -qi 'ws: wss:' <<<\"\$1\"" _ "$(hdr /)"
+
+# LIN-49 S-11/Pfade: Dotfiles 404, /.well-known bleibt proxied (Reihenfolge), /readyz am Edge gesperrt.
+check "/readyz -> 404 (am Edge gesperrt)" bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdr /readyz)"
+check "/.git/ -> 404 (Dotfile-Deny)" bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdr /.git/)"
+check "/.env -> 404 (Dotfile-Deny)" bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdr /.env)"
+check "/.well-known/x bleibt proxied -> 503 (Server aus), nicht vom Dotfile-Regex gefressen" \
+  bash -c "head -1 <<<\"\$1\" | grep -q ' 503'" _ "$(hdr /.well-known/acme-challenge/x)"
+
+# LIN-49 S-11/Body-Limits: kleiner Default greift auf Auth (413 JSON), /uploads erlaubt große Bodies
+# (kein 413; ohne Upstream 503). 3 MiB Testbody in EINEM curl-Container erzeugen.
+big() { # method, path -> Statuszeile+Header+Body
+  docker run --rm --network "$NET" --entrypoint sh curlimages/curl:8.10.1 -c \
+    "head -c 3145728 /dev/zero | tr '\\0' a > /tmp/big; curl -s -D - -m 20 -X $1 --data-binary @/tmp/big $BASE$2"
+}
+check "POST 3 MiB /auth/login -> 413 JSON (kleiner Body-Default)" \
+  bash -c "head -1 <<<\"\$1\" | grep -q ' 413' && grep -q '\"error\":\"limit_exceeded\"' <<<\"\$1\"" _ "$(big POST /auth/login)"
+# Bei erlaubtem großen Body schickt curl erst `Expect: 100-continue`, nginx antwortet `100 Continue`
+# und DANN (Server aus) 503 – daher die Statuszeile im ganzen Block prüfen, nicht nur head -1.
+check "PUT 3 MiB /uploads/x -> 503 (kein 413; großes Body-Limit greift)" \
+  bash -c "grep -qE '^HTTP/[0-9.]+ 503' <<<\"\$1\" && ! grep -qE '^HTTP/[0-9.]+ 413' <<<\"\$1\"" _ "$(big PUT /uploads/x)"
 
 # Server-Ausfall: kein Container "server" im Netz -> schnell 503 als JSON mit Retry-After.
 start=$(date +%s)
