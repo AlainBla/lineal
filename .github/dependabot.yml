@@ -1,0 +1,40 @@
+# S-07/LIN-34: Dependabot hält Abhängigkeiten und Advisories im Blick. Ergänzt die CI (ci.yml),
+# die bei jedem Push und täglich `cargo deny` und `npm audit` laufen lässt: Dependabot öffnet dazu
+# die passenden Update-PRs. Drei Ökosysteme (Cargo, npm im web/, GitHub-Actions-Workflows).
+#
+# `vendor/yrs` ist eine Path-Abhängigkeit und vom Workspace ausgeschlossen – Dependabot fasst sie
+# nicht an. Sicherheits-Updates (RUSTSEC/GHSA) öffnet Dependabot unabhängig vom Zeitplan sofort.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

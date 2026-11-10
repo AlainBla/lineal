@@ -74,8 +74,12 @@ check "Server aus: /auth/me -> 503 JSON mit Retry-After" \
 check "Server aus: Antwort in < 8 s (war bis 60 s)" test "$elapsed" -lt 8
 
 # Rate-Limit des nginx: 429 als JSON mit Retry-After (limit_req lineal_auth 10 r/min, burst 10).
-last=""
-for _ in $(seq 1 25); do last="$(curl_in -D - -X POST "$BASE/auth/login")"; done
+# Die 25 POSTs laufen sequentiell in EINEM curl-Container, nicht je Request in einem eigenen. Sonst
+# liegen die Requests in langsamer CI durch die Container-Startzeit zu weit auseinander, der Bucket
+# (10 r/min) füllt sich zwischendurch nach und der 429 bleibt aus (flaky). Geprüft wird der letzte
+# Antwortblock (Header + Body).
+last="$(docker run --rm --network "$NET" --entrypoint sh curlimages/curl:8.10.1 -c \
+  "for _ in \$(seq 1 25); do out=\"\$(curl -s -D - -m 10 -X POST $BASE/auth/login)\"; done; printf '%s' \"\$out\"")"
 check "nginx-429 als JSON mit Retry-After" \
   bash -c "head -1 <<<\"\$1\" | grep -q ' 429' && grep -qi 'retry-after' <<<\"\$1\" && grep -q '\"error\":\"rate_limited\"' <<<\"\$1\"" _ "$last"
 

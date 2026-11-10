@@ -16,7 +16,7 @@ export function teamScopeIds(
 ): Set<string> | null {
   if (!scopeTeamId) return null;
   const set = new Set<string>([scopeTeamId]);
-  for (let changed = true; changed; ) {
+  for (let changed = true; changed;) {
     changed = false;
     for (const t of teams) {
       if (t.parentId && set.has(t.parentId) && !set.has(t.id)) {

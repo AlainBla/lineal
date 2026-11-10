@@ -118,7 +118,11 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
         "get_milestone_resources" => {
             // Ohne `milestone`: Ressourcen/Anhänge des Projekts selbst (LIN-45).
             let r = app
-                .list_resources(ctx, required(&args, "project")?, arg_str(&args, "milestone"))
+                .list_resources(
+                    ctx,
+                    required(&args, "project")?,
+                    arg_str(&args, "milestone"),
+                )
                 .await?;
             Ok(json!({
                 "documents": r.documents.iter().map(|d| json!({

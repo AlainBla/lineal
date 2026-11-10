@@ -787,8 +787,13 @@ async fn guest_gets_a_shared_issue_live_and_loses_it_on_unshare(pool: PgPool) {
     while worker.tick().await.unwrap().deliveries > 0 {}
 
     let mut got: Vec<Value> = vec![];
-    while let Some(m) = next_sync(&mut carol, QUIET).await {
+    // Erste Nachricht mit großzügigem Timeout holen (unter paralleler Last kann die WS-Zustellung
+    // länger als QUIET brauchen – sonst flaky), danach den Rest im kurzen QUIET-Fenster leeren.
+    if let Some(m) = next_sync(&mut carol, WAIT).await {
         got.extend(m["actions"].as_array().unwrap().iter().cloned());
+        while let Some(m) = next_sync(&mut carol, QUIET).await {
+            got.extend(m["actions"].as_array().unwrap().iter().cloned());
+        }
     }
     let for_issue: Vec<&Value> = got
         .iter()
@@ -816,8 +821,12 @@ async fn guest_gets_a_shared_issue_live_and_loses_it_on_unshare(pool: PgPool) {
         .unwrap();
     while worker.tick().await.unwrap().deliveries > 0 {}
     let mut after: Vec<Value> = vec![];
-    while let Some(m) = next_sync(&mut carol, QUIET).await {
+    // Wie oben: erste Nachricht großzügig abwarten, dann im QUIET-Fenster leeren.
+    if let Some(m) = next_sync(&mut carol, WAIT).await {
         after.extend(m["actions"].as_array().unwrap().iter().cloned());
+        while let Some(m) = next_sync(&mut carol, QUIET).await {
+            after.extend(m["actions"].as_array().unwrap().iter().cloned());
+        }
     }
     let last = after
         .iter()

@@ -1360,6 +1360,7 @@ async fn b1_18_parallel_creates_get_unique_sort_orders(pool: PgPool) {
                     name: Some(format!("M{i}")),
                     description: None,
                     target_date: None,
+                    sort_order: None,
                 },
             )
             .await

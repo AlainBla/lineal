@@ -377,7 +377,10 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                         })).collect::<Vec<_>>(),
                     }),
                 );
-                j.insert("resourceCount".into(), json!(r.resource_count + files.len() as i64));
+                j.insert(
+                    "resourceCount".into(),
+                    json!(r.resource_count + files.len() as i64),
+                );
             }
             Ok(Value::Object(j))
         }

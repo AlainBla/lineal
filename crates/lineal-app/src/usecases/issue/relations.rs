@@ -16,9 +16,9 @@ use chrono::{DateTime, Utc};
 use lineal_domain::enums::{RelationType, StateType};
 use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{IssueId, IssueRelationId, StateId};
-use std::collections::HashMap;
 use lineal_domain::rules::state::TransitionSource;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Relationsänderungen eines Aufrufs (Append-only und explizites Entfernen, docs/07 §2.5).

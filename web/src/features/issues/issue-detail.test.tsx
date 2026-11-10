@@ -402,7 +402,9 @@ describe("Issue-Detail", () => {
     // Status-Icon je Rückverweis, mit Statusname als Label und Hover-Tooltip (LIN-55).
     expect(within(sec).getByRole("img", { name: "In Progress" })).toBeInTheDocument();
     expect(within(sec).getByRole("img", { name: "Done" })).toBeInTheDocument();
-    const tooltips = Array.from(sec.querySelectorAll("[title]")).map((t) => t.getAttribute("title"));
+    const tooltips = Array.from(sec.querySelectorAll("[title]")).map((t) =>
+      t.getAttribute("title"),
+    );
     expect(tooltips).toEqual(expect.arrayContaining(["In Progress", "Done"]));
   });
 

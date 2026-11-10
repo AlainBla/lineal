@@ -143,7 +143,9 @@ describe("Kontextmenü auf Tickets", () => {
     await screen.findByText("Erstes Ticket");
     const user = userEvent.setup();
     const menu = await openMenu("Erstes Ticket");
-    within(menu).getByRole("menuitem", { name: /^Status…/ }).focus();
+    within(menu)
+      .getByRole("menuitem", { name: /^Status…/ })
+      .focus();
     await user.keyboard("{ArrowRight}");
     const input = await screen.findByPlaceholderText("Change status…");
     await waitFor(() => expect(input).toHaveFocus());
