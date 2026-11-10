@@ -28,6 +28,12 @@
 #
 # Umgebung: COMPOSE_PROJECT_NAME (Default lineal) und COMPOSE_FILE, wie bei scripts/backup.sh;
 # beide werden ggf. aus .env übernommen.
+#
+# Verschlüsselte Backups (S-05/LIN-33): erkennt der Restore an der .age-Endung bzw. encrypted=1 im
+# Manifest. Dann muss LINEAL_BACKUP_AGE_IDENTITY auf die age-Identity (privater Schlüssel) zeigen –
+# NUR aus der Umgebung des Operators, nie aus .env (die .env ist evtl. gerade das, was
+# wiederhergestellt wird, und der Schlüssel soll nicht auf dem Host liegen). Entschlüsselt wird im
+# Stream, es landet kein Klartext-Backup auf der Platte.
 # Exit-Code ungleich 0 bei jedem Fehler. Wird vor Schritt 3 abgebrochen, bleibt der Stack
 # unverändert.
 set -euo pipefail
@@ -68,7 +74,7 @@ while (( $# > 0 )); do
       (( $# > 0 )) || die "$arg braucht eine Datei"
       FILES+=("$1"); shift
       ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     -*) die "unbekannte Option: $arg" ;;
     *)
       [[ -z "$BACKUP_ARG" ]] || die "nur ein Backup-Verzeichnis angeben"
@@ -85,11 +91,9 @@ fi
 BACKUP_DIR="$(cd "$BACKUP_ARG" && pwd)"
 
 MANIFEST="$BACKUP_DIR/manifest.txt"
-DUMP="$BACKUP_DIR/database.dump"
-BLOBS="$BACKUP_DIR/blobs.tar.gz"
 [[ -f "$MANIFEST" ]] || die "manifest.txt fehlt in $BACKUP_DIR"
-[[ -f "$DUMP" ]] || die "database.dump fehlt in $BACKUP_DIR"
-[[ -f "$BLOBS" ]] || die "blobs.tar.gz fehlt in $BACKUP_DIR"
+# DUMP/BLOBS werden unten aus dem Manifest aufgelöst (database_file/blobs_file), sobald mget
+# verfügbar ist – ein Pfad für Klartext- wie für verschlüsselte (.age) Backups.
 
 command -v docker >/dev/null || die "docker nicht gefunden"
 docker compose version >/dev/null 2>&1 || die "'docker compose' (Compose v2) nicht verfügbar"
@@ -114,6 +118,27 @@ mget() {
 
 # 1. Integrität
 info "Prüfe Backup $BACKUP_DIR"
+
+# Dateinamen aus dem Manifest (Klartext: database.dump/blobs.tar.gz; verschlüsselt: *.age).
+DB_FILE="$(mget database_file)"
+BLOB_FILE="$(mget blobs_file)"
+DUMP="$BACKUP_DIR/$DB_FILE"
+BLOBS="$BACKUP_DIR/$BLOB_FILE"
+[[ -f "$DUMP" ]] || die "$DB_FILE fehlt in $BACKUP_DIR"
+[[ -f "$BLOBS" ]] || die "$BLOB_FILE fehlt in $BACKUP_DIR"
+
+# Verschlüsselt? encrypted=1 im Manifest oder .age-Endung. Dann age + Identity nötig.
+ENCRYPTED=0
+if [[ "$(grep -E '^encrypted=' "$MANIFEST" | tail -n1 | cut -d= -f2-)" == "1" || "$DB_FILE" == *.age ]]; then
+  ENCRYPTED=1
+fi
+AGE_ID="${LINEAL_BACKUP_AGE_IDENTITY:-}"
+if (( ENCRYPTED )); then
+  command -v age >/dev/null || die "age nicht gefunden (z. B. 'apt install age'), für das verschlüsselte Backup nötig"
+  [[ -n "$AGE_ID" ]] || die "LINEAL_BACKUP_AGE_IDENTITY (Pfad zur age-Identity) ist nicht gesetzt – zum Entschlüsseln nötig"
+  [[ -f "$AGE_ID" ]] || die "LINEAL_BACKUP_AGE_IDENTITY zeigt auf keine Datei: $AGE_ID"
+fi
+
 for pair in "database:$DUMP" "blobs:$BLOBS"; do
   kind="${pair%%:*}"
   file="${pair#*:}"
@@ -130,6 +155,11 @@ BACKUP_VERSION="$(mget migration_version)"
 [[ "$BACKUP_VERSION" =~ ^[0-9]+$ ]] || die "migration_version in manifest.txt ungültig"
 BLOB_VOLUME_BACKUP="$(mget blobs_volume)"
 echo "    Zeitpunkt (UTC): $(mget created_utc), Git: $(mget git_commit), Migrationsstand: $BACKUP_VERSION"
+if grep -qE '^env_file=' "$MANIFEST"; then
+  env_file="$(grep -E '^env_file=' "$MANIFEST" | tail -n1 | cut -d= -f2-)"
+  echo "    Hinweis: Backup enthält $env_file (verschlüsselte .env). Dieser Restore fasst die .env NICHT an."
+  echo "             Bei Bedarf separat: age -d -i <identity> \"$BACKUP_DIR/$env_file\" > .env"
+fi
 
 # 2. Migrationsstand gegen den Checkout (Quelle der Images)
 IMAGE_VERSION=0
@@ -180,16 +210,35 @@ info "server, worker, web stoppen"
 dc stop server worker web >/dev/null 2>&1 || true
 
 info "Datenbank wiederherstellen (pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error)"
-dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
-    --single-transaction --exit-on-error < "$DUMP" \
-  || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). server/worker/web bleiben gestoppt; Ursache beheben und erneut ausführen. Ist-Zustand: $PRE_DUMP"
+# Verschlüsselt: age entschlüsselt im Stream in pg_restore. `set -o pipefail` lässt einen falschen
+# Schlüssel (age-Fehler) den Lauf abbrechen; --single-transaction hält die DB dabei unverändert.
+if (( ENCRYPTED )); then
+  age -d -i "$AGE_ID" < "$DUMP" \
+    | dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
+        --single-transaction --exit-on-error \
+    || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). Falscher Schlüssel? server/worker/web bleiben gestoppt. Ist-Zustand: $PRE_DUMP"
+else
+  dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
+      --single-transaction --exit-on-error < "$DUMP" \
+    || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). server/worker/web bleiben gestoppt; Ursache beheben und erneut ausführen. Ist-Zustand: $PRE_DUMP"
+fi
 
 info "Blob-Volume $BLOB_VOLUME ersetzen"
-docker run --rm \
-  -v "$BLOB_VOLUME:/data" \
-  -v "$BACKUP_DIR:/backup:ro" \
-  alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf /backup/blobs.tar.gz --numeric-owner -C /data' \
-  || die "Blob-Volume konnte nicht wiederhergestellt werden. server/worker/web bleiben gestoppt."
+# Wichtig: der DB-Restore oben lief bereits erfolgreich und beweist bei verschlüsselten Backups den
+# Schlüssel. Das `rm` leert das Volume VOR dem ersten tar-Byte – deshalb erst hier, nach bewiesenem
+# Schlüssel und geprüfter Chiffrat-Prüfsumme, damit ein falscher Schlüssel nicht das Volume leert.
+if (( ENCRYPTED )); then
+  age -d -i "$AGE_ID" < "$BLOBS" \
+    | docker run -i --rm -v "$BLOB_VOLUME:/data" \
+        alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf - --numeric-owner -C /data' \
+    || die "Blob-Volume konnte nicht wiederhergestellt werden. server/worker/web bleiben gestoppt."
+else
+  docker run --rm \
+    -v "$BLOB_VOLUME:/data" \
+    -v "$BACKUP_DIR:/backup:ro" \
+    alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf /backup/blobs.tar.gz --numeric-owner -C /data' \
+    || die "Blob-Volume konnte nicht wiederhergestellt werden. server/worker/web bleiben gestoppt."
+fi
 
 info "Migrationen ausführen"
 dc run --rm migrate \
