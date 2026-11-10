@@ -9,17 +9,52 @@ export interface LightboxImage {
   filename?: string;
 }
 
-let current: LightboxImage | null = null;
+/** Offene Galerie: die vorschaubaren Bilder einer Liste und der gezeigte Index (LIN-56). */
+export interface LightboxGallery {
+  images: LightboxImage[];
+  index: number;
+}
+
+let gallery: LightboxGallery | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
-export function openLightbox(image: LightboxImage): void {
-  current = image;
+const clampIndex = (i: number, len: number) => Math.min(Math.max(i, 0), len - 1);
+
+/**
+ * Öffnet die Lightbox – mit einem Einzelbild (z. B. ein Inline-Bild) oder mit einer ganzen Liste
+ * und dem Startindex, durch die sich dann per Pfeil blättern lässt (LIN-56). Eine leere Liste
+ * öffnet nichts.
+ */
+export function openLightbox(image: LightboxImage): void;
+export function openLightbox(images: LightboxImage[], index: number): void;
+export function openLightbox(arg: LightboxImage | LightboxImage[], index = 0): void {
+  const images = Array.isArray(arg) ? arg : [arg];
+  if (images.length === 0) return;
+  gallery = { images, index: clampIndex(index, images.length) };
   emit();
 }
 
+/** Blättert um `step` Bilder weiter; am Anfang/Ende ein No-op (kein Umlauf). */
+function step(delta: number): void {
+  if (!gallery) return;
+  const next = clampIndex(gallery.index + delta, gallery.images.length);
+  if (next !== gallery.index) {
+    gallery = { images: gallery.images, index: next };
+    emit();
+  }
+}
+
+export function nextLightbox(): void {
+  step(1);
+}
+
+export function prevLightbox(): void {
+  step(-1);
+}
+
 export function closeLightbox(): void {
-  current = null;
+  gallery = null;
   emit();
 }
 
@@ -99,10 +134,10 @@ export async function downloadUrl(url: string, filename?: string): Promise<void>
   }
 }
 
-export function useLightboxImage(): LightboxImage | null {
+export function useLightboxGallery(): LightboxGallery | null {
   return useSyncExternalStore(
     subscribe,
-    () => current,
+    () => gallery,
     () => null,
   );
 }

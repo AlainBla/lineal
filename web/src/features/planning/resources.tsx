@@ -19,7 +19,11 @@ import { useCreateDocument } from "@/features/docs/list-queries";
 import { sameOrigin, uploadFile } from "@/features/issues/assets";
 import { formatBytes } from "@/features/issues/attachments";
 import { errorText } from "@/features/issues/error-text";
-import { downloadUrl, openLightbox } from "@/features/issues/image-lightbox-store";
+import {
+  downloadUrl,
+  openLightbox,
+  type LightboxImage,
+} from "@/features/issues/image-lightbox-store";
 import { isMarkdown, openMarkdownPreview } from "@/features/issues/markdown-preview-store";
 import { cn } from "@/lib/cn";
 import type { Resources } from "@/gql/graphql";
@@ -194,6 +198,12 @@ export function ResourcesSection({
   // Am Projekt listet die Dokumentliste darüber die Dokumente.
   const documents = milestoneId ? (q.data?.documents ?? []) : [];
   const empty = q.data && !documents.length && !q.data.links.length && !q.data.files.length;
+  // Vorschaubare Bilder dieser Dateiliste in Anzeigereihenfolge, zum Blättern in der Lightbox (LIN-56).
+  const gallery: LightboxImage[] = (q.data?.files ?? []).flatMap((f) =>
+    f.contentType?.startsWith("image/")
+      ? [{ src: sameOrigin(f.downloadUrl), alt: f.title, filename: f.title }]
+      : [],
+  );
   return (
     <section
       aria-label="Resources"
@@ -368,7 +378,11 @@ export function ResourcesSection({
           const image = !!f.contentType?.startsWith("image/");
           const markdown = isMarkdown(f.contentType, f.title);
           const openInApp = image
-            ? () => openLightbox({ src: href, alt: f.title, filename: f.title })
+            ? () =>
+                openLightbox(
+                  gallery,
+                  gallery.findIndex((g) => g.src === href),
+                )
             : markdown
               ? () => openMarkdownPreview({ src: href, title: f.title })
               : undefined;

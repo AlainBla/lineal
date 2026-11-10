@@ -6,6 +6,7 @@ import "@/app/test-polyfills";
 
 import { AttachmentsSection, formatBytes } from "./attachments";
 import { ImageLightbox } from "./image-lightbox";
+import { closeLightbox } from "./image-lightbox-store";
 import { MarkdownPreview } from "./markdown-preview";
 import { closeMarkdownPreview } from "./markdown-preview-store";
 import { makeIssue, mockGraphql, renderWithApp } from "./test-fixtures";
@@ -44,6 +45,7 @@ function handlers(attachments: unknown[], extra: Record<string, () => unknown> =
 afterEach(() => {
   vi.unstubAllGlobals();
   closeMarkdownPreview();
+  closeLightbox();
 });
 
 describe("Anhänge (F.08)", () => {
@@ -141,6 +143,75 @@ describe("Anhänge (F.08)", () => {
       "src",
       "/files/img",
     );
+  });
+
+  it("blättert mit Pfeilen und Pfeiltasten durch die Bilder der Liste (LIN-56)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a2",
+          title: "a.png",
+          contentType: "image/png",
+          url: "http://localhost:8080/files/imgA",
+        },
+        { ...ATT, id: "a3", title: "spec.pdf" },
+        {
+          ...ATT,
+          id: "a4",
+          title: "b.png",
+          contentType: "image/png",
+          url: "http://localhost:8080/files/imgB",
+        },
+      ]),
+    );
+    await renderWithApp(
+      <>
+        <AttachmentsSection issue={ISSUE} />
+        <ImageLightbox />
+      </>,
+    );
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    await userEvent.click(await within(region).findByRole("link", { name: "a.png" }));
+    const dialog = await screen.findByRole("dialog");
+    // Die PDF zählt nicht mit: die Galerie sind nur die beiden Bilder.
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/files/imgA");
+    expect(within(dialog).getByText("1 / 2")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Previous file" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Next file" })).toBeEnabled();
+    // Vor per Klick.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Next file" }));
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/files/imgB");
+    expect(within(dialog).getByText("2 / 2")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Next file" })).toBeDisabled();
+    // Zurück per Pfeiltaste.
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/files/imgA");
+  });
+
+  it("zeigt in der Lightbox keine Pfeile, wenn nur ein Bild vorschaubar ist (LIN-56)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a2",
+          title: "only.png",
+          contentType: "image/png",
+          url: "http://localhost:8080/files/one",
+        },
+      ]),
+    );
+    await renderWithApp(
+      <>
+        <AttachmentsSection issue={ISSUE} />
+        <ImageLightbox />
+      </>,
+    );
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    await userEvent.click(await within(region).findByRole("link", { name: "only.png" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("button", { name: "Next file" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Previous file" })).toBeNull();
   });
 
   it("bietet bei Nicht-Bildern keinen eigenen Download-Knopf", async () => {

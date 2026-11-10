@@ -59,8 +59,10 @@ describe("Projekt-Anhänge (LIN-45)", () => {
     );
     const user = userEvent.setup();
     await user.click(await screen.findByRole("link", { name: "mockup.png" }));
+    // Die Lightbox bekommt die Bild-Galerie der Liste und den Index des angeklickten Bildes (LIN-56).
     expect(openLightbox).toHaveBeenCalledWith(
-      expect.objectContaining({ src: "/files/img-signed", filename: "mockup.png" }),
+      [expect.objectContaining({ src: "/files/img-signed", filename: "mockup.png" })],
+      0,
     );
     // PDF ist ein echter Download-Link, keine Vorschau.
     const pdf = screen.getByRole("link", { name: "plan.pdf" });

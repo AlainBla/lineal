@@ -18,7 +18,7 @@ export function safeHref(url: string): string | undefined {
   }
 }
 import { useIssueExtras } from "./hooks";
-import { downloadUrl, openLightbox } from "./image-lightbox-store";
+import { downloadUrl, openLightbox, type LightboxImage } from "./image-lightbox-store";
 import { isMarkdown, openMarkdownPreview } from "./markdown-preview-store";
 import { createAttachment, deleteAttachment, keys } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
@@ -77,6 +77,14 @@ export function AttachmentsSection({
 
   const attachments = extras.data?.attachments ?? [];
   if (attachments.length === 0 && readOnly) return null;
+
+  // Vorschaubare Bilder dieser Liste in Anzeigereihenfolge, zum Blättern in der Lightbox (LIN-56).
+  const gallery: LightboxImage[] = attachments.flatMap((a) => {
+    const h = a.sourceType === "upload" ? sameOrigin(a.url) : undefined;
+    return h && a.contentType?.startsWith("image/")
+      ? [{ src: h, alt: a.title, filename: a.title }]
+      : [];
+  });
 
   return (
     <section
@@ -149,7 +157,11 @@ export function AttachmentsSection({
             // Namensklick öffnet die passende In-App-Ansicht (Bild-Lightbox bzw. Markdown-Vorschau).
             const openInApp =
               image && href
-                ? () => openLightbox({ src: href, alt: a.title, filename: a.title })
+                ? () =>
+                    openLightbox(
+                      gallery,
+                      gallery.findIndex((g) => g.src === href),
+                    )
                 : markdown && href
                   ? () => openMarkdownPreview({ src: href, title: a.title })
                   : undefined;
