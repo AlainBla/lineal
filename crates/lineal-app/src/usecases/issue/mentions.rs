@@ -192,6 +192,7 @@ pub(super) async fn mentioned_in(
     target: lineal_domain::ids::IssueId,
 ) -> AppResult<Vec<MentionedIn>> {
     let mut out = Vec::new();
+    let mut states = std::collections::HashMap::new();
     for row in tx.issues().mentions_of(target).await? {
         let Some(src) = tx.issues().get(row.source_issue_id, false).await? else {
             continue;
@@ -205,11 +206,16 @@ pub(super) async fn mentioned_in(
                 _ => continue,
             }
         }
+        let (state_name, state_color) =
+            super::relations::state_meta(tx, &mut states, src.state_id).await?;
         out.push(MentionedIn {
             issue: super::relations::RelatedIssue {
                 uuid: src.id.0,
                 identifier: src.identifier.clone(),
                 title: src.title.clone(),
+                state_type: src.state_type,
+                state_name,
+                state_color,
             },
             comment_id: row.source_comment_id.map(|c| c.0),
             created_at: row.created_at,

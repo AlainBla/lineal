@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { Issue } from "@/gql/graphql";
 
 import { useIssueExtras } from "./hooks";
+import { StatusIcon } from "./icons";
 import { issuePath, relationGroups, type RelationChoice } from "./model";
 import { RelationDialog } from "./relation-dialog";
 
@@ -46,8 +47,13 @@ export function RelationsSection({
                   to={issuePath(ws, r.identifier) as "/"}
                   className="flex items-center gap-2 rounded px-1 text-sm hover:bg-surface-hover"
                 >
-                  <span className="w-24 text-xs text-muted-foreground">{g.label}</span>
-                  <span className="text-xs text-muted-foreground">{r.identifier}</span>
+                  <span className="w-24 shrink-0 text-xs whitespace-nowrap text-muted-foreground">
+                    {g.label}
+                  </span>
+                  <StatusIcon type={r.stateType} color={r.stateColor} title={r.stateName} />
+                  <span className="shrink-0 text-xs whitespace-nowrap text-muted-foreground">
+                    {r.identifier}
+                  </span>
                   <span className="truncate">{r.title}</span>
                 </Link>
               </li>

@@ -29,45 +29,54 @@ export function StatusIcon({ type, color, className, title }: StatusIconProps) {
     "aria-label": title ?? t,
     "data-state-type": t,
   };
-  if (t === "triage") {
-    return <Inbox {...{ ...common, viewBox: undefined }} style={{ color: c }} strokeWidth={2} />;
-  }
-  return (
-    <svg {...common} fill="none">
-      {t === "backlog" && (
-        <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" strokeDasharray="1.8 1.8" />
-      )}
-      {t === "unstarted" && <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" />}
-      {t === "started" && (
-        <>
-          <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" />
-          <path d="M7 3.5a3.5 3.5 0 0 1 0 7z" fill={c} />
-        </>
-      )}
-      {t === "completed" && (
-        <>
-          <circle cx="7" cy="7" r="6.25" fill={c} />
-          <path
-            d="m4.4 7.2 1.7 1.7 3.5-3.6"
-            stroke="var(--background)"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </>
-      )}
-      {(t === "canceled" || t === "duplicate") && (
-        <>
-          <circle cx="7" cy="7" r="6.25" fill={c} />
-          <path
-            d="m4.9 4.9 4.2 4.2m0-4.2-4.2 4.2"
-            stroke="var(--background)"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-          />
-        </>
-      )}
-    </svg>
+  const icon =
+    t === "triage" ? (
+      <Inbox {...{ ...common, viewBox: undefined }} style={{ color: c }} strokeWidth={2} />
+    ) : (
+      <svg {...common} fill="none">
+        {t === "backlog" && (
+          <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" strokeDasharray="1.8 1.8" />
+        )}
+        {t === "unstarted" && <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" />}
+        {t === "started" && (
+          <>
+            <circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" />
+            <path d="M7 3.5a3.5 3.5 0 0 1 0 7z" fill={c} />
+          </>
+        )}
+        {t === "completed" && (
+          <>
+            <circle cx="7" cy="7" r="6.25" fill={c} />
+            <path
+              d="m4.4 7.2 1.7 1.7 3.5-3.6"
+              stroke="var(--background)"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </>
+        )}
+        {(t === "canceled" || t === "duplicate") && (
+          <>
+            <circle cx="7" cy="7" r="6.25" fill={c} />
+            <path
+              d="m4.9 4.9 4.2 4.2m0-4.2-4.2 4.2"
+              stroke="var(--background)"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+            />
+          </>
+        )}
+      </svg>
+    );
+  // Hover-Tooltip über das umschließende Element (LIN-55): ein nativer `title` wird – anders als ein
+  // SVG-`<title>`-Kind – nicht als Textknoten gefunden und kollidiert so nicht mit Status-Labels.
+  return title ? (
+    <span title={title} className="inline-flex shrink-0">
+      {icon}
+    </span>
+  ) : (
+    icon
   );
 }
 

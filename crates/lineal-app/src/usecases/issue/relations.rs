@@ -15,7 +15,8 @@ use crate::resolve::user::actor_user_id;
 use chrono::{DateTime, Utc};
 use lineal_domain::enums::{RelationType, StateType};
 use lineal_domain::events::DomainEvent;
-use lineal_domain::ids::{IssueId, IssueRelationId};
+use lineal_domain::ids::{IssueId, IssueRelationId, StateId};
+use std::collections::HashMap;
 use lineal_domain::rules::state::TransitionSource;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -506,12 +507,37 @@ pub struct RelationsView {
     pub duplicates: Vec<RelatedIssue>,
 }
 
-/// Verwandtes Issue (nur Kennung und Titel).
+/// Verwandtes Issue (Kennung, Titel und Status, damit die Liste das Status-Icon ohne Extra-Query je
+/// Ticket zeigt, LIN-55).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelatedIssue {
     pub uuid: Uuid,
     pub identifier: String,
     pub title: String,
+    pub state_type: StateType,
+    pub state_name: String,
+    /// `#RRGGBB`; leer, falls der Status nicht (mehr) auffindbar ist.
+    pub state_color: String,
+}
+
+/// Status-Anzeigewerte (Name, Farbe) eines Issues, gepuffert je `StateId`, damit mehrere Relationen
+/// auf denselben Status nur einen Lookup kosten (LIN-55).
+pub(super) async fn state_meta(
+    tx: &mut dyn Tx,
+    cache: &mut HashMap<StateId, (String, String)>,
+    id: StateId,
+) -> AppResult<(String, String)> {
+    if let Some(v) = cache.get(&id) {
+        return Ok(v.clone());
+    }
+    let meta = tx
+        .states()
+        .get(id)
+        .await?
+        .map(|s| (s.name, s.color))
+        .unwrap_or_default();
+    cache.insert(id, meta.clone());
+    Ok(meta)
 }
 
 /// Baut die Relationssicht; Gegenüber, die der Akteur nicht sehen darf oder die im Papierkorb
@@ -524,6 +550,7 @@ pub(super) async fn view(
 ) -> AppResult<RelationsView> {
     let rels: Vec<Relation> = tx.issues().relations_of(issue).await?;
     let mut out = RelationsView::default();
+    let mut states: HashMap<StateId, (String, String)> = HashMap::new();
     for r in rels {
         let (other_id, outgoing) = if r.issue_id == issue {
             (r.related_issue_id, true)
@@ -536,10 +563,14 @@ pub(super) async fn view(
         if other.trashed || !resolve::issue::can_see(tx, snap, ctx, &other).await? {
             continue;
         }
+        let (state_name, state_color) = state_meta(tx, &mut states, other.state_id).await?;
         let item = RelatedIssue {
             uuid: other.id.0,
             identifier: other.identifier.clone(),
             title: other.title.clone(),
+            state_type: other.state_type,
+            state_name,
+            state_color,
         };
         match (r.relation_type, outgoing) {
             (RelationType::Blocks, true) => out.blocks.push(item),

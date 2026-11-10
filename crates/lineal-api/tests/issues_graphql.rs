@@ -346,7 +346,7 @@ async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
     let q = r#"{ issue(id: "ENG-1") {
         title
         children { identifier title }
-        relations { blocks { identifier title } blockedBy { identifier } duplicateOf { identifier } }
+        relations { blocks { identifier title stateType stateName stateColor } blockedBy { identifier } duplicateOf { identifier } }
         history { source changes flags createdAt }
     } }"#;
     let alice = data(run(&schema, SeedUser::Alice, q).await);
@@ -356,9 +356,18 @@ async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
         issue["children"],
         json!([{ "identifier": "ENG-2", "title": "Kind sichtbar" }])
     );
-    assert_eq!(
-        issue["relations"]["blocks"],
-        json!([{ "identifier": "ENG-2", "title": "Kind sichtbar" }])
+    let blocked = &issue["relations"]["blocks"][0];
+    assert_eq!(blocked["identifier"], "ENG-2");
+    assert_eq!(blocked["title"], "Kind sichtbar");
+    // Status reist mit (LIN-55): Kategorie fürs Icon, Name für den Tooltip, Farbe (#RRGGBB).
+    assert_eq!(blocked["stateType"], "backlog");
+    assert!(blocked["stateName"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(
+        blocked["stateColor"]
+            .as_str()
+            .is_some_and(|s| s.starts_with('#')),
+        "stateColor = {:?}",
+        blocked["stateColor"]
     );
     assert_eq!(issue["relations"]["blockedBy"], json!([]));
     assert_eq!(issue["relations"]["duplicateOf"], Value::Null);

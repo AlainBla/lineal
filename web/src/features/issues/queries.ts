@@ -145,7 +145,7 @@ export type IssueExtras = Pick<
   "children" | "relations" | "history" | "subscribed" | "attachments" | "mentionedIn"
 >;
 
-const RELATED = "id identifier title";
+const RELATED = "id identifier title stateType stateName stateColor";
 const EXTRAS_QUERY = `query IssueExtras($id: String!) {
   issue(id: $id) {
     id
@@ -157,7 +157,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
     }
     history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
     attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
-    mentionedIn { id identifier title source commentId createdAt }
+    mentionedIn { id identifier title source commentId createdAt stateType stateName stateColor }
   }
 }`;
 

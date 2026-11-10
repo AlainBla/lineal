@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import type { Issue } from "@/gql/graphql";
 
 import { useIssueExtras } from "./hooks";
+import { StatusIcon } from "./icons";
 import { issuePath } from "./model";
 
 /**
@@ -24,7 +25,10 @@ export function MentionedInSection({ issue, ws }: { issue: Issue; ws: string }) 
               to={issuePath(ws, m.identifier) as "/"}
               className="flex items-center gap-2 rounded px-1 text-sm hover:bg-surface-hover"
             >
-              <span className="text-xs text-muted-foreground">{m.identifier}</span>
+              <StatusIcon type={m.stateType} color={m.stateColor} title={m.stateName} />
+              <span className="shrink-0 text-xs whitespace-nowrap text-muted-foreground">
+                {m.identifier}
+              </span>
               <span className="truncate">{m.title}</span>
               <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                 {m.source === "comment" ? "in a comment" : "in the description"}

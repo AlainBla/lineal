@@ -1285,6 +1285,15 @@ type IssueMention {
 	"""
 	commentId: String
 	createdAt: String!
+	"""
+	Statuskategorie (`backlog`, `started`, `completed` …) für die Icon-Form (LIN-55).
+	"""
+	stateType: String!
+	stateName: String!
+	"""
+	`#RRGGBB`; leer, falls der Status nicht auffindbar ist.
+	"""
+	stateColor: String!
 }
 
 type IssuePayload {
@@ -2734,12 +2743,21 @@ input RecurringIssueUpdateInput {
 }
 
 """
-Verwandtes Issue (Kennung und Titel).
+Verwandtes Issue (Kennung, Titel und Status für das Status-Icon, LIN-55).
 """
 type RelatedIssue {
 	id: String!
 	identifier: String!
 	title: String!
+	"""
+	Statuskategorie (`backlog`, `started`, `completed` …) für die Icon-Form.
+	"""
+	stateType: String!
+	stateName: String!
+	"""
+	`#RRGGBB`; leer, falls der Status nicht auffindbar ist.
+	"""
+	stateColor: String!
 }
 
 """

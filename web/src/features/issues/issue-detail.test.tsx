@@ -374,6 +374,9 @@ describe("Issue-Detail", () => {
             source: "description",
             commentId: null,
             createdAt: "2026-10-03T08:00:00Z",
+            stateType: "started",
+            stateName: "In Progress",
+            stateColor: "#f2c94c",
           },
           {
             id: "i8",
@@ -382,6 +385,9 @@ describe("Issue-Detail", () => {
             source: "comment",
             commentId: "c9",
             createdAt: "2026-10-04T08:00:00Z",
+            stateType: "completed",
+            stateName: "Done",
+            stateColor: "#4cb782",
           },
         ],
       }),
@@ -393,6 +399,11 @@ describe("Issue-Detail", () => {
     expect(within(sec).getByText("in a comment")).toBeInTheDocument();
     const link = within(sec).getByText("Kommentiert ENG-120").closest("a");
     expect(link?.getAttribute("href")).toContain("WEB-9");
+    // Status-Icon je Rückverweis, mit Statusname als Label und Hover-Tooltip (LIN-55).
+    expect(within(sec).getByRole("img", { name: "In Progress" })).toBeInTheDocument();
+    expect(within(sec).getByRole("img", { name: "Done" })).toBeInTheDocument();
+    const tooltips = Array.from(sec.querySelectorAll("[title]")).map((t) => t.getAttribute("title"));
+    expect(tooltips).toEqual(expect.arrayContaining(["In Progress", "Done"]));
   });
 
   it("blendet „Mentioned in“ ohne Rückverweise aus", async () => {
@@ -405,7 +416,14 @@ describe("Issue-Detail", () => {
   });
 
   it("legt eine Relation „blocking“ über den Dialog an", async () => {
-    let blocks: Array<{ id: string; identifier: string; title: string }> = [];
+    let blocks: Array<{
+      id: string;
+      identifier: string;
+      title: string;
+      stateType?: string;
+      stateName?: string;
+      stateColor?: string;
+    }> = [];
     const h = handlers();
     const gql = mockGraphql({
       ...h,
@@ -433,7 +451,16 @@ describe("Issue-Detail", () => {
         },
       }),
       IssueRelationCreate: () => {
-        blocks = [{ id: "i9", identifier: "ENG-132", title: "Anderes Issue" }];
+        blocks = [
+          {
+            id: "i9",
+            identifier: "ENG-132",
+            title: "Anderes Issue",
+            stateType: "started",
+            stateName: "In Progress",
+            stateColor: "#f2c94c",
+          },
+        ];
         return { issueRelationCreate: { success: true } };
       },
     });

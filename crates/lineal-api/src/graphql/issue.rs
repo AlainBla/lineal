@@ -108,12 +108,17 @@ impl From<IssueView> for IssueGql {
     }
 }
 
-/// Verwandtes Issue (Kennung und Titel).
+/// Verwandtes Issue (Kennung, Titel und Status für das Status-Icon, LIN-55).
 #[derive(SimpleObject)]
 pub struct RelatedIssue {
     pub id: String,
     pub identifier: String,
     pub title: String,
+    /// Statuskategorie (`backlog`, `started`, `completed` …) für die Icon-Form.
+    pub state_type: String,
+    pub state_name: String,
+    /// `#RRGGBB`; leer, falls der Status nicht auffindbar ist.
+    pub state_color: String,
 }
 
 impl From<lineal_app::usecases::issue::RelatedIssue> for RelatedIssue {
@@ -122,6 +127,9 @@ impl From<lineal_app::usecases::issue::RelatedIssue> for RelatedIssue {
             id: r.uuid.to_string(),
             identifier: r.identifier,
             title: r.title,
+            state_type: r.state_type.as_str().into(),
+            state_name: r.state_name,
+            state_color: r.state_color,
         }
     }
 }
@@ -147,6 +155,11 @@ pub struct IssueMention {
     /// Der erwähnende Kommentar (nur bei `source = comment`).
     pub comment_id: Option<String>,
     pub created_at: String,
+    /// Statuskategorie (`backlog`, `started`, `completed` …) für die Icon-Form (LIN-55).
+    pub state_type: String,
+    pub state_name: String,
+    /// `#RRGGBB`; leer, falls der Status nicht auffindbar ist.
+    pub state_color: String,
 }
 
 /// Ein Eintrag der Aktivitätshistorie.
@@ -245,6 +258,9 @@ impl IssueGql {
                 .into(),
                 comment_id: m.comment_id.map(|c| c.to_string()),
                 created_at: m.created_at.to_rfc3339(),
+                state_type: m.issue.state_type.as_str().into(),
+                state_name: m.issue.state_name,
+                state_color: m.issue.state_color,
             })
             .collect())
     }
