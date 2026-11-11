@@ -316,3 +316,93 @@ async fn milestone_file_flow_follows_project_access(pool: sqlx::PgPool) {
     assert!(app.resolve_assets(&bob, &urls).await.unwrap().is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn storage_quota_blocks_uploads_over_the_limit(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool.clone());
+    let data = SeedData::acme();
+    let mut tx = store.begin(data.org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    // Quota = 12 Byte (genau eine PNG-Datei).
+    sqlx::query("UPDATE organization SET limits = limits || '{\"maxStorageBytes\": 12}'::jsonb WHERE id = $1")
+        .bind(data.org.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let dir = std::env::temp_dir().join(format!("lineal-wp09q-{}", Uuid::now_v7()));
+    let clock = Arc::new(TestClock(Mutex::new(
+        "2026-10-10T08:00:00Z".parse().unwrap(),
+    )));
+    let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
+    app.config.blob_dir = dir.clone();
+    app.config.base_url = "http://lineal.test".into();
+    app.clock = clock.clone();
+    app.blobs = Arc::new(LocalBlobStore::from_app(&app));
+    let app = Arc::new(app);
+    let router = lineal_api::router::router(app.clone(), false);
+
+    let eng = Uuid::now_v7();
+    sqlx::query(
+        "WITH n AS (UPDATE team SET last_issue_number = last_issue_number + 1 \
+         WHERE id = $1 RETURNING last_issue_number) \
+         INSERT INTO issue (id, organization_id, team_id, number, title, state_id) \
+         SELECT $2, $3, $1, last_issue_number, 'x', $4 FROM n",
+    )
+    .bind(data.eng.0)
+    .bind(eng)
+    .bind(data.org.0)
+    .bind(seed_workflow_state_ids(1)[0].0)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let bob = ctx_for(SeedUser::Bob);
+    let prep = |size: i64| PrepareUploadInput {
+        issue: Some(eng.to_string()),
+        filename: "diagram.png".into(),
+        content_type: "image/png".into(),
+        size,
+        title: None,
+        subtitle: None,
+    };
+    let put = |url: &str, body: Vec<u8>| {
+        Request::builder()
+            .method(Method::PUT)
+            .uri(url.trim_start_matches("http://lineal.test"))
+            .header("content-type", "image/png")
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    // Datei a (12 B) hochladen + finalisieren → passt (0 + 12 <= 12).
+    let a = app.prepare_attachment_upload(&bob, prep(12)).await.unwrap();
+    router
+        .clone()
+        .oneshot(put(&a.url, PNG.to_vec()))
+        .await
+        .unwrap();
+    app.create_attachment_from_upload(&bob, &eng.to_string(), &a.asset_url, None, None)
+        .await
+        .unwrap();
+
+    // Datei b: prepare reißt die Quota (12 + 12 > 12), mit Zahlen im Fehler.
+    let err = app
+        .prepare_attachment_upload(&bob, prep(12))
+        .await
+        .unwrap_err();
+    assert_eq!(err.details["limit"], "maxStorageBytes");
+    assert_eq!(err.details["usedBytes"], 12);
+    assert_eq!(err.details["maxBytes"], 12);
+
+    // a archivieren → Speicher frei → b passt wieder.
+    sqlx::query("UPDATE attachment SET archived_at = now() WHERE organization_id = $1")
+        .bind(data.org.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    app.prepare_attachment_upload(&bob, prep(12))
+        .await
+        .expect("nach dem Archivieren ist wieder Platz");
+}

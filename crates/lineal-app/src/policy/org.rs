@@ -30,6 +30,8 @@ pub struct Limits {
     pub trash_retention_days: i64,
     pub workspace_deletion_delay_hours: i64,
     pub max_team_memberships_per_user: Option<i64>,
+    /// S-15: Byte-Obergrenze für den Blob-Speicher des Workspace (`None` = unbegrenzt).
+    pub max_storage_bytes: Option<i64>,
 }
 
 impl Default for Limits {
@@ -49,6 +51,7 @@ impl Default for Limits {
             trash_retention_days: 30,
             workspace_deletion_delay_hours: 48,
             max_team_memberships_per_user: None,
+            max_storage_bytes: None,
         }
     }
 }
@@ -235,6 +238,7 @@ impl OrgPolicy {
                     &["maxTeamMembershipsPerUser"],
                     d.max_team_memberships_per_user,
                 ),
+                max_storage_bytes: opt_int(limits, &["maxStorageBytes"], d.max_storage_bytes),
             },
         }
     }

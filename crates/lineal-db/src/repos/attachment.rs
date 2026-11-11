@@ -362,6 +362,23 @@ impl AttachmentRepo for PgTx {
         .map_err(db_err)
     }
 
+    async fn org_storage_bytes(&mut self) -> AppResult<i64> {
+        // Drei disjunkte Quellen (Issue-Attachments, Projektdateien, finalisierte Reservierungen =
+        // Editor/Avatar). Finalisierte Issue-Attachment-Reservierungen werden beim Finalisieren
+        // gelöscht, Archiviertes (archived_at) zählt nicht mit.
+        sqlx::query_scalar(
+            "SELECT ( \
+               COALESCE((SELECT SUM(size) FROM attachment WHERE organization_id = $1 AND archived_at IS NULL), 0) \
+             + COALESCE((SELECT SUM(size) FROM project_file WHERE organization_id = $1 AND archived_at IS NULL), 0) \
+             + COALESCE((SELECT SUM(size) FROM upload_reservation WHERE organization_id = $1 AND finalized_at IS NOT NULL), 0) \
+             )::bigint",
+        )
+        .bind(self.org.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn list_expired_reservations(
         &mut self,
         cutoff: DateTime<Utc>,
