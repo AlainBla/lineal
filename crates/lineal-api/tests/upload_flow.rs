@@ -376,8 +376,18 @@ async fn storage_quota_blocks_uploads_over_the_limit(pool: sqlx::PgPool) {
             .unwrap()
     };
 
-    // Datei a (12 B) hochladen + finalisieren → passt (0 + 12 <= 12).
+    // Finding 1 (TOCTOU): Schon die OFFENE Reservierung von a zählt. prepare a (12 B, noch nicht
+    // hochgeladen) → prepare b reißt die Quota (12 + 12 > 12), mit Zahlen im Fehler.
     let a = app.prepare_attachment_upload(&bob, prep(12)).await.unwrap();
+    let err = app
+        .prepare_attachment_upload(&bob, prep(12))
+        .await
+        .unwrap_err();
+    assert_eq!(err.details["limit"], "maxStorageBytes");
+    assert_eq!(err.details["usedBytes"], 12, "offene Reservierung zählt");
+    assert_eq!(err.details["maxBytes"], 12);
+
+    // a hochladen + finalisieren → Attachment (12 B), Reservierung gelöscht, Verbrauch bleibt 12.
     router
         .clone()
         .oneshot(put(&a.url, PNG.to_vec()))
@@ -387,22 +397,19 @@ async fn storage_quota_blocks_uploads_over_the_limit(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // Datei b: prepare reißt die Quota (12 + 12 > 12), mit Zahlen im Fehler.
-    let err = app
-        .prepare_attachment_upload(&bob, prep(12))
-        .await
-        .unwrap_err();
-    assert_eq!(err.details["limit"], "maxStorageBytes");
-    assert_eq!(err.details["usedBytes"], 12);
-    assert_eq!(err.details["maxBytes"], 12);
-
-    // a archivieren → Speicher frei → b passt wieder.
+    // Finding 2: Archivieren löscht den Blob NICHT (er bleibt bis zum Purge physisch liegen), also
+    // zählt die archivierte Datei weiter → weiterhin blockiert.
     sqlx::query("UPDATE attachment SET archived_at = now() WHERE organization_id = $1")
         .bind(data.org.0)
         .execute(&pool)
         .await
         .unwrap();
-    app.prepare_attachment_upload(&bob, prep(12))
+    let err = app
+        .prepare_attachment_upload(&bob, prep(12))
         .await
-        .expect("nach dem Archivieren ist wieder Platz");
+        .unwrap_err();
+    assert_eq!(
+        err.details["usedBytes"], 12,
+        "archivierte Datei zählt weiter (Blob liegt noch)"
+    );
 }

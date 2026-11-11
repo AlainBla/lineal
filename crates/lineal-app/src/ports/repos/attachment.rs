@@ -154,10 +154,13 @@ pub trait AttachmentRepo: Send {
     async fn unreferenced_storage_keys(&mut self, keys: &[String]) -> AppResult<Vec<String>> {
         not_implemented()
     }
-    /// S-15: Aktuell belegte Blob-Bytes des Workspace – Summe der nicht archivierten Attachments und
-    /// Projektdateien plus der finalisierten Reservierungen (Editor-/Avatar-Bilder). Die drei
-    /// Quellen teilen keine `storage_key`s, daher ohne Dedup.
-    async fn org_storage_bytes(&mut self) -> AppResult<i64> {
+    /// S-15: Aktuell physisch belegte Blob-Bytes des Workspace. Zählt JEDE Zeile, deren Blob auf der
+    /// Platte liegt, bis der Purge ihn entfernt: alle Attachments und Projektdateien (auch
+    /// archivierte – der Blob bleibt bis zum Purge liegen), finalisierte Reservierungen
+    /// (Editor/Avatar) UND noch gültige offene Reservierungen (laufende Uploads, gegen TOCTOU).
+    /// Serialisiert je Org über einen Advisory-Lock, damit parallele Uploads die Quota nicht
+    /// gemeinsam reißen. Die Quellen teilen keine `storage_key`s, daher ohne Dedup.
+    async fn org_storage_bytes(&mut self, _now: DateTime<Utc>) -> AppResult<i64> {
         not_implemented()
     }
     /// Nicht finalisierte Reservierungen, die vor `cutoff` abgelaufen sind (alle Workspaces;

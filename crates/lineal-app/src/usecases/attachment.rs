@@ -102,11 +102,12 @@ async fn enforce_storage_quota(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     additional: i64,
+    now: DateTime<Utc>,
 ) -> AppResult<()> {
     let Some(limit) = snap.org.limits.max_storage_bytes else {
         return Ok(());
     };
-    let used = tx.attachments().org_storage_bytes().await?;
+    let used = tx.attachments().org_storage_bytes(now).await?;
     if used.saturating_add(additional) > limit {
         return Err(
             AppError::limit_exceeded("Workspace storage quota exceeded").with_details(json!({
@@ -314,7 +315,7 @@ impl App {
             }
         };
         // S-15: Byte-Quota des Workspace (früh, damit der Client die Datei gar nicht erst hochlädt).
-        enforce_storage_quota(&mut *tx, &snap, input.size).await?;
+        enforce_storage_quota(&mut *tx, &snap, input.size, self.clock.now()).await?;
         let now = self.clock.now();
         let key = format!(
             "{}/{}/{}",
@@ -464,9 +465,10 @@ impl App {
                 "The uploaded content type differs from the announced type",
             ));
         }
-        // S-15: Quota erneut beim Finalisieren prüfen – zwischen prepare und finalize können
-        // parallele Uploads die Grenze gerissen haben.
-        enforce_storage_quota(&mut *tx, &snap, reservation.size).await?;
+        // S-15: Quota erneut prüfen – zwischen prepare und finalize können andere Uploads oder eine
+        // gesenkte Grenze die Quota reißen. `additional = 0`: die Bytes dieser Datei stecken bereits
+        // in der Summe (ihre offene Reservierung zählt mit), Finalisieren fügt nichts Neues hinzu.
+        enforce_storage_quota(&mut *tx, &snap, 0, now).await?;
         if !tx
             .attachments()
             .finalize_reservation(reservation.id, now)

@@ -362,18 +362,28 @@ impl AttachmentRepo for PgTx {
         .map_err(db_err)
     }
 
-    async fn org_storage_bytes(&mut self) -> AppResult<i64> {
-        // Drei disjunkte Quellen (Issue-Attachments, Projektdateien, finalisierte Reservierungen =
-        // Editor/Avatar). Finalisierte Issue-Attachment-Reservierungen werden beim Finalisieren
-        // gelöscht, Archiviertes (archived_at) zählt nicht mit.
+    async fn org_storage_bytes(&mut self, now: DateTime<Utc>) -> AppResult<i64> {
+        // Serialisiert gleichzeitige Quota-Prüfungen desselben Workspace (hält bis Transaktionsende).
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext('storage_quota'))")
+            .bind(self.org.0.to_string())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        // Physisch belegte Bytes: jede Zeile, deren Blob bis zum Purge auf der Platte bleibt.
+        // Attachments/Projektdateien zählen AUCH archiviert (der Blob wird nicht sofort gelöscht);
+        // Reservierungen zählen finalisiert (Editor/Avatar) oder offen-und-noch-gültig (laufende
+        // Uploads). Finalisierte Issue-Attachment-Reservierungen werden beim Finalisieren gelöscht,
+        // daher keine Doppelzählung mit `attachment`.
         sqlx::query_scalar(
             "SELECT ( \
-               COALESCE((SELECT SUM(size) FROM attachment WHERE organization_id = $1 AND archived_at IS NULL), 0) \
-             + COALESCE((SELECT SUM(size) FROM project_file WHERE organization_id = $1 AND archived_at IS NULL), 0) \
-             + COALESCE((SELECT SUM(size) FROM upload_reservation WHERE organization_id = $1 AND finalized_at IS NOT NULL), 0) \
+               COALESCE((SELECT SUM(size) FROM attachment WHERE organization_id = $1), 0) \
+             + COALESCE((SELECT SUM(size) FROM project_file WHERE organization_id = $1), 0) \
+             + COALESCE((SELECT SUM(size) FROM upload_reservation \
+                         WHERE organization_id = $1 AND (finalized_at IS NOT NULL OR expires_at > $2)), 0) \
              )::bigint",
         )
         .bind(self.org.0)
+        .bind(now)
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)
