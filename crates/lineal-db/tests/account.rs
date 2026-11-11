@@ -639,3 +639,109 @@ async fn oauth_grants_group_per_app_and_revoke(pool: PgPool) {
         ErrorKind::NotFound
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_ip_known_matches_a_recent_session_ip(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    // Erfolgreicher Login von einer IP legt eine Session mit dieser IP an.
+    app.login(LoginInput {
+        email: "alice@acme.example".into(),
+        password: "correct-horse".into(),
+        ip_address: Some("203.0.113.9".into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let now = Utc::now();
+
+    // Bekannte IP (ohne und mit passendem Workspace) → true.
+    assert!(
+        app.login_ip_known("alice@acme.example", Some("203.0.113.9"), None, now)
+            .await
+    );
+    assert!(
+        app.login_ip_known("alice@acme.example", Some("203.0.113.9"), Some("acme"), now)
+            .await
+    );
+    // Fremder Workspace → false (Cross-Tenant-Trust ausgeschlossen).
+    assert!(
+        !app.login_ip_known(
+            "alice@acme.example",
+            Some("203.0.113.9"),
+            Some("other"),
+            now
+        )
+        .await
+    );
+    // Andere IP → false.
+    assert!(
+        !app.login_ip_known("alice@acme.example", Some("198.51.100.1"), None, now)
+            .await
+    );
+    // Nicht existierende E-Mail → false (gleiche Abfrage, kein Timing-Orakel).
+    assert!(
+        !app.login_ip_known("nobody@acme.example", Some("203.0.113.9"), None, now)
+            .await
+    );
+    // Ohne IP → false.
+    assert!(
+        !app.login_ip_known("alice@acme.example", None, None, now)
+            .await
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_ip_known_requires_a_single_workspace_without_an_explicit_one(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    let ip = "203.0.113.9";
+    let now = Utc::now();
+    // Alices Session in acme von dieser IP.
+    app.login(LoginInput {
+        email: "alice@acme.example".into(),
+        password: "correct-horse".into(),
+        ip_address: Some(ip.into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    // Dieselbe E-Mail in einem zweiten Workspace, ebenfalls mit einer Session von dieser IP.
+    let org2 = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO organization (id, name, url_key) VALUES ($1,'Other','other2')")
+        .bind(org2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let user2 = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO \"user\" (id, organization_id, name, display_name, email) VALUES ($1,$2,'Alice Two','alicetwo','alice@acme.example')")
+        .bind(user2)
+        .bind(org2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO user_session (organization_id, user_id, token_hash, expires_at, ip_address, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
+        .bind(org2)
+        .bind(user2)
+        .bind(uuid::Uuid::now_v7().to_string())
+        .bind(now + chrono::Duration::days(14))
+        .bind(ip)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Ohne Workspace: E-Mail jetzt in zwei Workspaces → keine Ausnahme.
+    assert!(
+        !app.login_ip_known("alice@acme.example", Some(ip), None, now)
+            .await,
+        "mehrdeutige E-Mail ohne Workspace darf keine bekannte IP ergeben"
+    );
+    // Mit explizitem Workspace bleibt die Ausnahme je Mandant korrekt.
+    assert!(
+        app.login_ip_known("alice@acme.example", Some(ip), Some("acme"), now)
+            .await
+    );
+    assert!(
+        app.login_ip_known("alice@acme.example", Some(ip), Some("other2"), now)
+            .await
+    );
+}

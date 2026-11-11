@@ -605,4 +605,36 @@ impl AuthRepo for PgTx {
         .rows_affected();
         Ok(n + codes)
     }
+
+    async fn ip_recently_succeeded(
+        &mut self,
+        email: &str,
+        ip: &str,
+        workspace: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        // Eine Abfrage, die „kein User" und „User ohne Session" gleich behandelt (kein
+        // Timing-Orakel). Gegen Cross-Tenant-Trust:
+        //  - mit `workspace` (url_key) exakt auf diesen Mandanten eingeschränkt;
+        //  - ohne `workspace` nur, wenn die E-Mail in GENAU EINEM Workspace existiert (sonst wäre
+        //    unklar, welches Konto gemeint ist, und ein Login in Workspace A würde die IP für einen
+        //    Angriff auf Workspace B vertrauen).
+        let found: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM \"user\" u \
+               JOIN organization o ON o.id = u.organization_id \
+               JOIN user_session s ON s.organization_id = u.organization_id AND s.user_id = u.id \
+             WHERE lower(u.email) = lower($1) AND s.ip_address = $2 AND s.created_at >= $3 \
+               AND ($4::text IS NULL OR o.url_key = $4)) \
+             AND ($4::text IS NOT NULL OR \
+                  (SELECT count(DISTINCT organization_id) FROM \"user\" WHERE lower(email) = lower($1)) = 1)",
+        )
+        .bind(email.trim())
+        .bind(ip)
+        .bind(since)
+        .bind(workspace)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(found)
+    }
 }

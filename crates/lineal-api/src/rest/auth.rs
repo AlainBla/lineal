@@ -91,13 +91,31 @@ pub async fn login(
     let now_ms = app.clock.now().timestamp_millis();
     let client_ip = client.as_ref().map(|Extension(c)| c.0.to_string());
     let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
+    // S-23: Ist das Account-Gesamtlimit erreicht (verteilter Angriff), würde es den Account auch
+    // von der eigenen IP sperren. Nur dann die DB nach einer bekannten IP fragen (jüngst
+    // erfolgreicher Login) – diese IP darf das Gesamtlimit passieren. Der Peek vermeidet eine
+    // DB-Abfrage bei jedem normalen Login.
+    let ip_known = match &fails {
+        Some(Extension(f)) if f.account_total_blocked(&body.email, now_ms) => {
+            app.login_ip_known(
+                &body.email,
+                client_ip.as_deref(),
+                body.workspace.as_deref(),
+                app.clock.now(),
+            )
+            .await
+        }
+        _ => false,
+    };
     let reservation = match &fails {
-        Some(Extension(f)) => match f.reserve_login(&body.email, ip_key.as_deref(), now_ms) {
-            Ok(r) => Some(r),
-            Err(wait) => {
-                return crate::middleware::auth::blocked_response("/auth/login", wait);
+        Some(Extension(f)) => {
+            match f.reserve_login(&body.email, ip_key.as_deref(), ip_known, now_ms) {
+                Ok(r) => Some(r),
+                Err(wait) => {
+                    return crate::middleware::auth::blocked_response("/auth/login", wait);
+                }
             }
-        },
+        }
         None => None,
     };
     let user_agent = headers

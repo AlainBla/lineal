@@ -36,9 +36,17 @@ pub const ACCOUNT_RULE: Rule = Rule {
     limit: 10,
     window_ms: 15 * 60_000,
 };
-/// Gesamtlimit je Ziel-Account über alle IPs: 100 pro 15 Minuten.
+/// Weiches Gesamtlimit je Ziel-Account über alle IPs: 100 pro 15 Minuten. Bekannte IPs dürfen es
+/// passieren (S-23), damit ein verteilter Angriff den User nicht von der eigenen IP aussperrt.
 pub const ACCOUNT_TOTAL_RULE: Rule = Rule {
     limit: 100,
+    window_ms: 15 * 60_000,
+};
+/// Hartes Gesamtlimit je Ziel-Account: 1000 pro 15 Minuten. Zählt ALLE Fehlversuche – auch die per
+/// bekannter IP durchgelassenen – und sperrt bei massivem verteiltem Angriff jeden (Sicherheitsnetz,
+/// damit die „bekannte IP"-Ausnahme kein unbegrenztes Durchprobieren erlaubt).
+pub const ACCOUNT_HARD_TOTAL_RULE: Rule = Rule {
+    limit: 1000,
     window_ms: 15 * 60_000,
 };
 /// Obergrenze gehaltener Schlüssel.
@@ -204,20 +212,28 @@ impl AuthFailures {
 
     /// Reserviert die Login-Zähler (IP, Paar Account+IP, Account gesamt) vor der Passwortprüfung.
     /// Bei `Err` ist nichts reserviert.
+    ///
+    /// S-23: Das Gesamtlimit je Account würde einen Account bei verteilten Fehlversuchen von ALLEN
+    /// IPs sperren – auch von der eigenen. `ip_known` (jüngst erfolgreicher Login von dieser IP)
+    /// lässt eine bekannte IP durch das Gesamtlimit; der Angriff über fremde IPs bleibt gesperrt.
+    /// Ein so durchgelassener Fehlversuch erhöht das Gesamtlimit NICHT (das harte Paar-Limit
+    /// 10/15min je Account+IP greift weiterhin).
     pub fn reserve_login(
         &self,
         account: &str,
         ip_key: Option<&str>,
+        ip_known: bool,
         now_ms: i64,
     ) -> Result<LoginReservation, u64> {
         let ip = ip_key.unwrap_or("-");
-        let keys = [
+        let mut held = Vec::new();
+        // Harte Limits je IP, je Paar (Account, IP) und das harte Gesamtlimit – immer. Das harte
+        // Gesamtlimit zählt auch die per bekannter IP durchgelassenen Fehlversuche.
+        for (key, rule) in [
             (format!("ip:{ip}"), IP_RULE),
             (pair_key(account, ip), ACCOUNT_RULE),
-            (account_total_key(account), ACCOUNT_TOTAL_RULE),
-        ];
-        let mut held = Vec::new();
-        for (key, rule) in keys {
+            (account_hard_total_key(account), ACCOUNT_HARD_TOTAL_RULE),
+        ] {
             match self.reserve(&key, rule, now_ms) {
                 Ok(()) => held.push(key),
                 Err(wait) => {
@@ -228,7 +244,31 @@ impl AuthFailures {
                 }
             }
         }
+        // Weiches Gesamtlimit je Account (verteilte Angriffe) – bekannte IPs dürfen hindurch.
+        let total = account_total_key(account);
+        match self.reserve(&total, ACCOUNT_TOTAL_RULE, now_ms) {
+            Ok(()) => held.push(total),
+            Err(wait) => {
+                if ip_known {
+                    tracing::warn!(
+                        "distributed login failures reached the account limit; a known IP was allowed through"
+                    );
+                } else {
+                    for k in &held {
+                        self.release(k);
+                    }
+                    return Err(wait);
+                }
+            }
+        }
         Ok(LoginReservation { keys: held })
+    }
+
+    /// Ob das Gesamtlimit des Accounts aktuell erreicht ist (für den „bekannte IP"-Pfad im Handler,
+    /// damit die DB nur dann nach bekannten IPs gefragt wird).
+    pub fn account_total_blocked(&self, account: &str, now_ms: i64) -> bool {
+        self.blocked_for(&account_total_key(account), ACCOUNT_TOTAL_RULE, now_ms)
+            .is_some()
     }
 }
 
@@ -259,6 +299,10 @@ fn pair_key(account: &str, ip: &str) -> String {
 
 fn account_total_key(account: &str) -> String {
     format!("acctt:{}", account_hash(account))
+}
+
+fn account_hard_total_key(account: &str) -> String {
+    format!("accth:{}", account_hash(account))
 }
 
 #[cfg(test)]
@@ -297,7 +341,7 @@ mod tests {
     #[test]
     fn account_pair_blocks_only_the_attacking_ip_not_the_owner() {
         let f = AuthFailures::default();
-        let attack = |ip: &str| f.reserve_login("Alice@Acme.example", Some(ip), 5_000);
+        let attack = |ip: &str| f.reserve_login("Alice@Acme.example", Some(ip), false, 5_000);
         for _ in 0..10 {
             // Fehlversuche des Angreifers: Reservierungen bleiben bestehen.
             attack("v4:6.6.6.6").unwrap();
@@ -306,7 +350,7 @@ mod tests {
         assert!(attack("v4:6.6.6.6").is_err());
         // ... Alice von ihrer eigenen IP aber nicht (anderes Paar, andere IP).
         let own = f
-            .reserve_login("alice@acme.example", Some("v4:1.1.1.1"), 5_100)
+            .reserve_login("alice@acme.example", Some("v4:1.1.1.1"), false, 5_100)
             .unwrap();
         own.release(&f);
         // Nach dem Fenster ist auch der Angreifer wieder frei.
@@ -314,7 +358,7 @@ mod tests {
     }
 
     fn attack_after(f: &AuthFailures, now: i64) -> Result<LoginReservation, u64> {
-        f.reserve_login("alice@acme.example", Some("v4:6.6.6.6"), now)
+        f.reserve_login("alice@acme.example", Some("v4:6.6.6.6"), false, now)
     }
 
     #[test]
@@ -325,18 +369,19 @@ mod tests {
             f.reserve_login(
                 "bob@acme.example",
                 Some(&format!("v4:10.0.{}.{}", i / 250, i)),
+                false,
                 1_000,
             )
             .unwrap();
         }
         // ... erreichen das hohe Gesamtlimit des Accounts.
         assert!(
-            f.reserve_login("bob@acme.example", Some("v4:10.9.9.9"), 1_000)
+            f.reserve_login("bob@acme.example", Some("v4:10.9.9.9"), false, 1_000)
                 .is_err()
         );
         // Andere Accounts sind unberührt.
         assert!(
-            f.reserve_login("carol@acme.example", Some("v4:10.9.9.9"), 1_000)
+            f.reserve_login("carol@acme.example", Some("v4:10.9.9.9"), false, 1_000)
                 .is_ok()
         );
     }
@@ -345,17 +390,17 @@ mod tests {
     fn successful_login_gives_the_reservation_back() {
         let f = AuthFailures::default();
         for _ in 0..50 {
-            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), 1_000)
+            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), false, 1_000)
                 .unwrap()
                 .release(&f);
         }
         // Erfolgreiche Logins verbrauchen kein Kontingent.
         for _ in 0..10 {
-            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), 1_000)
+            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), false, 1_000)
                 .unwrap();
         }
         assert!(
-            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), 1_000)
+            f.reserve_login("alice@acme.example", Some("v4:1.1.1.1"), false, 1_000)
                 .is_err()
         );
     }
@@ -367,7 +412,7 @@ mod tests {
             .map(|_| {
                 let f = f.clone();
                 std::thread::spawn(move || {
-                    f.reserve_login("alice@acme.example", Some("v4:6.6.6.6"), 1_000)
+                    f.reserve_login("alice@acme.example", Some("v4:6.6.6.6"), false, 1_000)
                         .is_ok()
                 })
             })
@@ -383,8 +428,13 @@ mod tests {
         let f = AuthFailures::with_max_keys(30);
         let mut rejected = false;
         for i in 0..100 {
-            if f.reserve_login(&format!("user{i}@acme.example"), Some("v4:7.7.7.7"), 1_000)
-                .is_err()
+            if f.reserve_login(
+                &format!("user{i}@acme.example"),
+                Some("v4:7.7.7.7"),
+                false,
+                1_000,
+            )
+            .is_err()
             {
                 rejected = true;
             }
@@ -433,5 +483,88 @@ mod tests {
         assert!(f.ip_blocked("v4:9.9.9.9", 1_000).is_some());
         let state = f.lock();
         assert_eq!(state.entries["ip:v4:9.9.9.9"].count, 100);
+    }
+
+    /// S-23: Ist das Gesamtlimit durch einen verteilten Angriff erreicht, bleibt eine unbekannte IP
+    /// gesperrt, eine bekannte IP (jüngst erfolgreicher Login) kommt aber durch.
+    #[test]
+    fn account_total_lets_a_known_ip_through_but_blocks_unknown() {
+        let f = AuthFailures::default();
+        for i in 0..100 {
+            f.reserve_login(
+                "bob@acme.example",
+                Some(&format!("v4:11.0.{}.{}", i / 250, i)),
+                false,
+                1_000,
+            )
+            .unwrap();
+        }
+        assert!(f.account_total_blocked("bob@acme.example", 1_000));
+        // Unbekannte IP: weiterhin gesperrt.
+        assert!(
+            f.reserve_login("bob@acme.example", Some("v4:11.9.9.9"), false, 1_000)
+                .is_err()
+        );
+        // Bekannte IP: darf das Gesamtlimit passieren (ihr Paar-Limit ist noch frei).
+        assert!(
+            f.reserve_login("bob@acme.example", Some("v4:11.9.9.9"), true, 1_000)
+                .is_ok()
+        );
+    }
+
+    /// Auch eine bekannte IP bleibt an das harte Paar-Limit (10/15min je Account+IP) gebunden – ein
+    /// Angreifer von einer bekannten IP kann also trotzdem nicht durchprobieren.
+    #[test]
+    fn a_known_ip_is_still_bound_by_the_pair_limit() {
+        let f = AuthFailures::default();
+        for i in 0..100 {
+            f.reserve_login(
+                "eve@acme.example",
+                Some(&format!("v4:12.0.{}.{}", i / 250, i)),
+                false,
+                1_000,
+            )
+            .unwrap();
+        }
+        for _ in 0..10 {
+            f.reserve_login("eve@acme.example", Some("v4:12.9.9.9"), true, 1_000)
+                .unwrap();
+        }
+        assert!(
+            f.reserve_login("eve@acme.example", Some("v4:12.9.9.9"), true, 1_000)
+                .is_err()
+        );
+    }
+
+    /// Das harte Gesamtlimit zählt auch per bekannter IP durchgelassene Fehlversuche und sperrt bei
+    /// massivem verteiltem Angriff selbst eine bekannte IP (Sicherheitsnetz, S-23/Review).
+    #[test]
+    fn the_hard_total_eventually_blocks_even_a_known_ip() {
+        let f = AuthFailures::default();
+        // 1000 Versuche von je eigener IP; als "bekannt" markiert, damit das weiche Limit sie
+        // durchlässt und sie das harte Gesamtlimit füllen.
+        for i in 0..1000 {
+            f.reserve_login(
+                "mallory@acme.example",
+                Some(&format!(
+                    "v4:13.{}.{}.{}",
+                    i / 65536,
+                    (i / 256) % 256,
+                    i % 256
+                )),
+                true,
+                1_000,
+            )
+            .unwrap();
+        }
+        assert!(
+            f.reserve_login(
+                "mallory@acme.example",
+                Some("v4:13.255.255.255"),
+                true,
+                1_000
+            )
+            .is_err()
+        );
     }
 }

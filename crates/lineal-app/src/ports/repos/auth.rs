@@ -246,6 +246,20 @@ pub trait AuthRepo: Send {
     ) -> AppResult<u64> {
         unimplemented_repo()
     }
+    /// S-23: Ob die E-Mail seit `since` einen erfolgreichen Login von dieser IP hatte. Ist
+    /// `workspace` gesetzt, zählt nur eine Session in genau diesem Workspace (Trust an das
+    /// angegriffene Konto gebunden, nicht nur an die E-Mail-Zeichenkette). Eine einzige Abfrage, die
+    /// „kein User" und „User ohne passende Session" gleich behandelt (kein Timing-Orakel).
+    /// Mandantenübergreifend (unter `begin_system`).
+    async fn ip_recently_succeeded(
+        &mut self,
+        _email: &str,
+        _ip: &str,
+        _workspace: Option<&str>,
+        _since: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
     /// Widerruft alle Web-Sessions, API-Keys und OAuth-Tokens des Users (beim Sperren, damit eine
     /// Entsperrung keine alten Zugangsdaten wiederbelebt).
     async fn revoke_all_credentials_of_user(

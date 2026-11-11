@@ -594,6 +594,30 @@ impl App {
         tx.commit().await?;
         Ok(())
     }
+
+    /// S-23: Ob die E-Mail in den letzten 30 Tagen einen erfolgreichen Login von `ip` hatte. Nur
+    /// für den Brute-Force-Schutz (der Handler lässt bekannte IPs durch das Account-Gesamtlimit).
+    /// `ip = None` oder ein DB-Fehler ⇒ `false` (im Zweifel sperren).
+    pub async fn login_ip_known(
+        &self,
+        email: &str,
+        ip: Option<&str>,
+        workspace: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let Some(ip) = ip else {
+            return false;
+        };
+        let since = now - Duration::days(30);
+        let mut tx = match self.store.begin_system().await {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        tx.auth()
+            .ip_recently_succeeded(email, ip, workspace, since)
+            .await
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
