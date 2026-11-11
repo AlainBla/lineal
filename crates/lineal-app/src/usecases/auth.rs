@@ -533,6 +533,67 @@ impl App {
         tx.commit().await?;
         Ok(())
     }
+
+    /// OAuth-Freigaben des Aufrufers (je Anwendung). Nur mit Browser-Session, nie mit einem Key.
+    pub async fn list_oauth_grants(
+        &self,
+        ctx: &RequestCtx,
+    ) -> AppResult<Vec<crate::ports::repos::auth::OAuthGrant>> {
+        if !ctx.via_session && !matches!(ctx.actor, crate::context::Actor::System) {
+            return Err(AppError::forbidden(
+                "OAuth access can only be managed from a browser session.",
+            ));
+        }
+        let user_id = resolve::user::actor_user_id(ctx)
+            .ok_or_else(|| AppError::forbidden("Only users own OAuth grants."))?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        tx.auth().list_oauth_grants(user_id).await
+    }
+
+    /// Widerruft die OAuth-Freigabe des Aufrufers für eine Anwendung (alle Tokens, alle Geräte).
+    /// Nur mit Browser-Session und Write-Scope.
+    pub async fn revoke_oauth_grant(
+        &self,
+        ctx: &RequestCtx,
+        application_id: Uuid,
+    ) -> AppResult<()> {
+        if !ctx.via_session && !matches!(ctx.actor, crate::context::Actor::System) {
+            return Err(AppError::forbidden(
+                "OAuth access can only be managed from a browser session.",
+            ));
+        }
+        if !ctx.scopes.write {
+            return Err(AppError::forbidden(
+                "Token scope does not allow write operations.",
+            ));
+        }
+        let user_id = resolve::user::actor_user_id(ctx)
+            .ok_or_else(|| AppError::forbidden("Only users own OAuth grants."))?;
+        let mut tx = self.store.begin(ctx.org_id).await?;
+        let revoked = tx
+            .auth()
+            .revoke_oauth_grant(user_id, application_id, self.clock.now())
+            .await?;
+        if revoked == 0 {
+            return Err(
+                AppError::not_found("Could not find referenced OAuth grant.")
+                    .with_details(json!({ "type": "OAuthGrant" })),
+            );
+        }
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "oauth_grant.revoked",
+                "oauth_application",
+                Some(application_id),
+                json!({ "revokedTokens": revoked }),
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

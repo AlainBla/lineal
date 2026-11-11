@@ -85,6 +85,28 @@ pub struct PasswordChangePayload {
     pub revoked_sessions: i32,
 }
 
+/// S-21: Eine OAuth-Freigabe (App mit Zugriff auf den Account), je Anwendung.
+#[derive(SimpleObject)]
+pub struct OAuthGrantGql {
+    pub application_id: String,
+    pub application_name: String,
+    pub scopes: Vec<String>,
+    pub granted_at: String,
+    pub last_active_at: String,
+}
+
+impl From<lineal_app::ports::repos::auth::OAuthGrant> for OAuthGrantGql {
+    fn from(g: lineal_app::ports::repos::auth::OAuthGrant) -> Self {
+        Self {
+            application_id: g.application_id.to_string(),
+            application_name: g.application_name,
+            scopes: g.scopes,
+            granted_at: g.granted_at.to_rfc3339(),
+            last_active_at: g.last_active_at.to_rfc3339(),
+        }
+    }
+}
+
 #[derive(SimpleObject)]
 pub struct SessionRevokePayload {
     pub success: bool,
@@ -181,6 +203,17 @@ impl AccountQuery {
     async fn sessions(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<UserSessionGql>> {
         Ok(app(ctx)?
             .list_own_sessions(request_ctx(ctx)?, session_hash(ctx))
+            .await
+            .map_err(gql_err)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// OAuth-Apps mit Zugriff auf den Account (nur mit Browser-Session).
+    async fn oauth_grants(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<OAuthGrantGql>> {
+        Ok(app(ctx)?
+            .list_oauth_grants(request_ctx(ctx)?)
             .await
             .map_err(gql_err)?
             .into_iter()
@@ -313,5 +346,24 @@ impl AccountMutation {
             success: true,
             count: i32::try_from(n).unwrap_or(i32::MAX),
         })
+    }
+
+    /// Widerruft die OAuth-Freigabe für eine Anwendung (alle Tokens, alle Geräte).
+    async fn oauth_grant_revoke(
+        &self,
+        ctx: &Context<'_>,
+        application_id: String,
+    ) -> async_graphql::Result<bool> {
+        let id = Uuid::parse_str(application_id.trim()).map_err(|_| {
+            gql_err(
+                AppError::invalid_request("Invalid application id.")
+                    .with_details(serde_json::json!({ "field": "applicationId" })),
+            )
+        })?;
+        app(ctx)?
+            .revoke_oauth_grant(request_ctx(ctx)?, id)
+            .await
+            .map_err(gql_err)?;
+        Ok(true)
     }
 }

@@ -6,7 +6,7 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::auth::{
-    ApiKeyRecord, LoginCandidate, NewApiKey, NewSession, SessionRecord,
+    ApiKeyRecord, LoginCandidate, NewApiKey, NewSession, OAuthGrant, SessionRecord,
 };
 use lineal_app::ports::repos::{AuthRepo, CredentialKind, Principal};
 use lineal_app::{Actor, AppResult, Scopes};
@@ -528,5 +528,81 @@ impl AuthRepo for PgTx {
         .map_err(db_err)?
         .rows_affected();
         Ok(n)
+    }
+
+    async fn list_oauth_grants(&mut self, user_id: UserId) -> AppResult<Vec<OAuthGrant>> {
+        // Ein aktives Token je Zeile; die Gruppierung je Anwendung (Scopes vereinen, früheste
+        // Freigabe, jüngste Aktivität) in Rust – klarer als Array-Aggregate in SQL.
+        let rows: Vec<(Uuid, String, Vec<String>, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT t.application_id, a.name, t.scopes, t.created_at, t.updated_at \
+             FROM oauth_token t JOIN oauth_application a \
+               ON a.organization_id = t.organization_id AND a.id = t.application_id \
+             WHERE t.organization_id = $1 AND t.user_id = $2 AND t.revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        let mut by_app: std::collections::BTreeMap<Uuid, OAuthGrant> =
+            std::collections::BTreeMap::new();
+        for (app_id, name, scopes, created, updated) in rows {
+            let e = by_app.entry(app_id).or_insert_with(|| OAuthGrant {
+                application_id: app_id,
+                application_name: name,
+                scopes: Vec::new(),
+                granted_at: created,
+                last_active_at: updated,
+            });
+            for s in scopes {
+                if !e.scopes.contains(&s) {
+                    e.scopes.push(s);
+                }
+            }
+            e.granted_at = e.granted_at.min(created);
+            e.last_active_at = e.last_active_at.max(updated);
+        }
+        let mut grants: Vec<OAuthGrant> = by_app.into_values().collect();
+        for g in &mut grants {
+            g.scopes.sort();
+        }
+        grants.sort_by(|a, b| b.granted_at.cmp(&a.granted_at));
+        Ok(grants)
+    }
+
+    async fn revoke_oauth_grant(
+        &mut self,
+        user_id: UserId,
+        application_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let n = sqlx::query(
+            "UPDATE oauth_token SET revoked_at = $4, version = version + 1, updated_at = $4 \
+             WHERE organization_id = $1 AND user_id = $2 AND application_id = $3 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(application_id)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        // Auch noch nicht eingelöste Authorization-Codes dieser App entwerten – sonst könnte ein
+        // offener Code nach dem Widerruf noch ein neues Token lösen. In die Rückgabe zählen, damit
+        // eine Freigabe mit nur einem offenen Code (ohne aktives Token) nicht als not_found gilt.
+        let codes = sqlx::query(
+            "UPDATE oauth_authorization_code SET used_at = $4 \
+             WHERE organization_id = $1 AND user_id = $2 AND application_id = $3 AND used_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(application_id)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        Ok(n + codes)
     }
 }

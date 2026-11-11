@@ -101,6 +101,20 @@ pub struct ApiKeyRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Eine OAuth-Freigabe des Users, gruppiert je Anwendung (nicht je Token/Gerät). S-21: der User
+/// kann sehen, welche Apps Zugriff haben, und ihn widerrufen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OAuthGrant {
+    pub application_id: Uuid,
+    pub application_name: String,
+    /// Vereinigung der Scopes aller aktiven Tokens dieser App.
+    pub scopes: Vec<String>,
+    /// Ältestes aktives Token (erste Freigabe).
+    pub granted_at: DateTime<Utc>,
+    /// Jüngste Aktivität (zuletzt rotiert/aktualisiert).
+    pub last_active_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait AuthRepo: Send {
     /// Sucht den Aufrufer zu einem SHA-256-Token-Hash (hex) in Sessions, API-Keys und
@@ -214,6 +228,20 @@ pub trait AuthRepo: Send {
     async fn revoke_api_keys_of_user(
         &mut self,
         _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// OAuth-Freigaben des Users, je Anwendung gruppiert (nur mit aktiven Tokens).
+    async fn list_oauth_grants(&mut self, _user_id: UserId) -> AppResult<Vec<OAuthGrant>> {
+        unimplemented_repo()
+    }
+    /// Widerruft alle aktiven OAuth-Tokens des Users für eine Anwendung. Liefert die Zahl der
+    /// widerrufenen Tokens (0, wenn die App keine aktive Freigabe hatte).
+    async fn revoke_oauth_grant(
+        &mut self,
+        _user_id: UserId,
+        _application_id: Uuid,
         _now: DateTime<Utc>,
     ) -> AppResult<u64> {
         unimplemented_repo()

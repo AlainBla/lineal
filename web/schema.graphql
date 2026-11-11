@@ -1905,6 +1905,10 @@ type Mutation {
 	"""
 	sessionsRevokeOthers: SessionRevokePayload!
 	"""
+	Widerruft die OAuth-Freigabe für eine Anwendung (alle Tokens, alle Geräte).
+	"""
+	oauthGrantRevoke(applicationId: String!): Boolean!
+	"""
 	SLA ein-/ausschalten und Arbeitswoche setzen (legt beim ersten Aktivieren Standardregeln an).
 	"""
 	teamSlaUpdate(teamId: String!, input: TeamSlaUpdateInput!): TeamSla!
@@ -2069,6 +2073,17 @@ input NotificationUpdateInput {
 	`true` beendet das Snoozen.
 	"""
 	unsnooze: Boolean
+}
+
+"""
+S-21: Eine OAuth-Freigabe (App mit Zugriff auf den Account), je Anwendung.
+"""
+type OauthGrantGql {
+	applicationId: String!
+	applicationName: String!
+	scopes: [String!]!
+	grantedAt: String!
+	lastActiveAt: String!
 }
 
 """
@@ -2629,6 +2644,10 @@ type Query {
 	Eigene aktive Web-Sessions (nur mit Browser-Session), neueste zuerst.
 	"""
 	sessions: [UserSession!]!
+	"""
+	OAuth-Apps mit Zugriff auf den Account (nur mit Browser-Session).
+	"""
+	oauthGrants: [OauthGrantGql!]!
 	"""
 	SLA-Einstellungen und Regeln eines Teams.
 	"""

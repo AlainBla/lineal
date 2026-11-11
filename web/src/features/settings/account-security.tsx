@@ -13,7 +13,9 @@ import { showToast } from "@/features/issues/toast-store";
 
 import {
   describeAgent,
+  useOAuthGrants,
   usePasswordChange,
+  useRevokeOAuthGrant,
   useRevokeOtherSessions,
   useRevokeSession,
   useSessions,
@@ -115,8 +117,8 @@ function PasswordForm() {
           onChange={(e) => setRevokeOther(e.target.checked)}
         />
         <span className="text-muted-foreground">
-          Also revoke API keys and the calendar subscription link. Connected apps
-          (OAuth) are always disconnected. You will need to recreate these afterwards.
+          Also revoke API keys and the calendar subscription link. Connected apps (OAuth) are always
+          disconnected. You will need to recreate these afterwards.
         </span>
       </label>
       {change.error != null && (
@@ -222,6 +224,61 @@ function SessionsList() {
   );
 }
 
+function ConnectedAppsList() {
+  const q = useOAuthGrants();
+  const revoke = useRevokeOAuthGrant();
+  const rows = q.data ?? [];
+  return (
+    <>
+      {q.isLoading && <ListSkeleton rows={2} />}
+      {q.isError && (
+        <ErrorState
+          error={q.error}
+          title="Could not load connected apps"
+          onRetry={() => void q.refetch()}
+        />
+      )}
+      {q.data && rows.length === 0 && (
+        <p className="text-sm text-muted-foreground">No apps are connected to your account.</p>
+      )}
+      {q.data && rows.length > 0 && (
+        <ul
+          aria-label="Connected apps"
+          className="divide-y divide-border rounded-lg border border-border"
+        >
+          {rows.map((g) => (
+            <li key={g.applicationId} className="flex items-center gap-3 px-3 py-2 text-sm">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">{g.applicationName}</p>
+                <p className="text-xs text-muted-foreground">
+                  {g.scopes.join(", ")} · connected {when(g.grantedAt)} UTC
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={revoke.isPending}
+                onClick={() =>
+                  revoke.mutate(g.applicationId, {
+                    onSuccess: () => showToast({ message: `Disconnected ${g.applicationName}` }),
+                  })
+                }
+              >
+                Disconnect
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {revoke.error != null && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorText(revoke.error)}
+        </p>
+      )}
+    </>
+  );
+}
+
 export function AccountSecurityPage({ ws }: { ws: string }) {
   const session = useSession();
   return (
@@ -237,6 +294,12 @@ export function AccountSecurityPage({ ws }: { ws: string }) {
         description="Browsers that are currently signed in to your account."
       >
         <SessionsList />
+      </Section>
+      <Section
+        title="Connected apps"
+        description="Apps you have granted access to your account via OAuth."
+      >
+        <ConnectedAppsList />
       </Section>
     </SettingsShell>
   );

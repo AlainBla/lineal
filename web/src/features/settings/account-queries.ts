@@ -195,6 +195,44 @@ export function useRevokeOtherSessions() {
   });
 }
 
+export interface OAuthGrant {
+  applicationId: string;
+  applicationName: string;
+  scopes: string[];
+  grantedAt: string;
+  lastActiveAt: string;
+}
+
+export const oauthGrantsKey = ["account", "oauth-grants"] as const;
+
+export function useOAuthGrants() {
+  return useQuery({
+    queryKey: oauthGrantsKey,
+    queryFn: async ({ signal }) =>
+      (
+        await gqlRequest<{ oauthGrants: OAuthGrant[] }>(
+          `query AccountOauthGrants {
+            oauthGrants { applicationId applicationName scopes grantedAt lastActiveAt }
+          }`,
+          undefined,
+          { signal },
+        )
+      ).oauthGrants,
+  });
+}
+
+export function useRevokeOAuthGrant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (applicationId: string) =>
+      gqlRequest(
+        `mutation AccountOauthGrantRevoke($applicationId: String!) { oauthGrantRevoke(applicationId: $applicationId) }`,
+        { applicationId },
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: oauthGrantsKey }),
+  });
+}
+
 /** „Chrome on Linux“ aus dem User-Agent; unbekannt → „Unknown device“. */
 export function describeAgent(ua: string | null): string {
   if (!ua) return "Unknown device";

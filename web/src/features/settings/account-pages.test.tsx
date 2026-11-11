@@ -202,6 +202,7 @@ describe("AccountSecurityPage", () => {
   it("changes the password after local checks and reports the signed-out sessions", async () => {
     const gql = mockGraphql({
       AccountSessions: () => ({ sessions: SESSIONS }),
+      AccountOauthGrants: () => ({ oauthGrants: [] }),
       AccountPasswordChange: () => ({ passwordChange: { success: true, revokedSessions: 1 } }),
     });
     await render();
@@ -232,6 +233,7 @@ describe("AccountSecurityPage", () => {
   it("shows the server error for a wrong current password and keeps the form", async () => {
     mockGraphql({
       AccountSessions: () => ({ sessions: SESSIONS }),
+      AccountOauthGrants: () => ({ oauthGrants: [] }),
       AccountPasswordChange: () => new Error("The current password is incorrect."),
     });
     await render();
@@ -247,6 +249,7 @@ describe("AccountSecurityPage", () => {
   it("lists sessions, marks this device and signs out one or all others", async () => {
     const gql = mockGraphql({
       AccountSessions: () => ({ sessions: SESSIONS }),
+      AccountOauthGrants: () => ({ oauthGrants: [] }),
       AccountSessionRevoke: () => ({ sessionRevoke: { success: true } }),
       AccountSessionsRevokeOthers: () => ({ sessionsRevokeOthers: { count: 1 } }),
     });
@@ -267,11 +270,44 @@ describe("AccountSecurityPage", () => {
   });
 
   it("disables signing out others when there are none", async () => {
-    mockGraphql({ AccountSessions: () => ({ sessions: [SESSIONS[0]] }) });
+    mockGraphql({
+      AccountSessions: () => ({ sessions: [SESSIONS[0]] }),
+      AccountOauthGrants: () => ({ oauthGrants: [] }),
+    });
     await render();
     expect(
       await screen.findByRole("button", { name: "Sign out all other sessions" }),
     ).toBeDisabled();
+  });
+
+  it("lists connected apps and disconnects one", async () => {
+    const gql = mockGraphql({
+      AccountSessions: () => ({ sessions: SESSIONS }),
+      AccountOauthGrants: () => ({
+        oauthGrants: [
+          {
+            applicationId: "app-1",
+            applicationName: "Acme CLI",
+            scopes: ["read", "write"],
+            grantedAt: "2026-10-01T08:00:00Z",
+            lastActiveAt: "2026-10-12T08:00:00Z",
+          },
+        ],
+      }),
+      AccountOauthGrantRevoke: () => ({ oauthGrantRevoke: true }),
+    });
+    await render();
+    const list = await screen.findByRole("list", { name: "Connected apps" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Acme CLI");
+    expect(items[0]).toHaveTextContent("read, write");
+    const user = userEvent.setup();
+    await user.click(within(items[0]!).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(gql.of("AccountOauthGrantRevoke")).toHaveLength(1));
+    expect(gql.of("AccountOauthGrantRevoke")[0]!.variables).toEqual({
+      applicationId: "app-1",
+    });
   });
 });
 

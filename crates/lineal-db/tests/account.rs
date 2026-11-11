@@ -579,3 +579,63 @@ async fn password_change_revokes_api_keys_and_calendar_when_requested(pool: PgPo
     assert_eq!(d["revokedApiKeys"], serde_json::json!(1));
     assert_eq!(d["calendarFeedRevoked"], serde_json::json!(true));
 }
+
+async fn insert_app(pool: &PgPool, creator: uuid::Uuid, name: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO oauth_application (organization_id, name, client_secret_hash, redirect_uris, developer, developer_url, creator_id) \
+         VALUES ($1,$2,'x',ARRAY['https://x.example/cb'],'dev','https://x.example',$3) RETURNING id",
+    )
+    .bind(SeedData::acme().org.0)
+    .bind(name)
+    .bind(creator)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn insert_token(pool: &PgPool, app_id: uuid::Uuid, user: uuid::Uuid, scopes: &[&str]) {
+    sqlx::query("INSERT INTO oauth_token (organization_id, application_id, user_id, access_token_hash, scopes) VALUES ($1,$2,$3,$4,$5)")
+        .bind(SeedData::acme().org.0)
+        .bind(app_id)
+        .bind(user)
+        .bind(uuid::Uuid::now_v7().to_string())
+        .bind(scopes.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn oauth_grants_group_per_app_and_revoke(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let aid = SeedData::acme().alice.0;
+    let app_a = insert_app(&pool, aid, "App A").await;
+    let app_b = insert_app(&pool, aid, "App B").await;
+    // App A: zwei Tokens (zwei Geräte), Scopes werden vereint. App B: eins.
+    insert_token(&pool, app_a, aid, &["read"]).await;
+    insert_token(&pool, app_a, aid, &["read", "write"]).await;
+    insert_token(&pool, app_b, aid, &["read"]).await;
+
+    let grants = app.list_oauth_grants(&alice).await.unwrap();
+    assert_eq!(grants.len(), 2, "je App genau ein Grant");
+    let a = grants.iter().find(|g| g.application_id == app_a).unwrap();
+    assert_eq!(a.application_name, "App A");
+    assert_eq!(
+        a.scopes,
+        vec!["read".to_string(), "write".to_string()],
+        "Scopes vereint und sortiert"
+    );
+
+    // Widerruf von App A entfernt beide Tokens → nur noch App B.
+    app.revoke_oauth_grant(&alice, app_a).await.unwrap();
+    let grants = app.list_oauth_grants(&alice).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].application_id, app_b);
+
+    // Erneuter Widerruf ohne aktive Freigabe → not_found.
+    assert_eq!(
+        kind(app.revoke_oauth_grant(&alice, app_a).await),
+        ErrorKind::NotFound
+    );
+}
