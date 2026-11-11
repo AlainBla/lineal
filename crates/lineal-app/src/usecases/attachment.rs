@@ -98,7 +98,7 @@ pub struct LinkAttachmentInput {
 
 /// S-15: Lehnt den Upload ab, wenn `maxStorageBytes` gesetzt ist und der belegte Speicher plus
 /// `additional` die Grenze überschreitet. Ohne gesetzte Quota passiert nichts.
-async fn enforce_storage_quota(
+pub(crate) async fn enforce_storage_quota(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     additional: i64,
@@ -107,7 +107,12 @@ async fn enforce_storage_quota(
     let Some(limit) = snap.org.limits.max_storage_bytes else {
         return Ok(());
     };
-    let used = tx.attachments().org_storage_bytes(now).await?;
+    // Offene Reservierungen zählen bis zum Purge mit (Gnadenfenster nach Ablauf), nicht nur bis
+    // `expires_at` – sonst klaffte dazwischen eine Lücke.
+    let used = tx
+        .attachments()
+        .org_storage_bytes(now - RESERVATION_GRACE)
+        .await?;
     if used.saturating_add(additional) > limit {
         return Err(
             AppError::limit_exceeded("Workspace storage quota exceeded").with_details(json!({

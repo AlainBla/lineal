@@ -362,7 +362,7 @@ impl AttachmentRepo for PgTx {
         .map_err(db_err)
     }
 
-    async fn org_storage_bytes(&mut self, now: DateTime<Utc>) -> AppResult<i64> {
+    async fn org_storage_bytes(&mut self, reservation_cutoff: DateTime<Utc>) -> AppResult<i64> {
         // Serialisiert gleichzeitige Quota-Prüfungen desselben Workspace (hält bis Transaktionsende).
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext('storage_quota'))")
             .bind(self.org.0.to_string())
@@ -371,9 +371,10 @@ impl AttachmentRepo for PgTx {
             .map_err(db_err)?;
         // Physisch belegte Bytes: jede Zeile, deren Blob bis zum Purge auf der Platte bleibt.
         // Attachments/Projektdateien zählen AUCH archiviert (der Blob wird nicht sofort gelöscht);
-        // Reservierungen zählen finalisiert (Editor/Avatar) oder offen-und-noch-gültig (laufende
-        // Uploads). Finalisierte Issue-Attachment-Reservierungen werden beim Finalisieren gelöscht,
-        // daher keine Doppelzählung mit `attachment`.
+        // Reservierungen zählen finalisiert (Editor/Avatar) oder offen, solange noch nicht
+        // purge-fähig (`expires_at > reservation_cutoff` = now - RESERVATION_GRACE). Finalisierte
+        // Issue-Attachment-Reservierungen werden beim Finalisieren gelöscht, daher keine
+        // Doppelzählung mit `attachment`.
         sqlx::query_scalar(
             "SELECT ( \
                COALESCE((SELECT SUM(size) FROM attachment WHERE organization_id = $1), 0) \
@@ -383,7 +384,7 @@ impl AttachmentRepo for PgTx {
              )::bigint",
         )
         .bind(self.org.0)
-        .bind(now)
+        .bind(reservation_cutoff)
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)

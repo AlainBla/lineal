@@ -160,7 +160,10 @@ pub trait AttachmentRepo: Send {
     /// (Editor/Avatar) UND noch gültige offene Reservierungen (laufende Uploads, gegen TOCTOU).
     /// Serialisiert je Org über einen Advisory-Lock, damit parallele Uploads die Quota nicht
     /// gemeinsam reißen. Die Quellen teilen keine `storage_key`s, daher ohne Dedup.
-    async fn org_storage_bytes(&mut self, _now: DateTime<Utc>) -> AppResult<i64> {
+    /// `reservation_cutoff`: offene Reservierungen zählen, solange sie noch nicht purge-fähig sind
+    /// (`expires_at > reservation_cutoff`, i. d. R. `now - RESERVATION_GRACE`) – sonst entstünde im
+    /// Gnadenfenster zwischen Ablauf und Purge eine Lücke.
+    async fn org_storage_bytes(&mut self, _reservation_cutoff: DateTime<Utc>) -> AppResult<i64> {
         not_implemented()
     }
     /// Nicht finalisierte Reservierungen, die vor `cutoff` abgelaufen sind (alle Workspaces;

@@ -256,6 +256,15 @@ impl App {
                 "The uploaded file size differs from the announced size",
             ));
         }
+        if reservation.expires_at < now {
+            return Err(upload_error(
+                "upload_expired",
+                "The upload reservation expired. Rerun the upload and try again",
+            ));
+        }
+        // S-15: Speicher-Quota auch auf dem Projektdatei-Pfad prüfen (additional = 0: die Bytes
+        // stecken bereits über die offene Reservierung in der Summe).
+        crate::usecases::attachment::enforce_storage_quota(&mut *tx, &snap, 0, now).await?;
         if !tx
             .attachments()
             .finalize_reservation(reservation.id, now)
