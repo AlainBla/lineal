@@ -6,7 +6,9 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::TeamRepo;
-use lineal_app::ports::repos::team::{Membership, NewMembership, NewTeam, Team, TeamPatch};
+use lineal_app::ports::repos::team::{
+    Membership, NewMembership, NewTeam, ReleasedField, Team, TeamPatch,
+};
 use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::{OrgId, StateId, TeamId, UserId};
 use serde_json::Value;
@@ -523,6 +525,62 @@ impl TeamRepo for PgTx {
             .into_iter()
             .map(|(i,)| lineal_domain::ids::IssueId(i))
             .collect())
+    }
+
+    async fn release_non_member_assets(
+        &mut self,
+        teams: &[TeamId],
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<ReleasedField>> {
+        let team_ids: Vec<Uuid> = teams.iter().map(|t| t.0).collect();
+        let mut out: Vec<ReleasedField> = Vec::new();
+        // Assignee/Delegate NULLen, wo der Wert das (nun private/restricted) Team nicht mehr sieht;
+        // nur offene Issues (docs/02 §4.5 Schritt 3). `{col}` ist ein fester Spaltenname, kein Input.
+        // Der alte Wert wird per CTE gesichert, bevor die UPDATE-CTE ihn auf NULL setzt.
+        for (col, field) in [("assignee_id", "assigneeId"), ("delegate_id", "delegateId")] {
+            let sql = format!(
+                "WITH victims AS (\
+                   SELECT i.id AS issue_id, i.{col} AS u \
+                   FROM issue i JOIN team t ON t.organization_id = i.organization_id AND t.id = i.team_id \
+                   WHERE i.organization_id = $1 AND i.team_id = ANY($2) AND i.{col} IS NOT NULL \
+                     AND NOT i.trashed AND i.archived_at IS NULL \
+                     AND i.state_type IN ('triage','backlog','unstarted','started') \
+                     AND NOT (t.visibility = 'public' \
+                       OR EXISTS (SELECT 1 FROM team_membership m WHERE m.team_id = t.id AND m.user_id = i.{col}) \
+                       OR (t.visibility = 'restricted' AND EXISTS (SELECT 1 FROM team_membership m WHERE m.team_id = t.parent_id AND m.user_id = i.{col})))\
+                 ), upd AS (\
+                   UPDATE issue SET {col} = NULL, version = version + 1, updated_at = $3 \
+                   WHERE organization_id = $1 AND id IN (SELECT issue_id FROM victims)\
+                 ) SELECT issue_id, u FROM victims"
+            );
+            let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(&sql)
+                .bind(self.org.0)
+                .bind(&team_ids)
+                .bind(now)
+                .fetch_all(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+            out.extend(rows.into_iter().map(|(issue, user)| ReleasedField {
+                issue: lineal_domain::ids::IssueId(issue),
+                user: UserId(user),
+                field,
+            }));
+        }
+        // Abos von Nicht-Mitgliedern auf Issues dieser Teams entfernen (Schritt 4; alle Issues).
+        sqlx::query(
+            "DELETE FROM issue_subscription s \
+             USING issue i JOIN team t ON t.organization_id = i.organization_id AND t.id = i.team_id \
+             WHERE s.organization_id = $1 AND s.issue_id = i.id AND i.team_id = ANY($2) \
+               AND NOT (t.visibility = 'public' \
+                 OR EXISTS (SELECT 1 FROM team_membership m WHERE m.team_id = t.id AND m.user_id = s.user_id) \
+                 OR (t.visibility = 'restricted' AND EXISTS (SELECT 1 FROM team_membership m WHERE m.team_id = t.parent_id AND m.user_id = s.user_id)))",
+        )
+        .bind(self.org.0)
+        .bind(&team_ids)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(out)
     }
 
     async fn allocate_issue_numbers(&mut self, team: TeamId, count: i32) -> AppResult<i32> {

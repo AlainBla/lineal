@@ -1142,7 +1142,7 @@ impl App {
                     .await?;
             }
         }
-        for c in cascade {
+        for &c in &cascade {
             tx.teams()
                 .update(
                     c,
@@ -1153,6 +1153,53 @@ impl App {
                     now,
                 )
                 .await?;
+        }
+        // S-24 (docs/02 §4.5 Schritte 3/4): Beim Privat-/Restricted-Machen die Assets der
+        // Nicht-Mitglieder der betroffenen Teams freigeben – Assignee/Delegate auf offenen Issues
+        // (mit History) und alle Abos. Nach der Cascade-Schleife, damit die neuen Sichtbarkeiten in
+        // der DB stehen; der ausführende User ist bereits Mitglied und wird nicht freigegeben.
+        if input
+            .visibility
+            .is_some_and(|v| v != TeamVisibility::Public)
+            && input.visibility != Some(team.visibility)
+        {
+            use crate::ports::repos::issue::HistorySource;
+            use crate::usecases::issue::history::{self, Delta};
+            let mut release_teams = vec![team.id];
+            release_teams.extend(cascade.iter().copied());
+            let released = tx
+                .teams()
+                .release_non_member_assets(&release_teams, now)
+                .await?;
+            for r in released {
+                let Some(issue) = tx.issues().get(r.issue, false).await? else {
+                    continue;
+                };
+                let mut delta = Delta::default();
+                delta.set(r.field, json!(r.user.to_string()), serde_json::Value::Null);
+                history::record(
+                    &mut *tx,
+                    uuid::Uuid::now_v7(),
+                    &issue,
+                    crate::resolve::user::actor_user_id(ctx),
+                    HistorySource::System,
+                    &delta,
+                    now,
+                )
+                .await?;
+                emit(
+                    &mut *tx,
+                    ctx,
+                    DomainEvent::IssueUpdated {
+                        previous: None,
+                        issue_id: issue.id,
+                        team_id: issue.team_id,
+                        changed: vec![r.field.to_string()],
+                        mentioned_user_ids: vec![],
+                    },
+                )
+                .await?;
+            }
         }
         emit(&mut *tx, ctx, DomainEvent::TeamUpdated { team_id: team.id }).await?;
         let view = reload_view(&mut *tx, team.id).await?;

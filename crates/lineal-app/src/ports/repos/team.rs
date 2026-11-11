@@ -207,6 +207,15 @@ pub struct NewMembership {
     pub now: DateTime<Utc>,
 }
 
+/// Ein beim Privat-Machen eines Teams freigegebenes Feld eines Issues (S-24, docs/02 §4.5 Schritt 3):
+/// `field` ist `"assigneeId"` oder `"delegateId"`, `user` der alte Wert (für den History-Eintrag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleasedField {
+    pub issue: IssueId,
+    pub user: UserId,
+    pub field: &'static str,
+}
+
 /// Persistenzzugriff des Bereichs `team`.
 #[async_trait]
 pub trait TeamRepo: Send {
@@ -292,6 +301,19 @@ pub trait TeamRepo: Send {
         _user: UserId,
         _now: DateTime<Utc>,
     ) -> AppResult<Vec<IssueId>> {
+        unimplemented_repo()
+    }
+
+    /// Räumt beim Privat-Machen der (nun nicht öffentlichen) `teams` die Assets der NICHT-Mitglieder
+    /// auf (docs/02 §4.5 Schritte 3 und 4): `assignee`/`delegate = null` bei offenen Issues, deren
+    /// Assignee/Delegate das Team nicht mehr sieht (Privat: Mitglied des Teams; Restricted:
+    /// zusätzlich Mitglied des Parents), und entfernt alle Abos von Nicht-Mitgliedern auf Issues
+    /// dieser Teams. Liefert die freigegebenen Assignee-/Delegate-Felder für die History.
+    async fn release_non_member_assets(
+        &mut self,
+        _teams: &[TeamId],
+        _now: DateTime<Utc>,
+    ) -> AppResult<Vec<ReleasedField>> {
         unimplemented_repo()
     }
 

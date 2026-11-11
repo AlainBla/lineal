@@ -1299,3 +1299,172 @@ async fn every_user_write_path_checks_scope_and_actor(pool: PgPool) {
         ErrorKind::Forbidden
     );
 }
+
+// --- S-24: Privat-Machen eines Teams gibt die Assets der Nicht-Mitglieder frei (docs/02 §4.5) ---
+
+async fn mk_issue(
+    pool: &PgPool,
+    d: &SeedData,
+    team: lineal_domain::ids::TeamId,
+    slot: u128,
+    number: i32,
+    assignee: Option<lineal_domain::ids::UserId>,
+    delegate: Option<lineal_domain::ids::UserId>,
+) -> lineal_domain::ids::IssueId {
+    let id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO issue (id, organization_id, team_id, number, title, state_id, creator_id, assignee_id, delegate_id) \
+         VALUES ($1,$2,$3,$4,'x',$5,$6,$7,$8)",
+    )
+    .bind(id)
+    .bind(d.org.0)
+    .bind(team.0)
+    .bind(number)
+    .bind(seed_workflow_state_ids(slot)[0].0)
+    .bind(d.bob.0) // Creator ≠ Akteur (Alice), sonst unterdrückt das Erstellungsfenster die History
+    .bind(assignee.map(|u| u.0))
+    .bind(delegate.map(|u| u.0))
+    .execute(pool)
+    .await
+    .unwrap();
+    lineal_domain::ids::IssueId(id)
+}
+
+async fn subscribe_sql(
+    pool: &PgPool,
+    d: &SeedData,
+    issue: lineal_domain::ids::IssueId,
+    user: lineal_domain::ids::UserId,
+) {
+    sqlx::query(
+        "INSERT INTO issue_subscription (organization_id, issue_id, user_id, reason) VALUES ($1,$2,$3,'manual')",
+    )
+    .bind(d.org.0)
+    .bind(issue.0)
+    .bind(user.0)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn assignee_of(pool: &PgPool, issue: lineal_domain::ids::IssueId) -> Option<uuid::Uuid> {
+    sqlx::query_scalar("SELECT assignee_id FROM issue WHERE id = $1")
+        .bind(issue.0)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn delegate_of(pool: &PgPool, issue: lineal_domain::ids::IssueId) -> Option<uuid::Uuid> {
+    sqlx::query_scalar("SELECT delegate_id FROM issue WHERE id = $1")
+        .bind(issue.0)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn subscribed(
+    pool: &PgPool,
+    issue: lineal_domain::ids::IssueId,
+    user: lineal_domain::ids::UserId,
+) -> bool {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issue_subscription WHERE issue_id = $1 AND user_id = $2",
+    )
+    .bind(issue.0)
+    .bind(user.0)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    n > 0
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn making_team_private_releases_non_member_assets(pool: PgPool) {
+    let (app, d, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    // Carol ist im Seed WEB-Mitglied; für diesen Test soll sie Nicht-Mitglied von ENG UND WEB sein.
+    sqlx::query("DELETE FROM team_membership WHERE team_id = $1 AND user_id = $2")
+        .bind(d.web.0)
+        .bind(d.carol.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // ENG (public, Mitglieder Alice+Bob): Carol ist Nicht-Mitglied.
+    let i1 = mk_issue(&pool, &d, d.eng, 1, 201, Some(d.carol), Some(d.carol)).await; // Carol Assignee+Delegate
+    let i2 = mk_issue(&pool, &d, d.eng, 1, 202, Some(d.bob), None).await; // Bob (Mitglied)
+    // WEB (public, Sub-Team von ENG → kaskadiert zu restricted). Mitglied: Bob. Parent ENG: Alice+Bob.
+    let i3 = mk_issue(&pool, &d, d.web, 2, 203, Some(d.carol), None).await; // Carol: weder WEB noch ENG
+    let i4 = mk_issue(&pool, &d, d.web, 2, 204, Some(d.alice), None).await; // Alice: ENG-Mitglied = Parent
+    subscribe_sql(&pool, &d, i1, d.carol).await;
+    subscribe_sql(&pool, &d, i2, d.bob).await;
+
+    app.update_team(
+        &alice,
+        "ENG",
+        UpdateTeamInput {
+            visibility: Some(TeamVisibility::Private),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Schritt 3: Assignee/Delegate von Nicht-Mitgliedern auf offenen Issues null.
+    assert_eq!(
+        assignee_of(&pool, i1).await,
+        None,
+        "Carol aus ENG-Issue freigegeben"
+    );
+    assert_eq!(
+        delegate_of(&pool, i1).await,
+        None,
+        "Delegate ebenfalls freigegeben"
+    );
+    assert_eq!(
+        assignee_of(&pool, i2).await,
+        Some(d.bob.0),
+        "Bob (Mitglied) bleibt Assignee"
+    );
+    // Cascade (Schritt 6): WEB wird restricted; Carol (kein WEB/ENG) freigegeben, Alice (ENG=Parent) bleibt.
+    assert_eq!(
+        assignee_of(&pool, i3).await,
+        None,
+        "Carol aus kaskadiertem WEB-Issue freigegeben"
+    );
+    assert_eq!(
+        assignee_of(&pool, i4).await,
+        Some(d.alice.0),
+        "Alice sieht restricted WEB über die ENG-Mitgliedschaft weiter → bleibt Assignee"
+    );
+
+    // Schritt 4: Abos von Nicht-Mitgliedern entfernt, Mitglieder-Abos bleiben.
+    assert!(!subscribed(&pool, i1, d.carol).await, "Carols Abo entfernt");
+    assert!(subscribed(&pool, i2, d.bob).await, "Bobs Abo bleibt");
+
+    // History-Einträge für die Freigabe (assigneeId und delegateId) auf i1.
+    let changes: String =
+        sqlx::query_scalar("SELECT coalesce(string_agg(changes::text, ' '), '') FROM issue_history WHERE issue_id = $1")
+            .bind(i1.0)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        changes.contains("assigneeId"),
+        "History-Eintrag für assigneeId vorhanden ({changes})"
+    );
+    assert!(
+        changes.contains("delegateId"),
+        "History-Eintrag für delegateId vorhanden ({changes})"
+    );
+
+    // Akteur ist Mitglied und Owner von ENG.
+    let owner: Option<bool> =
+        sqlx::query_scalar("SELECT owner FROM team_membership WHERE team_id = $1 AND user_id = $2")
+            .bind(d.eng.0)
+            .bind(d.alice.0)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(owner, Some(true), "Akteur ist Owner von ENG");
+}
