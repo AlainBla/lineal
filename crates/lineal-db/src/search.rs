@@ -339,11 +339,17 @@ pub(crate) async fn search_all(
                 qb.push_bind(org);
                 qb.push(" AND NOT i.trashed AND (i.team_id = ANY(");
                 qb.push_bind(vis.clone());
-                qb.push(
-                    ") OR i.id IN (SELECT s.issue_id FROM issue_share s WHERE s.organization_id = i.organization_id AND s.user_id = ",
-                );
-                qb.push_bind(q.access.user_id.0);
-                qb.push("))");
+                qb.push(")");
+                // S-18: geteilte Issues nur sichtbar, wenn Freigaben für den Akteur gelten
+                // (Mensch, Sharing an, kein team-beschränkter Key). Sonst entfällt die Klausel.
+                if let Some(recipient) = q.access.share_recipient {
+                    qb.push(
+                        " OR i.id IN (SELECT s.issue_id FROM issue_share s WHERE s.organization_id = i.organization_id AND s.user_id = ",
+                    );
+                    qb.push_bind(recipient.0);
+                    qb.push(")");
+                }
+                qb.push(")");
                 if !q.include_archived {
                     qb.push(" AND i.archived_at IS NULL");
                 }

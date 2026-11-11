@@ -1027,3 +1027,61 @@ async fn project_issue_tab_options_are_per_project_and_default_needs_manage_righ
     let again = fx.app.view_preferences(&alice(), key).await.unwrap();
     assert_eq!(again.effective["grouping"], "assignee");
 }
+
+/// S-18: `list_favorites` filtert über die Freigabe-Regel. Ein favorisiertes, geteiltes Issue aus
+/// einem unsichtbaren Team bleibt nur sichtbar, wenn Freigaben für den Akteur gelten.
+#[sqlx::test(migrations = "./migrations")]
+async fn favorites_respect_issue_share_gate(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = fx.data;
+    let shared = fx.issue(d.des, 150, "Quokka plan", 0).await;
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1,$2,$3)")
+        .bind(d.org.0)
+        .bind(shared)
+        .bind(d.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    fx.app
+        .create_favorite(
+            &alice(),
+            CreateFavoriteInput {
+                kind: "issue".into(),
+                target: Some(shared.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Positiv: sichtbar, solange Freigaben gelten.
+    assert_eq!(fx.app.list_favorites(&alice()).await.unwrap().len(), 1);
+
+    // Gate 1: team-beschränkter Key (nur ENG) → Ziel unsichtbar, Favorit ausgeblendet.
+    let mut scoped = alice();
+    scoped.team_scope = Some(vec![d.eng]);
+    assert!(
+        fx.app.list_favorites(&scoped).await.unwrap().is_empty(),
+        "team-beschränkter Key darf das geteilte Ziel nicht sehen"
+    );
+
+    // Gate 2: `issueSharingEnabled = false` → ausgeblendet.
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": false}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    assert!(
+        fx.app.list_favorites(&alice()).await.unwrap().is_empty(),
+        "ohne issueSharingEnabled darf das Ziel nicht sichtbar sein"
+    );
+}

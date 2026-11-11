@@ -272,6 +272,7 @@ pub(crate) fn view_access(snap: &PolicySnapshot, ctx: &RequestCtx) -> AppResult<
         user_id,
         is_guest: snap.actor.role == UserRole::Guest,
         visible_teams: snap.visible_team_ids().into_iter().collect(),
+        share_recipient: crate::resolve::issue::share_recipient(snap, ctx),
     })
 }
 

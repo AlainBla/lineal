@@ -691,7 +691,9 @@ impl App {
         let tx_ref: &mut dyn Tx = &mut *tx;
         let mut q = DocumentQuery {
             visible_teams: snap.visible_team_ids().into_iter().collect(),
-            actor: actor_user_id(ctx),
+            // S-18: Dokumente geteilter Issues nur, wenn Freigaben für den Akteur gelten
+            // (DocumentQuery.actor gatet die issue_share-Klausel in der DB).
+            actor: crate::resolve::issue::share_recipient(&snap, ctx),
             initiatives_visible: snap.require_workspace(ctx, Action::ViewInitiatives).is_ok(),
             text: input
                 .query

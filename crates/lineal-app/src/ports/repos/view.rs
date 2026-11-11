@@ -129,6 +129,10 @@ pub struct ViewAccess {
     pub is_guest: bool,
     /// `visibleTeamIds` des Akteurs (bei Gästen nur ihre Teams).
     pub visible_teams: Vec<TeamId>,
+    /// Empfänger von Issue-Freigaben: `Some(user)` nur, wenn der Akteur ein Mensch ist, der
+    /// Workspace Freigaben erlaubt und der Key nicht team-beschränkt ist (S-18, dieselbe Regel wie
+    /// `resolve::issue::share_recipient`). `None` ⇒ geteilte Issues bleiben unsichtbar.
+    pub share_recipient: Option<UserId>,
 }
 
 /// Filter der Ansichtsliste (`list_custom_views`).

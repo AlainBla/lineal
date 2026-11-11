@@ -248,9 +248,10 @@ impl App {
             include_archived: input.include_archived,
             visible_teams: snap.visible_team_ids().into_iter().collect(),
         };
+        let share_enabled = crate::resolve::issue::share_recipient(&snap, ctx).is_some();
         let page = tx
             .notifications()
-            .list_notifications(user, &query, self.clock.now(), &input.page)
+            .list_notifications(user, share_enabled, &query, self.clock.now(), &input.page)
             .await?;
         let base = org_base(self, &mut *tx).await?;
         Ok(Page {
@@ -279,8 +280,9 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
+        let share_enabled = crate::resolve::issue::share_recipient(&snap, ctx).is_some();
         tx.notifications()
-            .count_unread_groups(user, &visible, self.clock.now())
+            .count_unread_groups(user, share_enabled, &visible, self.clock.now())
             .await
     }
 
@@ -386,9 +388,10 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
+        let share_enabled = crate::resolve::issue::share_recipient(&snap, ctx).is_some();
         let ids = tx
             .notifications()
-            .mark_all_read(user, &visible, filter, self.clock.now())
+            .mark_all_read(user, share_enabled, &visible, filter, self.clock.now())
             .await?;
         // Jede geänderte Notification geht als Sync-Aktion an die Clients des Users.
         for id in &ids {
@@ -449,9 +452,10 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
+        let share_enabled = crate::resolve::issue::share_recipient(&snap, ctx).is_some();
         let ids = tx
             .notifications()
-            .archive_all(user, &visible, filter, self.clock.now())
+            .archive_all(user, share_enabled, &visible, filter, self.clock.now())
             .await?;
         for id in &ids {
             push_notification_event(

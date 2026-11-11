@@ -287,6 +287,76 @@ async fn search_never_returns_objects_of_private_teams(pool: PgPool) {
     assert!(all(carol(), "zebra").await.hits.is_empty());
 }
 
+/// S-18: Die Suche berücksichtigt die Freigabe-Regel. Ein geteiltes Issue aus einem unsichtbaren
+/// Team ist nur sichtbar, wenn Freigaben für den Akteur gelten – nicht über einen team-beschränkten
+/// Key und nicht nach `issueSharingEnabled = false`.
+#[sqlx::test(migrations = "./migrations")]
+async fn search_respects_issue_share_gate(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = fx.data;
+    // Issue im privaten Team DES (Alice ist kein Mitglied), mit Alice geteilt, Sharing erlaubt.
+    let shared = fx.issue(d.des, 140, "Pangolin roadmap", 0).await;
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1,$2,$3)")
+        .bind(d.org.0)
+        .bind(shared)
+        .bind(d.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+
+    let hits = |ctx: RequestCtx| {
+        let fx = &fx;
+        async move {
+            titles(
+                &fx.app
+                    .search(
+                        &ctx,
+                        SearchInput {
+                            term: "pangolin".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap(),
+            )
+        }
+    };
+
+    // Positiv: Mensch, Sharing an, kein Team-Scope → findet das geteilte Issue.
+    assert!(
+        hits(alice()).await.contains(&"Pangolin roadmap".to_owned()),
+        "Freigabe muss normal greifen"
+    );
+
+    // Gate 1: team-beschränkter Key (nur ENG) sieht das geteilte Issue NICHT.
+    let mut scoped = alice();
+    scoped.team_scope = Some(vec![d.eng]);
+    assert!(
+        hits(scoped).await.is_empty(),
+        "team-beschränkter Key darf nicht über eine Freigabe aus seinen Teams heraus sehen"
+    );
+
+    // Gate 2: `issueSharingEnabled = false` → auch der normale Akteur sieht es nicht mehr.
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": false}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    assert!(
+        hits(alice()).await.is_empty(),
+        "ohne issueSharingEnabled darf eine bestehende Freigabe nicht mehr wirken"
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn archived_are_included_with_a_penalty_trashed_never_and_guests_skip_initiatives(
     pool: PgPool,

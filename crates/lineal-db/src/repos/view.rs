@@ -939,9 +939,10 @@ impl ViewRepo for PgTx {
         let org = self.org.0;
         let sql = match kind {
             "issue" => {
+                // S-18: Share-Klausel nur, wenn Freigaben für den Akteur gelten ($6).
                 "SELECT EXISTS (SELECT 1 FROM issue i WHERE i.organization_id = $1 AND i.id = $2 \
-                 AND NOT i.trashed AND (i.team_id = ANY($3) OR EXISTS (SELECT 1 FROM issue_share s \
-                 WHERE s.issue_id = i.id AND s.user_id = $4)))"
+                 AND NOT i.trashed AND (i.team_id = ANY($3) OR ($6 AND EXISTS (SELECT 1 FROM issue_share s \
+                 WHERE s.issue_id = i.id AND s.user_id = $4))))"
             }
             "project" => {
                 "SELECT EXISTS (SELECT 1 FROM project p WHERE p.organization_id = $1 AND p.id = $2 \
@@ -983,9 +984,9 @@ impl ViewRepo for PgTx {
             // Eigene Views prüft der Use-Case über `get_view`.
             _ => return Ok(false),
         };
-        // Alle fünf Parameter müssen im Statement vorkommen (Extended Protocol).
+        // Alle sechs Parameter müssen im Statement vorkommen (Extended Protocol).
         let sql = format!(
-            "SELECT $3::uuid[] IS NOT NULL AND $4::uuid IS NOT NULL AND $5::bool IS NOT NULL AND ({})",
+            "SELECT $3::uuid[] IS NOT NULL AND $4::uuid IS NOT NULL AND $5::bool IS NOT NULL AND $6::bool IS NOT NULL AND ({})",
             sql.trim_start_matches("SELECT ")
         );
         sqlx::query_scalar(&sql)
@@ -994,6 +995,7 @@ impl ViewRepo for PgTx {
             .bind(vis)
             .bind(access.user_id.0)
             .bind(access.is_guest)
+            .bind(access.share_recipient.is_some())
             .fetch_one(&mut *self.tx)
             .await
             .map_err(db_err)

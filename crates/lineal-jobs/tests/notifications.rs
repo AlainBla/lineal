@@ -3074,3 +3074,88 @@ async fn label_subscription_uses_event_state_and_notifies_added_labels(pool: PgP
     .await;
     assert_eq!(e.kinds(bob).await, vec!["issueAddedToView"]);
 }
+
+/// S-18: `list_notifications` berücksichtigt die Freigabe-Regel. Eine Notification zu einem
+/// geteilten Issue aus einem unsichtbaren Team ist nur sichtbar, wenn Freigaben für den Akteur
+/// gelten – nicht über einen team-beschränkten Key und nicht nach `issueSharingEnabled = false`.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn notifications_respect_issue_share_gate(pool: PgPool) {
+    let e = env(pool).await;
+    let (org, des, eng, alice) = (e.d.org, e.d.des, e.d.eng, e.d.alice);
+    // Issue im privaten Team DES (Alice kein Mitglied), mit Alice geteilt, Sharing erlaubt.
+    let issue = e.issue(des, 3, 950, e.d.bob, None, 1).await;
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(org.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1,$2,$3)")
+        .bind(org.0)
+        .bind(issue.0)
+        .bind(alice.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    e.subscribe(issue, alice).await;
+    // Kommentar von Bob → Fan-out benachrichtigt die (geteilte) Abonnentin Alice.
+    let comment = e.comment(issue, e.d.bob, None).await;
+    e.handle(&e.user_ev(
+        e.d.bob,
+        DomainEvent::CommentCreated {
+            comment_id: comment,
+            mentioned_user_ids: vec![],
+        },
+    ))
+    .await;
+    assert_eq!(
+        e.count(alice).await,
+        1,
+        "Fan-out erstellt die Notification für die geteilte Abonnentin"
+    );
+
+    let list = |ctx| {
+        let e = &e;
+        async move {
+            e.app
+                .list_notifications(
+                    &ctx,
+                    ListNotificationsInput {
+                        page: Default::default(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .items
+                .len()
+        }
+    };
+
+    // Positiv: Mensch, Sharing an, kein Team-Scope.
+    assert_eq!(list(ctx_for(SeedUser::Alice)).await, 1);
+
+    // Gate 1: team-beschränkter Key (nur ENG).
+    let mut scoped = ctx_for(SeedUser::Alice);
+    scoped.team_scope = Some(vec![eng]);
+    assert_eq!(
+        list(scoped).await,
+        0,
+        "team-beschränkter Key darf die Notification zum geteilten Issue nicht sehen"
+    );
+
+    // Gate 2: `issueSharingEnabled = false`.
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": false}'::jsonb WHERE id = $1",
+    )
+    .bind(org.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        list(ctx_for(SeedUser::Alice)).await,
+        0,
+        "ohne issueSharingEnabled darf die Notification nicht über die Freigabe sichtbar sein"
+    );
+}

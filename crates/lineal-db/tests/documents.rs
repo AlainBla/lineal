@@ -1243,3 +1243,106 @@ async fn resending_read_content_does_not_bump_the_version(pool: PgPool) {
         assert_eq!(v.doc.content_version, v0, "content {:?}", read.doc.content);
     }
 }
+
+/// S-18: `list_documents` berücksichtigt die Freigabe-Regel. Das Dokument eines geteilten Issues
+/// aus einem unsichtbaren Team taucht nur auf, wenn Freigaben für den Akteur gelten – nicht über
+/// einen team-beschränkten Key und nicht nach `issueSharingEnabled = false`.
+#[sqlx::test(migrations = "./migrations")]
+async fn list_documents_respects_issue_share_gate(pool: PgPool) {
+    let env = setup(pool.clone()).await;
+    let d = SeedData::acme();
+    let issue = env
+        .app
+        .create_issue(
+            &ctx_for(SeedUser::Alice),
+            CreateIssueInput {
+                team: "ENG".into(),
+                title: Some("Rollout".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let ddoc = create(
+        &env,
+        SeedUser::Alice,
+        SaveDocumentInput {
+            title: Some("Rollout-Checkliste".into()),
+            parent: ParentRefs {
+                issue: Some(issue.issue.identifier.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await;
+    // Issue ins private Team DES verschieben (Alice kein Mitglied), mit Alice teilen, Sharing erlauben.
+    sqlx::query("UPDATE issue SET team_id = $1, state_id = $3 WHERE id = $2")
+        .bind(d.des.0)
+        .bind(issue.issue.id.0)
+        .bind(lineal_testkit::seed::identity::seed_workflow_state_ids(3)[0].0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1,$2,$3)")
+        .bind(d.org.0)
+        .bind(issue.issue.id.0)
+        .bind(d.alice.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let lists = |ctx: RequestCtx| {
+        let env = &env;
+        let want = ddoc.doc.id;
+        async move {
+            env.app
+                .list_documents(
+                    &ctx,
+                    ListDocumentsInput {
+                        limit: 50,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .items
+                .iter()
+                .any(|v| v.doc.id == want)
+        }
+    };
+
+    // Positiv: Mensch, Sharing an, kein Team-Scope → Dokument des geteilten Issues sichtbar.
+    assert!(
+        lists(ctx_for(SeedUser::Alice)).await,
+        "Freigabe muss greifen"
+    );
+
+    // Gate 1: team-beschränkter Key (nur ENG) sieht das Dokument NICHT.
+    let mut scoped = ctx_for(SeedUser::Alice);
+    scoped.team_scope = Some(vec![d.eng]);
+    assert!(
+        !lists(scoped).await,
+        "team-beschränkter Key darf das Dokument nicht über eine Freigabe sehen"
+    );
+
+    // Gate 2: `issueSharingEnabled = false` → nicht mehr sichtbar.
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": false}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !lists(ctx_for(SeedUser::Alice)).await,
+        "ohne issueSharingEnabled darf das Dokument nicht sichtbar sein"
+    );
+}

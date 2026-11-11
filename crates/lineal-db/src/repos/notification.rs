@@ -33,9 +33,17 @@ const ALIVE_COMMENT_SQL: &str = "(n.comment_id IS NULL OR EXISTS (SELECT 1 FROM 
      WHERE dc.organization_id = n.organization_id AND dc.id = n.comment_id AND dc.archived_at IS NULL AND dc.deleted_at IS NULL))";
 
 /// Bezugsobjekt sichtbar (`$vis` = Array sichtbarer Team-IDs).
-fn visible_sql(vis: &str) -> String {
+fn visible_sql(vis: &str, share: bool) -> String {
+    // S-18: Geteilte Issues nur sichtbar, wenn Freigaben für den Akteur gelten (`share`). Sonst
+    // entfällt die issue_share-Klausel – sonst blieben Notifications zu geteilten Issues auch nach
+    // `issueSharingEnabled = false` oder für team-beschränkte Keys sichtbar.
+    let share_clause = if share {
+        " OR EXISTS (SELECT 1 FROM issue_share ish WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)"
+    } else {
+        ""
+    };
     format!(
-        "(n.issue_id IS NULL OR i.team_id = ANY({vis}) OR EXISTS (SELECT 1 FROM issue_share ish WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)) \
+        "(n.issue_id IS NULL OR i.team_id = ANY({vis}){share_clause}) \
          AND (i.id IS NULL OR NOT i.trashed) AND {ALIVE_COMMENT_SQL} \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
               WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
@@ -59,11 +67,19 @@ fn doc_visible_sql(n: &str, vis: &str) -> String {
 }
 
 /// Wie [`visible_sql`], aber ohne Joins (für UPDATE-Statements).
-fn visible_sub_sql(vis: &str) -> String {
+fn visible_sub_sql(vis: &str, share: bool) -> String {
+    // S-18: dieselbe Freigabe-Gatterung wie `visible_sql`, hier für die UPDATE-Prädikate, damit
+    // Lese- und Schreibsicht nicht auseinanderlaufen (sonst ließe sich eine unsichtbare
+    // Notification trotzdem als gelesen markieren oder archivieren).
+    let share_clause = if share {
+        " OR EXISTS (SELECT 1 FROM issue_share ish \
+             WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)"
+    } else {
+        ""
+    };
     format!(
         "((n.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue vi WHERE vi.id = n.issue_id AND NOT vi.trashed \
-              AND (vi.team_id = ANY({vis}) OR EXISTS (SELECT 1 FROM issue_share ish \
-                   WHERE ish.organization_id = n.organization_id AND ish.issue_id = n.issue_id AND ish.user_id = n.user_id)))) \
+              AND (vi.team_id = ANY({vis}){share_clause}))) \
          AND {ALIVE_COMMENT_SQL} \
          AND (n.target_type <> 'project' OR EXISTS (SELECT 1 FROM project_team pt \
               WHERE pt.project_id = n.project_id AND pt.team_id = ANY({vis}))) \
@@ -528,13 +544,14 @@ impl NotificationRepo for PgTx {
     async fn list_notifications(
         &mut self,
         user: UserId,
+        share_enabled: bool,
         query: &InboxQuery,
         now: DateTime<Utc>,
         page: &PageRequest,
     ) -> AppResult<Page<NotificationView>> {
         let mut sql = format!(
             "{VIEW_SELECT} WHERE n.organization_id = $1 AND n.user_id = $2 AND {} ",
-            visible_sql("$3")
+            visible_sql("$3", share_enabled)
         );
         if !query.include_archived {
             sql.push_str("AND n.archived_at IS NULL ");
@@ -577,6 +594,7 @@ impl NotificationRepo for PgTx {
     async fn count_unread_groups(
         &mut self,
         user: UserId,
+        share_enabled: bool,
         visible_teams: &[TeamId],
         now: DateTime<Utc>,
     ) -> AppResult<i64> {
@@ -585,7 +603,7 @@ impl NotificationRepo for PgTx {
              LEFT JOIN issue i ON i.organization_id = n.organization_id AND i.id = n.issue_id \
              WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {} \
              GROUP BY n.group_key HAVING bool_or(n.read_at IS NULL)) g",
-            visible_sql("$3"),
+            visible_sql("$3", share_enabled),
             awake_sql("$4")
         );
         sqlx::query_scalar(&sql)
@@ -648,6 +666,7 @@ impl NotificationRepo for PgTx {
     async fn mark_all_read(
         &mut self,
         user: UserId,
+        share_enabled: bool,
         visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
@@ -656,7 +675,7 @@ impl NotificationRepo for PgTx {
             "UPDATE notification n SET read_at = $3, updated_at = $3, version = version + 1 \
              WHERE n.organization_id = $1 AND n.user_id = $2 AND n.read_at IS NULL \
                AND n.archived_at IS NULL AND {} AND {} RETURNING n.id",
-            visible_sub_sql("$4"),
+            visible_sub_sql("$4", share_enabled),
             bulk_sql(filter)
         );
         let ids: Vec<Uuid> = sqlx::query_scalar(&sql)
@@ -720,6 +739,7 @@ impl NotificationRepo for PgTx {
     async fn archive_all(
         &mut self,
         user: UserId,
+        share_enabled: bool,
         visible_teams: &[TeamId],
         filter: BulkFilter,
         now: DateTime<Utc>,
@@ -727,7 +747,7 @@ impl NotificationRepo for PgTx {
         let sql = format!(
             "UPDATE notification n SET archived_at = $3, updated_at = $3, version = version + 1 \
              WHERE n.organization_id = $1 AND n.user_id = $2 AND n.archived_at IS NULL AND {} AND {} RETURNING n.id",
-            visible_sub_sql("$4"),
+            visible_sub_sql("$4", share_enabled),
             bulk_sql(filter)
         );
         let ids: Vec<Uuid> = sqlx::query_scalar(&sql)

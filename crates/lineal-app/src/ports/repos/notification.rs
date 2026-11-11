@@ -531,6 +531,9 @@ pub trait NotificationRepo: Send {
     async fn list_notifications(
         &mut self,
         _user: UserId,
+        // S-18: ob Issue-Freigaben für den Akteur gelten (sonst keine Notifications zu geteilten
+        // Issues, deren Team unsichtbar ist).
+        _share_enabled: bool,
         _query: &InboxQuery,
         _now: DateTime<Utc>,
         _page: &PageRequest,
@@ -542,6 +545,7 @@ pub trait NotificationRepo: Send {
     async fn count_unread_groups(
         &mut self,
         _user: UserId,
+        _share_enabled: bool,
         _visible_teams: &[TeamId],
         _now: DateTime<Utc>,
     ) -> AppResult<i64> {
@@ -575,6 +579,7 @@ pub trait NotificationRepo: Send {
     async fn mark_all_read(
         &mut self,
         _user: UserId,
+        _share_enabled: bool,
         _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
@@ -608,6 +613,7 @@ pub trait NotificationRepo: Send {
     async fn archive_all(
         &mut self,
         _user: UserId,
+        _share_enabled: bool,
         _visible_teams: &[TeamId],
         _filter: BulkFilter,
         _now: DateTime<Utc>,
