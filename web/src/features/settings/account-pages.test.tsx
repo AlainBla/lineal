@@ -223,6 +223,7 @@ describe("AccountSecurityPage", () => {
     expect(gql.of("AccountPasswordChange")[0]!.variables).toEqual({
       currentPassword: "old-password",
       newPassword: "brand-new-pw",
+      revokeOtherCredentials: false,
     });
     // Felder werden geleert.
     await waitFor(() => expect(screen.getByLabelText("Current password")).toHaveValue(""));

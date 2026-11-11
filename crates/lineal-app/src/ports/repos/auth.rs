@@ -199,6 +199,25 @@ pub trait AuthRepo: Send {
     async fn revoke_api_key(&mut self, _id: ApiKeyId, _now: DateTime<Utc>) -> AppResult<bool> {
         unimplemented_repo()
     }
+    /// Widerruft alle noch gültigen OAuth-Tokens des Users und entwertet seine noch nicht
+    /// eingelösten OAuth-Codes (S-21: Passwortwechsel beendet App-Zugriffe). Liefert die Zahl der
+    /// widerrufenen Tokens.
+    async fn revoke_oauth_tokens_of_user(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// Widerruft alle noch gültigen API-Keys des Users (S-21, optional beim Passwortwechsel).
+    /// Liefert die Zahl der widerrufenen Keys.
+    async fn revoke_api_keys_of_user(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
     /// Widerruft alle Web-Sessions, API-Keys und OAuth-Tokens des Users (beim Sperren, damit eine
     /// Entsperrung keine alten Zugangsdaten wiederbelebt).
     async fn revoke_all_credentials_of_user(

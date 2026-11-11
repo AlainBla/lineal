@@ -1890,7 +1890,12 @@ type Mutation {
 	Nur mit Browser-Session. Falsche alte Passwörter zählen als Fehlversuche (Sperre mit
 	`rate_limited`).
 	"""
-	passwordChange(currentPassword: String!, newPassword: String!): PasswordChangePayload!
+	passwordChange(		currentPassword: String!,		newPassword: String!,
+		"""
+		Also revoke API keys and the calendar feed (OAuth tokens are always revoked).
+		"""
+		revokeOtherCredentials: Boolean! = false
+	): PasswordChangePayload!
 	"""
 	Meldet eine eigene Session ab (fremde IDs: `not_found`).
 	"""

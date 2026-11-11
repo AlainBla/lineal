@@ -6,7 +6,7 @@ use lineal_app::context::Scopes;
 use lineal_app::ports::{Clock, Store};
 use lineal_app::usecases::account::UpdateViewerInput;
 use lineal_app::usecases::attachment::PrepareUploadInput;
-use lineal_app::usecases::auth::{LoginInput, hash_token};
+use lineal_app::usecases::auth::{CreateApiKeyInput, LoginInput, hash_token};
 use lineal_app::{App, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
@@ -73,7 +73,7 @@ async fn password_change_checks_the_old_password_and_signs_out_other_sessions(po
 
     // Falsches altes Passwort: Fehler, Audit-Eintrag, nichts widerrufen.
     let r = app
-        .change_own_password(&alice, Some(&hash), "wrong-old", "brand-new-pw")
+        .change_own_password(&alice, Some(&hash), "wrong-old", "brand-new-pw", false)
         .await;
     let e = r.err().unwrap();
     assert_eq!(e.kind, ErrorKind::InvalidRequest);
@@ -94,14 +94,14 @@ async fn password_change_checks_the_old_password_and_signs_out_other_sessions(po
     // Neue Regeln wie beim Anlegen: zu kurz, identisch.
     assert_eq!(
         kind(
-            app.change_own_password(&alice, Some(&hash), "correct-horse", "short")
+            app.change_own_password(&alice, Some(&hash), "correct-horse", "short", false)
                 .await
         ),
         ErrorKind::InvalidRequest
     );
     assert_eq!(
         kind(
-            app.change_own_password(&alice, Some(&hash), "correct-horse", "correct-horse")
+            app.change_own_password(&alice, Some(&hash), "correct-horse", "correct-horse", false)
                 .await
         ),
         ErrorKind::InvalidRequest
@@ -110,7 +110,7 @@ async fn password_change_checks_the_old_password_and_signs_out_other_sessions(po
 
     // Erfolg: alle anderen Sessions weg (auch die von Bob bleibt unberührt), diese bleibt.
     let revoked = app
-        .change_own_password(&alice, Some(&hash), "correct-horse", "brand-new-pw")
+        .change_own_password(&alice, Some(&hash), "correct-horse", "brand-new-pw", false)
         .await
         .unwrap();
     assert_eq!(revoked, 1);
@@ -140,7 +140,7 @@ async fn password_change_needs_a_browser_session_with_write_scope(pool: PgPool) 
     let change = |ctx: RequestCtx, h: Option<String>| {
         let app = &app;
         async move {
-            app.change_own_password(&ctx, h.as_deref(), "correct-horse", "brand-new-pw")
+            app.change_own_password(&ctx, h.as_deref(), "correct-horse", "brand-new-pw", false)
                 .await
         }
     };
@@ -436,4 +436,146 @@ async fn avatar_must_be_an_uploaded_image_of_this_workspace(pool: PgPool) {
     let u = set(Some(ok.clone())).await.unwrap();
     assert_eq!(u.avatar_url.as_deref(), Some(ok.as_str()));
     assert!(set(None).await.unwrap().avatar_url.is_none());
+}
+
+// --- S-21: Passwortwechsel widerruft App-Zugriffe (OAuth immer, API-Keys/Kalender optional) ---
+
+async fn seed_oauth_token(pool: &PgPool, user: uuid::Uuid) -> uuid::Uuid {
+    let org = SeedData::acme().org.0;
+    let app_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO oauth_application (organization_id, name, client_secret_hash, redirect_uris, developer, developer_url, creator_id) \
+         VALUES ($1,'TestApp','x',ARRAY['https://x.example/cb'],'dev','https://x.example',$2) RETURNING id",
+    )
+    .bind(org)
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO oauth_token (organization_id, application_id, user_id, access_token_hash) \
+         VALUES ($1,$2,$3,'tokhash') RETURNING id",
+    )
+    .bind(org)
+    .bind(app_id)
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn seed_calendar_feed(pool: &PgPool, user: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO calendar_feed (organization_id, user_id, token_hash) VALUES ($1,$2,'calhash')",
+    )
+    .bind(SeedData::acme().org.0)
+    .bind(user)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn oauth_revoked(pool: &PgPool, token: uuid::Uuid) -> bool {
+    sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM oauth_token WHERE id = $1")
+        .bind(token)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn has_calendar(pool: &PgPool, user: uuid::Uuid) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM calendar_feed WHERE user_id = $1)")
+        .bind(user)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn last_password_change_audit(pool: &PgPool) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT details FROM audit_log WHERE action = 'user.password_changed' ORDER BY occurred_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn alice_api_key(app: &App) -> String {
+    app.create_api_key(
+        &ctx_for(SeedUser::Alice),
+        CreateApiKeyInput {
+            label: "ci".into(),
+            scopes: vec!["read".into()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .key
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn password_change_revokes_oauth_and_keeps_other_credentials_by_default(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let aid = SeedData::acme().alice.0;
+    let here = login(&app, "alice@acme.example", "correct-horse").await;
+    let key = alice_api_key(&app).await;
+    let oauth = seed_oauth_token(&pool, aid).await;
+    seed_calendar_feed(&pool, aid).await;
+    assert!(alive(&app, &key).await, "Key gilt zunächst");
+
+    app.change_own_password(
+        &alice,
+        Some(&hash_token(&here)),
+        "correct-horse",
+        "brand-new-pw",
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        oauth_revoked(&pool, oauth).await,
+        "OAuth-Token wird immer widerrufen"
+    );
+    assert!(alive(&app, &key).await, "API-Key bleibt ohne Flag gültig");
+    assert!(
+        has_calendar(&pool, aid).await,
+        "Kalender-Abo bleibt ohne Flag"
+    );
+    let d = last_password_change_audit(&pool).await;
+    assert_eq!(d["revokedOauthTokens"], serde_json::json!(1));
+    assert_eq!(d["revokedApiKeys"], serde_json::json!(0));
+    assert_eq!(d["calendarFeedRevoked"], serde_json::json!(false));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn password_change_revokes_api_keys_and_calendar_when_requested(pool: PgPool) {
+    let app = setup(pool.clone()).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let aid = SeedData::acme().alice.0;
+    let here = login(&app, "alice@acme.example", "correct-horse").await;
+    let key = alice_api_key(&app).await;
+    let oauth = seed_oauth_token(&pool, aid).await;
+    seed_calendar_feed(&pool, aid).await;
+
+    app.change_own_password(
+        &alice,
+        Some(&hash_token(&here)),
+        "correct-horse",
+        "brand-new-pw",
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert!(oauth_revoked(&pool, oauth).await, "OAuth-Token widerrufen");
+    assert!(!alive(&app, &key).await, "API-Key mit Flag widerrufen");
+    assert!(
+        !has_calendar(&pool, aid).await,
+        "Kalender-Abo mit Flag entfernt"
+    );
+    let d = last_password_change_audit(&pool).await;
+    assert_eq!(d["revokedApiKeys"], serde_json::json!(1));
+    assert_eq!(d["calendarFeedRevoked"], serde_json::json!(true));
 }

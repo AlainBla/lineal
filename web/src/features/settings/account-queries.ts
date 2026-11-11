@@ -116,14 +116,22 @@ export async function uploadAvatar(file: File): Promise<string> {
 export function usePasswordChange() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { currentPassword: string; newPassword: string }) =>
+    mutationFn: async (v: {
+      currentPassword: string;
+      newPassword: string;
+      revokeOtherCredentials: boolean;
+    }) =>
       (
         await gqlRequest<
           { passwordChange: { success: boolean; revokedSessions: number } },
-          { currentPassword: string; newPassword: string }
+          {
+            currentPassword: string;
+            newPassword: string;
+            revokeOtherCredentials: boolean;
+          }
         >(
-          `mutation AccountPasswordChange($currentPassword: String!, $newPassword: String!) {
-            passwordChange(currentPassword: $currentPassword, newPassword: $newPassword) {
+          `mutation AccountPasswordChange($currentPassword: String!, $newPassword: String!, $revokeOtherCredentials: Boolean!) {
+            passwordChange(currentPassword: $currentPassword, newPassword: $newPassword, revokeOtherCredentials: $revokeOtherCredentials) {
               success revokedSessions
             }
           }`,

@@ -481,4 +481,52 @@ impl AuthRepo for PgTx {
         .map_err(db_err)?;
         Ok(())
     }
+
+    async fn revoke_oauth_tokens_of_user(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let n = sqlx::query(
+            "UPDATE oauth_token SET revoked_at = $3, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        sqlx::query(
+            "UPDATE oauth_authorization_code SET used_at = $3 \
+             WHERE organization_id = $1 AND user_id = $2 AND used_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(n)
+    }
+
+    async fn revoke_api_keys_of_user(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let n = sqlx::query(
+            "UPDATE api_key SET revoked_at = $3, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        Ok(n)
+    }
 }

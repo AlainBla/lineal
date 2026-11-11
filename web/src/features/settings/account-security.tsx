@@ -29,6 +29,7 @@ function PasswordForm() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
+  const [revokeOther, setRevokeOther] = useState(false);
   const tooShort = next !== "" && next.length < MIN_PASSWORD;
   const mismatch = repeat !== "" && repeat !== next;
   const same = next !== "" && next === current;
@@ -42,12 +43,17 @@ function PasswordForm() {
         e.preventDefault();
         if (!valid) return;
         change.mutate(
-          { currentPassword: current, newPassword: next },
+          {
+            currentPassword: current,
+            newPassword: next,
+            revokeOtherCredentials: revokeOther,
+          },
           {
             onSuccess: (r) => {
               setCurrent("");
               setNext("");
               setRepeat("");
+              setRevokeOther(false);
               showToast({
                 message:
                   r.revokedSessions > 0
@@ -101,6 +107,18 @@ function PasswordForm() {
           </span>
         )}
       </Field>
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={revokeOther}
+          onChange={(e) => setRevokeOther(e.target.checked)}
+        />
+        <span className="text-muted-foreground">
+          Also revoke API keys and the calendar subscription link. Connected apps
+          (OAuth) are always disconnected. You will need to recreate these afterwards.
+        </span>
+      </label>
       {change.error != null && (
         <p role="alert" className="text-xs text-destructive">
           {errorText(change.error)}

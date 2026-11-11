@@ -226,6 +226,12 @@ impl AccountMutation {
         ctx: &Context<'_>,
         current_password: String,
         new_password: String,
+        // S-21: Zusätzlich API-Keys und das Kalender-Abo widerrufen (OAuth-Tokens immer).
+        #[graphql(
+            default,
+            desc = "Also revoke API keys and the calendar feed (OAuth tokens are always revoked)."
+        )]
+        revoke_other_credentials: bool,
     ) -> async_graphql::Result<PasswordChangePayload> {
         let rc = request_ctx(ctx)?;
         let app = app(ctx)?;
@@ -240,7 +246,13 @@ impl AccountMutation {
         let now_ms = app.clock.now().timestamp_millis();
         let reservation = reserve_password_attempt(ctx, &user_id, now_ms)?;
         let result = app
-            .change_own_password(rc, session_hash(ctx), &current_password, &new_password)
+            .change_own_password(
+                rc,
+                session_hash(ctx),
+                &current_password,
+                &new_password,
+                revoke_other_credentials,
+            )
             .await;
         match result {
             Ok(revoked) => {

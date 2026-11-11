@@ -213,6 +213,7 @@ impl App {
         current_session_hash: Option<&str>,
         current_password: &str,
         new_password: &str,
+        revoke_other_credentials: bool,
     ) -> AppResult<u64> {
         let id = viewer_id(ctx)?;
         let keep = require_session(ctx, current_session_hash)?;
@@ -260,6 +261,21 @@ impl App {
         let hash = self.hasher.hash(new_password)?;
         tx.users().set_password_hash(id, &hash, now).await?;
         let revoked = tx.auth().revoke_other_sessions(id, keep, now).await?;
+        // S-21: OAuth-Tokens überleben einen Passwortwechsel nicht. `change_own_password` läuft nur
+        // über eine Browser-Session (require_session oben), daher trifft der Widerruf nie den
+        // Aufrufer. API-Keys und Kalender-Abo sind langlebige Integrationen und nur auf Wunsch
+        // dabei (sie brechen sonst Automatisierungen bzw. abonnierte Kalender).
+        let revoked_oauth = tx.auth().revoke_oauth_tokens_of_user(id, now).await?;
+        let (revoked_keys, calendar_revoked) = if revoke_other_credentials {
+            let keys = tx.auth().revoke_api_keys_of_user(id, now).await?;
+            let had_calendar = tx.auth().has_calendar_feed(id).await?;
+            if had_calendar {
+                tx.auth().delete_calendar_feed(id).await?;
+            }
+            (keys, had_calendar)
+        } else {
+            (0, false)
+        };
         self.record_audit(
             &mut *tx,
             ctx,
@@ -267,7 +283,12 @@ impl App {
                 "user.password_changed",
                 "user",
                 Some(id.0),
-                json!({ "revokedSessions": revoked }),
+                json!({
+                    "revokedSessions": revoked,
+                    "revokedOauthTokens": revoked_oauth,
+                    "revokedApiKeys": revoked_keys,
+                    "calendarFeedRevoked": calendar_revoked,
+                }),
             ),
         )
         .await?;
