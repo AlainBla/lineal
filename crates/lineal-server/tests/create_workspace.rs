@@ -9,8 +9,10 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 fn app(pool: PgPool) -> Arc<lineal_app::App> {
+    // Echtes Secret statt LINEAL_DEV: Dev + https-Basis-URL ist seit LIN-42 (L-12) verboten,
+    // und das CLI create-workspace braucht keinen Dev-Modus (von WORKSPACE_CREATION ausgenommen).
     let cfg = Config::from_lookup(|k| match k {
-        "LINEAL_DEV" => Some("1".into()),
+        "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
         "LINEAL_BASE_URL" => Some("https://lineal.example/".into()),
         _ => None,
     })
