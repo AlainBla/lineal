@@ -184,6 +184,63 @@ Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuc
 Event-Konsumenten (Outbox): Notifications, Suchindex, Sync, Webhooks. Fehlversuche je (Konsument, Event) stehen in `outbox_delivery.attempts`/`last_error` und überleben Neustarts; nach `max_event_attempts` (10) gilt das Event als aufgegeben (Dead-Letter: zugestellt mit `last_error`, abfragbar über `OutboxRepo::list_dead_letters`). Periodische Jobs: `cycles` (60 s), `update_reminders` (1 h), `audit_retention` (1 h, Audit-Log je Workspace nach `auditLogRetentionDays`), `snooze` (60 s), `sync_purge` (1 h, Sync-Log 14 Tage), `notification_cap` (5 min), `due_reminders` (5 min), `email_digest` (60 s), `auto_close`, `auto_archive` (je 5 min; archiviert Issues, Cycles und Projekte und warnt vor der Issue-Archivierung), `purge` (5 min: Papierkorb nach Frist – Issues, Dokumente, Projekte –, verwaiste Dokumentinhalte, abgelaufene Upload-Reservierungen, zugehörige Blobs), `sla` (60 s), `triage_rotation` (60 s), `import_runner` (10 s), Webhook-Zustellung, `team_purge` (1 h).
 
 
+### 3.4 Host- und Mail-Härtung (LIN-52)
+
+Server- und DNS-seitige Rest-Funde der Sicherheitsprüfung (Schwere niedrig). **Nicht im Container, sondern auf dem Host bzw. im DNS** – vom Betreiber auszuführen. Jeder Schritt beginnt mit einer Bestandsaufnahme, weil Fehlkonfiguration hier zu Aussperrung (SSH) oder zu abgewiesener Legitim-Mail/blockierten Zertifikaten führt.
+
+**SSH.** Drop-in `deploy/sshd-hardening.conf` nach `/etc/ssh/sshd_config.d/00-lineal-hardening.conf`. Reihenfolge wichtig – sshd nimmt den ersten Treffer, Cloud-Images setzen in `50-cloud-init.conf` oft `PasswordAuthentication yes`.
+
+```bash
+# 1. Bestandsaufnahme: liest sshd Drop-ins? Was setzt cloud-init?
+grep -n '^Include' /etc/ssh/sshd_config; ls -1 /etc/ssh/sshd_config.d/ 2>/dev/null
+grep -rniE 'passwordauth|kbdinteractive|permitrootlogin' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/
+
+# 2. Drop-in ablegen (00- steht VOR 50-cloud-init), Syntax prüfen
+install -m 0644 deploy/sshd-hardening.conf /etc/ssh/sshd_config.d/00-lineal-hardening.conf
+sshd -t
+
+# 3. Neu laden – AKTUELLE Sitzung offen lassen!
+systemctl reload ssh
+
+# 4. In einem ZWEITEN Terminal eine neue Schlüssel-Anmeldung testen, dann erst Schritt 1 schließen.
+# 5. Effektive Werte verifizieren:
+sshd -T | grep -Ei 'passwordauth|kbdinteractive|x11forward|permitrootlogin|maxauthtries|authenticationmethods'
+```
+
+Vor dem Reload sicherstellen, dass für root (bzw. den Admin-Account) ein funktionierender Public-Key in `~/.ssh/authorized_keys` liegt. **Port 22 auf Quell-IPs beschränken nur mit statischer Admin-IP** (dynamische Heim-IP + nft-Regel = Aussperrung); als sichere Alternative fail2ban mit nftables-Backend (der Host nutzt bereits nft):
+
+```bash
+apt-get install -y fail2ban
+printf '[sshd]\nenabled = true\nbackend = systemd\nbantime = 1h\nmaxretry = 5\n' > /etc/fail2ban/jail.d/sshd.local
+systemctl enable --now fail2ban && fail2ban-client status sshd
+```
+
+**Mail (DMARC/SPF).** Erst Ist-Zustand ansehen, dann stufen – sonst landet Legitim-Mail anderer Absender von `kollegeplus.de` im Spam.
+
+```bash
+dig +short TXT kollegeplus.de            # SPF (v=spf1 …)
+dig +short TXT _dmarc.kollegeplus.de     # DMARC – hat der Eintrag schon rua= ?
+dig +short TXT lineal._domainkey.kollegeplus.de   # DKIM-Selector (OpenDKIM)
+```
+
+- **DMARC:** Hat der aktuelle Eintrag kein `rua=`, zuerst `v=DMARC1; p=none; rua=mailto:dmarc@kollegeplus.de` setzen und 1–2 Wochen Reports sammeln. Erst danach `p=quarantine; pct=25` → bei sauberen Reports auf `pct=100` → optional `p=reject`. Ausrichtung (Alignment) trägt DKIM `d=kollegeplus.de` unabhängig vom Postfix-`myhostname`.
+- **SPF:** `~all` → `-all` erst, wenn jede legitime Absenderquelle (Postfix auf dem Host, evtl. M365/Google o. Ä.) im `include` steht. Vorher die `dig`-Ausgabe prüfen.
+
+**DNS (CAA).** Kein CAA-Eintrag vorhanden. **Vor dem Setzen prüfen, welche CA Caddy wirklich nutzt** – Caddy 2.x hat Let's Encrypt mit ZeroSSL-Fallback (ZeroSSL stellt unter `sectigo.com` aus); ein CAA nur für `letsencrypt.org` könnte den Fallback blockieren.
+
+```bash
+grep -rn 'issuer\|acme_ca\|email' /opt/caddy/ 2>/dev/null
+echo | openssl s_client -connect lineal.kollegeplus.de:443 2>/dev/null | openssl x509 -noout -issuer
+```
+
+CAA auf dem Apex `kollegeplus.de` gilt auch für alle Subdomains – nutzen andere Hosts andere CAs, entweder alle CAs auflisten oder CAA nur auf `lineal.kollegeplus.de` scoped setzen. Beispiel (an die tatsächlichen Issuer anpassen):
+
+```
+lineal.kollegeplus.de.  CAA 0 issue "letsencrypt.org"
+lineal.kollegeplus.de.  CAA 0 issue "sectigo.com"        # nur falls ZeroSSL-Fallback aktiv bleibt
+lineal.kollegeplus.de.  CAA 0 iodef "mailto:security@kollegeplus.de"
+```
+
 ### 3.5 Echtzeit-Mitbearbeitung (WP36)
 
 **Verfahren.** Yjs-kompatibles CRDT (Rust: `yrs`, Browser: `yjs`/`y-prosemirror` über TipTap `Collaboration`). Je geöffnetem Inhalt gibt es im Serverprozess einen Raum. Das Dokument ist ein `Y.XmlFragment` `default` im Schema des TipTap-StarterKits; der Server liest und schreibt diesen Baum selbst (Markdown ⇄ Baum in `lineal-app/src/collab/pm.rs`), die Erstbefüllung aus Markdown macht immer der Server, nie ein Client.
