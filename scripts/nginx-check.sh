@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IMAGE="${1:-nginxinc/nginx-unprivileged:1.27-alpine}"
+IMAGE="${1:-nginxinc/nginx-unprivileged:1.28-alpine}"
 NET="lineal-nginxcheck-net"
 NAME="lineal-nginxcheck-web"
 TMP="$(mktemp -d)"

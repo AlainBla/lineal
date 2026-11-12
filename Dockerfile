@@ -37,7 +37,9 @@ RUN npm run build
 
 # ---------------------------------------------------------------------------------------------
 # Laufzeit Server: schlankes Debian, kein Root, Daten unter /data.
-FROM debian:bookworm-slim AS server
+# S-10/LIN-35: Runtime-Basis per Digest gepinnt (Reproduzierbarkeit; Dependabot-docker bumpt den
+# Digest per PR). Index-Digest (Multi-Arch), nicht der Plattform-Digest.
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS server
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
@@ -59,7 +61,8 @@ CMD ["serve"]
 
 # ---------------------------------------------------------------------------------------------
 # Laufzeit Web: nginx (unprivilegiert, Port 8080) liefert die SPA aus und leitet API-Pfade weiter.
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS web
+# S-10/LIN-35: nginx auf die stabile 1.28-Linie (1.27 war abgekündigt), per Index-Digest gepinnt.
+FROM nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8 AS web
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 # Snippet mit den Sicherheits-Headern NUR nach snippets/ (nicht conf.d/, siehe Datei-Kopf):
 # conf.d/*.conf würde auf http-Ebene gelten und die Header auf jede Antwort doppeln.

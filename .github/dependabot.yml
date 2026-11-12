@@ -4,6 +4,9 @@
 #
 # `vendor/yrs` ist eine Path-Abhängigkeit und vom Workspace ausgeschlossen – Dependabot fasst sie
 # nicht an. Sicherheits-Updates (RUSTSEC/GHSA) öffnet Dependabot unabhängig vom Zeitplan sofort.
+#
+# S-10/LIN-35: Das `docker`-Ökosystem (Dir `/`) hält die per Digest gepinnten Basis-Images in
+# Dockerfile UND docker-compose.yml aktuell – sonst wären die Pins ein Stillstand.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -35,6 +38,17 @@ updates:
     open-pull-requests-limit: 5
     groups:
       actions:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      docker:
         update-types:
           - minor
           - patch
