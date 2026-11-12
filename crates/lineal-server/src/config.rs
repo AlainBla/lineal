@@ -135,6 +135,13 @@ impl Config {
             })
             .collect::<Result<Vec<_>>>()?;
         let base_url = get("LINEAL_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into());
+        // L-12: Der Dev-Modus lockert Annahmen (Beispiel-Secret zulässig, CORS auf localhost,
+        // Workspace-Anlage für alle). Eine https-Basis-URL signalisiert dagegen eine echte
+        // Installation. Beides zusammen ist fast immer eine Fehlkonfiguration, die wie Prod
+        // aussähe, aber mit öffentlich bekannten Annahmen liefe – daher hart abbrechen.
+        if dev && base_url.trim_start().to_ascii_lowercase().starts_with("https://") {
+            bail!("LINEAL_DEV must not be combined with an https LINEAL_BASE_URL (dev mode relaxes secret/CORS/workspace checks)");
+        }
         let smtp = smtp(&get)?;
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
@@ -214,6 +221,22 @@ mod tests {
             _ => None,
         };
         assert!(Config::from_lookup(with_secret).is_ok());
+    }
+
+    #[test]
+    fn dev_mode_is_rejected_behind_https() {
+        // L-12: Der Dev-Modus akzeptiert u. a. das Beispiel-Secret und lockert CORS/Workspace-
+        // Anlage. Zusammen mit einer https-Basis-URL sähe das wie eine echte Installation aus,
+        // liefe aber mit öffentlich bekannten Annahmen. Der Start muss abbrechen.
+        let dev_https = |k: &str| match k {
+            "LINEAL_DEV" => Some("1".into()),
+            "LINEAL_BASE_URL" => Some("https://lineal.example".into()),
+            _ => None,
+        };
+        assert!(Config::from_lookup(dev_https).is_err());
+        // Dev mit http (Default) bleibt erlaubt.
+        let dev_http = |k: &str| (k == "LINEAL_DEV").then(|| "1".into());
+        assert!(Config::from_lookup(dev_http).is_ok());
     }
 
     #[test]

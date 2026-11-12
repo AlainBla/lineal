@@ -479,6 +479,14 @@ impl AuthRepo for PgTx {
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
+        // L-4: Kalender-Feed löschen (kein Widerruf-Feld – der Feed ist nur über seinen Token-Hash
+        // erreichbar). Sonst würde eine spätere Entsperrung den alten Link wiederbeleben.
+        sqlx::query("DELETE FROM calendar_feed WHERE organization_id = $1 AND user_id = $2")
+            .bind(self.org.0)
+            .bind(user_id.0)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
         Ok(())
     }
 

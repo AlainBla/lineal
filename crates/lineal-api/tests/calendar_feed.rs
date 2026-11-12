@@ -144,6 +144,37 @@ async fn old_revoked_and_unknown_links_are_not_found(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn suspension_removes_the_feed_so_unlock_does_not_revive_it(pool: sqlx::PgPool) {
+    // L-4: Eine Sperrung soll den Kalender-Feed endgültig entwerten – eine spätere Entsperrung
+    // darf den alten Link nicht wiederbeleben (docs/02 §… „eine Entsperrung belebt nichts wieder").
+    let (app, router) = setup(pool.clone()).await;
+    let url = app
+        .rotate_calendar_feed(&ctx_for(SeedUser::Bob))
+        .await
+        .unwrap();
+    assert_eq!(get(&router, &url).await.0, StatusCode::OK);
+
+    // Owner sperrt Bob, dann entsperrt ihn wieder.
+    let owner = ctx_for(SeedUser::Alice);
+    app.set_user_active(&owner, "bob@acme.example", false)
+        .await
+        .unwrap();
+    app.set_user_active(&owner, "bob@acme.example", true)
+        .await
+        .unwrap();
+
+    // Der alte Link bleibt tot und die Feed-Zeile ist gelöscht (nicht nur über `active` verdeckt).
+    assert_eq!(get(&router, &url).await.0, StatusCode::NOT_FOUND);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM calendar_feed")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    // Nach der Entsperrung ist der Feed wieder normal aktivierbar.
+    assert!(!app.calendar_feed_enabled(&ctx_for(SeedUser::Bob)).await.unwrap());
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn links_are_stored_hashed_and_only_managed_from_a_session(pool: sqlx::PgPool) {
     let (app, _) = setup(pool.clone()).await;
     let url = app
