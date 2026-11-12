@@ -8,6 +8,15 @@ web/src/routeTree.gen.ts
 var
 .git
 .claude
+.playwright-mcp
+# Backups liegen in Prod im Build-Kontext (/opt/lineal/backups) und enthalten
+# verschlüsselte Dumps/env.age – nie an den Build-Daemon senden (LIN-42, infra N11).
+backups
+# Env-Dateien auch in Unterordnern ausschließen, Beispiel aber behalten.
 .env
 .env.*
+**/.env
+**/.env.*
+!**/.env.example
 *.log
+**/*.log

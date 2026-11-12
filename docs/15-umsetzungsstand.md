@@ -119,11 +119,12 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 Eine frische Instanz hat keinen Workspace; `lineal serve` loggt dann ein WARN mit dem Befehl. Ersten Workspace samt Owner anlegen (nach `lineal migrate`):
 
 ```bash
-LINEAL_OWNER_PASSWORD='…' lineal create-workspace --name "Acme" --url-key acme \
+lineal create-workspace --name "Acme" --url-key acme \
   --owner-email alice@acme.example --owner-name "Alice"
+# fragt das Owner-Passwort interaktiv ohne Echo ab (Wiederholung, mindestens 8 Zeichen).
 ```
 
-Das Passwort wird nie als Argument übergeben: aus `LINEAL_OWNER_PASSWORD` oder interaktiv ohne Echo mit Wiederholung (mindestens 8 Zeichen). Ausgabe: Login-URL (`LINEAL_BASE_URL/login`) und die User-ID des Owners (für `LINEAL_INSTANCE_ADMINS`). Belegter `--url-key` ist ein Fehler. Das CLI ist Betreiberzugang und von `LINEAL_WORKSPACE_CREATION` ausgenommen. Weitere Workspaces über die Oberfläche/GraphQL nur, wenn der Betreiber es erlaubt (Default außerhalb des Dev-Modus: `disabled`, Antwort `forbidden` „Workspace creation is disabled on this instance.“).
+Das Passwort wird nie als Argument übergeben. Bevorzugt ist die interaktive Abfrage (oben); für Automatisierung geht auch `LINEAL_OWNER_PASSWORD` aus der Umgebung, dann aber nicht als Kommando-Präfix `LINEAL_OWNER_PASSWORD='…' lineal …` (landet in der Shell-History und in `ps`/`/proc/<pid>/environ`), sondern vorher exportiert bzw. per `--env-file` gesetzt. Mindestens 8 Zeichen. Ausgabe: Login-URL (`LINEAL_BASE_URL/login`) und die User-ID des Owners (für `LINEAL_INSTANCE_ADMINS`). Belegter `--url-key` ist ein Fehler. Das CLI ist Betreiberzugang und von `LINEAL_WORKSPACE_CREATION` ausgenommen. Weitere Workspaces über die Oberfläche/GraphQL nur, wenn der Betreiber es erlaubt (Default außerhalb des Dev-Modus: `disabled`, Antwort `forbidden` „Workspace creation is disabled on this instance.“).
 
 `lineal seed` (auch `--demo`) legt Benutzer mit dem bekannten Passwort `lineal-dev` an und läuft deshalb nur mit `LINEAL_DEV=1` oder `--allow-insecure-demo-users`.
 
@@ -142,8 +143,9 @@ Das Passwort wird nie als Argument übergeben: aus `LINEAL_OWNER_PASSWORD` oder 
 export LINEAL_SESSION_SECRET="$(openssl rand -hex 32)"   # Pflicht; z. B. in .env ablegen
 export LINEAL_DB_PASSWORD="$(openssl rand -hex 24)"      # Pflicht: Passwort der App-Datenbank
 docker compose --profile app up -d --build               # migrate (einmalig), server, worker, web
-# Ersteinrichtung (statt seed): Workspace und Owner anlegen
-LINEAL_OWNER_PASSWORD='…' docker compose --profile app run --rm -e LINEAL_OWNER_PASSWORD migrate \
+# Ersteinrichtung (statt seed): Workspace und Owner anlegen (fragt das Passwort
+# interaktiv ohne Echo ab – `run --rm` hat ein TTY; Secret nicht als Kommando-Präfix).
+docker compose --profile app run --rm migrate \
   create-workspace --name "Acme" --owner-email alice@acme.example --owner-name "Alice"
 # Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Login mit der Owner-E-Mail
 ```
