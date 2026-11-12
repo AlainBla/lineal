@@ -139,8 +139,15 @@ impl Config {
         // Workspace-Anlage für alle). Eine https-Basis-URL signalisiert dagegen eine echte
         // Installation. Beides zusammen ist fast immer eine Fehlkonfiguration, die wie Prod
         // aussähe, aber mit öffentlich bekannten Annahmen liefe – daher hart abbrechen.
-        if dev && base_url.trim_start().to_ascii_lowercase().starts_with("https://") {
-            bail!("LINEAL_DEV must not be combined with an https LINEAL_BASE_URL (dev mode relaxes secret/CORS/workspace checks)");
+        if dev
+            && base_url
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("https://")
+        {
+            bail!(
+                "LINEAL_DEV must not be combined with an https LINEAL_BASE_URL (dev mode relaxes secret/CORS/workspace checks)"
+            );
         }
         let smtp = smtp(&get)?;
         Ok(Self {

@@ -171,7 +171,11 @@ async fn suspension_removes_the_feed_so_unlock_does_not_revive_it(pool: sqlx::Pg
         .unwrap();
     assert_eq!(rows, 0);
     // Nach der Entsperrung ist der Feed wieder normal aktivierbar.
-    assert!(!app.calendar_feed_enabled(&ctx_for(SeedUser::Bob)).await.unwrap());
+    assert!(
+        !app.calendar_feed_enabled(&ctx_for(SeedUser::Bob))
+            .await
+            .unwrap()
+    );
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
