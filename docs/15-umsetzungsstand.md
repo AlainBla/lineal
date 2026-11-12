@@ -209,11 +209,12 @@ systemctl reload ssh
 sshd -T | grep -Ei 'passwordauth|kbdinteractive|x11forward|permitrootlogin|maxauthtries|authenticationmethods'
 ```
 
-Vor dem Reload sicherstellen, dass für root (bzw. den Admin-Account) ein funktionierender Public-Key in `~/.ssh/authorized_keys` liegt. **Port 22 auf Quell-IPs beschränken nur mit statischer Admin-IP** (dynamische Heim-IP + nft-Regel = Aussperrung); als sichere Alternative fail2ban mit nftables-Backend (der Host nutzt bereits nft):
+Vor dem Reload sicherstellen, dass für root (bzw. den Admin-Account) ein funktionierender Public-Key in `~/.ssh/authorized_keys` liegt. Wer mehrere Schlüssel im ssh-agent hat, setzt clientseitig in `~/.ssh/config` `IdentitiesOnly yes` + `IdentityFile <key>` für den Host, sonst können zu viele angebotene Schlüssel die Anmeldung verzögern. **Port 22 auf Quell-IPs beschränken nur mit statischer Admin-IP** (dynamische Heim-IP + nft-Regel = Aussperrung); als sichere Alternative fail2ban mit nftables-Backend (der Host nutzt bereits nft):
 
 ```bash
 apt-get install -y fail2ban
-printf '[sshd]\nenabled = true\nbackend = systemd\nbantime = 1h\nmaxretry = 5\n' > /etc/fail2ban/jail.d/sshd.local
+# banaction nftables, weil der Host nft nutzt (ohne iptables-nft-Shim scheitert die Default-Action).
+printf '[sshd]\nenabled = true\nbackend = systemd\nbanaction = nftables-multiport\nbantime = 1h\nmaxretry = 5\n' > /etc/fail2ban/jail.d/sshd.local
 systemctl enable --now fail2ban && fail2ban-client status sshd
 ```
 
@@ -225,7 +226,7 @@ dig +short TXT _dmarc.kollegeplus.de     # DMARC – hat der Eintrag schon rua= 
 dig +short TXT lineal._domainkey.kollegeplus.de   # DKIM-Selector (OpenDKIM)
 ```
 
-- **DMARC:** Hat der aktuelle Eintrag kein `rua=`, zuerst `v=DMARC1; p=none; rua=mailto:dmarc@kollegeplus.de` setzen und 1–2 Wochen Reports sammeln. Erst danach `p=quarantine; pct=25` → bei sauberen Reports auf `pct=100` → optional `p=reject`. Ausrichtung (Alignment) trägt DKIM `d=kollegeplus.de` unabhängig vom Postfix-`myhostname`.
+- **DMARC:** Hat der aktuelle Eintrag kein `rua=`, zuerst `v=DMARC1; p=none; rua=mailto:<postfach>` setzen und 1–2 Wochen Reports sammeln. `<postfach>` muss ein **tatsächlich empfangendes** Postfach sein (Postfix auf dem Host ist send-only) – sonst nutzt man einen DMARC-Report-Dienst (z. B. dmarcian/Postmark Free Tier), dessen Adresse das Berichtsaufkommen aggregiert. Erst danach `p=quarantine; pct=25` → bei sauberen Reports auf `pct=100` → optional `p=reject`. Ausrichtung (Alignment) trägt DKIM `d=kollegeplus.de` unabhängig vom Postfix-`myhostname`.
 - **SPF:** `~all` → `-all` erst, wenn jede legitime Absenderquelle (Postfix auf dem Host, evtl. M365/Google o. Ä.) im `include` steht. Vorher die `dig`-Ausgabe prüfen.
 
 **DNS (CAA).** Kein CAA-Eintrag vorhanden. **Vor dem Setzen prüfen, welche CA Caddy wirklich nutzt** – Caddy 2.x hat Let's Encrypt mit ZeroSSL-Fallback (ZeroSSL stellt unter `sectigo.com` aus); ein CAA nur für `letsencrypt.org` könnte den Fallback blockieren.

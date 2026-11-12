@@ -146,7 +146,7 @@ async fn old_revoked_and_unknown_links_are_not_found(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn suspension_removes_the_feed_so_unlock_does_not_revive_it(pool: sqlx::PgPool) {
     // L-4: Eine Sperrung soll den Kalender-Feed endgültig entwerten – eine spätere Entsperrung
-    // darf den alten Link nicht wiederbeleben (docs/02 §… „eine Entsperrung belebt nichts wieder").
+    // darf den alten Link nicht wiederbeleben (docs/02 Z. 711 „eine Entsperrung belebt nichts wieder").
     let (app, router) = setup(pool.clone()).await;
     let url = app
         .rotate_calendar_feed(&ctx_for(SeedUser::Bob))
