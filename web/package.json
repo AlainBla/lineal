@@ -62,7 +62,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@graphql-codegen/cli": "^7.4.6",
-    "@graphql-codegen/typescript": "^6.1.2",
+    "@graphql-codegen/typescript": "^7.0.0",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/router-cli": "^1.167.40",
