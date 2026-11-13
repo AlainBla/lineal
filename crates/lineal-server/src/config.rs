@@ -12,6 +12,11 @@ const DEFAULT_SESSION_SECRET: &str = "change-me-32-bytes-minimum-xxxxxxxx";
 pub struct Config {
     pub database_url: String,
     pub base_url: String,
+    /// `LINEAL_FILES_BASE_URL`: eigene, cookielose Origin für die Inline-Ansicht von HTML-Anhängen
+    /// (Weg B, `docs/superpowers/specs/2026-11-13-html-anhang-tab.md`). `None` = Feature aus, HTML
+    /// wird überall als Download ausgeliefert. Muss sich von `base_url` unterscheiden (sonst keine
+    /// Isolation). Normalisiert ohne Slash am Ende.
+    pub files_base_url: Option<String>,
     pub session_secret: String,
     pub blob_dir: PathBuf,
     pub bind: SocketAddr,
@@ -149,10 +154,25 @@ impl Config {
                 "LINEAL_DEV must not be combined with an https LINEAL_BASE_URL (dev mode relaxes secret/CORS/workspace checks)"
             );
         }
+        // Weg B: eigene Datei-Origin für die Inline-Ansicht von HTML-Anhängen. Muss sich von der
+        // App-Origin unterscheiden, sonst gäbe es keine Cookie-/Script-Isolation.
+        let files_base_url = match get("LINEAL_FILES_BASE_URL") {
+            Some(v) if !v.trim().is_empty() => {
+                let normalized = v.trim().trim_end_matches('/').to_owned();
+                if normalized == base_url.trim().trim_end_matches('/') {
+                    bail!(
+                        "LINEAL_FILES_BASE_URL must differ from LINEAL_BASE_URL (it is a separate cookieless origin for HTML attachments)"
+                    );
+                }
+                Some(normalized)
+            }
+            _ => None,
+        };
         let smtp = smtp(&get)?;
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
             base_url,
+            files_base_url,
             session_secret,
             blob_dir: get("LINEAL_BLOB_DIR")
                 .map_or_else(|| PathBuf::from("./var/blobs"), PathBuf::from),
@@ -228,6 +248,32 @@ mod tests {
             _ => None,
         };
         assert!(Config::from_lookup(with_secret).is_ok());
+    }
+
+    #[test]
+    fn files_base_url_is_optional_and_distinct() {
+        // Ungesetzt -> None (Feature aus, HTML überall als Download).
+        let dev = |k: &str| (k == "LINEAL_DEV").then(|| "1".into());
+        assert_eq!(Config::from_lookup(dev).unwrap().files_base_url, None);
+        // Gesetzt -> normalisiert ohne Slash am Ende.
+        let set = |k: &str| match k {
+            "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
+            "LINEAL_BASE_URL" => Some("https://lineal.example/".into()),
+            "LINEAL_FILES_BASE_URL" => Some("https://lineal-files.example/".into()),
+            _ => None,
+        };
+        assert_eq!(
+            Config::from_lookup(set).unwrap().files_base_url.as_deref(),
+            Some("https://lineal-files.example")
+        );
+        // Gleich wie base_url -> Fehler: ohne getrennte Origin keine Isolation.
+        let same = |k: &str| match k {
+            "LINEAL_SESSION_SECRET" => Some("a-real-secret-with-at-least-32-bytes!".into()),
+            "LINEAL_BASE_URL" => Some("https://lineal.example".into()),
+            "LINEAL_FILES_BASE_URL" => Some("https://lineal.example/".into()),
+            _ => None,
+        };
+        assert!(Config::from_lookup(same).is_err());
     }
 
     #[test]

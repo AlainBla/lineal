@@ -258,4 +258,51 @@ describe("Anhänge (F.08)", () => {
     expect(await within(dialog).findByText("Hallo Welt")).toBeInTheDocument();
     expect(within(dialog).getByRole("heading", { name: "Überschrift" })).toBeInTheDocument();
   });
+
+  it("öffnet HTML-Anhänge mit viewUrl im Tab (Datei-Origin) und bietet Download an (KOL-478)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a4",
+          title: "deck.html",
+          contentType: "text/html",
+          url: "http://localhost:8080/files/deck",
+          viewUrl: "https://lineal-files.test/files/deck",
+        },
+      ]),
+    );
+    await renderWithApp(<AttachmentsSection issue={ISSUE} />);
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    const link = await within(region).findByRole("link", { name: "deck.html" });
+    // Der Namensklick zielt auf die cookielose Datei-Origin (sandboxed Tab), nicht den Download.
+    expect(link).toHaveAttribute("href", "https://lineal-files.test/files/deck");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // Download bleibt verfügbar (App-Origin).
+    expect(
+      within(region).getByRole("button", { name: "Download deck.html" }),
+    ).toBeInTheDocument();
+  });
+
+  it("lädt HTML-Anhänge ohne viewUrl weiter herunter (Feature aus)", async () => {
+    mockGraphql(
+      handlers([
+        {
+          ...ATT,
+          id: "a5",
+          title: "page.html",
+          contentType: "text/html",
+          url: "http://localhost:8080/files/page",
+          viewUrl: null,
+        },
+      ]),
+    );
+    await renderWithApp(<AttachmentsSection issue={ISSUE} />);
+    const region = await screen.findByRole("region", { name: "Attachments" });
+    const link = await within(region).findByRole("link", { name: "page.html" });
+    // Ohne Datei-Origin bleibt es der same-origin Link, kein eigener Download-Knopf.
+    expect(link).toHaveAttribute("href", "/files/page");
+    expect(within(region).queryByRole("button", { name: "Download page.html" })).toBeNull();
+  });
 });

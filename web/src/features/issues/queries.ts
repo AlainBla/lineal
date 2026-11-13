@@ -156,7 +156,7 @@ const EXTRAS_QUERY = `query IssueExtras($id: String!) {
       duplicateOf { ${RELATED} } duplicates { ${RELATED} }
     }
     history { id actorId actorName source changes addedLabelIds removedLabelIds relationChanges flags createdAt }
-    attachments { id issueId title subtitle url sourceType contentType size creatorId createdAt }
+    attachments { id issueId title subtitle url viewUrl sourceType contentType size creatorId createdAt }
     mentionedIn { id identifier title source commentId createdAt stateType stateName stateColor }
   }
 }`;

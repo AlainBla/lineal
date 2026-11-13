@@ -216,6 +216,9 @@ pub struct AttachmentGql {
     pub issue_id: String,
     pub issue_identifier: String,
     pub url: String,
+    /// Weg B: Ansichts-URL auf der cookielosen Datei-Origin (nur HTML-Uploads bei gesetzter
+    /// `files_base_url`); öffnet im Tab statt Download. `null` = nicht verfügbar, dann `url` nutzen.
+    pub view_url: Option<String>,
     pub title: String,
     pub subtitle: Option<String>,
     pub source_type: Option<String>,
@@ -235,6 +238,7 @@ impl From<AttachmentView> for AttachmentGql {
             issue_id: a.issue_id.to_string(),
             issue_identifier: v.issue_identifier,
             url: v.url,
+            view_url: v.view_url,
             title: a.title,
             subtitle: a.subtitle,
             source_type: a.source_type,

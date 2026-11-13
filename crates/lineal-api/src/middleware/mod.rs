@@ -8,11 +8,32 @@ pub mod request_id;
 
 use crate::rate_limit::{self, RateLimiter, RateLimits};
 use crate::security_headers::{self, SecurityConfig};
-use axum::http::{HeaderName, HeaderValue, Method, header};
+use axum::extract::{Request, State};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Router, middleware::from_fn, middleware::from_fn_with_state};
 use lineal_app::App;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+
+/// Defense-in-Depth für Weg B: Auf der cookielosen Datei-Origin darf NUR `/files/*` leben – nie
+/// die SPA, `/login`, GraphQL o. Ä. (sonst würde dort ein Session-Cookie gesetzt und die
+/// Isolation bräche). nginx trennt das bereits per `server_name`; dieser Guard hält die
+/// Eigenschaft auch bei Fehlkonfiguration des Proxys. Ungesetzt (`None`) = Feature aus.
+async fn files_origin_guard(
+    State(files_host): State<Arc<Option<String>>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(host) = files_host.as_ref().as_deref()
+        && crate::blob::request_host(req.headers()).as_deref() == Some(host)
+        && !req.uri().path().starts_with("/files/")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(req).await
+}
 
 /// Konfiguration der Plattform-Middleware.
 #[derive(Debug, Clone)]
@@ -122,10 +143,18 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
     let security = platform.cfg.security;
     let cors_origins = platform.cfg.cors_origins.clone();
     let trusted = Arc::new(platform.cfg.trusted_proxies.clone());
+    // Host der Datei-Origin (normalisiert) für den Guard; None = Feature aus.
+    let files_host = Arc::new(
+        app.config
+            .files_base_url
+            .as_deref()
+            .map(crate::blob::host_only),
+    );
     // `layer` umhüllt: zuletzt hinzugefügt = äußerste Schicht.
     let mut router = router
         .layer(Extension(app))
         .layer(Extension(fails))
+        .layer(from_fn_with_state(files_host, files_origin_guard))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
         .layer(from_fn_with_state(platform.clone(), auth::middleware))
         // IP-Limit vor dem Token-Lookup (jeder Request kostet erst IP-Kontingent).

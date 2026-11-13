@@ -89,6 +89,11 @@ type Attachment {
 	issueId: String!
 	issueIdentifier: String!
 	url: String!
+	"""
+	Weg B: Ansichts-URL auf der cookielosen Datei-Origin (nur HTML-Uploads bei gesetzter
+	`files_base_url`); öffnet im Tab statt Download. `null` = nicht verfügbar, dann `url` nutzen.
+	"""
+	viewUrl: String
 	title: String!
 	subtitle: String
 	sourceType: String

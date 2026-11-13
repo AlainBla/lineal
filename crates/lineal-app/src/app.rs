@@ -33,6 +33,9 @@ impl WorkspaceCreation {
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub base_url: String,
+    /// Eigene, cookielose Origin für die Inline-Ansicht von HTML-Anhängen (Weg B). `None` =
+    /// Feature aus; HTML wird überall als Download ausgeliefert.
+    pub files_base_url: Option<String>,
     pub session_secret: String,
     pub blob_dir: PathBuf,
     /// Erlaubte Origins für Cookie-Sessions (CSRF). Leer = Origin von `base_url`.
@@ -50,6 +53,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             base_url: "http://localhost:8080".into(),
+            files_base_url: None,
             session_secret: "change-me-32-bytes-minimum-xxxxxxxx".into(),
             blob_dir: PathBuf::from("./var/blobs"),
             allowed_origins: Vec::new(),

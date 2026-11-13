@@ -23,6 +23,9 @@ fn attachment_json(v: &AttachmentView) -> Value {
         "title": a.title,
         "subtitle": envelope::opt_text(a.subtitle.as_deref()),
         "url": v.url,
+        // Weg B: Ansichts-URL auf der cookielosen Datei-Origin (nur HTML-Uploads bei gesetzter
+        // files_base_url); öffnet im Tab statt Download. null = nicht verfügbar, dann url nutzen.
+        "viewUrl": v.view_url,
         "contentType": a.content_type,
         "size": a.size,
         "createdAt": ts(a.created_at),

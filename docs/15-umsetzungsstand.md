@@ -86,6 +86,7 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 |---|---|---|
 | `DATABASE_URL` | `postgres://lineal:lineal@localhost:5440/lineal` | PostgreSQL ≥ 15 |
 | `LINEAL_BASE_URL` | `http://localhost:8080` | öffentliche URL (Links, Cookie-`Secure` bei `https://`, Standard-Origin für CSRF) |
+| `LINEAL_FILES_BASE_URL` | leer (Feature aus) | eigene, cookielose Origin für die Inline-Ansicht von HTML-Anhängen (Weg B, KOL-478, §3.4b). Muss sich von `LINEAL_BASE_URL` unterscheiden; aktiviert den Datei-Origin-Guard |
 | `LINEAL_SESSION_SECRET` | – (Pflicht, ≥ 32 Byte) | signiert Blob-URLs, Consent-Nonces, verschlüsselt Import-Tokens; ohne `LINEAL_DEV=1` Pflicht, der Beispielwert wird abgelehnt |
 | `LINEAL_DEV` | aus | Entwicklungsmodus: GraphiQL, zufälliges Secret, CORS/Origin für `localhost`/`127.0.0.1` |
 | `LINEAL_BIND` | `127.0.0.1:8080` | Adresse des HTTP-Servers |
@@ -243,6 +244,55 @@ lineal.kollegeplus.de.  CAA 0 issue "letsencrypt.org"
 lineal.kollegeplus.de.  CAA 0 issue "sectigo.com"        # nur falls ZeroSSL-Fallback aktiv bleibt
 lineal.kollegeplus.de.  CAA 0 iodef "mailto:security@kollegeplus.de"
 ```
+
+### 3.4b HTML-Anhänge im Tab öffnen / eigene Datei-Origin (KOL-478, Weg B)
+
+Entwurf: `docs/superpowers/specs/2026-11-13-html-anhang-tab.md`. Ziel: hochgeladene HTML-Dateien
+(v. a. embeddete Präsentationen) öffnen beim Betrachter **inline im Tab** (inkl. Folien-JS), ohne
+dass hochgeladenes HTML den Session-Kontext eines anderen internen Nutzers angreifen kann. Dafür
+läuft HTML **nur** auf einer eigenen, cookielosen Origin (`lineal-files.*`) inline + sandboxed; die
+App-Origin liefert HTML unverändert als Download. `GET /files/<token>` autorisiert nur über das
+signierte Token (kein Cookie), derselbe Token verifiziert auf beiden Origins.
+
+**Eigenschaft (muss halten):** Auf der Datei-Origin lebt ausschließlich `/files/*`. Nie SPA,
+`/login`, GraphQL – sonst würde dort ein Session-Cookie gesetzt und die Isolation bräche. Das
+Session-Cookie ist host-only (kein `Domain=`), also sieht die Subdomain es ohnehin nicht; der
+`sandbox allow-scripts`-Header macht das HTML zusätzlich zur opaken Origin.
+**Invariante:** nie ein Cookie mit `Domain=.<registrable-domain>` setzen.
+
+**Einrichtung (einmalig, Betreiber):**
+1. **DNS:** `lineal-files.kollegeplus.de` als CNAME auf `lineal.kollegeplus.de` (gleicher Host).
+   CAA wird vom Apex geerbt (§3.4) – kein neuer Record.
+2. **Caddy:** zweiter Site-Block, der die Datei-Origin auf dasselbe nginx (:8080) proxyt und den
+   `Host` erhält; Auto-LE-Zertifikat. HSTS `includeSubDomains` ist aktiv → die Subdomain muss
+   gültiges HTTPS liefern (erledigt Caddy).
+
+   ```
+   lineal-files.kollegeplus.de {
+       reverse_proxy 127.0.0.1:8080 { header_up Host {host} }
+   }
+   ```
+3. **nginx:** `deploy/nginx.conf` enthält bereits den zweiten `server`-Block (nur `/files/*`, sonst
+   404). **Pflicht:** dort `server_name lineal-files.example;` auf den echten Datei-Host ändern
+   (identisch zu `LINEAL_FILES_BASE_URL`). Ohne diesen Block liefert der Catch-all `_` die SPA
+   statisch auch unter dem Datei-Host → Isolation gebrochen.
+4. **Server:** `LINEAL_FILES_BASE_URL=https://lineal-files.kollegeplus.de` setzen (muss sich von
+   `LINEAL_BASE_URL` unterscheiden; ungesetzt = Feature aus). Aktiviert den App-Guard
+   (Host == Datei-Origin & Pfad ∉ `/files/` → 404) als Schutz unabhängig vom Proxy.
+
+**Verifikation (nach Deploy):**
+```
+# Nicht-/files auf der Datei-Origin ist 404 (nginx-Block + App-Guard):
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: lineal-files.kollegeplus.de' https://lineal-files.kollegeplus.de/     # -> 404
+# Ein HTML-Anhang auf der Datei-Origin kommt inline + script-fähiger CSP (nicht attachment):
+curl -sI 'https://lineal-files.kollegeplus.de/files/<token>' | grep -iE 'content-disposition|content-security-policy'
+#   -> content-disposition: inline...   und   content-security-policy: ...sandbox allow-scripts...
+# Derselbe Token auf der App-Origin bleibt Download + strikte Sandbox:
+curl -sI 'https://lineal.kollegeplus.de/files/<token>' | grep -iE 'content-disposition|content-security-policy'
+#   -> content-disposition: attachment...   und   content-security-policy: default-src 'none'; sandbox
+```
+Im Web zeigt die Anhangsliste bei HTML-Uploads „Im Tab öffnen" (Datei-Origin) plus „Herunterladen"
+(App-Origin); MCP/Bots erhalten das Feld `viewUrl`.
 
 ### 3.5 Echtzeit-Mitbearbeitung (WP36)
 

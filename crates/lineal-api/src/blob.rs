@@ -12,7 +12,7 @@ use axum::Extension;
 use axum::body::Body;
 use axum::extract::Path;
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -449,6 +449,49 @@ pub async fn upload(
     Ok(StatusCode::OK)
 }
 
+/// CSP für HTML-Präsentationen auf der eigenen, cookielosen Datei-Origin (Weg B,
+/// `docs/superpowers/specs/2026-11-13-html-anhang-tab.md`). `sandbox allow-scripts` ohne
+/// `allow-same-origin` → opake Origin: das Folien-Skript läuft, erreicht aber weder App-Cookie
+/// noch App-API noch Storage. `default-src 'none'` (kein `connect-src`) verbietet fetch/XHR/WS →
+/// kein Nach-Hause-Telefonieren. Inline-Skript/-Style erlaubt (Decks sind „alles embedded");
+/// Google-Fonts als einzige externe Quelle; Bilder nur als `data:`-URI.
+const PRESENTATION_CSP: &str = "default-src 'none'; sandbox allow-scripts; \
+script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; \
+font-src https://fonts.gstatic.com; img-src data:; base-uri 'none'; form-action 'none'; \
+frame-ancestors 'none'";
+
+/// Strikte CSP für alle anderen Datei-Antworten: keinerlei aktive Inhalte.
+const STRICT_BLOB_CSP: &str = "default-src 'none'; sandbox";
+
+/// Host (klein geschrieben, ohne Port) aus einer Basis-URL oder einem `Host`-Header.
+pub(crate) fn host_only(s: &str) -> String {
+    let after_scheme = s.split_once("://").map_or(s, |(_, rest)| rest);
+    let host = after_scheme.split('/').next().unwrap_or(after_scheme);
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    host.trim().to_ascii_lowercase()
+}
+
+/// Host der Anfrage (klein, ohne Port) aus dem `Host`-Header.
+pub(crate) fn request_host(headers: &HeaderMap) -> Option<String> {
+    headers.get(HOST)?.to_str().ok().map(host_only)
+}
+
+/// Entscheidet `Content-Disposition`-Art und CSP für eine Datei-Antwort.
+/// `files_origin` = die Anfrage traf exakt die konfigurierte, cookielose Datei-Origin.
+/// Nur dort und nur für `text/html` wird inline + script-fähig ausgeliefert; sonst unverändert
+/// (Download/Inline nach `inline_safe`, immer strikte CSP ohne aktive Inhalte).
+fn presentation_delivery(content_type: &str, files_origin: bool) -> (&'static str, &'static str) {
+    if files_origin && essence(content_type) == "text/html" {
+        return ("inline", PRESENTATION_CSP);
+    }
+    let disposition = if inline_safe(content_type) {
+        "inline"
+    } else {
+        "attachment"
+    };
+    (disposition, STRICT_BLOB_CSP)
+}
+
 /// Typen, die der Browser inline darstellen darf (kein HTML/SVG/Skript).
 fn inline_safe(content_type: &str) -> bool {
     matches!(
@@ -520,6 +563,7 @@ fn filename_of(key: &str) -> String {
 /// `GET /files/{token}`: Inhalt ausliefern (sandboxed, `nosniff`).
 pub async fn download(
     Extension(app): Extension<Arc<App>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Response, ApiError> {
     let store = LocalBlobStore::from_app(&app);
@@ -536,13 +580,18 @@ pub async fn download(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(not_found().into()),
         Err(e) => return Err(io_err(e).into()),
     };
+    // Weg B: Nur auf der konfigurierten, cookielosen Datei-Origin (exakter Host-Vergleich,
+    // fail-closed) darf HTML inline + script-fähig laufen. Auf der App-Origin bleibt es Download.
+    let files_origin = app
+        .config
+        .files_base_url
+        .as_deref()
+        .map(host_only)
+        .zip(request_host(&headers))
+        .is_some_and(|(want, got)| want == got);
+    let (disposition_kind, csp) = presentation_delivery(&meta.content_type, files_origin);
     let disposition = format!(
-        "{}; filename=\"{}\"",
-        if inline_safe(&meta.content_type) {
-            "inline"
-        } else {
-            "attachment"
-        },
+        "{disposition_kind}; filename=\"{}\"",
         download_filename(&meta.key, &meta.content_type)
     );
     let mut res = Body::from_stream(tokio_util::io::ReaderStream::new(file)).into_response();
@@ -556,11 +605,9 @@ pub async fn download(
     if let Ok(v) = HeaderValue::from_str(&disposition) {
         h.insert(CONTENT_DISPOSITION, v);
     }
-    // Nutzerinhalt darf nie im Ursprung der App Skripte ausführen.
-    h.insert(
-        CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; sandbox"),
-    );
+    // Nutzerinhalt führt nur auf der eigenen Datei-Origin (opake Sandbox) Skripte aus, nie im
+    // Ursprung der App.
+    h.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp));
     h.insert(
         CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=60"),
@@ -673,6 +720,64 @@ mod tests {
         );
         assert!(other.verify(token_of(&put), "put").is_err());
         assert!(s.verify("garbage", "put").is_err());
+    }
+
+    #[test]
+    fn html_renders_inline_only_on_the_files_origin() {
+        // Review-Focus 1: App-Origin -> HTML bleibt Download + strikte Sandbox (kein Skript).
+        let (disp, csp) = presentation_delivery("text/html", false);
+        assert_eq!(disp, "attachment");
+        assert_eq!(csp, STRICT_BLOB_CSP);
+        // Review-Focus 2: Datei-Origin -> HTML inline + script-fähige Präsentations-CSP.
+        let (disp, csp) = presentation_delivery("text/html; charset=utf-8", true);
+        assert_eq!(disp, "inline");
+        assert!(csp.contains("sandbox allow-scripts"));
+        assert!(csp.contains("script-src 'unsafe-inline'"));
+        assert!(csp.contains("font-src https://fonts.gstatic.com"));
+        assert!(!csp.contains("connect-src"), "kein Nach-Hause-Telefonieren");
+        assert!(
+            !csp.contains("allow-same-origin"),
+            "opake Origin bleibt opak"
+        );
+        // Review-Focus 3: Datei-Origin + Nicht-HTML -> unverändert.
+        assert_eq!(
+            presentation_delivery("image/png", true),
+            ("inline", STRICT_BLOB_CSP)
+        );
+        assert_eq!(
+            presentation_delivery("application/zip", true),
+            ("attachment", STRICT_BLOB_CSP)
+        );
+        // SVG bleibt in dieser Stufe Download, auch auf der Datei-Origin.
+        assert_eq!(
+            presentation_delivery("image/svg+xml", true),
+            ("attachment", STRICT_BLOB_CSP)
+        );
+    }
+
+    #[test]
+    fn host_match_is_exact_case_insensitive_and_port_stripped() {
+        assert_eq!(
+            host_only("https://Lineal-Files.Example/"),
+            "lineal-files.example"
+        );
+        assert_eq!(
+            host_only("lineal-files.example:443"),
+            "lineal-files.example"
+        );
+        assert_eq!(
+            host_only("HTTPS://lineal-files.example:8080/files/x"),
+            "lineal-files.example"
+        );
+        // Review-Focus 4: Spoofing-Hosts matchen die Datei-Origin nicht.
+        let want = host_only("https://lineal-files.example");
+        assert_ne!(host_only("evil.lineal-files.example"), want);
+        assert_ne!(host_only("lineal-files.example.evil.com"), want);
+        // request_host liest + normalisiert den Header; fehlt er, None (fail-closed).
+        let mut h = HeaderMap::new();
+        h.insert(HOST, HeaderValue::from_static("Lineal-Files.Example:8080"));
+        assert_eq!(request_host(&h).as_deref(), Some("lineal-files.example"));
+        assert_eq!(request_host(&HeaderMap::new()), None);
     }
 
     #[test]

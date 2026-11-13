@@ -73,6 +73,10 @@ pub struct AttachmentView {
     pub creator: Option<(UserId, String)>,
     /// Hochgeladene Dateien: signierte Download-URL; Links: die URL unverändert.
     pub url: String,
+    /// Weg B (`docs/superpowers/specs/2026-11-13-html-anhang-tab.md`): Ansichts-URL auf der
+    /// cookielosen Datei-Origin, nur für HTML-Uploads bei gesetzter `files_base_url`. Öffnet im
+    /// Tab (inline, sandboxed) statt Download. `None` = nicht verfügbar (dann weiter `url` nutzen).
+    pub view_url: Option<String>,
     /// Ablauf der signierten URL (nur bei Uploads).
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -242,13 +246,35 @@ impl App {
             ),
             _ => (attachment.url.clone(), None),
         };
+        let view_url = self.html_view_url(&url, attachment.content_type.as_deref());
         Ok(AttachmentView {
             attachment,
             issue_identifier,
             creator,
             url,
+            view_url,
             expires_at,
         })
+    }
+
+    /// Weg B: Macht aus der signierten Download-URL eines HTML-Uploads die Ansichts-URL auf der
+    /// cookielosen Datei-Origin (gleiches Token, nur Host getauscht). `None`, wenn keine
+    /// `files_base_url` konfiguriert ist, der Typ nicht `text/html` ist oder die URL nicht auf der
+    /// App-Origin liegt (z. B. externe Link-Anhänge).
+    fn html_view_url(&self, url: &str, content_type: Option<&str>) -> Option<String> {
+        let files_base = self.config.files_base_url.as_deref()?;
+        let ct = content_type?;
+        if !ct
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("text/html")
+        {
+            return None;
+        }
+        let rest = url.strip_prefix(self.config.base_url.trim_end_matches('/'))?;
+        Some(format!("{files_base}{rest}"))
     }
 
     async fn issue_for_attachments(

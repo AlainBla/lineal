@@ -148,13 +148,21 @@ export function AttachmentsSection({
         <ul className="flex flex-col gap-0.5">
           {attachments.map((a) => {
             const href = a.sourceType === "upload" ? sameOrigin(a.url) : safeHref(a.url);
+            // Weg B (KOL-478): HTML-Uploads öffnen auf der eigenen, cookielosen Datei-Origin
+            // (viewUrl) inline im Tab statt eines Downloads. Ohne konfigurierte Datei-Origin
+            // liefert das Backend kein viewUrl -> wie bisher Download.
+            const viewHref =
+              a.sourceType === "upload" && a.viewUrl ? safeHref(a.viewUrl) : undefined;
             // Hochgeladene Bilder (same-origin, CSP `img-src 'self'`) öffnen zuerst groß (LIN-21).
             const image =
               a.sourceType === "upload" && !!href && !!a.contentType?.startsWith("image/");
             // Hochgeladene Markdown-Dateien werden in Lineal gerendert statt heruntergeladen (LIN-43).
             const markdown =
               a.sourceType === "upload" && !!href && isMarkdown(a.contentType, a.title);
-            // Namensklick öffnet die passende In-App-Ansicht (Bild-Lightbox bzw. Markdown-Vorschau).
+            const html = !!viewHref;
+            // Der Namensklick öffnet die passende Ansicht: Bild-Lightbox, Markdown-Vorschau oder
+            // (HTML) der sandboxed Tab über das normale Link-Ziel.
+            const linkHref = viewHref ?? href;
             const openInApp =
               image && href
                 ? () =>
@@ -175,7 +183,7 @@ export function AttachmentsSection({
                   <Paperclip className="size-3.5 text-muted-foreground" aria-hidden />
                 )}
                 <a
-                  href={href}
+                  href={linkHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="min-w-0 truncate hover:underline"
@@ -194,7 +202,7 @@ export function AttachmentsSection({
                 {a.size != null && (
                   <span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span>
                 )}
-                {(image || markdown) && href && (
+                {(image || markdown || html) && href && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -212,7 +220,7 @@ export function AttachmentsSection({
                     size="icon"
                     className={cn(
                       "size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                      !image && !markdown && "ml-auto",
+                      !image && !markdown && !html && "ml-auto",
                     )}
                     aria-label={`Remove attachment ${a.title}`}
                     onClick={() => remove.mutate(a.id)}
