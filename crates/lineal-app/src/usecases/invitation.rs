@@ -72,6 +72,13 @@ pub struct AcceptedInvitation {
     pub login: Option<super::auth::Login>,
 }
 
+/// Passwortquelle für die Einladungsannahme. Der Einladungslink reicht das rohe Passwort durch,
+/// das erst nach der Token-Prüfung gehasht wird (L-2); der Konto-Pfad reicht einen fertigen Hash.
+enum AcceptCredential<'a> {
+    RawPassword(&'a str),
+    CopiedHash(Option<String>),
+}
+
 fn invitation_not_found() -> AppError {
     AppError::not_found("Could not find referenced Invitation.")
         .with_details(json!({ "type": "Invitation" }))
@@ -493,40 +500,33 @@ impl App {
         &self,
         input: AcceptInvitationInput,
     ) -> AppResult<AcceptedInvitation> {
-        if let Some(p) = &input.password {
-            validate_password(p)?;
-        }
-        if input.password.is_none() {
+        let Some(password) = input.password.as_deref() else {
             return Err(AppError::invalid_request("password is required")
                 .with_details(json!({ "field": "password" })));
-        }
-        let password_hash = match &input.password {
-            Some(p) => Some(self.hasher.hash(p)?),
-            None => None,
         };
+        validate_password(password)?;
+        // Das Passwort wird erst im Kern gehasht, nachdem das Token geprüft ist (L-2): ein erfundenes
+        // Token darf keinen Argon2-Lauf kosten.
         let (accepted, email) = self
             .accept_invitation_core(
                 &input.token,
                 input.name.as_deref(),
-                password_hash,
+                AcceptCredential::RawPassword(password),
                 Some(&input.email),
             )
             .await?;
         // Session für den neuen Zugang.
-        let login = match &input.password {
-            Some(p) => Some(
-                self.login(LoginInput {
-                    email,
-                    password: p.clone(),
-                    workspace: Some(accepted.url_key.clone()),
-                    user_agent: None,
-                    ip_address: None,
-                    request_id: None,
-                })
-                .await?,
-            ),
-            None => None,
-        };
+        let login = Some(
+            self.login(LoginInput {
+                email,
+                password: password.to_string(),
+                workspace: Some(accepted.url_key.clone()),
+                user_agent: None,
+                ip_address: None,
+                request_id: None,
+            })
+            .await?,
+        );
         Ok(AcceptedInvitation { login, ..accepted })
     }
 
@@ -552,7 +552,12 @@ impl App {
         let hash = sys.webhooks().password_hash_of_account(me).await?;
         drop(sys);
         let accepted = self
-            .accept_invitation_core(token, Some(&account.name), hash, Some(&account.email))
+            .accept_invitation_core(
+                token,
+                Some(&account.name),
+                AcceptCredential::CopiedHash(hash),
+                Some(&account.email),
+            )
             .await?;
         Ok(accepted.0)
     }
@@ -563,7 +568,7 @@ impl App {
         &self,
         token: &str,
         name: Option<&str>,
-        password_hash: Option<String>,
+        credential: AcceptCredential<'_>,
         required_email: Option<&str>,
     ) -> AppResult<(AcceptedInvitation, String)> {
         if token.is_empty() || token.len() > 512 {
@@ -590,6 +595,12 @@ impl App {
             .map(|n| lineal_domain::rules::text::validate_single_line_name("name", n, 255))
             .transpose()?;
         let name = name_norm.as_deref();
+        // Token ist jetzt geprüft (gefunden, pending, nicht abgelaufen, E-Mail passt): erst jetzt
+        // das Passwort hashen (L-2). Der Konto-Pfad reicht den kopierten Hash unverändert durch.
+        let password_hash = match credential {
+            AcceptCredential::CopiedHash(h) => h,
+            AcceptCredential::RawPassword(p) => Some(self.hasher.hash(p)?),
+        };
         let mut tx = self.store.begin(inv.org_id).await?;
         // Erneut im Workspace prüfen (Wettlauf mit widerrufen/angenommen). `FOR UPDATE` sperrt die
         // Zeile bis zum Commit, sodass parallele Annahmen serialisiert werden (L-10).

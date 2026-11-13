@@ -41,6 +41,20 @@ struct Fx {
     data: SeedData,
     pool: PgPool,
     clock: Arc<TestClock>,
+    hashes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Verhält sich wie der Test-Hasher (Format `fake:<pw>`), zählt aber hash-Aufrufe (für L-2).
+struct CountingHasher(Arc<std::sync::atomic::AtomicUsize>);
+
+impl lineal_app::ports::PasswordHasher for CountingHasher {
+    fn hash(&self, password: &str) -> Result<String, lineal_app::AppError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(format!("fake:{password}"))
+    }
+    fn verify(&self, password: &str, hash: &str) -> Result<bool, lineal_app::AppError> {
+        Ok(hash == format!("fake:{password}"))
+    }
 }
 
 async fn setup(pool: PgPool) -> Fx {
@@ -54,6 +68,8 @@ async fn setup(pool: PgPool) -> Fx {
     )));
     let mut app = Arc::try_unwrap(test_app(Arc::new(store))).ok().unwrap();
     app.clock = clock.clone();
+    let hashes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    app.hasher = Arc::new(CountingHasher(hashes.clone()));
     // Produktionsnahe SSRF-Regeln: https-Basis-URL = strenge Policy.
     app.config.base_url = "https://lineal.example".into();
     Fx {
@@ -61,6 +77,7 @@ async fn setup(pool: PgPool) -> Fx {
         data,
         pool,
         clock,
+        hashes,
     }
 }
 
@@ -1923,4 +1940,47 @@ async fn activate_imported_user_only_from_imported(pool: PgPool) {
         .unwrap();
     assert_eq!(n, 0, "aktivieren nur aus importiert");
     tx.commit().await.unwrap();
+}
+
+// LIN-62 L-2: /invite/accept darf das Passwort erst hashen, nachdem das Token geprüft ist. Ein
+// erfundenes Token kostet sonst einen Argon2-Lauf (anonym, ohne Fehlversuchszähler).
+#[sqlx::test(migrations = "./migrations")]
+async fn accept_does_not_hash_before_validating_the_token(pool: PgPool) {
+    use std::sync::atomic::Ordering;
+    let fx = setup(pool).await;
+    let created = fx
+        .app
+        .invite_users(
+            &alice(),
+            invite(&["dave@acme.example"], UserRole::User, &["ENG"]),
+        )
+        .await
+        .unwrap();
+    let token = created[0].token.clone();
+    let accept = |token: &str| AcceptInvitationInput {
+        token: token.into(),
+        email: "dave@acme.example".into(),
+        name: Some("Dave Example".into()),
+        password: Some("correct horse battery".into()),
+    };
+
+    // Erfundenes Token: kein Hash.
+    fx.hashes.store(0, Ordering::SeqCst);
+    assert_eq!(
+        kind(fx.app.accept_invitation(accept(&"0".repeat(96))).await),
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        fx.hashes.load(Ordering::SeqCst),
+        0,
+        "ungültiges Token darf keinen Hash auslösen"
+    );
+
+    // Gültiges Token: wird wie bisher gehasht (Sanity).
+    fx.hashes.store(0, Ordering::SeqCst);
+    fx.app.accept_invitation(accept(&token)).await.unwrap();
+    assert!(
+        fx.hashes.load(Ordering::SeqCst) >= 1,
+        "gültige Annahme hasht das Passwort"
+    );
 }
