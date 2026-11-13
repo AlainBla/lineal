@@ -94,10 +94,12 @@ pub trait SearchIndex: Send + Sync {
     async fn search(&self, org: OrgId, query: &str, limit: u32) -> AppResult<Vec<SearchHit>>;
 }
 
-/// Passwort-Hashing (Argon2 in WP03).
+/// Passwort-Hashing (Argon2 in WP03). Async, damit der Adapter die CPU-schwere Argon2-Arbeit per
+/// `spawn_blocking` von den Tokio-Workern fernhält und über einen Semaphor begrenzt (L-1).
+#[async_trait]
 pub trait PasswordHasher: Send + Sync {
-    fn hash(&self, password: &str) -> AppResult<String>;
-    fn verify(&self, password: &str, hash: &str) -> AppResult<bool>;
+    async fn hash(&self, password: &str) -> AppResult<String>;
+    async fn verify(&self, password: &str, hash: &str) -> AppResult<bool>;
 }
 
 /// Eine zu versendende E-Mail.

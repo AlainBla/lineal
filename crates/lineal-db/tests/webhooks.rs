@@ -47,12 +47,13 @@ struct Fx {
 /// Verhält sich wie der Test-Hasher (Format `fake:<pw>`), zählt aber hash-Aufrufe (für L-2).
 struct CountingHasher(Arc<std::sync::atomic::AtomicUsize>);
 
+#[async_trait::async_trait]
 impl lineal_app::ports::PasswordHasher for CountingHasher {
-    fn hash(&self, password: &str) -> Result<String, lineal_app::AppError> {
+    async fn hash(&self, password: &str) -> Result<String, lineal_app::AppError> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(format!("fake:{password}"))
     }
-    fn verify(&self, password: &str, hash: &str) -> Result<bool, lineal_app::AppError> {
+    async fn verify(&self, password: &str, hash: &str) -> Result<bool, lineal_app::AppError> {
         Ok(hash == format!("fake:{password}"))
     }
 }

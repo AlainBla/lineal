@@ -358,11 +358,12 @@ impl SearchIndex for FakeSearch {
 
 struct FakeHasher;
 
+#[async_trait]
 impl PasswordHasher for FakeHasher {
-    fn hash(&self, password: &str) -> AppResult<String> {
+    async fn hash(&self, password: &str) -> AppResult<String> {
         Ok(format!("fake:{password}"))
     }
-    fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
+    async fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
         Ok(hash == format!("fake:{password}"))
     }
 }

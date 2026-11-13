@@ -227,9 +227,13 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let stored = tx.users().get_password_hash(id).await?;
         let verified = match &stored {
-            Some(h) => self.hasher.verify(current_password, h).unwrap_or(false),
+            Some(h) => self
+                .hasher
+                .verify(current_password, h)
+                .await
+                .unwrap_or(false),
             None => {
-                self.burn_verify(current_password);
+                self.burn_verify(current_password).await;
                 false
             }
         };
@@ -258,7 +262,7 @@ impl App {
             ));
         }
         let now = self.clock.now();
-        let hash = self.hasher.hash(new_password)?;
+        let hash = self.hasher.hash(new_password).await?;
         tx.users().set_password_hash(id, &hash, now).await?;
         let revoked = tx.auth().revoke_other_sessions(id, keep, now).await?;
         // S-21: OAuth-Tokens überleben einen Passwortwechsel nicht. `change_own_password` läuft nur

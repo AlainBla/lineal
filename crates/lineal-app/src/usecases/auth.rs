@@ -99,24 +99,24 @@ pub struct CreatedApiKey {
 /// gehasht **und** verifiziert (zwei Argon2-Läufe), echte Kandidaten liefen nur durch eine Verify
 /// (ein Lauf) — das war ein Timing-Orakel, das unbekannte von bekannten Adressen unterschied. Der
 /// Hash wird einmal je Prozess berechnet, danach läuft nur noch die Verify.
-fn burn_verify_impl(hasher: &dyn PasswordHasher, password: &str, cache: &OnceLock<String>) {
+async fn burn_verify_impl(hasher: &dyn PasswordHasher, password: &str, cache: &OnceLock<String>) {
     // Nur einen erfolgreichen Hash cachen: Ein vorübergehender Hash-Fehler darf die Dummy-Prüfung
     // nicht dauerhaft deaktivieren (sonst würden unbekannte Adressen schnell — ein Timing-Leck).
     if cache.get().is_none()
-        && let Ok(h) = hasher.hash("lineal-dummy-password")
+        && let Ok(h) = hasher.hash("lineal-dummy-password").await
     {
         let _ = cache.set(h);
     }
     if let Some(dummy) = cache.get() {
-        let _ = hasher.verify(password, dummy);
+        let _ = hasher.verify(password, dummy).await;
     }
 }
 
 impl App {
     /// Eine Passwortprüfung mit demselben Aufwand wie eine echte (siehe [`burn_verify_impl`]).
-    pub(crate) fn burn_verify(&self, password: &str) {
+    pub(crate) async fn burn_verify(&self, password: &str) {
         static DUMMY: OnceLock<String> = OnceLock::new();
-        burn_verify_impl(self.hasher.as_ref(), password, &DUMMY);
+        burn_verify_impl(self.hasher.as_ref(), password, &DUMMY).await;
     }
 
     /// Passwort-Login (docs/11 `POST /auth/login`). Unbekannte E-Mail, falsches Passwort,
@@ -133,17 +133,22 @@ impl App {
         let mut failures: Vec<(&LoginCandidate, &'static str)> = Vec::new();
         if candidates.is_empty() {
             // Zeitverhalten angleichen; das Ergebnis wird verworfen.
-            self.burn_verify(&input.password);
+            self.burn_verify(&input.password).await;
         }
         for c in &candidates {
             let verdict: Result<(), &'static str> = match &c.password_hash {
                 // Bots (Rolle `app`) handeln nur per API-Key, nie per Browser-Login (LIN-22).
                 Some(_) if c.role == UserRole::App => {
-                    self.burn_verify(&input.password);
+                    self.burn_verify(&input.password).await;
                     Err("app_user")
                 }
                 Some(h) => {
-                    if !self.hasher.verify(&input.password, h).unwrap_or(false) {
+                    if !self
+                        .hasher
+                        .verify(&input.password, h)
+                        .await
+                        .unwrap_or(false)
+                    {
                         Err("invalid_password")
                     } else if !c.active {
                         Err("inactive")
@@ -152,7 +157,7 @@ impl App {
                     }
                 }
                 None => {
-                    self.burn_verify(&input.password);
+                    self.burn_verify(&input.password).await;
                     Err("no_password")
                 }
             };
@@ -627,28 +632,29 @@ mod tests {
 
     /// S-20: Die Dummy-Prüfung berechnet den Hash nur einmal je Prozess und macht danach genau
     /// eine Verify pro Aufruf — gleicher Aufwand wie eine echte Prüfung (eine Verify, kein Hash).
-    #[test]
-    fn burn_verify_hashes_once_then_only_verifies() {
+    #[tokio::test]
+    async fn burn_verify_hashes_once_then_only_verifies() {
         #[derive(Default)]
         struct Counting {
             hashes: AtomicUsize,
             verifies: AtomicUsize,
         }
+        #[async_trait::async_trait]
         impl PasswordHasher for Counting {
-            fn hash(&self, password: &str) -> AppResult<String> {
+            async fn hash(&self, password: &str) -> AppResult<String> {
                 self.hashes.fetch_add(1, Ordering::SeqCst);
                 Ok(format!("h:{password}"))
             }
-            fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
+            async fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
                 self.verifies.fetch_add(1, Ordering::SeqCst);
                 Ok(hash == format!("h:{password}"))
             }
         }
         let hasher = Counting::default();
         let cache = OnceLock::new();
-        burn_verify_impl(&hasher, "a", &cache);
-        burn_verify_impl(&hasher, "b", &cache);
-        burn_verify_impl(&hasher, "c", &cache);
+        burn_verify_impl(&hasher, "a", &cache).await;
+        burn_verify_impl(&hasher, "b", &cache).await;
+        burn_verify_impl(&hasher, "c", &cache).await;
         assert_eq!(hasher.hashes.load(Ordering::SeqCst), 1, "Hash nur einmal");
         assert_eq!(
             hasher.verifies.load(Ordering::SeqCst),

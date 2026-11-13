@@ -309,7 +309,7 @@ impl App {
         let password_hash = match &input.password {
             Some(p) => {
                 validate_password(p)?;
-                Some(self.hasher.hash(p)?)
+                Some(self.hasher.hash(p).await?)
             }
             None => None,
         };
@@ -582,7 +582,7 @@ impl App {
                 snap.require_workspace(ctx, Action::UpdateWorkspaceLimits)?;
             }
         }
-        let hash = self.hasher.hash(password)?;
+        let hash = self.hasher.hash(password).await?;
         tx.users()
             .set_password_hash(target.id, &hash, self.clock.now())
             .await?;

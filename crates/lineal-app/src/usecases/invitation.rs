@@ -599,7 +599,7 @@ impl App {
         // das Passwort hashen (L-2). Der Konto-Pfad reicht den kopierten Hash unverändert durch.
         let password_hash = match credential {
             AcceptCredential::CopiedHash(h) => h,
-            AcceptCredential::RawPassword(p) => Some(self.hasher.hash(p)?),
+            AcceptCredential::RawPassword(p) => Some(self.hasher.hash(p).await?),
         };
         let mut tx = self.store.begin(inv.org_id).await?;
         // Erneut im Workspace prüfen (Wettlauf mit widerrufen/angenommen). `FOR UPDATE` sperrt die

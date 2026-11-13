@@ -36,29 +36,72 @@ impl IdGen for UuidV7IdGen {
 pub type LocalBlobStore = lineal_api::blob::LocalBlobStore;
 
 /// Argon2id-Passwort-Hashing (PHC-String mit zufälligem Salt, Standardparameter der Crate).
-#[derive(Default)]
+///
+/// Argon2 ist absichtlich CPU- und speicherschwer. Lief es synchron auf einem Tokio-Worker,
+/// blockierten parallele Logins die Worker und damit auch WebSocket und GraphQL (L-1). Die Arbeit
+/// läuft daher in `spawn_blocking`, begrenzt durch einen Semaphor in Höhe der CPU-Anzahl, damit ein
+/// Ansturm von Logins nicht beliebig viele Blocking-Threads gleichzeitig Speicher belegen lässt.
 pub struct Argon2Hasher {
-    argon2: Argon2<'static>,
+    sem: Arc<tokio::sync::Semaphore>,
 }
 
+impl Default for Argon2Hasher {
+    fn default() -> Self {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        Self {
+            sem: Arc::new(tokio::sync::Semaphore::new(cpus)),
+        }
+    }
+}
+
+#[async_trait]
 impl PasswordHasher for Argon2Hasher {
-    fn hash(&self, password: &str) -> AppResult<String> {
-        let salt = SaltString::generate(&mut OsRng);
-        self.argon2
-            .hash_password(password.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| AppError::internal(format!("password hashing failed: {e}")))
+    async fn hash(&self, password: &str) -> AppResult<String> {
+        // Owned Permit ins Closure: wird der äußere Future abgebrochen (z. B. Client trennt), läuft
+        // die spawn_blocking-Arbeit detached weiter – das Permit fällt dann erst mit der tatsächlichen
+        // Argon2-Arbeit, der Semaphor begrenzt also auch unter Abbrüchen (DoS-Cap, Security-Review).
+        let permit = self
+            .sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::internal("password hasher unavailable"))?;
+        let password = password.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|h| h.to_string())
+                .map_err(|e| AppError::internal(format!("password hashing failed: {e}")))
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("password hash task failed: {e}")))?
     }
 
     /// Falsches Passwort oder unlesbarer Hash ergeben `Ok(false)` (kein Hinweis für Angreifer).
-    fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
-        let Ok(parsed) = PasswordHash::new(hash) else {
-            return Ok(false);
-        };
-        Ok(self
-            .argon2
-            .verify_password(password.as_bytes(), &parsed)
-            .is_ok())
+    async fn verify(&self, password: &str, hash: &str) -> AppResult<bool> {
+        let permit = self
+            .sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::internal("password hasher unavailable"))?;
+        let password = password.to_owned();
+        let hash = hash.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let Ok(parsed) = PasswordHash::new(&hash) else {
+                return Ok(false);
+            };
+            Ok(Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok())
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("password verify task failed: {e}")))?
     }
 }
 
@@ -200,16 +243,16 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    #[test]
-    fn argon2_roundtrip_with_salt_and_garbage_hash() {
+    #[tokio::test]
+    async fn argon2_roundtrip_with_salt_and_garbage_hash() {
         let h = Argon2Hasher::default();
-        let a = h.hash("correct horse").unwrap();
-        let b = h.hash("correct horse").unwrap();
+        let a = h.hash("correct horse").await.unwrap();
+        let b = h.hash("correct horse").await.unwrap();
         assert!(a.starts_with("$argon2id$"));
         assert_ne!(a, b, "salt must differ");
-        assert!(h.verify("correct horse", &a).unwrap());
-        assert!(!h.verify("wrong", &a).unwrap());
-        assert!(!h.verify("x", "not-a-phc-string").unwrap());
+        assert!(h.verify("correct horse", &a).await.unwrap());
+        assert!(!h.verify("wrong", &a).await.unwrap());
+        assert!(!h.verify("x", "not-a-phc-string").await.unwrap());
     }
 
     #[test]
@@ -231,7 +274,13 @@ mod tests {
             .await
             .unwrap();
         assert!(url.starts_with("http://localhost:8080/uploads/"));
-        assert!(app.hasher.hash("x").unwrap().starts_with("$argon2id$"));
+        assert!(
+            app.hasher
+                .hash("x")
+                .await
+                .unwrap()
+                .starts_with("$argon2id$")
+        );
     }
 
     /// Minimaler SMTP-Server: beantwortet einen Dialog und liefert die DATA-Zeilen.

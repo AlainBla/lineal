@@ -156,7 +156,7 @@ impl App {
         let password_hash = match &input.owner_password {
             Some(p) => {
                 super::user::validate_password(p)?;
-                Some(self.hasher.hash(p)?)
+                Some(self.hasher.hash(p).await?)
             }
             None => None,
         };
