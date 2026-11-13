@@ -479,16 +479,22 @@ pub trait WebhookRepo: Send {
     ) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Setzt den Status einer Einladung. Mit `require_pending` wird der Übergang auf einen
+    /// bedingten Write (`WHERE status = 'pending'`) gestützt – für die Annahme, die gegen einen
+    /// parallelen Widerruf/eine zweite Annahme laufen kann (L-10). Liefert die Zahl betroffener
+    /// Zeilen; 0 bedeutet, dass der Wettlauf verloren wurde.
     async fn set_invitation_status(
         &mut self,
         _id: Uuid,
         _status: &str,
         _accepted_user: Option<UserId>,
         _now: DateTime<Utc>,
-    ) -> AppResult<()> {
+        _require_pending: bool,
+    ) -> AppResult<u64> {
         unimplemented_repo()
     }
-    /// Macht einen importierten Platzhalter-User zum aktiven User (Name, Passwort, Rolle).
+    /// Macht einen importierten Platzhalter-User zum aktiven User (Name, Passwort, Rolle). Bedingter
+    /// Write (`WHERE status = 'imported'`); liefert die Zahl betroffener Zeilen (0 = schon aktiviert).
     async fn activate_imported_user(
         &mut self,
         _user: UserId,
@@ -496,7 +502,15 @@ pub trait WebhookRepo: Send {
         _password_hash: Option<&str>,
         _role: UserRole,
         _now: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// Wie [`get_invitation`](Self::get_invitation), aber mit `FOR UPDATE`: sperrt die Zeile bis zum
+    /// Ende der Transaktion, damit parallele Annahmen serialisiert werden (L-10).
+    async fn get_invitation_for_update(
+        &mut self,
+        _id: Uuid,
+    ) -> AppResult<Option<InvitationRecord>> {
         unimplemented_repo()
     }
     /// Passwort-Hash eines aktiven Users mit dieser E-Mail in einem beliebigen Workspace

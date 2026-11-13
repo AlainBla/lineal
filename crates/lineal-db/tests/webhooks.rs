@@ -1837,3 +1837,90 @@ async fn team_scoped_key_cannot_create_workspace_webhooks(pool: PgPool) {
         .await
         .unwrap();
 }
+
+// LIN-62 L-10: Einladungsannahme ist gegen Wettläufe (TOCTOU) gehärtet. Die Status-Änderung auf
+// "accepted" und das Aktivieren eines importierten Platzhalters sind bedingte Writes; ein paralleler
+// Widerruf/eine zweite Annahme, die zwischen Lesen und Schreiben dazwischenfunkt, trifft 0 Zeilen.
+#[sqlx::test(migrations = "./migrations")]
+async fn accept_status_transition_only_from_pending(pool: PgPool) {
+    let fx = setup(pool).await;
+    let created = fx
+        .app
+        .invite_users(
+            &alice(),
+            invite(&["dave@acme.example"], UserRole::User, &["ENG"]),
+        )
+        .await
+        .unwrap();
+    let inv = created[0].invitation.clone();
+    let store = PgStore::new(fx.pool.clone());
+
+    // Normalfall: pending -> genau eine Zeile. Danach verwerfen (drop = rollback), nicht annehmen.
+    {
+        let mut tx = store.begin(fx.data.org).await.unwrap();
+        let n = tx
+            .webhooks()
+            .set_invitation_status(inv.id, "accepted", None, fx.clock.now(), true)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "pending -> accepted trifft eine Zeile");
+    }
+
+    // Rennfenster: extern auf revoked gesetzt. Der bedingte Accept-Write trifft 0 Zeilen.
+    sqlx::query("UPDATE invitation SET status = 'revoked' WHERE id = $1")
+        .bind(inv.id)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let mut tx = store.begin(fx.data.org).await.unwrap();
+    let n = tx
+        .webhooks()
+        .set_invitation_status(inv.id, "accepted", None, fx.clock.now(), true)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "accepted nur aus pending; revoked gewinnt");
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn activate_imported_user_only_from_imported(pool: PgPool) {
+    let fx = setup(pool).await;
+    let placeholder = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO \"user\" (id, organization_id, name, display_name, email, role, status, active) \
+         VALUES ($1, $2, 'Gina (importiert)', 'gina', 'gina@acme.example', 'user', 'imported', false)",
+    )
+    .bind(placeholder)
+    .bind(fx.data.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    let store = PgStore::new(fx.pool.clone());
+    let uid = lineal_domain::ids::UserId(placeholder);
+
+    // Platzhalter ist importiert -> eine Zeile.
+    {
+        let mut tx = store.begin(fx.data.org).await.unwrap();
+        let n = tx
+            .webhooks()
+            .activate_imported_user(uid, "Gina", None, UserRole::User, fx.clock.now())
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "importiert -> aktiv trifft eine Zeile");
+    }
+
+    // Rennfenster: eine parallele Annahme hat den Platzhalter schon aktiviert.
+    sqlx::query("UPDATE \"user\" SET status = 'active', active = true WHERE id = $1")
+        .bind(placeholder)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let mut tx = store.begin(fx.data.org).await.unwrap();
+    let n = tx
+        .webhooks()
+        .activate_imported_user(uid, "Gina", None, UserRole::User, fx.clock.now())
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "aktivieren nur aus importiert");
+    tx.commit().await.unwrap();
+}

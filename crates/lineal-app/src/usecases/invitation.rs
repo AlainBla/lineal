@@ -186,7 +186,7 @@ impl App {
     ) -> AppResult<()> {
         let now = self.clock.now();
         tx.webhooks()
-            .set_invitation_status(inv.id, "revoked", None, now)
+            .set_invitation_status(inv.id, "revoked", None, now, false)
             .await?;
         let sys = RequestCtx::system(inv.org_id, "req_invitation_recheck");
         self.record_audit(
@@ -305,7 +305,7 @@ impl App {
                     .with_details(json!({ "field": "emails", "email": email })));
                 }
                 tx.webhooks()
-                    .set_invitation_status(old.id, "expired", None, now)
+                    .set_invitation_status(old.id, "expired", None, now, false)
                     .await?;
             }
             let token = random_token();
@@ -463,7 +463,7 @@ impl App {
             );
         }
         tx.webhooks()
-            .set_invitation_status(id, "revoked", None, self.clock.now())
+            .set_invitation_status(id, "revoked", None, self.clock.now(), false)
             .await?;
         self.record_audit(
             &mut *tx,
@@ -591,10 +591,11 @@ impl App {
             .transpose()?;
         let name = name_norm.as_deref();
         let mut tx = self.store.begin(inv.org_id).await?;
-        // Erneut im Workspace prüfen (Wettlauf mit widerrufen/angenommen).
+        // Erneut im Workspace prüfen (Wettlauf mit widerrufen/angenommen). `FOR UPDATE` sperrt die
+        // Zeile bis zum Commit, sodass parallele Annahmen serialisiert werden (L-10).
         let inv = tx
             .webhooks()
-            .get_invitation(inv.id)
+            .get_invitation_for_update(inv.id)
             .await?
             .filter(|i| i.status == "pending" && i.expires_at > now)
             .ok_or_else(invitation_not_found)?;
@@ -619,7 +620,10 @@ impl App {
         let existing = tx.users().find_by_email(&inv.email).await?;
         let user_id = match existing {
             Some(u) if u.status == "imported" => {
-                tx.webhooks()
+                // Bedingter Write: hat eine parallele Annahme den Platzhalter schon aktiviert,
+                // trifft dies 0 Zeilen und die Annahme scheitert neutral (L-10).
+                let activated = tx
+                    .webhooks()
                     .activate_imported_user(
                         u.id,
                         name.map(str::trim)
@@ -630,6 +634,9 @@ impl App {
                         now,
                     )
                     .await?;
+                if activated == 0 {
+                    return Err(invitation_not_found());
+                }
                 u.id
             }
             Some(_) => {
@@ -708,9 +715,15 @@ impl App {
                 }
             }
         }
-        tx.webhooks()
-            .set_invitation_status(inv.id, "accepted", Some(user_id), now)
+        // Bedingter Write (`WHERE status = 'pending'`): ein paralleler Widerruf, der nach dem Lesen
+        // dazwischenkommt, lässt dies 0 Zeilen treffen → neutraler Fehler, Transaktion rollt zurück.
+        let accepted_rows = tx
+            .webhooks()
+            .set_invitation_status(inv.id, "accepted", Some(user_id), now, true)
             .await?;
+        if accepted_rows == 0 {
+            return Err(invitation_not_found());
+        }
         // System-Benachrichtigung "Einladung angenommen" an den Einladenden (F.17, docs/05 §6.2).
         super::notification::fanout::insert_direct(
             &mut *tx,

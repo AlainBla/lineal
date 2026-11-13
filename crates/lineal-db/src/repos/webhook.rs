@@ -1114,9 +1114,13 @@ impl WebhookRepo for PgTx {
         status: &str,
         accepted_user: Option<UserId>,
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
-        self.set_invitation_status_impl(id, status, accepted_user, now)
+        require_pending: bool,
+    ) -> AppResult<u64> {
+        self.set_invitation_status_impl(id, status, accepted_user, now, require_pending)
             .await
+    }
+    async fn get_invitation_for_update(&mut self, id: Uuid) -> AppResult<Option<InvitationRecord>> {
+        self.get_invitation_for_update_impl(id).await
     }
     async fn activate_imported_user(
         &mut self,
@@ -1125,7 +1129,7 @@ impl WebhookRepo for PgTx {
         password_hash: Option<&str>,
         role: UserRole,
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<u64> {
         self.activate_imported_user_impl(user, name, password_hash, role, now)
             .await
     }

@@ -184,12 +184,19 @@ impl PgTx {
         status: &str,
         accepted_user: Option<UserId>,
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
-        sqlx::query(
+        require_pending: bool,
+    ) -> AppResult<u64> {
+        let guard = if require_pending {
+            " AND status = 'pending'"
+        } else {
+            ""
+        };
+        let res = sqlx::query(&format!(
             "UPDATE invitation SET status = $3, accepted_user_id = COALESCE($4, accepted_user_id), \
              accepted_at = CASE WHEN $3 = 'accepted' THEN $5 ELSE accepted_at END, \
-             version = version + 1, updated_at = $5 WHERE organization_id = $1 AND id = $2",
-        )
+             version = version + 1, updated_at = $5 \
+             WHERE organization_id = $1 AND id = $2{guard}"
+        ))
         .bind(self.org.0)
         .bind(id)
         .bind(status)
@@ -198,7 +205,23 @@ impl PgTx {
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(())
+        Ok(res.rows_affected())
+    }
+
+    pub(crate) async fn get_invitation_for_update_impl(
+        &mut self,
+        id: Uuid,
+    ) -> AppResult<Option<InvitationRecord>> {
+        let row: Option<Row> = sqlx::query_as(&format!(
+            "SELECT {COLS} FROM invitation \
+             WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE"
+        ))
+        .bind(self.org.0)
+        .bind(id)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        row.map(record).transpose()
     }
 
     pub(crate) async fn activate_imported_user_impl(
@@ -208,8 +231,8 @@ impl PgTx {
         password_hash: Option<&str>,
         role: UserRole,
         now: DateTime<Utc>,
-    ) -> AppResult<()> {
-        sqlx::query(
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
             "UPDATE \"user\" SET status = 'active', active = true, name = $3, \
              password_hash = COALESCE($4, password_hash), role = $5, version = version + 1, updated_at = $6 \
              WHERE organization_id = $1 AND id = $2 AND status = 'imported'",
@@ -223,7 +246,7 @@ impl PgTx {
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok(())
+        Ok(res.rows_affected())
     }
 
     pub(crate) async fn password_hash_of_account_impl(
