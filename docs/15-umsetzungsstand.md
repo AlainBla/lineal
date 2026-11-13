@@ -263,22 +263,22 @@ Session-Cookie ist host-only (kein `Domain=`), also sieht die Subdomain es ohneh
 **Einrichtung (einmalig, Betreiber):**
 1. **DNS:** `lineal-files.kollegeplus.de` als CNAME auf `lineal.kollegeplus.de` (gleicher Host).
    CAA wird vom Apex geerbt (§3.4) – kein neuer Record.
-2. **Caddy:** zweiter Site-Block, der die Datei-Origin auf dasselbe nginx (:8080) proxyt und den
-   `Host` erhält; Auto-LE-Zertifikat. HSTS `includeSubDomains` ist aktiv → die Subdomain muss
-   gültiges HTTPS liefern (erledigt Caddy).
-
-   ```
-   lineal-files.kollegeplus.de {
-       reverse_proxy 127.0.0.1:8080 { header_up Host {host} }
-   }
-   ```
-3. **nginx:** `deploy/nginx.conf` enthält bereits den zweiten `server`-Block (nur `/files/*`, sonst
-   404). **Pflicht:** dort `server_name lineal-files.example;` auf den echten Datei-Host ändern
-   (identisch zu `LINEAL_FILES_BASE_URL`). Ohne diesen Block liefert der Catch-all `_` die SPA
-   statisch auch unter dem Datei-Host → Isolation gebrochen.
+2. **Caddy:** zweiter Site-Block für `lineal-files.kollegeplus.de`, der **denselben Upstream wie
+   der bestehende `lineal.kollegeplus.de`-Block** nutzt (Block verbatim kopieren, nur den
+   Site-Namen ändern; nicht den Port raten – nginx hängt je nach Setup an `LINEAL_HTTP_PORT`,
+   Default 8088). `Host` muss erhalten bleiben. Auto-LE-Zertifikat; HSTS `includeSubDomains` ist
+   aktiv → die Subdomain muss gültiges HTTPS liefern (erledigt Caddy).
+3. **nginx:** `deploy/nginx.conf` enthält den zweiten `server`-Block (`server_name
+   lineal-files.kollegeplus.de`, nur `/files/*`, sonst 404) bereits mit dem echten Host – keine
+   Änderung nötig. Die Routing-Eigenschaft ist in `scripts/nginx-check.sh` CI-geprüft.
 4. **Server:** `LINEAL_FILES_BASE_URL=https://lineal-files.kollegeplus.de` setzen (muss sich von
    `LINEAL_BASE_URL` unterscheiden; ungesetzt = Feature aus). Aktiviert den App-Guard
    (Host == Datei-Origin & Pfad ∉ `/files/` → 404) als Schutz unabhängig vom Proxy.
+
+**Zuerst testen (nach Deploy):** einen HTML-Anhang (z. B. aus KOL-478) im Web über „Im Tab öffnen"
+aufrufen. Zeigt der Tab die Folien → gut. Bleibt er leer → Browser-Konsole prüfen: ein
+`SecurityError` bei `localStorage`/`document.cookie` bedeutet, dass das Deck in der opaken Sandbox
+auf gesperrte APIs zugreift (dann Deck anpassen, nicht die CSP lockern).
 
 **Verifikation (nach Deploy):**
 ```

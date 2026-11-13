@@ -94,6 +94,17 @@ check "/.env -> 404 (Dotfile-Deny)" bash -c "head -1 <<<\"\$1\" | grep -q ' 404'
 check "/.well-known/x bleibt proxied -> 503 (Server aus), nicht vom Dotfile-Regex gefressen" \
   bash -c "head -1 <<<\"\$1\" | grep -q ' 503'" _ "$(hdr /.well-known/acme-challenge/x)"
 
+# KOL-478 (Weg B): Die eigene Datei-Origin (server_name lineal-files.*) serviert NUR /files/* –
+# alles andere ist 404, insbesondere liefert sie weder die SPA noch statische /assets (sonst
+# würde dort ein Session-Cookie möglich). Host-Header auf den Datei-Host setzen.
+hdrf() { curl_in -D - -o /dev/null -H "Host: lineal-files.kollegeplus.de" "$BASE$1"; }
+check "Datei-Origin: / -> 404 (keine SPA, kein index.html)" \
+  bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdrf /)"
+check "Datei-Origin: /assets/app-abc.js -> 404 (keine statische Datei)" \
+  bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdrf /assets/app-abc.js)"
+check "Datei-Origin: /files/x -> 503 (proxied, Server aus) statt 404" \
+  bash -c "head -1 <<<\"\$1\" | grep -q ' 503'" _ "$(hdrf /files/x)"
+
 # LIN-49 S-11/Body-Limits: kleiner Default greift auf Auth (413 JSON), /uploads erlaubt große Bodies
 # (kein 413; ohne Upstream 503). 3 MiB Testbody in EINEM curl-Container erzeugen.
 big() { # method, path -> Statuszeile+Header+Body
