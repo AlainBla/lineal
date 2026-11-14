@@ -16,10 +16,29 @@ use axum::response::{IntoResponse, Response};
 use lineal_app::ports::repos::{CredentialKind, Principal};
 use lineal_app::{App, AppError, AppResult, RequestCtx};
 
-/// Name des Session-Cookies.
+/// Name des Session-Cookies (http-Dev, ohne `Secure`).
 pub const SESSION_COOKIE: &str = "lineal_session";
+/// Name mit `__Host-`-Präfix, sobald das Cookie `Secure` ist (nur https): der Browser lässt ein
+/// solches Cookie nur host-exakt, `Path=/` und ohne `Domain` zu, sodass eine kompromittierte
+/// Schwester-Subdomain kein `Domain=.kollegeplus.de`-Cookie unterschieben kann (LIN-62 L-7).
+pub const SESSION_COOKIE_HOST: &str = "__Host-lineal_session";
 /// Längere Tokens sind nie gültig (Schutz vor Hashing riesiger Header).
 const MAX_TOKEN_LEN: usize = 512;
+
+/// Cookie-Name passend zur Transportsicherheit: `__Host-`-Präfix nur mit `Secure` (https),
+/// sonst der einfache Name (http-Dev), weil `__Host-` ohne `Secure` ungültig wäre.
+pub fn session_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        SESSION_COOKIE_HOST
+    } else {
+        SESSION_COOKIE
+    }
+}
+
+/// Erkennt beide Namensvarianten beim Lesen (https schickt `__Host-…`, http-Dev ohne Präfix).
+fn is_session_cookie(name: &str) -> bool {
+    name == SESSION_COOKIE || name == SESSION_COOKIE_HOST
+}
 
 /// Art der Anmeldung; bestimmt die Rate-Limit-Klasse (09 §3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +121,7 @@ pub fn extract_token(headers: &HeaderMap) -> Option<(String, CredentialClass)> {
         };
         for pair in header.split(';') {
             if let Some((name, value)) = pair.trim().split_once('=')
-                && name == SESSION_COOKIE
+                && is_session_cookie(name)
                 && !value.is_empty()
             {
                 return Some((value.to_owned(), CredentialClass::Session));
@@ -125,10 +144,9 @@ pub async fn lookup_principal(app: &App, token: &str) -> AppResult<Option<Princi
 
 /// `Set-Cookie`-Wert für eine neue Session (docs/10 §11.4: HttpOnly; Secure; SameSite=Lax).
 pub fn session_cookie(token: &str, max_age_secs: u64, secure: bool) -> String {
+    let name = session_cookie_name(secure);
     let secure = if secure { "; Secure" } else { "" };
-    format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure}"
-    )
+    format!("{name}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure}")
 }
 
 /// `Set-Cookie`-Wert, der die Session löscht (Logout).
@@ -315,6 +333,14 @@ mod tests {
             t(headers(&[("cookie", "a=b; lineal_session=tok; c=d")])),
             Some(("tok".into(), CredentialClass::Session))
         );
+        // Produktion (https) schickt die `__Host-`-Variante; der Leser akzeptiert sie auch.
+        assert_eq!(
+            t(headers(&[(
+                "cookie",
+                "a=b; __Host-lineal_session=tok; c=d"
+            )])),
+            Some(("tok".into(), CredentialClass::Session))
+        );
         // Authorization schlägt Cookie
         assert_eq!(
             t(headers(&[
@@ -334,8 +360,17 @@ mod tests {
 
     #[test]
     fn cookie_attributes() {
+        // https: `__Host-`-Präfix, Secure, Path=/ und KEIN Domain (sonst lehnt der Browser ab).
         let c = session_cookie("tok", 60, true);
+        assert!(c.starts_with("__Host-lineal_session=tok"));
         assert!(c.contains("HttpOnly") && c.contains("Secure") && c.contains("SameSite=Lax"));
+        assert!(c.contains("Path=/") && !c.contains("Domain"));
+        // http-Dev: einfacher Name, kein `__Host-`, kein Secure.
+        let dev = session_cookie("tok", 60, false);
+        assert!(dev.starts_with("lineal_session=tok"));
+        assert!(!dev.contains("__Host-") && !dev.contains("Secure"));
+        // Löschen nutzt denselben Namen/dieselben Attribute, sonst entfernt der Browser nichts.
         assert!(clear_session_cookie(false).contains("Max-Age=0"));
+        assert!(clear_session_cookie(true).starts_with("__Host-lineal_session="));
     }
 }

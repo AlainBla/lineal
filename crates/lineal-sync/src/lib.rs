@@ -65,8 +65,10 @@ use tokio::sync::broadcast;
 use tokio::time::{Instant, interval_at, timeout};
 use uuid::Uuid;
 
-/// Name des Session-Cookies (identisch zur API).
+/// Name des Session-Cookies (identisch zur API; http-Dev ohne `Secure`).
 const SESSION_COOKIE: &str = "lineal_session";
+/// `__Host-`-Variante, die der Browser bei https schickt (LIN-62 L-7). Muss zur API passen.
+const SESSION_COOKIE_HOST: &str = "__Host-lineal_session";
 /// Längere Tokens sind nie gültig.
 const MAX_TOKEN_LEN: usize = 512;
 /// `NOTIFY`-Kanal, auf den `sync_log`-Schreiber senden.
@@ -298,7 +300,7 @@ fn extract_token(headers: &HeaderMap) -> Option<(String, bool)> {
         };
         for pair in header.split(';') {
             if let Some((name, value)) = pair.trim().split_once('=')
-                && name == SESSION_COOKIE
+                && (name == SESSION_COOKIE || name == SESSION_COOKIE_HOST)
                 && !value.is_empty()
             {
                 return Some((value.to_owned(), true));

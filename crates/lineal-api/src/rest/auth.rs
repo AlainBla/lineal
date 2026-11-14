@@ -66,15 +66,20 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
 }
 
 fn session_cookie(app: &App, token: &str, max_age_secs: i64) -> Option<HeaderValue> {
-    let secure = if app.config.base_url.starts_with("https://") {
-        "; Secure"
-    } else {
-        ""
-    };
+    let secure = app.config.base_url.starts_with("https://");
+    let name = crate::middleware::auth::session_cookie_name(secure);
+    let secure_attr = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure}"
+        "{name}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure_attr}"
     ))
     .ok()
+}
+
+/// Session-Cookie lesen und dabei beide Namensvarianten akzeptieren: in Produktion schickt der
+/// Browser `__Host-lineal_session`, in der http-Entwicklung `lineal_session` (LIN-62 L-7).
+fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, crate::middleware::auth::SESSION_COOKIE_HOST)
+        .or_else(|| cookie_value(headers, SESSION_COOKIE))
 }
 
 /// `POST /auth/login`: `{ "email", "password", "workspace"? }`.
@@ -224,7 +229,7 @@ pub async fn logout(
 ) -> Response {
     let client_ip = client.map(|Extension(c)| c.0.to_string());
     let request_id = request_id.map(|Extension(r)| r.0);
-    if let Some(token) = cookie_value(&headers, SESSION_COOKIE)
+    if let Some(token) = session_cookie_value(&headers)
         && let Err(e) = app.logout(&token, client_ip, request_id).await
     {
         return error_response(e);
@@ -238,7 +243,7 @@ pub async fn logout(
 
 /// `GET /auth/me`: der eingeloggte User (Session-Cookie oder `Authorization`-Header).
 pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    let cookie = cookie_value(&headers, SESSION_COOKIE);
+    let cookie = session_cookie_value(&headers);
     let from_cookie = cookie.is_some();
     let Some(token) = cookie.or_else(|| bearer(&headers)) else {
         return error_response(AppError::unauthenticated("Missing credentials."));
