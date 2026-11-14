@@ -26,7 +26,7 @@ services:
   postgres:
     profiles: [dev]
     # S-10/LIN-35: per Index-Digest gepinnt (Dependabot-docker bumpt ihn).
-    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    image: postgres:16@sha256:63e83b5a3dc36a917dccb76fe1bd2ac51f1ec9c1deb47ff20d4f04233bf6eae9
     environment:
       POSTGRES_USER: lineal
       POSTGRES_PASSWORD: lineal
@@ -54,7 +54,7 @@ services:
     cap_drop: ["ALL"]
     cap_add: ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]
     pids_limit: 2048
-    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+    image: postgres:16@sha256:63e83b5a3dc36a917dccb76fe1bd2ac51f1ec9c1deb47ff20d4f04233bf6eae9
     # Ohne Passwort klar scheitern (Compose-Interpolation `:?` würde auch `docker compose up`
     # ohne Profil blockieren).
     entrypoint:
