@@ -8,9 +8,9 @@ use crate::error::ApiError;
 use crate::middleware::Platform;
 use crate::middleware::request_id::RequestId;
 use axum::extract::{FromRequestParts, Request, State};
-use axum::http::header::{AUTHORIZATION, COOKIE};
+use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use lineal_app::ports::repos::{CredentialKind, Principal};
@@ -168,12 +168,29 @@ pub(crate) fn blocked_response(path: &str, retry_after_secs: u64) -> Response {
 /// Zählt einen Fehlversuch (ungültiges Token) auf die Client-IP. Ist die IP bereits gesperrt,
 /// antwortet die Anfrage mit 429 (kein weiterer Lookup-Spielraum für Token-Raten); gültige
 /// Tokens kommen hier nie an.
-fn fail_attempt(p: &Platform, ip: Option<&str>, now_ms: i64, path: &str) -> Option<Response> {
+fn fail_attempt(
+    p: &Platform,
+    ip: Option<&str>,
+    now_ms: i64,
+    path: &str,
+    is_cookie: bool,
+) -> Option<Response> {
     let ip = ip?;
-    if let Some(wait) = p.fails.ip_blocked(ip, now_ms) {
+    // LIN-62 L-11: Fehler durch ein ungültiges Session-Cookie werden getrennt vom `ip:`-Login-
+    // Zähler geführt, damit ein Browser mit alter Session den Login derselben IP nicht aussperrt.
+    let blocked = if is_cookie {
+        p.fails.cookie_blocked(ip, now_ms)
+    } else {
+        p.fails.ip_blocked(ip, now_ms)
+    };
+    if let Some(wait) = blocked {
         return Some(blocked_response(path, wait));
     }
-    p.fails.record_ip(ip, now_ms);
+    if is_cookie {
+        p.fails.record_cookie(ip, now_ms);
+    } else {
+        p.fails.record_ip(ip, now_ms);
+    }
     None
 }
 
@@ -181,6 +198,10 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
     let now_ms = p.app.clock.now().timestamp_millis();
     let ip_key = crate::rate_limit::client_ip(&req);
     let mut session_hash: Option<String> = None;
+    // LIN-62 L-11: Kam die ungültige Anmeldung über ein Session-Cookie, löschen wir es am Ende per
+    // `Set-Cookie: Max-Age=0`, damit ein Browser mit alter/widerrufener Session es nicht endlos
+    // weiterschickt (und so Fehlversuche sammelt).
+    let mut clear_stale_cookie = false;
     let state = match extract_token(req.headers()) {
         None => AuthState::Anonymous,
         Some((token, class)) => {
@@ -190,8 +211,10 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
             match lookup_principal(&p.app, &token).await {
                 Ok(Some(principal)) if !transport_matches(class, principal.kind) => {
                     // Token-Art passt nicht zum Transport (z. B. API-Key im Session-Cookie).
+                    let is_cookie = class == CredentialClass::Session;
+                    clear_stale_cookie |= is_cookie;
                     if let Some(resp) =
-                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path())
+                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path(), is_cookie)
                     {
                         return resp;
                     }
@@ -227,8 +250,10 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                     }
                 }
                 Ok(None) => {
+                    let is_cookie = class == CredentialClass::Session;
+                    clear_stale_cookie |= is_cookie;
                     if let Some(resp) =
-                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path())
+                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path(), is_cookie)
                     {
                         return resp;
                     }
@@ -244,7 +269,27 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
     if let Some(h) = session_hash {
         req.extensions_mut().insert(CurrentSession(h));
     }
-    next.run(req).await
+    let mut resp = next.run(req).await;
+    // LIN-62 L-11: Das veraltete Session-Cookie löschen (beide Namen: `__Host-` mit Secure und der
+    // einfache Name fürs http-Dev) — aber nur, wenn der Handler nicht selbst schon ein Session-
+    // Cookie setzt (Login setzt ein neues, Logout löscht bereits), sonst würde der Clear es wieder
+    // entfernen.
+    if clear_stale_cookie {
+        let handler_sets_session = resp
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .any(|c| c.starts_with(SESSION_COOKIE) || c.starts_with(SESSION_COOKIE_HOST));
+        if !handler_sets_session {
+            for v in [clear_session_cookie(true), clear_session_cookie(false)] {
+                if let Ok(hv) = HeaderValue::from_str(&v) {
+                    resp.headers_mut().append(SET_COOKIE, hv);
+                }
+            }
+        }
+    }
+    resp
 }
 
 /// Extraktor für geschützte REST-Handler: liefert den `RequestCtx` oder antwortet 401.

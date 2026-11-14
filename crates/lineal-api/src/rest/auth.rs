@@ -434,6 +434,73 @@ mod tests {
         assert!(headers.get(header::SET_COOKIE).is_none());
     }
 
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn invalid_session_cookie_is_cleared_both_names(pool: sqlx::PgPool) {
+        // LIN-62 L-11: Eine Anfrage mit ungültigem Session-Cookie bekommt das Cookie per
+        // `Max-Age=0` gelöscht – und zwar beide Namen (`__Host-` mit Secure und der einfache),
+        // damit ein nach dem L-7-Rollout verbliebenes `lineal_session` sicher verschwindet.
+        let r = setup(pool).await;
+        let req = Request::builder()
+            .uri("/auth/me")
+            .header("cookie", "lineal_session=bogus-token")
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, _) = send(&r, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let cookies: Vec<String> = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            cookies
+                .iter()
+                .any(|c| c.starts_with("__Host-lineal_session=")
+                    && c.contains("Max-Age=0")
+                    && c.contains("Secure")),
+            "__Host-Cookie wird nicht gelöscht: {cookies:?}"
+        );
+        assert!(
+            cookies
+                .iter()
+                .any(|c| c.starts_with("lineal_session=") && c.contains("Max-Age=0")),
+            "einfaches Cookie wird nicht gelöscht: {cookies:?}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn login_with_a_stale_cookie_still_sets_a_fresh_session(pool: sqlx::PgPool) {
+        // Der Lösch-Guard darf das frische Login-Cookie nicht wieder entfernen, auch wenn die
+        // Login-Anfrage ein altes, ungültiges Cookie mitschickt (LIN-62 L-11).
+        let r = setup(pool).await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/auth/login")
+            .header("content-type", "application/json")
+            .header("cookie", "lineal_session=stale")
+            .body(Body::from(
+                json!({ "email": "alice@acme.example", "password": PW }).to_string(),
+            ))
+            .unwrap();
+        let (status, headers, _) = send(&r, req).await;
+        assert_eq!(status, StatusCode::OK);
+        let session: Vec<String> = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .filter(|c| c.starts_with("lineal_session=") || c.starts_with("__Host-lineal_session="))
+            .collect();
+        assert_eq!(
+            session.len(),
+            1,
+            "genau ein Session-Cookie erwartet: {session:?}"
+        );
+        assert!(
+            !session[0].contains("Max-Age=0"),
+            "das Login-Cookie darf nicht gelöscht werden: {session:?}"
+        );
+    }
+
     fn accept_req(token: &str, email: &str, origin: Option<&str>) -> Request<Body> {
         let mut r = Request::builder()
             .method("POST")

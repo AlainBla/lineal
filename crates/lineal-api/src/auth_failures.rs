@@ -31,6 +31,14 @@ pub const IP_RULE: Rule = Rule {
     limit: 20,
     window_ms: 60_000,
 };
+/// Anfragen mit ungültigem **Session-Cookie** (abgelaufen/widerrufen) je IP: getrennt vom
+/// `ip:`-Login-Zähler gezählt (LIN-62 L-11), damit ein Browser mit alter Session hinter einer
+/// Büro-NAT nicht den Login derselben IP aussperrt. Großzügig und mit derselben Fensterlänge wie
+/// `IP_RULE` (wichtig: `purge_expired` nutzt für Nicht-`acct`-Schlüssel die IP-Fensterlänge).
+pub const COOKIE_RULE: Rule = Rule {
+    limit: 120,
+    window_ms: 60_000,
+};
 /// Fehlversuche je Ziel-Account: 10 pro 15 Minuten.
 pub const ACCOUNT_RULE: Rule = Rule {
     limit: 10,
@@ -210,6 +218,16 @@ impl AuthFailures {
         self.record(&format!("ip:{ip_key}"), IP_RULE, now_ms);
     }
 
+    /// Wie `ip_blocked`, aber für ungültige Session-Cookies (eigener, großzügiger Zähler, LIN-62
+    /// L-11). Sperrt NICHT den Login-`ip:`-Zähler.
+    pub fn cookie_blocked(&self, ip_key: &str, now_ms: i64) -> Option<u64> {
+        self.blocked_for(&format!("cookie:{ip_key}"), COOKIE_RULE, now_ms)
+    }
+
+    pub fn record_cookie(&self, ip_key: &str, now_ms: i64) {
+        self.record(&format!("cookie:{ip_key}"), COOKIE_RULE, now_ms);
+    }
+
     /// Reserviert die Login-Zähler (IP, Paar Account+IP, Account gesamt) vor der Passwortprüfung.
     /// Bei `Err` ist nichts reserviert.
     ///
@@ -309,6 +327,25 @@ fn account_hard_total_key(account: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn cookie_failures_do_not_block_the_login_ip() {
+        // LIN-62 L-11: Viele Anfragen mit ungültigem Session-Cookie von derselben IP dürfen den
+        // `ip:`-Login-Zähler NICHT sperren (sonst 429 beim Login hinter NAT).
+        let f = AuthFailures::default();
+        for i in 0..100 {
+            f.record_cookie("198.51.100.9", i);
+        }
+        assert!(
+            f.ip_blocked("198.51.100.9", 100).is_none(),
+            "Cookie-Fehler dürfen den Login-IP-Zähler nicht sperren"
+        );
+        // Der Cookie-Zähler selbst sperrt erst ab seinem eigenen (großzügigen) Limit.
+        for i in 0..i64::from(COOKIE_RULE.limit) {
+            f.record_cookie("203.0.113.5", i);
+        }
+        assert!(f.cookie_blocked("203.0.113.5", 1000).is_some());
+    }
 
     #[test]
     fn login_keys_stay_small_for_huge_accounts() {
