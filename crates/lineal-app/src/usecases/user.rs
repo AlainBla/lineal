@@ -17,8 +17,11 @@ use lineal_domain::events::DomainEvent;
 use lineal_domain::ids::{TeamId, UserId};
 use serde_json::json;
 
-/// Mindestlänge von Passwörtern.
-pub const MIN_PASSWORD_LEN: usize = 8;
+/// Mindestlänge selbstgewählter Passwörter (LIN-62 L-8). Gilt für alle Pfade, auf denen ein
+/// Nutzer ein Passwort setzt (Registrierung, Einladungsannahme, Passwortwechsel, Admin setzt).
+pub const MIN_PASSWORD_LEN: usize = 12;
+/// Höchstlänge eines Passworts (Schutz vor überlangen Eingaben für den Argon2-Hash).
+pub const MAX_PASSWORD_LEN: usize = 1024;
 
 pub(crate) fn validate_email(email: &str) -> AppResult<()> {
     if is_valid_email(email) {
@@ -77,11 +80,16 @@ pub(crate) fn check_invite_domain(
 }
 
 pub(crate) fn validate_password(password: &str) -> AppResult<()> {
-    if password.chars().count() < MIN_PASSWORD_LEN {
+    let len = password.chars().count();
+    if len < MIN_PASSWORD_LEN {
         return Err(AppError::invalid_request(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
         ))
         .with_details(json!({ "field": "password" })));
+    }
+    if len > MAX_PASSWORD_LEN {
+        return Err(AppError::invalid_request("password is too long")
+            .with_details(json!({ "field": "password" })));
     }
     Ok(())
 }
@@ -638,7 +646,11 @@ mod tests {
         for bad in ["", "alice", "@x.io", "a@b", "a b@x.io", "a@.io"] {
             assert!(validate_email(bad).is_err(), "{bad}");
         }
-        assert!(validate_password("lineal-dev").is_ok());
+        // `lineal-dev` ist das 10-stellige Seed-Passwort und liegt bewusst UNTER dem Minimum;
+        // die 12er-Regel gilt für selbstgewählte Passwörter, nicht für die Insecure-Demo-User.
+        assert!(validate_password("lineal-dev").is_err());
+        assert!(validate_password("zwoelf-zeichen").is_ok()); // 14 Zeichen
         assert!(validate_password("short").is_err());
+        assert!(validate_password(&"x".repeat(MAX_PASSWORD_LEN + 1)).is_err());
     }
 }

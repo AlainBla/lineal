@@ -80,7 +80,7 @@ describe("acceptInvite", () => {
 });
 
 describe("validateAccept", () => {
-  it("requires email, name, a password of 8+ characters and a matching repeat", () => {
+  it("requires email, name, a password of 12+ characters and a matching repeat", () => {
     expect(validateAccept({ email: "x", name: "", password: "kurz", confirm: "anders" })).toEqual({
       email: expect.any(String),
       name: expect.any(String),
@@ -91,8 +91,8 @@ describe("validateAccept", () => {
       validateAccept({
         email: "dora@acme.example",
         name: "Dora",
-        password: "12345678",
-        confirm: "12345678",
+        password: "123456789012",
+        confirm: "123456789012",
       }),
     ).toEqual({});
   });
@@ -139,7 +139,7 @@ describe("InvitePage", () => {
     await user.type(screen.getByLabelText("Password"), "kurz");
     await user.type(screen.getByLabelText("Repeat password"), "anders");
     await user.click(screen.getByRole("button", { name: /Create account and join/ }));
-    expect(await screen.findByText(/at least 8 characters/)).toBeInTheDocument();
+    expect(await screen.findByText(/at least 12 characters/)).toBeInTheDocument();
     expect(screen.getByText(/do not match/)).toBeInTheDocument();
     expect(submit).not.toHaveBeenCalled();
   });

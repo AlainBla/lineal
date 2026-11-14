@@ -123,6 +123,11 @@ impl App {
     /// Platzhalter-User ohne Passwort und suspendierte User liefern dieselbe Antwort; in jedem
     /// Fall läuft genau eine Passwortprüfung pro Kandidat (bzw. eine Dummy-Prüfung ohne Kandidat).
     pub async fn login(&self, input: LoginInput) -> AppResult<Login> {
+        // Überlange Eingabe gar nicht erst hashen (LIN-62 L-8). Hängt nur vom eingereichten
+        // Passwort ab, verrät also nichts über die Existenz eines Kontos.
+        if input.password.chars().count() > super::user::MAX_PASSWORD_LEN {
+            return Err(invalid_credentials());
+        }
         let mut tx = self.store.begin_system().await?;
         let candidates = tx
             .auth()

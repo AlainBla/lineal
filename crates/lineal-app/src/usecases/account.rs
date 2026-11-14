@@ -8,7 +8,7 @@
 use super::audit::AuditEvent;
 use super::team::emit;
 use super::team::validate_timezone;
-use super::user::validate_password;
+use super::user::{MAX_PASSWORD_LEN, validate_password};
 use crate::app::App;
 use crate::context::{Actor, RequestCtx};
 use crate::error::{AppError, AppResult};
@@ -44,8 +44,6 @@ pub struct SessionInfo {
     pub current: bool,
 }
 
-/// Höchstlänge eines Passworts (Schutz vor überlangen Eingaben für den Hash).
-pub const MAX_PASSWORD_LEN: usize = 1024;
 /// Größte erlaubte Avatar-Datei.
 pub const MAX_AVATAR_BYTES: i64 = 5 * 1024 * 1024;
 const AVATAR_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];

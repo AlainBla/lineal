@@ -306,6 +306,10 @@ mod tests {
     use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
     use tower::ServiceExt;
 
+    /// Testpasswort für Alice: >= 12 Zeichen (Mindestlänge, LIN-62 L-8). Nicht das 10-stellige
+    /// Seed-Passwort, weil `set_user_password` die Länge prüft.
+    const PW: &str = "alice-test-pw-1";
+
     async fn setup(pool: sqlx::PgPool) -> Router {
         let store = PgStore::new(pool);
         let mut tx = store.begin(SeedData::acme().org).await.unwrap();
@@ -313,7 +317,7 @@ mod tests {
         tx.commit().await.unwrap();
         let app = test_app(Arc::new(store));
         // Seed-Hash ist Argon2; der Testkit-Hasher kennt nur `fake:`-Hashes -> Passwort setzen.
-        app.set_user_password(&ctx_for(SeedUser::Alice), "me", "lineal-dev")
+        app.set_user_password(&ctx_for(SeedUser::Alice), "me", PW)
             .await
             .unwrap();
         router(app, false)
@@ -345,7 +349,7 @@ mod tests {
     #[sqlx::test(migrations = "../lineal-db/migrations")]
     async fn login_me_logout_roundtrip(pool: sqlx::PgPool) {
         let r = setup(pool).await;
-        let (status, headers, body) = send(&r, login_req("lineal-dev")).await;
+        let (status, headers, body) = send(&r, login_req(PW)).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body["csrfToken"].is_string());
         let cookie = headers
@@ -419,7 +423,7 @@ mod tests {
             assert_eq!(status, StatusCode::UNAUTHORIZED, "versuch {i}");
         }
         // Das richtige Passwort hilft jetzt nicht mehr: 429 mit Retry-After.
-        let (status, headers, body) = send(&r, login_req("lineal-dev")).await;
+        let (status, headers, body) = send(&r, login_req(PW)).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert!(headers.contains_key(header::RETRY_AFTER));
         assert!(headers.get(header::SET_COOKIE).is_none());

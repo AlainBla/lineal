@@ -7,7 +7,7 @@
  */
 import { gqlRequest, GraphQLRequestError } from "@/lib/graphql";
 
-export const MIN_PASSWORD_LEN = 8;
+export const MIN_PASSWORD_LEN = 12;
 
 export type AcceptResult =
   | { ok: true; workspace: string | null }

@@ -210,7 +210,7 @@ describe("AccountSecurityPage", () => {
     const submit = await screen.findByRole("button", { name: "Change password" });
     await user.type(screen.getByLabelText("Current password"), "old-password");
     await user.type(screen.getByLabelText("New password"), "short");
-    expect(screen.getByRole("alert")).toHaveTextContent("at least 8");
+    expect(screen.getByRole("alert")).toHaveTextContent("at least 12");
     expect(submit).toBeDisabled();
     await user.clear(screen.getByLabelText("New password"));
     await user.type(screen.getByLabelText("New password"), "brand-new-pw");

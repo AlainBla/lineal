@@ -748,7 +748,7 @@ async fn workspace_creation_builds_the_scaffold(pool: PgPool) {
             url_key: None,
             owner_name: "Zed Example".into(),
             owner_email: "zed@globex.example".into(),
-            owner_password: Some("lineal-dev".into()),
+            owner_password: Some("owner-test-pw-1".into()),
             credential_kind: None,
         })
         .await
@@ -1133,7 +1133,7 @@ async fn role_changes_cannot_escalate(pool: PgPool) {
     );
     assert_eq!(
         kind(
-            app.set_user_password(&bob_admin, "alice", "hijack-pass")
+            app.set_user_password(&bob_admin, "alice", "hijack-pass1")
                 .await
         ),
         ErrorKind::Forbidden

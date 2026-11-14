@@ -24,7 +24,7 @@ import {
 import { workspaceSettingsNav } from "./nav";
 import { Field, Section, SettingsShell } from "./ui";
 
-const MIN_PASSWORD = 8;
+const MIN_PASSWORD = 12;
 
 function PasswordForm() {
   const change = usePasswordChange();

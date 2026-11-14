@@ -88,7 +88,7 @@ async fn admins_rejects_unlisted_role_user_suspended_and_same_email_elsewhere(po
             url_key: Some("evil".into()),
             owner_name: "Mallory".into(),
             owner_email: "alice@acme.example".into(),
-            owner_password: Some("lineal-dev".into()),
+            owner_password: Some("owner-test-pw-1".into()),
             credential_kind: None,
         })
         .await
