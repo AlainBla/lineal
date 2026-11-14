@@ -315,6 +315,14 @@ fn exempt(path: &str) -> bool {
     matches!(path, "/healthz" | "/readyz")
 }
 
+/// Öffentliche, unauthentifizierte Auth-Pfade (LIN-62 L-3): Sie dürfen ohne Anmeldung aufgerufen
+/// werden, verrichten aber sicherheitskritische Arbeit. Hier muss immer das strenge Anon-IP-Limit
+/// greifen, egal ob ein (auch erfundenes) Credential mitkommt – sonst hebt ein beliebiges Token
+/// das Limit auf das hohe Netz an.
+fn public_auth_path(path: &str) -> bool {
+    matches!(path, "/invite/accept" | "/oauth/register" | "/oauth/token")
+}
+
 /// Stufe 1 (vor der Authentifizierung): Anfragen ohne Zugangsdaten nutzen das (kleine)
 /// Anonym-Limit je IP. Anfragen mit Zugangsdaten werden in Stufe 2 nach dem Lookup gezählt.
 pub async fn ip_middleware(
@@ -348,6 +356,21 @@ pub async fn ip_middleware(
         );
         if !d.allowed {
             return rejection(&req, &d, "requests per IP");
+        }
+        // LIN-62 L-3: Öffentliche Auth-Pfade zusätzlich am strengen Anon-IP-Limit messen, damit ein
+        // (auch erfundenes) Credential dieses Limit nicht umgeht. Zählt in denselben `ip:`-Bucket
+        // wie anonyme Anfragen – die sensiblen Pfade teilen sich also das Anon-Budget der IP.
+        if public_auth_path(req.uri().path()) {
+            let anon = p.limiter.take(
+                &format!("ip:{ip}"),
+                p.cfg.rate.anonymous.requests,
+                p.cfg.rate.period_secs,
+                1.0,
+                now_ms,
+            );
+            if !anon.allowed {
+                return rejection(&req, &anon, "requests per IP");
+            }
         }
         return next.run(req).await;
     }

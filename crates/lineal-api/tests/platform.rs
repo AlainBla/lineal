@@ -8,7 +8,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use http_body_util::BodyExt;
 use lineal_api::blob::{GET_TTL, LocalBlobStore, PUT_TTL};
@@ -457,6 +457,60 @@ async fn forged_forwarded_for_from_untrusted_peer_does_not_evade_the_rate_limit(
     {
         let r = send(&router, from_peer("203.0.113.9", &format!("1.2.3.{i}"))).await;
         assert_eq!(r.status, expected, "request {i}");
+    }
+}
+
+#[tokio::test]
+async fn credential_does_not_bypass_the_anon_limit_on_public_auth_paths() {
+    // LIN-62 L-3: Auf öffentlichen Auth-Pfaden (hier /oauth/register) muss das strenge Anon-IP-
+    // Limit auch dann greifen, wenn ein Credential mitkommt – sonst hebt ein beliebiges Token das
+    // Limit auf das hohe ipa:-Netz an. Ein normaler Pfad bleibt dagegen beim ipa:-Netz.
+    let app = app_with_keys();
+    let mut cfg = PlatformConfig::new(&app, false);
+    cfg.rate.anonymous = ClassLimits {
+        requests: 2.0,
+        complexity: 100.0,
+    };
+    let router = apply_with(
+        Router::new()
+            .route("/oauth/register", post(|| async { "ok" }))
+            .route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let req = |method: &str, path: &str| {
+        let mut r = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", KEY_RW)
+            .body(Body::empty())
+            .unwrap();
+        r.extensions_mut().insert(axum::extract::ConnectInfo(
+            "203.0.113.50:4000".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        r
+    };
+    for (i, expected) in [
+        StatusCode::OK,
+        StatusCode::OK,
+        StatusCode::TOO_MANY_REQUESTS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            send(&router, req("POST", "/oauth/register")).await.status,
+            expected,
+            "register {i}"
+        );
+    }
+    // Kontrolle: derselbe Credential-Client auf einem normalen Pfad bleibt unbegrenzt (ipa:-Netz).
+    for i in 0..3 {
+        assert_eq!(
+            send(&router, req("GET", "/ping")).await.status,
+            StatusCode::OK,
+            "ping {i}"
+        );
     }
 }
 
