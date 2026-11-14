@@ -10,7 +10,7 @@ use crate::middleware::auth::{AuthState, CredentialClass, MaybeAuth, hash_token}
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Form, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -165,8 +165,22 @@ fn is_unsafe_name_char(c: char) -> bool {
         || ('\u{2066}'..='\u{2069}').contains(&c)
 }
 
-pub async fn register(State(app): State<Arc<App>>, body: Bytes) -> Response {
+pub async fn register(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {
     let bad = |d: &str| oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata", d);
+    // LIN-62 L-9: Nur echte JSON-Clients. Ohne diese Prüfung ließe sich /oauth/register als
+    // „simple request" per Formular aus einer fremden Website im Browser des Opfers auslösen;
+    // `application/json` erzwingt einen CORS-Preflight, den wir nicht beantworten.
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !content_type
+        .split(';')
+        .next()
+        .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return bad("Content-Type must be application/json");
+    }
     if body.len() > 16 * 1024 {
         return bad("request too large");
     }

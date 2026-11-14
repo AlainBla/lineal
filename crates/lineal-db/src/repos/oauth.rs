@@ -125,6 +125,37 @@ impl PgTx {
         Ok(())
     }
 
+    pub(crate) async fn oauth_delete_stale_registrations_impl(
+        &mut self,
+        before: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        // Registrierungen, zu denen es keine oauth_application gibt (nie zugestimmt) und die älter
+        // als `before` sind. Mandantenübergreifend (begin_system) – kein Org-Filter.
+        let n = sqlx::query(
+            "DELETE FROM oauth_client_registration r WHERE r.created_at < $1 \
+             AND NOT EXISTS (SELECT 1 FROM oauth_application a WHERE a.dcr_client_id = r.client_id)",
+        )
+        .bind(before)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        Ok(n)
+    }
+
+    pub(crate) async fn oauth_delete_expired_codes_impl(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let n = sqlx::query("DELETE FROM oauth_authorization_code WHERE expires_at < $1")
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        Ok(n)
+    }
+
     pub(crate) async fn oauth_find_code_impl(
         &mut self,
         code_hash: &str,

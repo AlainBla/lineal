@@ -397,6 +397,15 @@ pub trait WebhookRepo: Send {
     async fn oauth_insert_code(&mut self, _code: &NewAuthCode) -> AppResult<()> {
         unimplemented_repo()
     }
+    /// Löscht DCR-Registrierungen ohne zugehörige `oauth_application`, die älter als `_before`
+    /// sind (LIN-62 L-9). Mandantenübergreifend; nur unter `begin_system`. Zahl der Zeilen.
+    async fn oauth_delete_stale_registrations(&mut self, _before: DateTime<Utc>) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// Löscht abgelaufene Autorisierungscodes (`expires_at < _now`). Mandantenübergreifend.
+    async fn oauth_delete_expired_codes(&mut self, _now: DateTime<Utc>) -> AppResult<u64> {
+        unimplemented_repo()
+    }
     /// Code zum Hash (mandantenübergreifend; nur `begin_system`).
     async fn oauth_find_code(&mut self, _code_hash: &str) -> AppResult<Option<AuthCodeRecord>> {
         unimplemented_repo()

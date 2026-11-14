@@ -704,6 +704,24 @@ async fn suspending_a_user_kills_codes_refresh_tokens_and_stays_dead(pool: PgPoo
 }
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn registration_requires_json_content_type(pool: PgPool) {
+    // LIN-62 L-9: Ohne `application/json` abgelehnt — verhindert das Auslösen aus einer fremden
+    // Website per einfachem Formular-POST (text/plain) im Browser des Opfers.
+    let fx = setup(pool).await;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/register")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from(
+            json!({ "client_name": "Test", "redirect_uris": [REDIRECT] }).to_string(),
+        ))
+        .unwrap();
+    let (status, _, body) = send(&fx.api, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("Content-Type"), "{body}");
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn registration_rejects_bidi_client_name(pool: PgPool) {
     let fx = setup(pool).await;
     // S-22: Ein Bidi-Override im Namen würde die Consent-Anzeige verschleiern → abgelehnt.

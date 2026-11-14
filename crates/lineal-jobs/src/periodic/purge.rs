@@ -40,8 +40,34 @@ impl PeriodicJob for PurgeJob {
         // Die Upload-Bereinigung (`App::run_upload_purge`) läuft bewusst nicht mehr: Sie hat Editor-Bilder
         // und Avatare gelöscht. Abgebrochene Uploads bleiben dafür liegen.
         purge_queues(app, now).await?;
+        // LIN-62 L-9: unbenutzte DCR-Registrierungen, abgelaufene Auth-Codes und Sessions räumen.
+        purge_oauth_and_sessions(app, now).await?;
         Ok(())
     }
+}
+
+/// Unbenutzte DCR-Clients werden nach dieser Frist gelöscht (keine zugehörige oauth_application).
+pub const DCR_STALE_HOURS: i64 = 24;
+
+/// LIN-62 L-9: räumt OAuth-/Session-Altlasten, die sonst unbegrenzt liegen bleiben.
+pub async fn purge_oauth_and_sessions(app: &App, now: DateTime<Utc>) -> AppResult<()> {
+    let mut tx = app.store.begin_system().await?;
+    let registrations = tx
+        .webhooks()
+        .oauth_delete_stale_registrations(now - chrono::Duration::hours(DCR_STALE_HOURS))
+        .await?;
+    let codes = tx.webhooks().oauth_delete_expired_codes(now).await?;
+    let sessions = tx.auth().delete_expired_sessions(now).await?;
+    tx.commit().await?;
+    if registrations > 0 || codes > 0 || sessions > 0 {
+        tracing::info!(
+            registrations,
+            codes,
+            sessions,
+            "purged stale DCR registrations, expired auth codes and sessions"
+        );
+    }
+    Ok(())
 }
 
 /// Aufbewahrung erledigter Jobs (1 Tag), fehlgeschlagener Jobs (14 Tage) und verarbeiteter

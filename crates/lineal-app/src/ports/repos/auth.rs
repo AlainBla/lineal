@@ -245,6 +245,12 @@ pub trait AuthRepo: Send {
     ) -> AppResult<u64> {
         unimplemented_repo()
     }
+    /// Löscht abgelaufene Sessions (`expires_at < _now`). Widerrufene, aber noch nicht abgelaufene
+    /// Sessions bleiben erhalten – sie müssen weiterhin „ungültig" liefern, nicht „unbekannt"
+    /// (LIN-62 L-9). Mandantenübergreifend; nur unter `begin_system`. Zahl der Zeilen.
+    async fn delete_expired_sessions(&mut self, _now: DateTime<Utc>) -> AppResult<u64> {
+        unimplemented_repo()
+    }
     /// OAuth-Freigaben des Users, je Anwendung gruppiert (nur mit aktiven Tokens).
     async fn list_oauth_grants(&mut self, _user_id: UserId) -> AppResult<Vec<OAuthGrant>> {
         unimplemented_repo()

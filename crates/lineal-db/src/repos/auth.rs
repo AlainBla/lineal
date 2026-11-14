@@ -559,6 +559,18 @@ impl AuthRepo for PgTx {
         Ok(n)
     }
 
+    async fn delete_expired_sessions(&mut self, now: DateTime<Utc>) -> AppResult<u64> {
+        // Nur abgelaufene; widerrufene-aber-noch-gültige bleiben (müssen „ungültig" liefern).
+        // Mandantenübergreifend (begin_system) – kein Org-Filter.
+        let n = sqlx::query("DELETE FROM user_session WHERE expires_at < $1")
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        Ok(n)
+    }
+
     async fn list_oauth_grants(&mut self, user_id: UserId) -> AppResult<Vec<OAuthGrant>> {
         // Ein aktives Token je Zeile; die Gruppierung je Anwendung (Scopes vereinen, früheste
         // Freigabe, jüngste Aktivität) in Rust – klarer als Array-Aggregate in SQL.

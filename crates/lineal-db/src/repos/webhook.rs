@@ -1041,6 +1041,12 @@ impl WebhookRepo for PgTx {
     async fn oauth_insert_code(&mut self, code: &NewAuthCode) -> AppResult<()> {
         self.oauth_insert_code_impl(code).await
     }
+    async fn oauth_delete_stale_registrations(&mut self, before: DateTime<Utc>) -> AppResult<u64> {
+        self.oauth_delete_stale_registrations_impl(before).await
+    }
+    async fn oauth_delete_expired_codes(&mut self, now: DateTime<Utc>) -> AppResult<u64> {
+        self.oauth_delete_expired_codes_impl(now).await
+    }
     async fn oauth_find_code(&mut self, code_hash: &str) -> AppResult<Option<AuthCodeRecord>> {
         self.oauth_find_code_impl(code_hash).await
     }
