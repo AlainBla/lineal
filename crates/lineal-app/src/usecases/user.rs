@@ -547,9 +547,13 @@ impl App {
         .await?;
         if !active {
             // Alte Sessions, Keys und Tokens bleiben auch nach einer Entsperrung ungültig.
+            let now = self.clock.now();
             tx.auth()
-                .revoke_all_credentials_of_user(target.id, self.clock.now())
+                .revoke_all_credentials_of_user(target.id, now)
                 .await?;
+            // LIN-62 L-6: Auch die Bot-Keys mitnehmen, die der gesperrte Admin erzeugt hat – die
+            // hängen am Bot-User, nicht am Ersteller, und blieben sonst gültig.
+            tx.auth().revoke_api_keys_created_by(target.id, now).await?;
         }
         emit(
             &mut *tx,

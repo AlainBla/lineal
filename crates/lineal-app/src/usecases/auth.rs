@@ -466,6 +466,9 @@ impl App {
                 scopes,
                 team_ids,
                 expires_at: input.expires_at,
+                // LIN-62 L-6: Ersteller festhalten (Bot-Key: der Admin; eigener Key: der User
+                // selbst; System-Aktoren: None), damit die Sperre des Erstellers die Keys mitnimmt.
+                created_by: crate::resolve::user::actor_user_id(ctx),
                 now,
             })
             .await?;

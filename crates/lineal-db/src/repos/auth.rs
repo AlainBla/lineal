@@ -383,7 +383,7 @@ impl AuthRepo for PgTx {
             k.team_ids.as_ref().map(|v| v.iter().map(|t| t.0).collect());
         sqlx::query(
             "INSERT INTO api_key (id, organization_id, user_id, label, key_prefix, key_hash, scopes, team_ids, \
-             expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
+             expires_at, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
         )
         .bind(k.id.0)
         .bind(self.org.0)
@@ -394,6 +394,7 @@ impl AuthRepo for PgTx {
         .bind(&k.scopes)
         .bind(team_ids)
         .bind(k.expires_at)
+        .bind(k.created_by.map(|u| u.0))
         .bind(k.now)
         .execute(&mut *self.tx)
         .await
@@ -530,6 +531,26 @@ impl AuthRepo for PgTx {
         )
         .bind(self.org.0)
         .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        Ok(n)
+    }
+
+    async fn revoke_api_keys_created_by(
+        &mut self,
+        creator: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        // `created_by = $2` matcht NULL nie, Alt-Keys ohne Ersteller bleiben also unberührt.
+        let n = sqlx::query(
+            "UPDATE api_key SET revoked_at = $3, version = version + 1, updated_at = $3 \
+             WHERE organization_id = $1 AND created_by = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(creator.0)
         .bind(now)
         .execute(&mut *self.tx)
         .await

@@ -5,13 +5,16 @@ use chrono::{DateTime, Utc};
 use lineal_app::context::Actor;
 use lineal_app::ports::Clock;
 use lineal_app::ports::Store;
-use lineal_app::usecases::auth::{CreateApiKeyInput, LoginInput};
+use lineal_app::ports::repos::auth::NewApiKey;
+use lineal_app::usecases::auth::{CreateApiKeyInput, LoginInput, hash_token};
+use lineal_app::usecases::bot::CreateBotInput;
 use lineal_app::usecases::invitation::{AcceptInvitationInput, InviteUsersInput};
 use lineal_app::usecases::org::SecuritySettingsPatch;
 use lineal_app::usecases::user::CreateUserInput;
 use lineal_app::{App, ErrorKind, RequestCtx};
 use lineal_db::PgStore;
 use lineal_domain::enums::UserRole;
+use lineal_domain::ids::ApiKeyId;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -491,6 +494,114 @@ async fn suspending_kills_sessions_keys_and_blocks_login(pool: PgPool) {
     );
     let fresh = app.login(login("bob@acme.example")).await.unwrap();
     assert!(app.principal_for_token(&fresh.token).await.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn suspending_an_admin_revokes_only_the_bot_keys_they_created(pool: PgPool) {
+    // LIN-62 L-6: Sperrt man einen Admin, müssen die Bot-Keys sterben, die ER erstellt hat (sonst
+    // behält ein gesperrter Admin Bot-Zugang). Keys anderer, noch aktiver Admins bleiben gültig.
+    let app = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // Owner mit admin-Scope, darf sperren
+    app.set_user_role(&alice, "bob", UserRole::Admin)
+        .await
+        .unwrap();
+    let mut bob_admin = with_role(&ctx_for(SeedUser::Bob), UserRole::Admin);
+    bob_admin.scopes.admin = true;
+    bob_admin.scopes.write = true;
+
+    let bot = app
+        .create_bot(
+            &bob_admin,
+            CreateBotInput {
+                name: "CI Bot".into(),
+                email: "ci-bot@acme.example".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let by_bob = app
+        .create_bot_api_key(
+            &bob_admin,
+            bot.id,
+            CreateApiKeyInput {
+                label: "by-bob".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let by_alice = app
+        .create_bot_api_key(
+            &alice,
+            bot.id,
+            CreateApiKeyInput {
+                label: "by-alice".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(app.principal_for_token(&by_bob.key).await.is_ok());
+    assert!(app.principal_for_token(&by_alice.key).await.is_ok());
+
+    app.set_user_active(&alice, "bob", false).await.unwrap();
+
+    // (a) Der von Bob (jetzt gesperrt) erstellte Bot-Key authentifiziert nicht mehr.
+    assert_eq!(
+        kind(app.principal_for_token(&by_bob.key).await),
+        ErrorKind::Unauthenticated
+    );
+    // (b) Der von der weiterhin aktiven Alice erstellte Key bleibt gültig (kein Über-Widerruf).
+    assert!(app.principal_for_token(&by_alice.key).await.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn suspension_leaves_keys_without_a_known_creator_untouched(pool: PgPool) {
+    // LIN-62 L-6, Grenzfall: Keys von vor der Migration haben created_by = NULL. Ihr Bot bleibt
+    // aktiv, also müssen sie die Sperre eines Admins überleben (SQL: `created_by = $1` matcht NULL nie).
+    let app = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    app.set_user_role(&alice, "bob", UserRole::Admin)
+        .await
+        .unwrap();
+    let mut bob_admin = with_role(&ctx_for(SeedUser::Bob), UserRole::Admin);
+    bob_admin.scopes.admin = true;
+    bob_admin.scopes.write = true;
+    let bot = app
+        .create_bot(
+            &bob_admin,
+            CreateBotInput {
+                name: "Legacy Bot".into(),
+                email: "legacy-bot@acme.example".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Alt-Key direkt einfügen: created_by = None (wie vor der Migration).
+    let legacy = "lin_legacy_key_without_a_creator_00";
+    let mut tx = app.store.begin(SeedData::acme().org).await.unwrap();
+    tx.auth()
+        .insert_api_key(&NewApiKey {
+            id: ApiKeyId(uuid::Uuid::new_v4()),
+            user_id: bot.id,
+            label: "legacy".into(),
+            key_prefix: legacy.chars().take(12).collect(),
+            key_hash: hash_token(legacy),
+            scopes: vec!["read".into()],
+            team_ids: None,
+            expires_at: None,
+            created_by: None,
+            now: app.clock.now(),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(app.principal_for_token(legacy).await.is_ok());
+
+    app.set_user_active(&alice, "bob", false).await.unwrap();
+    // Der Alt-Key (created_by NULL) bleibt trotz Sperre gültig.
+    assert!(app.principal_for_token(legacy).await.is_ok());
 }
 
 #[sqlx::test(migrations = "./migrations")]

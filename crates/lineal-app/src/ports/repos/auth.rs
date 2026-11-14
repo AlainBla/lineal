@@ -83,6 +83,9 @@ pub struct NewApiKey {
     pub scopes: Vec<String>,
     pub team_ids: Option<Vec<TeamId>>,
     pub expires_at: Option<DateTime<Utc>>,
+    /// Ersteller des Keys (LIN-62 L-6): bei Bot-Keys der Admin, bei eigenen Keys der User selbst;
+    /// `None` für System-/Nicht-User-Aktoren und für Alt-Keys von vor der Migration.
+    pub created_by: Option<UserId>,
     pub now: DateTime<Utc>,
 }
 
@@ -228,6 +231,16 @@ pub trait AuthRepo: Send {
     async fn revoke_api_keys_of_user(
         &mut self,
         _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+    /// Widerruft alle noch gültigen API-Keys, die `_creator` erzeugt hat (LIN-62 L-6, beim Sperren
+    /// eines Admins). Liefert die Zahl der widerrufenen Keys; Keys ohne Ersteller (`created_by`
+    /// NULL) bleiben unberührt.
+    async fn revoke_api_keys_created_by(
+        &mut self,
+        _creator: UserId,
         _now: DateTime<Utc>,
     ) -> AppResult<u64> {
         unimplemented_repo()
