@@ -280,9 +280,7 @@ describe("Anhänge (F.08)", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     // Download bleibt verfügbar (App-Origin).
-    expect(
-      within(region).getByRole("button", { name: "Download deck.html" }),
-    ).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "Download deck.html" })).toBeInTheDocument();
   });
 
   it("lädt HTML-Anhänge ohne viewUrl weiter herunter (Feature aus)", async () => {
