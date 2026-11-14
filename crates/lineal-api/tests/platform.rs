@@ -461,6 +461,37 @@ async fn forged_forwarded_for_from_untrusted_peer_does_not_evade_the_rate_limit(
 }
 
 #[tokio::test]
+async fn an_api_key_smuggled_into_a_cookie_stays_on_the_strict_ip_counter() {
+    // LIN-62 L-11-Regression: Ein in ein Session-Cookie geschmuggelter API-Key darf NICHT auf den
+    // lenienten cookie:-Zaehler ausweichen – er bleibt am strengen ip:-Fehlversuchszaehler (20/min).
+    let app = app_with_keys();
+    let cfg = PlatformConfig::new(&app, false);
+    let router = apply_with(
+        Router::new().route("/ping", get(|| async { "pong" })),
+        app,
+        cfg,
+    );
+    let req = || {
+        let mut r = Request::get("/ping")
+            .header("cookie", "lineal_session=lin_api_forged_key")
+            .body(Body::empty())
+            .unwrap();
+        r.extensions_mut().insert(axum::extract::ConnectInfo(
+            "203.0.113.77:4000".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        r
+    };
+    for i in 0..20 {
+        assert_eq!(send(&router, req()).await.status, StatusCode::OK, "req {i}");
+    }
+    assert_eq!(
+        send(&router, req()).await.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "der 21. Versuch muss am ip:-Limit (20/min) sperren, nicht erst bei 120"
+    );
+}
+
+#[tokio::test]
 async fn credential_does_not_bypass_the_anon_limit_on_public_auth_paths() {
     // LIN-62 L-3: Auf öffentlichen Auth-Pfaden (hier /oauth/register) muss das strenge Anon-IP-
     // Limit auch dann greifen, wenn ein Credential mitkommt – sonst hebt ein beliebiges Token das

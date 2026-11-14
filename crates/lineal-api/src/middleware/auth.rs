@@ -168,6 +168,14 @@ pub(crate) fn blocked_response(path: &str, retry_after_secs: u64) -> Response {
 /// Zählt einen Fehlversuch (ungültiges Token) auf die Client-IP. Ist die IP bereits gesperrt,
 /// antwortet die Anfrage mit 429 (kein weiterer Lookup-Spielraum für Token-Raten); gültige
 /// Tokens kommen hier nie an.
+/// Sieht der Token wie ein Session-Token aus (nicht `lin_api_`/`lin_oauth_`)? Nur dann darf ein
+/// Fehlversuch aus dem Cookie auf den lenienten `cookie:`-Zähler (LIN-62 L-11); ein in ein Cookie
+/// geschmuggelter API-Key muss weiter am strengen `ip:`-Zähler hängen (sonst 120/min statt 20/min
+/// Brute-Force-Schutz).
+fn looks_like_session_token(token: &str) -> bool {
+    !token.starts_with("lin_api_") && !token.starts_with("lin_oauth_")
+}
+
 fn fail_attempt(
     p: &Platform,
     ip: Option<&str>,
@@ -213,9 +221,14 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                     // Token-Art passt nicht zum Transport (z. B. API-Key im Session-Cookie).
                     let is_cookie = class == CredentialClass::Session;
                     clear_stale_cookie |= is_cookie;
-                    if let Some(resp) =
-                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path(), is_cookie)
-                    {
+                    let cookie_failure = is_cookie && looks_like_session_token(&token);
+                    if let Some(resp) = fail_attempt(
+                        &p,
+                        ip_key.as_deref(),
+                        now_ms,
+                        req.uri().path(),
+                        cookie_failure,
+                    ) {
                         return resp;
                     }
                     AuthState::Invalid
@@ -252,9 +265,14 @@ pub async fn middleware(State(p): State<Platform>, mut req: Request, next: Next)
                 Ok(None) => {
                     let is_cookie = class == CredentialClass::Session;
                     clear_stale_cookie |= is_cookie;
-                    if let Some(resp) =
-                        fail_attempt(&p, ip_key.as_deref(), now_ms, req.uri().path(), is_cookie)
-                    {
+                    let cookie_failure = is_cookie && looks_like_session_token(&token);
+                    if let Some(resp) = fail_attempt(
+                        &p,
+                        ip_key.as_deref(),
+                        now_ms,
+                        req.uri().path(),
+                        cookie_failure,
+                    ) {
                         return resp;
                     }
                     AuthState::Invalid
