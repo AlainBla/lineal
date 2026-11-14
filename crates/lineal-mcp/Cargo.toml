@@ -23,7 +23,7 @@ uuid.workspace = true
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
-jsonschema = { version = "0.30", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 
 [dev-dependencies]
 lineal-testkit.workspace = true
