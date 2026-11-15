@@ -206,6 +206,30 @@ pub fn mailer_for(config: &Config) -> AppResult<ConfiguredMailer> {
     })
 }
 
+/// Waehlt das TOTP-Schluessel-Backend: OpenBAO Transit (optional) oder der
+/// aus `session_secret` abgeleitete App-Key (Default).
+fn build_totp_keys(config: &Config) -> Arc<dyn lineal_app::ports::TotpKeyProvider> {
+    use crate::config::TotpKeyBackend;
+    match (config.totp_key_backend, &config.openbao) {
+        (TotpKeyBackend::OpenBao, Some(bao)) => {
+            let transport = Arc::new(crate::totp_keys::HttpTransport::new(
+                bao.addr.clone(),
+                bao.token.clone(),
+            ));
+            Arc::new(crate::totp_keys::OpenBaoProvider::new(
+                transport,
+                bao.transit_key.clone(),
+            ))
+        }
+        _ => Arc::new(
+            lineal_app::usecases::totp::key_provider::AppKeyProvider::from_session_secret(
+                &config.session_secret,
+            )
+            .expect("TOTP-KEK aus session_secret ableitbar"),
+        ),
+    }
+}
+
 /// Verdrahtet die `App` mit allen Adaptern.
 pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -225,12 +249,7 @@ pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
             tracing::error!(error = %e, "SMTP mailer unavailable, mails are only logged");
             ConfiguredMailer::Log(LogMailer)
         })),
-        totp_keys: Arc::new(
-            lineal_app::usecases::totp::key_provider::AppKeyProvider::from_session_secret(
-                &config.session_secret,
-            )
-            .expect("TOTP-KEK aus session_secret ableitbar"),
-        ),
+        totp_keys: build_totp_keys(config),
         config: AppConfig {
             base_url: config.base_url.clone(),
             files_base_url: config.files_base_url.clone(),

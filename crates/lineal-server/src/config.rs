@@ -41,9 +41,32 @@ pub struct Config {
     /// SMTP-Relay (`LINEAL_SMTP_HOST`, `LINEAL_SMTP_PORT`, `LINEAL_MAIL_FROM`); `None` = Mails
     /// nur ins Log.
     pub smtp: Option<SmtpConfig>,
+    /// Backend fuer die Verschluesselung der TOTP-Secrets (LIN-70). Default `app`
+    /// (Schluessel aus `session_secret`); `openbao` nutzt OpenBAO Transit.
+    pub totp_key_backend: TotpKeyBackend,
+    /// OpenBAO-Zugang; nur gesetzt, wenn `totp_key_backend = OpenBao`.
+    pub openbao: Option<OpenBaoConfig>,
 }
 
 /// Ziel für ausgehende Mails: ein Relay ohne Anmeldung (z. B. Postfix auf dem Host).
+/// Schluessel-Backend fuer die TOTP-Secrets (LIN-70).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TotpKeyBackend {
+    App,
+    OpenBao,
+}
+
+/// Zugang zu OpenBAO Transit.
+#[derive(Debug, Clone)]
+pub struct OpenBaoConfig {
+    /// Basis-URL, z. B. `https://bao.internal:8200` (ohne Slash am Ende).
+    pub addr: String,
+    /// Vault-/OpenBAO-Token (`X-Vault-Token`).
+    pub token: String,
+    /// Name des Transit-Schluessels, z. B. `lineal-totp`.
+    pub transit_key: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
     pub host: String,
@@ -172,6 +195,23 @@ impl Config {
             _ => None,
         };
         let smtp = smtp(&get)?;
+        let totp_key_backend = match get("LINEAL_TOTP_KEY_BACKEND").as_deref() {
+            Some("openbao") => TotpKeyBackend::OpenBao,
+            _ => TotpKeyBackend::App,
+        };
+        let openbao = if totp_key_backend == TotpKeyBackend::OpenBao {
+            Some(OpenBaoConfig {
+                addr: get("LINEAL_OPENBAO_ADDR")
+                    .map(|a| a.trim_end_matches('/').to_string())
+                    .context("LINEAL_OPENBAO_ADDR is required for the openbao backend")?,
+                token: get("LINEAL_OPENBAO_TOKEN")
+                    .context("LINEAL_OPENBAO_TOKEN is required for the openbao backend")?,
+                transit_key: get("LINEAL_OPENBAO_TRANSIT_KEY")
+                    .context("LINEAL_OPENBAO_TRANSIT_KEY is required for the openbao backend")?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
             base_url,
@@ -192,6 +232,8 @@ impl Config {
                 get("LINEAL_TOTP_ENFORCE_OWNERS").as_deref(),
                 Some("0") | Some("false") | Some("no")
             ),
+            totp_key_backend,
+            openbao,
             smtp,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())

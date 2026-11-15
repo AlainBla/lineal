@@ -4,6 +4,7 @@
 pub mod adapters;
 pub mod cli;
 pub mod config;
+pub mod totp_keys;
 
 use axum::Router;
 use lineal_app::App;

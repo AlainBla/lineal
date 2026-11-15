@@ -39,6 +39,9 @@ clap.workspace = true
 dotenvy.workspace = true
 # SMTP-Versand an einen Relay (Postfix auf dem Host), ohne TLS-Stack.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1"] }
+# OpenBAO/Vault Transit fuer die TOTP-Secret-Verschluesselung (LIN-70, optionales Backend).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+base64 = "0.22"
 sqlx.workspace = true
 serde_json.workspace = true
 rpassword = "7"
