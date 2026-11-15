@@ -6,6 +6,7 @@ pub mod migrate;
 pub mod schema_export;
 pub mod seed;
 pub mod serve;
+pub mod totp;
 pub mod worker;
 
 use crate::adapters::build_app;
@@ -54,6 +55,8 @@ pub enum Command {
         #[arg(long, default_value = "web/schema.graphql")]
         out: PathBuf,
     },
+    /// TOTP (2FA) verwalten, z. B. zuruecksetzen (LIN-70).
+    Totp(totp::TotpArgs),
 }
 
 /// Führt den Subcommand aus.
@@ -69,6 +72,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::CreateWorkspace(args) => create_workspace::run(args).await,
         Command::Import(args) => import::run(args).await,
         Command::SchemaExport { out } => schema_export::run(&out),
+        Command::Totp(args) => totp::run(args).await,
     }
 }
 

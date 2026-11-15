@@ -116,6 +116,40 @@ async fn enforcement_off_never_blocks_owner(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn enforcement_job_revokes_expired_owner_sessions(pool: PgPool) {
+    let (app, _d) = setup(pool, true).await;
+    // 3 Logins innerhalb der Schonfrist; einen Token behalten.
+    let mut token = None;
+    for _ in 0..3 {
+        if let LoginOutcome::Session(l) = app
+            .login_outcome(login_input("alice@acme.example"))
+            .await
+            .unwrap()
+        {
+            token = Some(l.token);
+        }
+    }
+    let token = token.unwrap();
+    assert!(app.principal_for_token(&token).await.is_ok());
+
+    // 4. Login: Schonfrist erschöpft.
+    assert!(matches!(
+        app.login_outcome(login_input("alice@acme.example"))
+            .await
+            .unwrap(),
+        LoginOutcome::EnrollRequired { .. }
+    ));
+
+    // Der Job widerruft Alices Sessions.
+    let revoked = app.enforce_totp_grace(app.clock.now()).await.unwrap();
+    assert_eq!(revoked, 1);
+    assert!(
+        app.principal_for_token(&token).await.is_err(),
+        "Session nach Enforcement ungueltig"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn member_is_never_enrolled(pool: PgPool) {
     let (app, _d) = setup(pool, true).await;
     for _ in 0..5 {

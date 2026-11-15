@@ -352,6 +352,24 @@ impl App {
         })
     }
 
+    /// Enforcement-Job (LIN-70): widerruft die Sessions von Ownern, deren Schonfrist
+    /// ohne bestätigtes TOTP abgelaufen ist — sonst liefe der Zugang bis zum
+    /// Session-Ablauf (14 Tage) weiter. Gibt die Zahl betroffener Owner zurück.
+    pub async fn enforce_totp_grace(&self, now: chrono::DateTime<chrono::Utc>) -> AppResult<u64> {
+        let mut tx = self.store.begin_system().await?;
+        let owners = tx
+            .totp()
+            .owners_past_deadline(now, GRACE_MAX_DAYS, GRACE_MAX_LOGINS)
+            .await?;
+        for user in &owners {
+            // System-weit (begin_system, org = nil): die org-agnostische Variante,
+            // sonst traefe der org-Filter von revoke_other_sessions nichts.
+            tx.auth().revoke_all_user_sessions(*user, now).await?;
+        }
+        tx.commit().await?;
+        Ok(owners.len() as u64)
+    }
+
     /// Setzt das TOTP eines anderen Nutzers zurück (Geräteverlust). Nur Owner.
     pub async fn totp_reset_for_user(&self, ctx: &RequestCtx, target: UserId) -> AppResult<()> {
         if !matches!(

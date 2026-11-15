@@ -16,5 +16,6 @@ pub mod snooze;
 pub mod sort_renumber;
 pub mod sync_purge;
 pub mod team_purge;
+pub mod totp_grace;
 pub mod triage_rotation;
 pub mod update_reminders;

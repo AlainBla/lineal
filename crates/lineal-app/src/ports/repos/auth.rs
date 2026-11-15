@@ -202,6 +202,16 @@ pub trait AuthRepo: Send {
         unimplemented_repo()
     }
 
+    /// Widerruft **alle** Sessions eines Nutzers, mandantenübergreifend (für den
+    /// TOTP-Enforcement-Job, der system-weit läuft). LIN-70.
+    async fn revoke_all_user_sessions(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+
     async fn insert_api_key(&mut self, _key: &NewApiKey) -> AppResult<()> {
         unimplemented_repo()
     }

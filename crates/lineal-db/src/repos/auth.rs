@@ -378,6 +378,23 @@ impl AuthRepo for PgTx {
         Ok(res.rows_affected())
     }
 
+    async fn revoke_all_user_sessions(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE user_session SET revoked_at = $2, version = version + 1, updated_at = $2 \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
     async fn insert_api_key(&mut self, k: &NewApiKey) -> AppResult<()> {
         let team_ids: Option<Vec<Uuid>> =
             k.team_ids.as_ref().map(|v| v.iter().map(|t| t.0).collect());

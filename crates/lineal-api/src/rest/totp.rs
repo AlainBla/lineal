@@ -7,7 +7,7 @@ use crate::auth_failures::{ACCOUNT_RULE, AuthFailures};
 use crate::client_ip::ClientIp;
 use crate::middleware::auth::blocked_response;
 use crate::middleware::request_id::RequestId;
-use crate::rest::auth::{bearer, error_response, session_cookie, session_cookie_value};
+use crate::rest::auth::{error_response, session_cookie, session_cookie_value};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -22,20 +22,19 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-/// Baut einen `RequestCtx` aus dem Session-Cookie (wie `me()`).
+/// Baut einen `RequestCtx` aus dem Session-Cookie. TOTP-Verwaltung ist bewusst
+/// **nur per Browser-Session** erlaubt — ein API-Key/OAuth-Token (Bearer) darf 2FA
+/// nicht einrichten, abschalten oder zurücksetzen.
 async fn ctx_from_session(app: &App, headers: &HeaderMap) -> Result<RequestCtx, Response> {
-    let cookie = session_cookie_value(headers);
-    let from_cookie = cookie.is_some();
-    let token = cookie
-        .or_else(|| bearer(headers))
-        .ok_or_else(|| error_response(AppError::unauthenticated("Missing credentials.")))?;
+    let token = session_cookie_value(headers)
+        .ok_or_else(|| error_response(AppError::unauthenticated("session required")))?;
     let principal = app
         .principal_for_token(&token)
         .await
         .map_err(error_response)?;
-    if from_cookie != (principal.kind == lineal_app::ports::repos::CredentialKind::Session) {
+    if principal.kind != lineal_app::ports::repos::CredentialKind::Session {
         return Err(error_response(AppError::unauthenticated(
-            "Invalid or expired token.",
+            "session required",
         )));
     }
     Ok(RequestCtx {
@@ -105,13 +104,24 @@ pub async fn login_totp(
         None => return error_response(AppError::unauthenticated("invalid or expired token")),
     };
 
-    // Konto-Lockout: Zähler je Nutzer, mirror der Login-Brute-Force-Reservierung.
+    // Konto-Lockout je Nutzer, atomar reserviert (wie der Login): ein Treffer bleibt
+    // bei falschem Faktor stehen und zählt, bei Erfolg/Nicht-Auth-Fehler wird er
+    // wieder freigegeben. Vermeidet das TOCTOU von check-dann-record.
     let lock_key = format!("totp:{}", claims.user_id.0);
-    if let Some(Extension(f)) = &fails {
-        if let Some(wait) = f.blocked_for(&lock_key, ACCOUNT_RULE, now_ms) {
-            return blocked_response("/auth/login/totp", wait);
+    let reserved = match &fails {
+        Some(Extension(f)) => match f.reserve(&lock_key, ACCOUNT_RULE, now_ms) {
+            Ok(()) => true,
+            Err(wait) => return blocked_response("/auth/login/totp", wait),
+        },
+        None => false,
+    };
+    let release = |reserved: bool| {
+        if reserved {
+            if let Some(Extension(f)) = &fails {
+                f.release(&lock_key);
+            }
         }
-    }
+    };
 
     let factor = match (&body.code, &body.recovery_code) {
         (Some(code), _) if !code.trim().is_empty() => TotpSecondFactor::Code(code.clone()),
@@ -138,6 +148,7 @@ pub async fn login_totp(
         .await
     {
         Ok(login) => {
+            release(reserved);
             let mut res = (
                 StatusCode::OK,
                 Json(json!({
@@ -154,11 +165,10 @@ pub async fn login_totp(
             res
         }
         Err(e) => {
-            // Ungültiger zweiter Faktor zählt gegen den Konto-Lockout.
-            if e.kind == lineal_app::ErrorKind::Unauthenticated {
-                if let Some(Extension(f)) = &fails {
-                    f.record(&lock_key, ACCOUNT_RULE, now_ms);
-                }
+            // Ungültiger zweiter Faktor: Reservierung bleibt stehen (zählt). Andere
+            // Fehler (z. B. Server) geben sie frei.
+            if e.kind != lineal_app::ErrorKind::Unauthenticated {
+                release(reserved);
             }
             error_response(e)
         }
@@ -233,9 +243,7 @@ pub async fn enroll_confirm(
         },
         None => match ctx_from_session(&app, &headers).await {
             Ok(ctx) => {
-                let keep = session_cookie_value(&headers)
-                    .or_else(|| bearer(&headers))
-                    .map(|t| hash_token(&t));
+                let keep = session_cookie_value(&headers).map(|t| hash_token(&t));
                 (
                     ctx,
                     EnrollSession::RevokeOthers {

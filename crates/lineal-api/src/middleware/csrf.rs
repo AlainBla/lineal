@@ -99,6 +99,10 @@ fn rule_for(method: &Method, path: &str, has_cookie_session: bool) -> Rule {
     }
     match path {
         "/graphql" | "/auth/logout" if has_cookie_session => Rule::OriginAndHeader,
+        // LIN-70: Cookie-authentifizierte TOTP-Verwaltung braucht CSRF-Schutz. Die
+        // Token-basierten Pfade (enroll per enroll-Token, /auth/login/totp) tragen
+        // kein Cookie und fallen damit nicht unter diese Regel.
+        p if p.starts_with("/auth/totp/") && has_cookie_session => Rule::OriginAndHeader,
         "/auth/login" | "/invite/accept" => Rule::OriginIfPresent,
         "/oauth/authorize" if has_cookie_session => Rule::OriginIfPresent,
         p if p.starts_with("/uploads/") => Rule::OriginIfPresent,
