@@ -70,31 +70,37 @@ impl TotpRepo for PgTx {
         Ok(())
     }
 
-    async fn set_last_used_step(&mut self, user: UserId, step: i64) -> AppResult<()> {
-        sqlx::query("UPDATE user_totp SET last_used_step = $2 WHERE user_id = $1")
-            .bind(user.0)
-            .bind(step)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
-        Ok(())
+    async fn set_last_used_step(&mut self, user: UserId, step: i64) -> AppResult<bool> {
+        // Nur vorwärts: verhindert, dass zwei parallele Zweitschritte denselben Code
+        // einlösen (der zweite trifft 0 Zeilen und scheitert).
+        let res = sqlx::query(
+            "UPDATE user_totp SET last_used_step = $2 WHERE user_id = $1 AND (last_used_step IS NULL OR last_used_step < $2)",
+        )
+        .bind(user.0)
+        .bind(step)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() == 1)
     }
 
-    async fn delete_all(&mut self, user: UserId) -> AppResult<()> {
-        // Recovery-Codes und Schonfrist hängen per FK am Nutzer, aber wir räumen sie
-        // hier explizit mit, da ein Reset nur TOTP entfernen soll, nicht den Nutzer.
-        sqlx::query("DELETE FROM user_recovery_code WHERE user_id = $1")
+    async fn delete_all(&mut self, user: UserId, org: OrgId) -> AppResult<()> {
+        // Mandantengebunden: ein Owner darf nur Nutzer des eigenen Workspace zurücksetzen.
+        sqlx::query("DELETE FROM user_recovery_code WHERE user_id = $1 AND organization_id = $2")
             .bind(user.0)
+            .bind(org.0)
             .execute(&mut *self.tx)
             .await
             .map_err(db_err)?;
-        sqlx::query("DELETE FROM user_totp_grace WHERE user_id = $1")
+        sqlx::query("DELETE FROM user_totp_grace WHERE user_id = $1 AND organization_id = $2")
             .bind(user.0)
+            .bind(org.0)
             .execute(&mut *self.tx)
             .await
             .map_err(db_err)?;
-        sqlx::query("DELETE FROM user_totp WHERE user_id = $1")
+        sqlx::query("DELETE FROM user_totp WHERE user_id = $1 AND organization_id = $2")
             .bind(user.0)
+            .bind(org.0)
             .execute(&mut *self.tx)
             .await
             .map_err(db_err)?;
@@ -142,14 +148,16 @@ impl TotpRepo for PgTx {
             .collect())
     }
 
-    async fn consume_recovery_code(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<()> {
-        sqlx::query("UPDATE user_recovery_code SET used_at = $2 WHERE id = $1 AND used_at IS NULL")
-            .bind(id)
-            .bind(now)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(db_err)?;
-        Ok(())
+    async fn consume_recovery_code(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<bool> {
+        let res = sqlx::query(
+            "UPDATE user_recovery_code SET used_at = $2 WHERE id = $1 AND used_at IS NULL",
+        )
+        .bind(id)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected() == 1)
     }
 
     async fn grace_get(&mut self, user: UserId) -> AppResult<Option<GraceRow>> {

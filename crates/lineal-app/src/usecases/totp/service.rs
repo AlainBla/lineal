@@ -65,6 +65,11 @@ impl App {
         let sealed = crypto::seal(self.totp_keys.as_ref(), &secret).await?;
         let now = self.clock.now();
         let mut tx = self.store.begin(ctx.org_id).await?;
+        // Ein laufendes Enrollment darf ein bereits aktives TOTP nicht ueberschreiben
+        // (sonst liesse sich 2FA durch ein abgebrochenes Enrollment deaktivieren).
+        if tx.totp().get(user_id).await?.is_some_and(|t| t.is_active()) {
+            return Err(AppError::invalid_request("two-factor is already active"));
+        }
         let user = tx
             .users()
             .get(user_id)
@@ -166,6 +171,11 @@ impl App {
             .get(user_id)
             .await?
             .ok_or_else(|| AppError::not_found("user"))?;
+        // Zwischen Passwortschritt und Zweitschritt kann der Nutzer gesperrt worden
+        // sein (der Pending-Token lebt 5 min) — vor dem Praegen erneut pruefen.
+        if !user.active {
+            return Err(AppError::unauthenticated("account is not active"));
+        }
 
         let ok = match factor {
             TotpSecondFactor::Code(code) => {
@@ -173,10 +183,9 @@ impl App {
                     crypto::open(self.totp_keys.as_ref(), &totp.secret_enc, &totp.dek_wrapped)
                         .await?;
                 match core::verify(&secret, code, now.timestamp(), totp.last_used_step) {
-                    Some(step) => {
-                        tx.totp().set_last_used_step(user_id, step).await?;
-                        true
-                    }
+                    // set_last_used_step ist bedingt (nur vorwaerts): trifft es 0 Zeilen,
+                    // hat parallel schon jemand denselben Code eingeloest -> kein Erfolg.
+                    Some(step) => tx.totp().set_last_used_step(user_id, step).await?,
                     None => false,
                 }
             }
@@ -188,10 +197,8 @@ impl App {
                     .find(|r| recovery::verify_code(&key, input, &r.code_hash))
                     .map(|r| r.id);
                 match hit {
-                    Some(id) => {
-                        tx.totp().consume_recovery_code(id, now).await?;
-                        true
-                    }
+                    // consume gibt false, wenn der Code parallel schon verbraucht wurde.
+                    Some(id) => tx.totp().consume_recovery_code(id, now).await?,
                     None => false,
                 }
             }
@@ -223,7 +230,7 @@ impl App {
             return Err(AppError::forbidden("owners must keep two-factor enabled"));
         }
         let mut tx = self.store.begin(ctx.org_id).await?;
-        tx.totp().delete_all(user_id).await?;
+        tx.totp().delete_all(user_id, ctx.org_id).await?;
         self.record_audit(
             &mut *tx,
             ctx,
@@ -306,7 +313,12 @@ impl App {
             return Err(AppError::forbidden("only owners can reset two-factor"));
         }
         let mut tx = self.store.begin(ctx.org_id).await?;
-        tx.totp().delete_all(target).await?;
+        // Ziel muss zum Workspace gehoeren, sonst waere ein Cross-Tenant-Reset moeglich.
+        tx.users()
+            .get(target)
+            .await?
+            .ok_or_else(|| AppError::not_found("user"))?;
+        tx.totp().delete_all(target, ctx.org_id).await?;
         self.record_audit(
             &mut *tx,
             ctx,

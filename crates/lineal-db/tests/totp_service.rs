@@ -8,9 +8,11 @@ use lineal_app::ports::{Clock, Store};
 use lineal_app::usecases::totp::core;
 use lineal_app::usecases::totp::service::TotpSecondFactor;
 use lineal_db::PgStore;
+use lineal_domain::ids::UserId;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use sqlx::PgPool;
 use std::sync::Arc;
+use uuid::Uuid;
 
 struct SystemClock;
 impl Clock for SystemClock {
@@ -158,6 +160,36 @@ async fn disable_blocked_for_enforced_owner_but_allowed_for_member(pool: PgPool)
     let bctx = ctx_for(SeedUser::Bob);
     app.totp_disable(&bctx).await.unwrap();
     assert!(!app.totp_status(&bctx).await.unwrap().enabled);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn begin_is_rejected_when_totp_already_active(pool: PgPool) {
+    let (app, _d) = setup(pool, false).await;
+    enroll(&app).await; // bob ist jetzt aktiv
+    // Ein neues Enrollment darf das aktive TOTP nicht ueberschreiben/deaktivieren.
+    assert!(
+        app.totp_begin_enrollment(&ctx_for(SeedUser::Bob))
+            .await
+            .is_err()
+    );
+    assert!(
+        app.totp_status(&ctx_for(SeedUser::Bob))
+            .await
+            .unwrap()
+            .confirmed
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reset_of_unknown_user_is_rejected(pool: PgPool) {
+    let (app, _d) = setup(pool, false).await;
+    // Fremde/erfundene UUID (anderer Mandant) darf nicht zuruecksetzbar sein.
+    let stranger = UserId(Uuid::new_v4());
+    assert!(
+        app.totp_reset_for_user(&ctx_for(SeedUser::Alice), stranger)
+            .await
+            .is_err()
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

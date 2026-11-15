@@ -199,13 +199,16 @@ impl TotpRepo for FakeTx {
         }
         Ok(())
     }
-    async fn set_last_used_step(&mut self, user: UserId, step: i64) -> AppResult<()> {
+    async fn set_last_used_step(&mut self, user: UserId, step: i64) -> AppResult<bool> {
         if let Some(t) = lock(&self.state.totp).get_mut(&user.0) {
-            t.last_used_step = Some(step);
+            if t.last_used_step.is_none_or(|s| s < step) {
+                t.last_used_step = Some(step);
+                return Ok(true);
+            }
         }
-        Ok(())
+        Ok(false)
     }
-    async fn delete_all(&mut self, user: UserId) -> AppResult<()> {
+    async fn delete_all(&mut self, user: UserId, _org: OrgId) -> AppResult<()> {
         lock(&self.state.totp).remove(&user.0);
         lock(&self.state.recovery).retain(|(_, u, _, _)| *u != user.0);
         lock(&self.state.grace).remove(&user.0);
@@ -235,16 +238,17 @@ impl TotpRepo for FakeTx {
             })
             .collect())
     }
-    async fn consume_recovery_code(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<()> {
+    async fn consume_recovery_code(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<bool> {
         if let Some(row) = lock(&self.state.recovery)
             .iter_mut()
             .find(|(i, _, _, _)| *i == id)
         {
             if row.3.is_none() {
                 row.3 = Some(now);
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
     async fn grace_get(&mut self, user: UserId) -> AppResult<Option<GraceRow>> {
         Ok(lock(&self.state.grace).get(&user.0).cloned())

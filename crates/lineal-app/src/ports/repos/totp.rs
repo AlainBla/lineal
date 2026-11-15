@@ -73,12 +73,15 @@ pub trait TotpRepo: Send {
     async fn confirm(&mut self, _user: UserId, _now: DateTime<Utc>) -> AppResult<()> {
         unimplemented_repo()
     }
-    /// Hält den zuletzt benutzten Zeitschritt fest (Replay-Schutz).
-    async fn set_last_used_step(&mut self, _user: UserId, _step: i64) -> AppResult<()> {
+    /// Hält den zuletzt benutzten Zeitschritt fest (Replay-Schutz). Nur wenn der neue
+    /// Schritt größer ist; gibt `true` zurück, wenn tatsächlich gesetzt wurde (sonst
+    /// hat parallel schon jemand diesen oder einen neueren Schritt verbraucht).
+    async fn set_last_used_step(&mut self, _user: UserId, _step: i64) -> AppResult<bool> {
         unimplemented_repo()
     }
-    /// Entfernt TOTP, Recovery-Codes und Schonfrist eines Nutzers (Disable/Reset).
-    async fn delete_all(&mut self, _user: UserId) -> AppResult<()> {
+    /// Entfernt TOTP, Recovery-Codes und Schonfrist eines Nutzers (Disable/Reset),
+    /// mandantengebunden.
+    async fn delete_all(&mut self, _user: UserId, _org: OrgId) -> AppResult<()> {
         unimplemented_repo()
     }
     /// Ersetzt den kompletten Recovery-Code-Satz.
@@ -99,8 +102,9 @@ pub trait TotpRepo: Send {
     async fn unused_recovery_count(&mut self, user: UserId) -> AppResult<i64> {
         Ok(self.unused_recovery_codes(user).await?.len() as i64)
     }
-    /// Markiert einen Recovery-Code als verbraucht.
-    async fn consume_recovery_code(&mut self, _id: Uuid, _now: DateTime<Utc>) -> AppResult<()> {
+    /// Markiert einen Recovery-Code als verbraucht. Gibt `true` zurück, wenn er noch
+    /// unbenutzt war (sonst hat ihn parallel schon jemand eingelöst).
+    async fn consume_recovery_code(&mut self, _id: Uuid, _now: DateTime<Utc>) -> AppResult<bool> {
         unimplemented_repo()
     }
     /// Schonfrist-Zeile eines Nutzers.
