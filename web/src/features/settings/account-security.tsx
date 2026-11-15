@@ -22,6 +22,7 @@ import {
   type UserSession,
 } from "./account-queries";
 import { workspaceSettingsNav } from "./nav";
+import { TotpSection } from "./totp-section";
 import { Field, Section, SettingsShell } from "./ui";
 
 const MIN_PASSWORD = 12;
@@ -289,6 +290,7 @@ export function AccountSecurityPage({ ws }: { ws: string }) {
       <Section title="Password" description="Changing your password signs you out everywhere else.">
         <PasswordForm />
       </Section>
+      <TotpSection />
       <Section
         title="Active sessions"
         description="Browsers that are currently signed in to your account."

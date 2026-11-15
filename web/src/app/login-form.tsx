@@ -1,16 +1,93 @@
 import { useId, useState, type FormEvent } from "react";
 
 import { login, validateLogin, type LoginErrors, type LoginResult } from "@/app/auth";
+import { TotpEnroll } from "@/app/totp-enroll";
+import { loginTotp } from "@/app/totp-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const SERVER_MESSAGES: Record<Exclude<LoginResult, { ok: true }>["reason"], string> = {
+const SERVER_MESSAGES: Record<Extract<LoginResult, { kind: "error" }>["reason"], string> = {
   invalid_credentials: "Incorrect email or password.",
   rate_limited: "Too many attempts. Please wait a moment and try again.",
   server_error: "Something went wrong on our side. Please try again.",
   network: "Cannot reach the server. Check your connection and try again.",
 };
+
+/** Zweiter Login-Schritt: TOTP-Code oder Recovery-Code. */
+function TotpStep({ pendingToken, onSuccess }: { pendingToken: string; onSuccess: () => void }) {
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (pending || value.trim() === "") return;
+    setPending(true);
+    setError(null);
+    const factor = useRecovery
+      ? { recoveryCode: value.trim() }
+      : { code: value.replace(/\D/g, "") };
+    const result = await loginTotp(pendingToken, factor);
+    setPending(false);
+    if (result.ok) {
+      onSuccess();
+      return;
+    }
+    setError(
+      result.reason === "rate_limited"
+        ? "Too many attempts. Please wait a moment."
+        : result.reason === "network"
+          ? "Cannot reach the server."
+          : useRecovery
+            ? "Invalid recovery code."
+            : "Invalid code.",
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-4" aria-label="Two-factor">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="totp-code">
+          {useRecovery ? "Recovery code" : "Code from your authenticator app"}
+        </Label>
+        <Input
+          id="totp-code"
+          autoFocus
+          inputMode={useRecovery ? "text" : "numeric"}
+          autoComplete="one-time-code"
+          maxLength={useRecovery ? 9 : 6}
+          placeholder={useRecovery ? "XXXX-XXXX" : "123456"}
+          value={value}
+          onChange={(e) =>
+            setValue(useRecovery ? e.target.value : e.target.value.replace(/\D/g, ""))
+          }
+          aria-invalid={error ? true : undefined}
+        />
+        {error && (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        )}
+      </div>
+      <Button type="submit" size="lg" disabled={pending} aria-busy={pending}>
+        {pending ? "Verifying…" : "Log in"}
+      </Button>
+      <button
+        type="button"
+        className="text-xs text-primary hover:underline"
+        onClick={() => {
+          setUseRecovery((v) => !v);
+          setValue("");
+          setError(null);
+        }}
+      >
+        {useRecovery ? "Use your authenticator app instead" : "Use a recovery code instead"}
+      </button>
+    </form>
+  );
+}
 
 export function LoginForm({
   onSuccess,
@@ -26,6 +103,11 @@ export function LoginForm({
   const [errors, setErrors] = useState<LoginErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [step, setStep] = useState<
+    | { name: "password" }
+    | { name: "totp"; pendingToken: string }
+    | { name: "enroll"; pendingToken: string }
+  >({ name: "password" });
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -34,16 +116,34 @@ export function LoginForm({
     setErrors(found);
     setFormError(null);
     if (found.email || found.password) {
-      // Fokus auf das erste fehlerhafte Feld (Barrierefreiheit).
       document.getElementById(found.email ? `${id}-email` : `${id}-password`)?.focus();
       return;
     }
     setPending(true);
     const result = await submit(email.trim(), password);
     setPending(false);
-    if (result.ok) onSuccess();
+    if (result.kind === "ok") onSuccess();
+    else if (result.kind === "totp") setStep({ name: "totp", pendingToken: result.pendingToken });
+    else if (result.kind === "enroll")
+      setStep({ name: "enroll", pendingToken: result.pendingToken });
     else setFormError(SERVER_MESSAGES[result.reason]);
   }
+
+  if (step.name === "totp")
+    return <TotpStep pendingToken={step.pendingToken} onSuccess={onSuccess} />;
+
+  if (step.name === "enroll")
+    return (
+      <div className="flex flex-col gap-4">
+        <div>
+          <h2 className="text-sm font-semibold">Two-factor is required</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            As an owner you must set up two-factor authentication to continue.
+          </p>
+        </div>
+        <TotpEnroll pendingToken={step.pendingToken} onComplete={onSuccess} />
+      </div>
+    );
 
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4" aria-label="Log in">

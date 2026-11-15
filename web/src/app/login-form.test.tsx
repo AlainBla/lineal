@@ -35,7 +35,7 @@ describe("LoginForm", () => {
 
   it("submits trimmed credentials and calls onSuccess", async () => {
     const user = userEvent.setup();
-    const submit = vi.fn().mockResolvedValue({ ok: true });
+    const submit = vi.fn().mockResolvedValue({ kind: "ok" });
     const onSuccess = vi.fn();
     render(<LoginForm onSuccess={onSuccess} submit={submit} />);
     await user.type(screen.getByLabelText("Email"), " alice@acme.example ");
@@ -45,9 +45,19 @@ describe("LoginForm", () => {
     expect(submit).toHaveBeenCalledWith("alice@acme.example", "s3cret");
   });
 
+  it("moves to the two-factor step when the server asks for it", async () => {
+    const user = userEvent.setup();
+    const submit = vi.fn().mockResolvedValue({ kind: "totp", pendingToken: "pt1" });
+    render(<LoginForm onSuccess={() => {}} submit={submit} />);
+    await user.type(screen.getByLabelText("Email"), "alice@acme.example");
+    await user.type(screen.getByLabelText("Password"), "s3cretpassword");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    expect(await screen.findByLabelText(/Code from your authenticator/)).toBeInTheDocument();
+  });
+
   it("shows a server error for wrong credentials", async () => {
     const user = userEvent.setup();
-    const submit = vi.fn().mockResolvedValue({ ok: false, reason: "invalid_credentials" });
+    const submit = vi.fn().mockResolvedValue({ kind: "error", reason: "invalid_credentials" });
     const onSuccess = vi.fn();
     render(<LoginForm onSuccess={onSuccess} submit={submit} />);
     await user.type(screen.getByLabelText("Email"), "alice@acme.example");
@@ -61,7 +71,7 @@ describe("LoginForm", () => {
 describe("auth client", () => {
   it("posts JSON credentials to /auth/login and maps status codes", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
-    expect(await login("a@b.co", "pw", fetchImpl)).toEqual({ ok: true });
+    expect(await login("a@b.co", "pw", fetchImpl)).toEqual({ kind: "ok" });
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/auth/login");
     expect(init.method).toBe("POST");
@@ -70,15 +80,38 @@ describe("auth client", () => {
 
     const fail = (status: number) => vi.fn().mockResolvedValue(new Response("{}", { status }));
     expect(await login("a@b.co", "pw", fail(401))).toEqual({
-      ok: false,
+      kind: "error",
       reason: "invalid_credentials",
     });
-    expect(await login("a@b.co", "pw", fail(429))).toEqual({ ok: false, reason: "rate_limited" });
-    expect(await login("a@b.co", "pw", fail(500))).toEqual({ ok: false, reason: "server_error" });
+    expect(await login("a@b.co", "pw", fail(429))).toEqual({
+      kind: "error",
+      reason: "rate_limited",
+    });
+    expect(await login("a@b.co", "pw", fail(500))).toEqual({
+      kind: "error",
+      reason: "server_error",
+    });
     expect(await login("a@b.co", "pw", vi.fn().mockRejectedValue(new Error("x")))).toEqual({
-      ok: false,
+      kind: "error",
       reason: "network",
     });
+  });
+
+  it("surfaces a required second factor from a 200 body", async () => {
+    const totp = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ totpRequired: true, pendingToken: "pt1" }), { status: 200 }),
+      );
+    expect(await login("a@b.co", "pw", totp)).toEqual({ kind: "totp", pendingToken: "pt1" });
+    const enroll = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ enrollRequired: true, pendingToken: "pt2" }), {
+          status: 200,
+        }),
+      );
+    expect(await login("a@b.co", "pw", enroll)).toEqual({ kind: "enroll", pendingToken: "pt2" });
   });
 
   it("normalizes the /auth/me payload", () => {

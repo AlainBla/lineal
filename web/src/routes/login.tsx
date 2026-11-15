@@ -6,7 +6,13 @@ import { queryClient } from "@/app/query-client";
 
 export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
-    redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+    // `redirect` (eigene Navigation) oder `next` (OAuth-Authorize-Weiterleitung, LIN-70).
+    redirect:
+      typeof search.redirect === "string"
+        ? search.redirect
+        : typeof search.next === "string"
+          ? search.next
+          : undefined,
   }),
   beforeLoad: async ({ search }) => {
     if (await ensureSession()) throw redirect({ to: safeRedirect(search.redirect) as "/" });

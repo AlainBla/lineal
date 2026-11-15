@@ -161,8 +161,11 @@ export function useSession(): Session | null | undefined {
 }
 
 export type LoginResult =
-  | { ok: true }
-  | { ok: false; reason: "invalid_credentials" | "rate_limited" | "server_error" | "network" };
+  | { kind: "ok" }
+  // Zweiter Faktor fällig: `totp` = Code eingeben, `enroll` = Owner muss jetzt einrichten.
+  | { kind: "totp"; pendingToken: string }
+  | { kind: "enroll"; pendingToken: string }
+  | { kind: "error"; reason: "invalid_credentials" | "rate_limited" | "server_error" | "network" };
 
 export async function login(
   email: string,
@@ -182,13 +185,24 @@ export async function login(
       body: JSON.stringify({ email, password }),
     });
   } catch {
-    return { ok: false, reason: "network" };
+    return { kind: "error", reason: "network" };
   }
-  if (res.ok) return { ok: true };
+  if (res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {
+      totpRequired?: boolean;
+      enrollRequired?: boolean;
+      pendingToken?: string;
+    };
+    if (body.totpRequired && body.pendingToken)
+      return { kind: "totp", pendingToken: body.pendingToken };
+    if (body.enrollRequired && body.pendingToken)
+      return { kind: "enroll", pendingToken: body.pendingToken };
+    return { kind: "ok" };
+  }
   if (res.status === 401 || res.status === 400 || res.status === 403)
-    return { ok: false, reason: "invalid_credentials" };
-  if (res.status === 429) return { ok: false, reason: "rate_limited" };
-  return { ok: false, reason: "server_error" };
+    return { kind: "error", reason: "invalid_credentials" };
+  if (res.status === 429) return { kind: "error", reason: "rate_limited" };
+  return { kind: "error", reason: "server_error" };
 }
 
 export async function logout(fetchImpl: typeof fetch = fetch): Promise<void> {
