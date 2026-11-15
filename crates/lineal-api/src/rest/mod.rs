@@ -1,6 +1,7 @@
 //! REST-Endpunkte. Gemeinsame Datei: nur S1 / Orchestrator.
 
 pub mod auth;
+pub mod totp;
 
 use axum::Json;
 use axum::http::StatusCode;

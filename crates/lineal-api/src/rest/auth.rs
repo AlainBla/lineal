@@ -12,8 +12,9 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use lineal_app::usecases::auth::{LoginInput, SESSION_TTL_DAYS};
+use lineal_app::usecases::auth::{LoginInput, LoginOutcome, SESSION_TTL_DAYS};
 use lineal_app::usecases::invitation::AcceptInvitationInput;
+use lineal_app::usecases::totp::pending::{PendingScope, mint as mint_pending};
 use lineal_app::{Actor, App, AppError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -31,7 +32,7 @@ pub struct LoginBody {
     pub workspace: Option<String>,
 }
 
-fn error_response(e: AppError) -> Response {
+pub(crate) fn error_response(e: AppError) -> Response {
     let status =
         StatusCode::from_u16(e.kind.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let body = json!({
@@ -59,13 +60,13 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-fn bearer(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
     let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     let token = v.strip_prefix("Bearer ").unwrap_or(v).trim();
     (!token.is_empty()).then(|| token.to_string())
 }
 
-fn session_cookie(app: &App, token: &str, max_age_secs: i64) -> Option<HeaderValue> {
+pub(crate) fn session_cookie(app: &App, token: &str, max_age_secs: i64) -> Option<HeaderValue> {
     let secure = app.config.base_url.starts_with("https://");
     let name = crate::middleware::auth::session_cookie_name(secure);
     let secure_attr = if secure { "; Secure" } else { "" };
@@ -77,7 +78,7 @@ fn session_cookie(app: &App, token: &str, max_age_secs: i64) -> Option<HeaderVal
 
 /// Session-Cookie lesen und dabei beide Namensvarianten akzeptieren: in Produktion schickt der
 /// Browser `__Host-lineal_session`, in der http-Entwicklung `lineal_session` (LIN-62 L-7).
-fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
     cookie_value(headers, crate::middleware::auth::SESSION_COOKIE_HOST)
         .or_else(|| cookie_value(headers, SESSION_COOKIE))
 }
@@ -128,7 +129,7 @@ pub async fn login(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.chars().take(300).collect());
     let result = app
-        .login(LoginInput {
+        .login_outcome(LoginInput {
             email: body.email,
             password: body.password,
             workspace: body.workspace,
@@ -137,11 +138,15 @@ pub async fn login(
             request_id: request_id.map(|Extension(r)| r.0),
         })
         .await;
+    // Reservierung bei allem ausser falschen Zugangsdaten freigeben.
+    let release = |reservation: Option<crate::auth_failures::LoginReservation>| {
+        if let (Some(r), Some(Extension(f))) = (reservation, &fails) {
+            r.release(f);
+        }
+    };
     match result {
-        Ok(login) => {
-            if let (Some(r), Some(Extension(f))) = (reservation, &fails) {
-                r.release(f);
-            }
+        Ok(LoginOutcome::Session(login)) => {
+            release(reservation);
             let mut res = (
                 StatusCode::OK,
                 Json(json!({
@@ -157,15 +162,53 @@ pub async fn login(
             }
             res
         }
+        // Passwort stimmte: Reservierung freigeben, zweiter Schritt folgt per Pending-Token.
+        Ok(LoginOutcome::TotpRequired { user_id, org_id }) => {
+            release(reservation);
+            pending_response(&app, user_id, org_id, PendingScope::Login, "totpRequired")
+        }
+        Ok(LoginOutcome::EnrollRequired { user_id, org_id }) => {
+            release(reservation);
+            pending_response(
+                &app,
+                user_id,
+                org_id,
+                PendingScope::Enroll,
+                "enrollRequired",
+            )
+        }
         Err(e) => {
             // Falsche Zugangsdaten zählen (Reservierung bleibt); andere Fehler nicht.
-            if e.kind != lineal_app::ErrorKind::Unauthenticated
-                && let (Some(r), Some(Extension(f))) = (reservation, &fails)
-            {
-                r.release(f);
+            if e.kind != lineal_app::ErrorKind::Unauthenticated {
+                release(reservation);
             }
             error_response(e)
         }
+    }
+}
+
+/// Antwort für einen fälligen zweiten Schritt: stellt den Pending-Token aus.
+fn pending_response(
+    app: &App,
+    user_id: lineal_domain::ids::UserId,
+    org_id: lineal_domain::ids::OrgId,
+    scope: PendingScope,
+    flag: &str,
+) -> Response {
+    match mint_pending(
+        &app.config.session_secret,
+        user_id,
+        org_id,
+        scope,
+        app.clock.now(),
+    ) {
+        Ok(token) => {
+            let mut obj = serde_json::Map::new();
+            obj.insert(flag.to_string(), json!(true));
+            obj.insert("pendingToken".to_string(), json!(token));
+            (StatusCode::OK, Json(Value::Object(obj))).into_response()
+        }
+        Err(e) => error_response(e),
     }
 }
 

@@ -44,6 +44,27 @@ pub struct TotpStatus {
     pub grace_logins_left: Option<i32>,
 }
 
+/// Was beim Bestätigen mit der Session geschehen soll.
+#[derive(Debug, Clone)]
+pub enum EnrollSession {
+    /// Freiwilliges Enrollment aus den Einstellungen: die übrigen Sessions des
+    /// Nutzers widerrufen, die aktuelle (sofern bekannt) behalten.
+    RevokeOthers { keep_token_hash: Option<String> },
+    /// Erzwungenes Enrollment (Owner ohne Session): eine frische Session prägen.
+    MintFresh {
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        request_id: Option<String>,
+    },
+}
+
+/// Ergebnis des Bestätigens: Recovery-Codes und ggf. eine frisch geprägte Session.
+#[derive(Debug, Clone)]
+pub struct EnrollConfirmed {
+    pub recovery_codes: Vec<String>,
+    pub login: Option<Login>,
+}
+
 impl App {
     fn recovery_key(&self) -> AppResult<[u8; 32]> {
         let hk = Hkdf::<Sha256>::new(None, self.config.session_secret.as_bytes());
@@ -99,7 +120,8 @@ impl App {
         &self,
         ctx: &RequestCtx,
         code: &str,
-    ) -> AppResult<Vec<String>> {
+        session: EnrollSession,
+    ) -> AppResult<EnrollConfirmed> {
         let user_id = Self::require_user(ctx)?;
         let now = self.clock.now();
         let mut tx = self.store.begin(ctx.org_id).await?;
@@ -119,12 +141,41 @@ impl App {
         core::verify(&secret, code, now.timestamp(), None)
             .ok_or_else(|| AppError::invalid_request("invalid code"))?;
         tx.totp().confirm(user_id, now).await?;
-        let codes = self
+        let recovery_codes = self
             .store_fresh_recovery_codes(&mut tx, user_id, ctx.org_id, now)
             .await?;
         tx.totp().grace_clear(user_id).await?;
+
+        let login = match session {
+            EnrollSession::RevokeOthers { keep_token_hash } => {
+                let keep = keep_token_hash.as_deref().unwrap_or("");
+                tx.auth().revoke_other_sessions(user_id, keep, now).await?;
+                None
+            }
+            EnrollSession::MintFresh {
+                ip_address,
+                user_agent,
+                request_id,
+            } => {
+                let user = tx
+                    .users()
+                    .get(user_id)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("user"))?;
+                Some(
+                    self.mint_session_tx(
+                        &mut *tx, user_id, ctx.org_id, user.role, ip_address, user_agent,
+                        request_id, now,
+                    )
+                    .await?,
+                )
+            }
+        };
         tx.commit().await?;
-        Ok(codes)
+        Ok(EnrollConfirmed {
+            recovery_codes,
+            login,
+        })
     }
 
     async fn store_fresh_recovery_codes(

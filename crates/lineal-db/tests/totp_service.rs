@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use lineal_app::App;
 use lineal_app::ports::{Clock, Store};
 use lineal_app::usecases::totp::core;
-use lineal_app::usecases::totp::service::TotpSecondFactor;
+use lineal_app::usecases::totp::service::{EnrollSession, TotpSecondFactor};
 use lineal_db::PgStore;
 use lineal_domain::ids::UserId;
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
@@ -43,9 +43,16 @@ async fn enroll(app: &App) -> (Vec<u8>, Vec<String>) {
     let enrollment = app.totp_begin_enrollment(&ctx).await.unwrap();
     let secret = core::base32_decode(&enrollment.secret_base32).unwrap();
     let recovery = app
-        .totp_confirm_enrollment(&ctx, &code(&secret))
+        .totp_confirm_enrollment(
+            &ctx,
+            &code(&secret),
+            EnrollSession::RevokeOthers {
+                keep_token_hash: None,
+            },
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .recovery_codes;
     (secret, recovery)
 }
 
@@ -68,7 +75,15 @@ async fn wrong_code_does_not_activate(pool: PgPool) {
     let (app, _d) = setup(pool, false).await;
     let ctx = ctx_for(SeedUser::Bob);
     app.totp_begin_enrollment(&ctx).await.unwrap();
-    let err = app.totp_confirm_enrollment(&ctx, "000000").await;
+    let err = app
+        .totp_confirm_enrollment(
+            &ctx,
+            "000000",
+            EnrollSession::RevokeOthers {
+                keep_token_hash: None,
+            },
+        )
+        .await;
     assert!(err.is_err());
     assert!(!app.totp_status(&ctx).await.unwrap().confirmed);
 }
@@ -147,9 +162,15 @@ async fn disable_blocked_for_enforced_owner_but_allowed_for_member(pool: PgPool)
     let actx = ctx_for(SeedUser::Alice);
     let enrollment = app.totp_begin_enrollment(&actx).await.unwrap();
     let secret = core::base32_decode(&enrollment.secret_base32).unwrap();
-    app.totp_confirm_enrollment(&actx, &code(&secret))
-        .await
-        .unwrap();
+    app.totp_confirm_enrollment(
+        &actx,
+        &code(&secret),
+        EnrollSession::RevokeOthers {
+            keep_token_hash: None,
+        },
+    )
+    .await
+    .unwrap();
     assert!(
         app.totp_disable(&actx).await.is_err(),
         "Owner darf nicht abschalten"

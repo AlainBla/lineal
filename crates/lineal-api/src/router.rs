@@ -48,8 +48,21 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/graphql", post(graphql_post).get(graphiql))
         .route("/graphql/schema.graphql", get(schema_sdl))
         .route("/auth/login", post(rest::auth::login))
+        .route("/auth/login/totp", post(rest::totp::login_totp))
         .route("/auth/logout", post(rest::auth::logout))
         .route("/auth/me", get(rest::auth::me))
+        .route("/auth/totp/status", get(rest::totp::status))
+        .route("/auth/totp/enroll/begin", post(rest::totp::enroll_begin))
+        .route(
+            "/auth/totp/enroll/confirm",
+            post(rest::totp::enroll_confirm),
+        )
+        .route("/auth/totp/disable", post(rest::totp::disable))
+        .route(
+            "/auth/totp/recovery/regenerate",
+            post(rest::totp::regenerate_recovery),
+        )
+        .route("/auth/totp/reset", post(rest::totp::reset))
         .route("/invite/accept", post(rest::auth::accept_invite))
         .route("/uploads/{token}", put(blob::upload))
         .route("/files/{token}", get(blob::download))
