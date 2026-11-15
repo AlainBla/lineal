@@ -296,6 +296,59 @@ impl App {
         }
     }
 
+    /// Prägt eine Session in einer laufenden Transaktion und schreibt den
+    /// `auth.login_succeeded`-Audit. Gemeinsam genutzt von Passwort-Login und dem
+    /// TOTP-Zweitschritt (LIN-70), damit beide Pfade dieselbe Session-Semantik haben.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn mint_session_tx(
+        &self,
+        tx: &mut dyn Tx,
+        user_id: UserId,
+        org_id: OrgId,
+        role: UserRole,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        request_id: Option<String>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Login> {
+        let token = random_hex();
+        let csrf = random_hex();
+        let expires_at = now + Duration::days(SESSION_TTL_DAYS);
+        tx.auth()
+            .insert_session(&NewSession {
+                id: self.ids.new_uuid(),
+                user_id,
+                token_hash: hash_token(&token),
+                csrf_token_hash: Some(hash_token(&csrf)),
+                user_agent,
+                ip_address: ip_address.clone(),
+                expires_at,
+                now,
+            })
+            .await?;
+        let ctx = user_ctx(
+            org_id,
+            user_id,
+            role,
+            ip_address,
+            request_id.unwrap_or_default(),
+            Some("session"),
+        );
+        self.record_audit(
+            tx,
+            &ctx,
+            AuditEvent::new("auth.login_succeeded", "user", Some(user_id.0), json!({})),
+        )
+        .await?;
+        Ok(Login {
+            token,
+            csrf_token: csrf,
+            expires_at,
+            org_id,
+            user_id,
+        })
+    }
+
     /// Schreibt einen fehlgeschlagenen Login in den Workspace des Kontos (ohne Passwort, ohne E-Mail).
     /// Schreibt die Audit-Einträge fehlgeschlagener Logins im Hintergrund (je Konto eine
     /// eigene Transaktion im Workspace des Kontos).

@@ -4,7 +4,9 @@
 pub mod core;
 pub mod crypto;
 pub mod key_provider;
+pub mod pending;
 pub mod recovery;
+pub mod service;
 
 /// Schonfrist für Owner ohne TOTP: nach so vielen Tagen greift die harte Sperre.
 pub const GRACE_MAX_DAYS: i64 = 7;

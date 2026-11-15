@@ -33,6 +33,14 @@ pub fn base32_encode(secret: &[u8]) -> String {
     base32::encode(base32::Alphabet::Rfc4648 { padding: false }, secret)
 }
 
+/// Dekodiert Base32 (RFC 4648, Groß-/Kleinschreibung egal) zurück zum Rohsecret.
+pub fn base32_decode(s: &str) -> Option<Vec<u8>> {
+    base32::decode(
+        base32::Alphabet::Rfc4648 { padding: false },
+        &s.to_uppercase(),
+    )
+}
+
 /// `otpauth://`-URI für den QR-Code. `issuer`/`account` werden prozent-kodiert.
 pub fn otpauth_uri(issuer: &str, account: &str, secret: &[u8]) -> String {
     let label = format!("{}:{}", percent_encode(issuer), percent_encode(account));
@@ -180,5 +188,12 @@ mod tests {
     #[test]
     fn generated_secrets_differ() {
         assert_ne!(generate_secret(), generate_secret());
+    }
+
+    #[test]
+    fn base32_roundtrips() {
+        let secret = generate_secret();
+        let decoded = base32_decode(&base32_encode(&secret)).unwrap();
+        assert_eq!(decoded, secret);
     }
 }
