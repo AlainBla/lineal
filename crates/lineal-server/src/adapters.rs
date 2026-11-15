@@ -225,6 +225,12 @@ pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
             tracing::error!(error = %e, "SMTP mailer unavailable, mails are only logged");
             ConfiguredMailer::Log(LogMailer)
         })),
+        totp_keys: Arc::new(
+            lineal_app::usecases::totp::key_provider::AppKeyProvider::from_session_secret(
+                &config.session_secret,
+            )
+            .expect("TOTP-KEK aus session_secret ableitbar"),
+        ),
         config: AppConfig {
             base_url: config.base_url.clone(),
             files_base_url: config.files_base_url.clone(),
@@ -234,6 +240,7 @@ pub fn build_app(store: Arc<dyn Store>, config: &Config) -> Arc<App> {
             trusted_proxies: config.trusted_proxies.clone(),
             workspace_creation: config.workspace_creation,
             instance_admins: config.instance_admins.clone(),
+            totp_owner_enforcement: config.totp_enforce_owners,
         },
     })
 }

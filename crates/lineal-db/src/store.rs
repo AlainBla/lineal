@@ -158,6 +158,9 @@ impl Tx for PgTx {
     fn auth(&mut self) -> &mut dyn AuthRepo {
         self
     }
+    fn totp(&mut self) -> &mut dyn TotpRepo {
+        self
+    }
     fn teams(&mut self) -> &mut dyn TeamRepo {
         self
     }

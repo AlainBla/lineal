@@ -22,6 +22,7 @@ mod state;
 mod team;
 mod team_lifecycle;
 mod template;
+mod totp;
 mod triage;
 mod user;
 mod view;

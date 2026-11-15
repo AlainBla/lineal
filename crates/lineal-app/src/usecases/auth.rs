@@ -76,6 +76,25 @@ pub struct Login {
     pub user_id: UserId,
 }
 
+/// Ergebnis des Passwort-Schritts (LIN-70). Nur `Session` hat tatsächlich
+/// eine gültige Session geprägt; die beiden anderen Varianten verlangen einen
+/// zweiten Schritt (TOTP-Code bzw. erzwungenes Enrollment) und prägen **keine**
+/// Session — der Aufrufer stellt dafür einen kurzlebigen Pending-Token aus.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoginOutcome {
+    Session(Login),
+    /// Nutzer hat aktives TOTP: zweiter Schritt über `/auth/login/totp`.
+    TotpRequired {
+        user_id: UserId,
+        org_id: OrgId,
+    },
+    /// Owner ohne TOTP, Schonfrist abgelaufen: muss jetzt einrichten.
+    EnrollRequired {
+        user_id: UserId,
+        org_id: OrgId,
+    },
+}
+
 /// Eingabe für `create_api_key`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateApiKeyInput {
@@ -122,7 +141,7 @@ impl App {
     /// Passwort-Login (docs/11 `POST /auth/login`). Unbekannte E-Mail, falsches Passwort,
     /// Platzhalter-User ohne Passwort und suspendierte User liefern dieselbe Antwort; in jedem
     /// Fall läuft genau eine Passwortprüfung pro Kandidat (bzw. eine Dummy-Prüfung ohne Kandidat).
-    pub async fn login(&self, input: LoginInput) -> AppResult<Login> {
+    pub async fn login_outcome(&self, input: LoginInput) -> AppResult<LoginOutcome> {
         // Überlange Eingabe gar nicht erst hashen (LIN-62 L-8). Hängt nur vom eingereichten
         // Passwort ab, verrät also nichts über die Existenz eines Kontos.
         if input.password.chars().count() > super::user::MAX_PASSWORD_LEN {
@@ -193,10 +212,37 @@ impl App {
             }
         };
         let now = self.clock.now();
+        let mut tx = self.store.begin(chosen.org_id).await?;
+        // LIN-70: Zweiter Faktor, bevor eine Session entsteht.
+        if let Some(totp) = tx.totp().get(chosen.user_id).await? {
+            if totp.is_active() {
+                // Aktives TOTP: keine Session, kein login_succeeded — der zweite Schritt folgt.
+                return Ok(LoginOutcome::TotpRequired {
+                    user_id: chosen.user_id,
+                    org_id: chosen.org_id,
+                });
+            }
+        }
+        // Owner ohne aktives TOTP: Schonfrist hochzählen; abgelaufen ⇒ Enrollment erzwingen.
+        // Nur wenn der Betreiber die Pflicht aktiviert hat (Tests laufen sonst unverändert).
+        if chosen.role == UserRole::Owner && self.config.totp_owner_enforcement {
+            let grace = tx
+                .totp()
+                .grace_bump(chosen.user_id, chosen.org_id, now)
+                .await?;
+            let expired = grace.logins_since > super::totp::GRACE_MAX_LOGINS
+                || now - grace.started_at > Duration::days(super::totp::GRACE_MAX_DAYS);
+            if expired {
+                tx.commit().await?; // den hochgezählten Stand festhalten
+                return Ok(LoginOutcome::EnrollRequired {
+                    user_id: chosen.user_id,
+                    org_id: chosen.org_id,
+                });
+            }
+        }
         let token = random_hex();
         let csrf = random_hex();
         let expires_at = now + Duration::days(SESSION_TTL_DAYS);
-        let mut tx = self.store.begin(chosen.org_id).await?;
         tx.auth()
             .insert_session(&NewSession {
                 id: self.ids.new_uuid(),
@@ -229,13 +275,25 @@ impl App {
         )
         .await?;
         tx.commit().await?;
-        Ok(Login {
+        Ok(LoginOutcome::Session(Login {
             token,
             csrf_token: csrf,
             expires_at,
             org_id: chosen.org_id,
             user_id: chosen.user_id,
-        })
+        }))
+    }
+
+    /// Rückwärtskompatibler Login: liefert die Session direkt. Verlangt ein Konto
+    /// den zweiten Faktor, meldet dieser Pfad einen Fehler — Aufrufer, die TOTP
+    /// unterstützen, nutzen [`App::login_outcome`].
+    pub async fn login(&self, input: LoginInput) -> AppResult<Login> {
+        match self.login_outcome(input).await? {
+            LoginOutcome::Session(login) => Ok(login),
+            LoginOutcome::TotpRequired { .. } | LoginOutcome::EnrollRequired { .. } => Err(
+                AppError::invalid_request("two-factor authentication required"),
+            ),
+        }
     }
 
     /// Schreibt einen fehlgeschlagenen Login in den Workspace des Kontos (ohne Passwort, ohne E-Mail).

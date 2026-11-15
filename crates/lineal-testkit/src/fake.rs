@@ -5,15 +5,19 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use lineal_app::ports::repos::*;
 use lineal_app::ports::{
-    BlobStore, Clock, IdGen, Mail, Mailer, PasswordHasher, SearchHit, SearchIndex, Store, Tx,
+    BlobStore, Clock, IdGen, Mail, Mailer, PasswordHasher, SearchHit, SearchIndex, Store,
+    TotpKeyProvider, Tx,
 };
 use lineal_app::{App, AppConfig, AppResult};
-use lineal_domain::ids::{EventId, JobId, OrgId};
+use lineal_domain::ids::{EventId, JobId, OrgId, UserId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
+
+/// Recovery-Code-Zeile im Fake: (id, user_id, code_hash, used_at).
+type FakeRecoveryRow = (Uuid, Uuid, Vec<u8>, Option<DateTime<Utc>>);
 
 #[derive(Default)]
 struct FakeState {
@@ -22,6 +26,9 @@ struct FakeState {
     jobs: Mutex<Vec<NewJob>>,
     audit: Mutex<Vec<NewAuditEntry>>,
     sync_seq: AtomicI64,
+    totp: Mutex<HashMap<Uuid, UserTotp>>,
+    recovery: Mutex<Vec<FakeRecoveryRow>>,
+    grace: Mutex<HashMap<Uuid, GraceRow>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -165,6 +172,132 @@ impl AuthRepo for FakeTx {
 }
 
 #[async_trait]
+impl TotpRepo for FakeTx {
+    async fn get(&mut self, user: UserId) -> AppResult<Option<UserTotp>> {
+        Ok(lock(&self.state.totp).get(&user.0).cloned())
+    }
+    async fn upsert_pending(&mut self, rec: &NewUserTotp) -> AppResult<()> {
+        lock(&self.state.totp).insert(
+            rec.user_id.0,
+            UserTotp {
+                user_id: rec.user_id,
+                secret_enc: rec.secret_enc.clone(),
+                dek_wrapped: rec.dek_wrapped.clone(),
+                key_backend: rec.key_backend.clone(),
+                key_version: rec.key_version,
+                confirmed_at: None,
+                last_used_step: None,
+            },
+        );
+        Ok(())
+    }
+    async fn confirm(&mut self, user: UserId, now: DateTime<Utc>) -> AppResult<()> {
+        if let Some(t) = lock(&self.state.totp).get_mut(&user.0) {
+            if t.confirmed_at.is_none() {
+                t.confirmed_at = Some(now);
+            }
+        }
+        Ok(())
+    }
+    async fn set_last_used_step(&mut self, user: UserId, step: i64) -> AppResult<()> {
+        if let Some(t) = lock(&self.state.totp).get_mut(&user.0) {
+            t.last_used_step = Some(step);
+        }
+        Ok(())
+    }
+    async fn delete_all(&mut self, user: UserId) -> AppResult<()> {
+        lock(&self.state.totp).remove(&user.0);
+        lock(&self.state.recovery).retain(|(_, u, _, _)| *u != user.0);
+        lock(&self.state.grace).remove(&user.0);
+        Ok(())
+    }
+    async fn replace_recovery_codes(
+        &mut self,
+        user: UserId,
+        _org: OrgId,
+        hashes: &[Vec<u8>],
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut r = lock(&self.state.recovery);
+        r.retain(|(_, u, _, _)| *u != user.0);
+        for h in hashes {
+            r.push((Uuid::new_v4(), user.0, h.clone(), None));
+        }
+        Ok(())
+    }
+    async fn unused_recovery_codes(&mut self, user: UserId) -> AppResult<Vec<RecoveryCodeRow>> {
+        Ok(lock(&self.state.recovery)
+            .iter()
+            .filter(|(_, u, _, used)| *u == user.0 && used.is_none())
+            .map(|(id, _, hash, _)| RecoveryCodeRow {
+                id: *id,
+                code_hash: hash.clone(),
+            })
+            .collect())
+    }
+    async fn consume_recovery_code(&mut self, id: Uuid, now: DateTime<Utc>) -> AppResult<()> {
+        if let Some(row) = lock(&self.state.recovery)
+            .iter_mut()
+            .find(|(i, _, _, _)| *i == id)
+        {
+            if row.3.is_none() {
+                row.3 = Some(now);
+            }
+        }
+        Ok(())
+    }
+    async fn grace_get(&mut self, user: UserId) -> AppResult<Option<GraceRow>> {
+        Ok(lock(&self.state.grace).get(&user.0).cloned())
+    }
+    async fn grace_bump(
+        &mut self,
+        user: UserId,
+        _org: OrgId,
+        now: DateTime<Utc>,
+    ) -> AppResult<GraceRow> {
+        let mut g = lock(&self.state.grace);
+        let entry = g.entry(user.0).or_insert(GraceRow {
+            started_at: now,
+            logins_since: 0,
+        });
+        entry.logins_since += 1;
+        Ok(entry.clone())
+    }
+    async fn grace_clear(&mut self, user: UserId) -> AppResult<()> {
+        lock(&self.state.grace).remove(&user.0);
+        Ok(())
+    }
+    async fn owners_past_deadline(
+        &mut self,
+        _now: DateTime<Utc>,
+        _max_age_days: i64,
+        _max_logins: i32,
+    ) -> AppResult<Vec<UserId>> {
+        // Der Fake kennt die Rollen nicht; Enforcement-Job wird gegen die DB getestet.
+        Ok(Vec::new())
+    }
+}
+
+/// Test-KeyProvider: wrappt den DEK per XOR mit einem festen Schlüssel.
+pub struct FakeTotpKeys;
+
+#[async_trait]
+impl TotpKeyProvider for FakeTotpKeys {
+    fn backend(&self) -> &'static str {
+        "app"
+    }
+    fn key_version(&self) -> i32 {
+        1
+    }
+    async fn wrap_dek(&self, dek: &[u8]) -> AppResult<Vec<u8>> {
+        Ok(dek.iter().map(|b| b ^ 0x5a).collect())
+    }
+    async fn unwrap_dek(&self, wrapped: &[u8]) -> AppResult<Vec<u8>> {
+        Ok(wrapped.iter().map(|b| b ^ 0x5a).collect())
+    }
+}
+
+#[async_trait]
 impl OutboxRepo for FakeTx {
     async fn push(&mut self, event: NewEvent) -> AppResult<EventId> {
         lock(&self.state.events).push(event);
@@ -239,6 +372,9 @@ impl Tx for FakeTx {
         self
     }
     fn auth(&mut self) -> &mut dyn AuthRepo {
+        self
+    }
+    fn totp(&mut self) -> &mut dyn TotpRepo {
         self
     }
     fn teams(&mut self) -> &mut dyn TeamRepo {
@@ -387,6 +523,7 @@ pub fn test_app(store: Arc<dyn Store>) -> Arc<App> {
         search: Arc::new(FakeSearch),
         hasher: Arc::new(FakeHasher),
         mailer: Arc::new(FakeMailer),
+        totp_keys: Arc::new(FakeTotpKeys),
         config: AppConfig::default(),
     })
 }

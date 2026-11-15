@@ -38,6 +38,7 @@ pub trait Tx: Send {
     fn orgs(&mut self) -> &mut dyn OrgRepo;
     fn users(&mut self) -> &mut dyn UserRepo;
     fn auth(&mut self) -> &mut dyn AuthRepo;
+    fn totp(&mut self) -> &mut dyn TotpRepo;
     fn teams(&mut self) -> &mut dyn TeamRepo;
     fn states(&mut self) -> &mut dyn WorkflowStateRepo;
     fn labels(&mut self) -> &mut dyn LabelRepo;

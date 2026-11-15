@@ -1,6 +1,8 @@
 //! Zentrale Fassade `App`, die Adapter benutzen. Use-Cases stehen als `impl App` in `usecases/*`.
 
-use crate::ports::{BlobStore, Clock, IdGen, Mailer, PasswordHasher, SearchIndex, Store};
+use crate::ports::{
+    BlobStore, Clock, IdGen, Mailer, PasswordHasher, SearchIndex, Store, TotpKeyProvider,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -47,6 +49,10 @@ pub struct AppConfig {
     pub workspace_creation: WorkspaceCreation,
     /// Instanz-Admins (User-IDs) für `WorkspaceCreation::Admins`.
     pub instance_admins: Vec<uuid::Uuid>,
+    /// LIN-70: erzwingt TOTP für Org-Owner (Schonfrist, dann harte Sperre). Default
+    /// `false`, damit Tests ohne 2FA unverändert laufen; der Server setzt ihn aus der
+    /// Konfiguration. Die Prüfung eines **aktiven** TOTP greift unabhängig davon.
+    pub totp_owner_enforcement: bool,
 }
 
 impl Default for AppConfig {
@@ -60,6 +66,7 @@ impl Default for AppConfig {
             trusted_proxies: Vec::new(),
             workspace_creation: WorkspaceCreation::All,
             instance_admins: Vec::new(),
+            totp_owner_enforcement: false,
         }
     }
 }
@@ -73,5 +80,7 @@ pub struct App {
     pub search: Arc<dyn SearchIndex>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub mailer: Arc<dyn Mailer>,
+    /// Schlüssel-Backend für die Envelope-Verschlüsselung der TOTP-Secrets (LIN-70).
+    pub totp_keys: Arc<dyn TotpKeyProvider>,
     pub config: AppConfig,
 }

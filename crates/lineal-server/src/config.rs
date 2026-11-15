@@ -35,6 +35,9 @@ pub struct Config {
     pub workspace_creation: WorkspaceCreation,
     /// `LINEAL_INSTANCE_ADMINS` (Komma-Liste von User-UUIDs) für `admins`.
     pub instance_admins: Vec<uuid::Uuid>,
+    /// `LINEAL_TOTP_ENFORCE_OWNERS` (Default `true`): erzwingt TOTP für Org-Owner
+    /// (Schonfrist, dann harte Sperre, LIN-70). `0`/`false`/`no` schaltet es ab.
+    pub totp_enforce_owners: bool,
     /// SMTP-Relay (`LINEAL_SMTP_HOST`, `LINEAL_SMTP_PORT`, `LINEAL_MAIL_FROM`); `None` = Mails
     /// nur ins Log.
     pub smtp: Option<SmtpConfig>,
@@ -185,6 +188,10 @@ impl Config {
             trusted_proxies,
             workspace_creation,
             instance_admins,
+            totp_enforce_owners: !matches!(
+                get("LINEAL_TOTP_ENFORCE_OWNERS").as_deref(),
+                Some("0") | Some("false") | Some("no")
+            ),
             smtp,
             db_max_connections: get("LINEAL_DB_MAX_CONNECTIONS")
                 .map(|v| v.parse())
