@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LIN-70 TOTP Mockup</title>
+<style>
+  :root {
+    --radius: 0.5rem;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.22 0.01 265);
+    --sidebar: oklch(0.972 0.003 265);
+    --surface: oklch(0.985 0.002 265);
+    --surface-hover: oklch(0.955 0.004 265);
+    --card: oklch(1 0 0);
+    --primary: oklch(0.52 0.19 277);
+    --primary-foreground: oklch(0.99 0 0);
+    --muted: oklch(0.955 0.004 265);
+    --muted-foreground: oklch(0.5 0.012 265);
+    --accent: oklch(0.945 0.005 265);
+    --destructive: oklch(0.577 0.225 27);
+    --success: oklch(0.6 0.14 155);
+    --warning: oklch(0.72 0.15 75);
+    --border: oklch(0.2 0.02 265 / 9%);
+    --border-strong: oklch(0.2 0.02 265 / 16%);
+    --input: oklch(0.2 0.02 265 / 14%);
+    --note-bg: oklch(0.96 0.03 277);
+    --note-border: oklch(0.52 0.19 277 / 35%);
+    --shadow: 0 1px 2px oklch(0.2 0.02 265 / 8%), 0 4px 16px oklch(0.2 0.02 265 / 6%);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --background: oklch(0.185 0.004 265);
+    --foreground: oklch(0.95 0.003 265);
+    --sidebar: oklch(0.155 0.004 265);
+    --surface: oklch(0.215 0.005 265);
+    --surface-hover: oklch(0.25 0.006 265);
+    --card: oklch(0.215 0.005 265);
+    --primary: oklch(0.6 0.19 277);
+    --primary-foreground: oklch(0.99 0 0);
+    --muted: oklch(0.25 0.006 265);
+    --muted-foreground: oklch(0.7 0.01 265);
+    --accent: oklch(0.28 0.008 265);
+    --destructive: oklch(0.7 0.19 22);
+    --success: oklch(0.72 0.14 155);
+    --warning: oklch(0.8 0.14 75);
+    --border: oklch(1 0 0 / 7%);
+    --border-strong: oklch(1 0 0 / 13%);
+    --input: oklch(1 0 0 / 11%);
+    --note-bg: oklch(0.28 0.05 277);
+    --note-border: oklch(0.6 0.19 277 / 45%);
+    --shadow: 0 1px 2px oklch(0 0 0 / 30%), 0 6px 20px oklch(0 0 0 / 35%);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 32px 16px 96px; }
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 8px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(140deg, var(--primary), oklch(0.62 0.17 300));
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 14px;
+  }
+  .brand h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .brand .sub { font-size: 12px; color: var(--muted-foreground); }
+  .toggle {
+    border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--foreground); border-radius: 999px; padding: 7px 14px;
+    font-size: 13px; cursor: pointer; font-weight: 550;
+  }
+  .toggle:hover { background: var(--surface-hover); }
+  .lede { color: var(--muted-foreground); font-size: 14px; max-width: 760px; margin: 4px 0 20px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted-foreground); margin-bottom: 28px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+  .screen { display: flex; flex-direction: column; gap: 10px; }
+  .screen.wide { grid-column: 1 / -1; }
+  .screen-cap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .screen-cap .n {
+    font-size: 11px; font-weight: 700; color: var(--primary);
+    border: 1px solid var(--note-border); border-radius: 6px; padding: 1px 7px;
+    background: var(--note-bg);
+  }
+  .screen-cap h2 { font-size: 14px; margin: 0; font-weight: 620; }
+  .screen-cap .flow { font-size: 12px; color: var(--muted-foreground); }
+
+  .frame {
+    background: var(--card); border: 1px solid var(--border-strong);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+  }
+  .winbar {
+    display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .winbar i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .winbar .url {
+    margin-left: 8px; font-size: 11px; color: var(--muted-foreground);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .body { padding: 22px; }
+
+  .modal-title { font-size: 17px; font-weight: 640; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .modal-desc { font-size: 13px; color: var(--muted-foreground); margin: 0 0 18px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    border-radius: var(--radius); font-size: 13.5px; font-weight: 580; cursor: pointer;
+    padding: 9px 16px; border: 1px solid transparent;
+  }
+  .btn.primary { background: var(--primary); color: var(--primary-foreground); }
+  .btn.ghost { background: var(--surface); color: var(--foreground); border-color: var(--border-strong); }
+  .btn.danger { background: transparent; color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 40%, transparent); }
+  .btn.sm { padding: 6px 11px; font-size: 12.5px; }
+  .btn.block { width: 100%; }
+  .btn-row { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+
+  .field { margin-bottom: 14px; }
+  .label { font-size: 12px; font-weight: 600; margin-bottom: 6px; display: block; }
+  .input {
+    width: 100%; border: 1px solid var(--input); background: var(--background);
+    color: var(--foreground); border-radius: var(--radius); padding: 10px 12px; font-size: 14px;
+  }
+  .otp { display: flex; gap: 8px; }
+  .otp .cell {
+    width: 44px; height: 52px; border: 1px solid var(--border-strong); border-radius: 8px;
+    display: grid; place-items: center; font-size: 22px; font-weight: 600; background: var(--background);
+  }
+  .otp .cell.active { border-color: var(--primary); box-shadow: 0 0 0 3px var(--note-bg); }
+
+  .qr-wrap { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .qr { width: 148px; height: 148px; border-radius: 10px; border: 1px solid var(--border-strong); padding: 8px; background: #fff; flex: none; }
+  .qr svg { width: 100%; height: 100%; display: block; }
+  .secret {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    letter-spacing: 0.08em; background: var(--muted); padding: 8px 12px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .steps { display: flex; gap: 6px; margin-bottom: 18px; }
+  .steps .s { flex: 1; height: 4px; border-radius: 2px; background: var(--border-strong); }
+  .steps .s.done { background: var(--primary); }
+
+  .codes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 22px; font-family: ui-monospace, Menlo, monospace; font-size: 14px; margin: 14px 0; }
+  .codes div { padding: 7px 10px; background: var(--muted); border-radius: 6px; letter-spacing: 0.06em; }
+  .codes div.used { text-decoration: line-through; color: var(--muted-foreground); opacity: 0.55; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .row .k { font-size: 13.5px; font-weight: 560; }
+  .row .d { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; }
+  .pill { font-size: 11px; font-weight: 650; padding: 3px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; }
+  .pill.on { background: color-mix(in oklab, var(--success) 18%, transparent); color: var(--success); }
+  .pill.off { background: var(--muted); color: var(--muted-foreground); }
+  .pill.req { background: color-mix(in oklab, var(--warning) 20%, transparent); color: var(--warning); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .banner {
+    display: flex; gap: 14px; align-items: flex-start; padding: 16px 18px; border-radius: 12px;
+    background: color-mix(in oklab, var(--warning) 14%, var(--card));
+    border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
+  }
+  .banner .ic { font-size: 20px; line-height: 1; }
+  .banner h3 { margin: 0 0 3px; font-size: 14px; }
+  .banner p { margin: 0; font-size: 12.5px; color: var(--muted-foreground); }
+
+  .muted-link { color: var(--primary); font-size: 12.5px; text-decoration: none; cursor: pointer; }
+  .hint { font-size: 12px; color: var(--muted-foreground); margin-top: 10px; }
+
+  .note {
+    margin-top: 10px; font-size: 12.5px; line-height: 1.55; border-left: 3px solid var(--note-border);
+    background: var(--note-bg); padding: 10px 12px; border-radius: 0 8px 8px 0; color: var(--foreground);
+  }
+  .note b { color: var(--primary); }
+  .note.q { border-left-color: var(--warning); background: color-mix(in oklab, var(--warning) 12%, var(--card)); }
+  .note.q b { color: var(--warning); }
+
+  .section-h { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); margin: 40px 0 6px; }
+  .mini-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(140deg, var(--primary), oklch(0.62 0.17 300)); color:#fff; display:grid; place-items:center; font-size:12px; font-weight:650; flex:none; }
+  .pw-dots { letter-spacing: 3px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div>
+        <h1>TOTP (2FA) für Admins — Mockup</h1>
+        <div class="sub">LIN-70 · Sicherheit &amp; Härtung · Reagier-Entwurf, kein finales Design</div>
+      </div>
+    </div>
+    <button class="toggle" id="themeBtn">◐ Hell / Dunkel</button>
+  </header>
+
+  <p class="lede">Entwurf der fünf UI-Flächen aus dem Ticket. <b>Blaue Notizen</b> = angenommene Defaults (sag Bescheid, wenn anders).
+  <b>Gelbe Notizen</b> = echte offene Entscheidungen, die den Entwurf ändern. Nichts hiervon ist beschlossen — Grundlage fürs Design-Doc.</p>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--note-border)"></span> angenommener Default</span>
+    <span><span class="swatch" style="background:var(--warning)"></span> offene Entscheidung</span>
+    <span><span class="swatch" style="background:var(--success)"></span> aktiv / bestätigt</span>
+    <span><span class="swatch" style="background:var(--destructive)"></span> Abschalten / Risiko</span>
+  </div>
+
+  <div class="grid">
+
+    <!-- 1. Account Security status -->
+    <div class="screen">
+      <div class="screen-cap"><span class="n">1</span><h2>Account → Sicherheit</h2><span class="flow">Einstiegspunkt</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">lineal.kollegeplus.de/settings/security</span></div>
+        <div class="body">
+          <div class="row">
+            <div>
+              <div class="k">Zwei-Faktor-Authentifizierung (TOTP)</div>
+              <div class="d">Authenticator-App (Google Authenticator, 1Password, Aegis …)</div>
+            </div>
+            <span class="pill off"><span class="dot"></span>Aus</span>
+          </div>
+          <div class="row">
+            <div>
+              <div class="k">Status deiner Rolle</div>
+              <div class="d">Owner — 2FA ist für Admins vorgeschrieben</div>
+            </div>
+            <span class="pill req">erforderlich</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary">Einrichten</button>
+          </div>
+          <div class="note"><b>Default:</b> Eine Methode (TOTP, RFC 6238: SHA-1, 6 Stellen, 30 s) — kompatibel mit jeder Standard-App. WebAuthn/Passkeys bewusst später, nicht in LIN-70.</div>
+          <div class="note q"><b>Offen:</b> Gilt „Admin“ = nur Org-<b>Owner</b>, oder auch System-Admins / weitere Rollen? Bot-User (`app`) sind raus (nur API-Key, kein Browser-Login).</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Enrollment -->
+    <div class="screen">
+      <div class="screen-cap"><span class="n">2</span><h2>Einrichtung — Schritt 1</h2><span class="flow">QR scannen + Code bestätigen</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">… /settings/security/2fa/enroll</span></div>
+        <div class="body">
+          <div class="steps"><div class="s done"></div><div class="s"></div></div>
+          <p class="modal-title">App koppeln</p>
+          <p class="modal-desc">Scanne den Code mit deiner Authenticator-App und gib danach den angezeigten 6-stelligen Code ein.</p>
+          <div class="qr-wrap">
+            <div class="qr" aria-label="QR-Platzhalter"><svg viewBox="0 0 29 29" shape-rendering="crispEdges" id="qr"></svg></div>
+            <div style="flex:1; min-width:180px">
+              <div class="label">Oder Schlüssel manuell eingeben</div>
+              <div class="secret">JBSW Y3DP EHPK 3PXP <span class="muted-link">kopieren</span></div>
+              <div class="hint" style="word-break:break-all">otpauth://totp/Lineal:owner@acme.de?secret=…&amp;issuer=Lineal</div>
+              <div class="field" style="margin-top:16px">
+                <span class="label">Code aus der App</span>
+                <div class="otp"><div class="cell">1</div><div class="cell">4</div><div class="cell">9</div><div class="cell active">2</div><div class="cell"></div><div class="cell"></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-row"><button class="btn primary">Bestätigen &amp; aktivieren</button><button class="btn ghost">Abbrechen</button></div>
+          <div class="note"><b>Default:</b> Secret wird erst <b>nach</b> erfolgreicher Code-Bestätigung aktiviert (kein „halb eingerichtetes“ 2FA). Gespeichert <b>verschlüsselt at rest</b> — gleiche Philosophie wie die Backup-age-Identity, nie im Klartext.</div>
+          <div class="note q"><b>Offen:</b> Woher kommt der Verschlüsselungsschlüssel (App-weiter Key in `.env` / KMS / aus Passwort abgeleitet)? Schlüsselverwaltung = eigene Design-Frage.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Recovery codes -->
+    <div class="screen">
+      <div class="screen-cap"><span class="n">3</span><h2>Einrichtung — Schritt 2</h2><span class="flow">Recovery-Codes</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">… /settings/security/2fa/recovery</span></div>
+        <div class="body">
+          <div class="steps"><div class="s done"></div><div class="s done"></div></div>
+          <p class="modal-title">Speichere deine Recovery-Codes</p>
+          <p class="modal-desc">Jeder Code funktioniert <b>einmal</b>, falls du dein Gerät verlierst. Wir zeigen sie nur dieses eine Mal.</p>
+          <div class="codes">
+            <div>4K2P-9QX7</div><div>H8RM-2WLD</div>
+            <div>7YND-QV3C</div><div>XB49-KM6T</div>
+            <div>93PL-RA8S</div><div>UE2X-7HQN</div>
+            <div>D5TW-KP91</div><div>2NRB-X4VC</div>
+            <div>QL7M-83DK</div><div>A6YH-N2WP</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost sm">⤓ Herunterladen</button>
+            <button class="btn ghost sm">⧉ Kopieren</button>
+            <button class="btn ghost sm">⎙ Drucken</button>
+          </div>
+          <div class="field" style="margin-top:16px">
+            <label style="display:flex;gap:9px;align-items:center;font-size:13px"><input type="checkbox" checked /> Ich habe die Codes sicher gespeichert</label>
+          </div>
+          <div class="btn-row"><button class="btn primary block">Fertig — 2FA ist aktiv</button></div>
+          <div class="note"><b>Default:</b> 10 Einmal-Codes, server-seitig nur <b>gehasht</b> gespeichert (wie Passwörter). Verbrauch wird markiert; „neu erzeugen“ invalidiert alle alten.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. Login second step -->
+    <div class="screen">
+      <div class="screen-cap"><span class="n">4</span><h2>Login — Zweitschritt</h2><span class="flow">nach Passwort</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">lineal.kollegeplus.de/login</span></div>
+        <div class="body" style="max-width:360px;margin:0 auto">
+          <div style="text-align:center;margin-bottom:6px"><div class="logo" style="margin:0 auto 12px">L</div></div>
+          <p class="modal-title" style="text-align:center">Bestätige deine Anmeldung</p>
+          <p class="modal-desc" style="text-align:center">Gib den 6-stelligen Code aus deiner Authenticator-App ein.</p>
+          <div class="otp" style="justify-content:center"><div class="cell">0</div><div class="cell">5</div><div class="cell">8</div><div class="cell">2</div><div class="cell active">3</div><div class="cell"></div></div>
+          <div class="btn-row"><button class="btn primary block">Anmelden</button></div>
+          <div class="hint" style="text-align:center"><span class="muted-link">Stattdessen einen Recovery-Code verwenden</span></div>
+          <div class="note"><b>Default:</b> Der Zweitschritt zählt gegen denselben gestaffelten Fehlversuchs-Lockout wie der Login (LIN-48), getrennt vom `__Host-`-Session-Cookie (LIN-62 L-7), das erst nach bestandenem 2FA gesetzt wird.</div>
+          <div class="note q"><b>Offen:</b> „Diesem Gerät 30 Tage vertrauen“ anbieten? Bequem, aber schwächt 2FA — bewusst entscheiden.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. OAuth / enforcement wide -->
+    <div class="screen wide">
+      <div class="screen-cap"><span class="n">5</span><h2>Durchsetzung &amp; OAuth-/MCP-Pfad</h2><span class="flow">die kniffligen Stellen</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">verschiedene Einstiegspunkte</span></div>
+        <div class="body">
+          <div class="banner" style="margin-bottom:18px">
+            <div class="ic">⚠️</div>
+            <div style="flex:1">
+              <h3>2FA ist für dein Konto jetzt vorgeschrieben</h3>
+              <p>Als Owner musst du die Zwei-Faktor-Authentifizierung einrichten. Verbleibende Schonfrist: <b>6 Tage / 2 Anmeldungen</b>.</p>
+            </div>
+            <button class="btn primary sm">Jetzt einrichten</button>
+          </div>
+
+          <div class="grid" style="gap:18px">
+            <div>
+              <div class="section-h" style="margin-top:0">A · Browser-Login (Weboberfläche)</div>
+              <div class="row"><div><div class="k">Passwort</div><div class="d">Schritt 1 — unverändert</div></div><span class="pill on"><span class="dot"></span>ok</span></div>
+              <div class="row"><div><div class="k">TOTP-Code</div><div class="d">Schritt 2 — Screen 4</div></div><span class="pill on"><span class="dot"></span>ok</span></div>
+              <div class="row"><div><div class="k">Session-Cookie gesetzt</div><div class="d">erst nach Schritt 2</div></div><span class="pill on"><span class="dot"></span>ok</span></div>
+            </div>
+            <div>
+              <div class="section-h" style="margin-top:0">B · OAuth-Authorize (MCP / DCR)</div>
+              <div class="row"><div><div class="k">Login im Consent-Flow</div><div class="d">Browser-Login vor dem Authorize-Redirect</div></div><span class="pill req">2FA hier einhängen</span></div>
+              <div class="row"><div><div class="k">API-Key direkt (Bot, Rolle `app`)</div><div class="d">kein Browser, kein TOTP</div></div><span class="pill off">ausgenommen</span></div>
+            </div>
+          </div>
+
+          <div class="note" style="margin-top:18px"><b>Default:</b> 2FA sitzt an der <b>Browser-Login-Stufe</b>. Weil der OAuth-Authorize-Flow denselben Login nutzt, ist Pfad B automatisch abgedeckt — kein zweiter 2FA-Ort nötig. Bot-API-Keys (LIN-22) laufen nie über diesen Login, bleiben also funktionsfähig und von der Pflicht ausgenommen (Überschneidung mit LIN-62 L-6 `created_by`/Revoke beachten).</div>
+          <div class="note q"><b>Offen 1 — Enforcement-Härte:</b> Schonfrist (Default 7 Tage / 3 Logins) dann harte Sperre bis eingerichtet? Oder sofort beim nächsten Login? <br>
+          <b>Offen 2 — laufende Sessions:</b> bei Aktivierung bestehende Sessions invalidieren (sauber, aber loggt alle aus) oder weiterlaufen lassen? <br>
+          <b>Offen 3 — Totalverlust:</b> Gerät <i>und</i> Recovery-Codes weg → zweiter Owner setzt zurück? Support-Pfad? Bei Ein-Personen-Workspace kritisch.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. active state -->
+    <div class="screen wide">
+      <div class="screen-cap"><span class="n">6</span><h2>Account → Sicherheit (2FA aktiv)</h2><span class="flow">Verwaltungszustand</span></div>
+      <div class="frame">
+        <div class="winbar"><i></i><i></i><i></i><span class="url">… /settings/security</span></div>
+        <div class="body">
+          <div class="row">
+            <div style="display:flex;gap:12px;align-items:center"><div class="mini-avatar">OW</div><div><div class="k">Zwei-Faktor-Authentifizierung</div><div class="d">Aktiv seit 15.11.2026 · Authenticator-App</div></div></div>
+            <span class="pill on"><span class="dot"></span>Aktiv</span>
+          </div>
+          <div class="row">
+            <div><div class="k">Recovery-Codes</div><div class="d">3 von 10 verbraucht</div></div>
+            <button class="btn ghost sm">Neu erzeugen</button>
+          </div>
+          <div class="row">
+            <div><div class="k">2FA deaktivieren</div><div class="d">Nur möglich, wenn deine Rolle es nicht erzwingt</div></div>
+            <button class="btn danger sm">Deaktivieren</button>
+          </div>
+          <div class="codes" style="grid-template-columns:repeat(5,1fr);margin-top:6px">
+            <div class="used">4K2P-9QX7</div><div class="used">H8RM-2WLD</div><div class="used">7YND-QV3C</div><div>XB49-KM6T</div><div>93PL-RA8S</div>
+          </div>
+          <div class="note"><b>Default:</b> „Deaktivieren“ ist für erzwungene Rollen gesperrt (Button disabled + Hinweis) — sonst könnte ein Owner die Pflicht einfach wieder abschalten.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="section-h">Zusammengefasst: 3 Entscheidungen, die ich von dir brauche</div>
+  <div class="note q" style="max-width:860px">
+    <b>1. Pflicht-Rolle:</b> nur Owner, oder auch System-Admins/weitere? &nbsp;·&nbsp;
+    <b>2. Enforcement:</b> Schonfrist (7 Tage/3 Logins) oder sofort? &nbsp;·&nbsp;
+    <b>3. Verlust-Fallback:</b> was bei Gerät + Recovery-Codes weg (besonders Ein-Owner-Workspace)?<br>
+    Der Rest (RFC-6238-Parameter, verschlüsselte Secrets, gehashte Codes, OAuth über den Browser-Login) sind sinnvolle Defaults, die ich im Design-Doc setze, wenn du nicht widersprichst.
+  </div>
+</div>
+
+<script>
+  // Theme toggle
+  const root = document.documentElement;
+  const saved = (() => { try { return localStorage.getItem('lin70-theme'); } catch { return null; } })();
+  if (saved) root.dataset.theme = saved;
+  else root.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.getElementById('themeBtn').onclick = () => {
+    const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = next;
+    try { localStorage.setItem('lin70-theme', next); } catch {}
+  };
+  // Decorative QR placeholder (deterministic pattern, not a real code)
+  (function(){
+    const svg = document.getElementById('qr'); if(!svg) return;
+    const N = 29; let seed = 1337;
+    const rnd = () => (seed = (seed*1103515245+12345) & 0x7fffffff) / 0x7fffffff;
+    const fg = '#111';
+    function finder(x,y){
+      let s='';
+      for(let i=0;i<7;i++)for(let j=0;j<7;j++){
+        const edge = i===0||i===6||j===0||j===6; const core = i>=2&&i<=4&&j>=2&&j<=4;
+        if(edge||core) s+=`<rect x="${x+j}" y="${y+i}" width="1" height="1" fill="${fg}"/>`;
+      } return s;
+    }
+    let out='';
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+      const inFinder = (x<8&&y<8)||(x>N-9&&y<8)||(x<8&&y>N-9);
+      if(inFinder) continue;
+      if(rnd()>0.55) out+=`<rect x="${x}" y="${y}" width="1" height="1" fill="${fg}"/>`;
+    }
+    out+=finder(0,0)+finder(N-7,0)+finder(0,N-7);
+    svg.innerHTML = out;
+  })();
+</script>
+</body>
+</html>
