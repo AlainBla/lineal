@@ -46,7 +46,7 @@ Pro Nutzer ein TOTP-Secret, **verschlüsselt at rest**. Aktivierung erst **nach*
 → *Schlüsselverwaltung ist eine offene Teilfrage (siehe Offen 4).*
 
 ### Recovery-Codes
-10 Einmal-Codes, server-seitig nur **gehasht** (wie Passwörter, Argon2 via `spawn_blocking` analog LIN-62 L-1). Anzeige nur einmal. Verbrauch markiert. „Neu erzeugen" invalidiert alle alten. Entwurf: `user_recovery_code(user_id, code_hash, used_at)`.
+10 Einmal-Codes, server-seitig nur **gehasht**. **Kein Argon2** (im Login-Pfad würden bis zu 10× Argon2 pro Versuch ≈ DoS): Codes sind CSPRNG-Zufall mit ≥40 Bit Entropie, daher genügt **keyed HMAC-SHA256 + konstantzeitiger Vergleich**. Anzeige nur einmal. Verbrauch markiert. „Neu erzeugen" invalidiert alle alten. Entwurf: `user_recovery_code(id, user_id, code_hash, used_at, created_at)`.
 
 ### Login-Zweitschritt
 Nach erfolgreichem Passwort und *wenn* der Nutzer 2FA aktiv hat: Zwischenzustand (noch **kein** `__Host-`-Session-Cookie), 6-stellige Eingabe oder Recovery-Code. Cookie wird **erst nach** bestandenem zweitem Schritt gesetzt (greift sauber in LIN-62 L-7). Fehlversuche zählen gegen denselben gestaffelten Lockout wie der Login (LIN-48), als eigener Zähler-Bucket.
@@ -64,10 +64,12 @@ Admin-Konten ohne aktives 2FA sehen ein Pflicht-Banner. Übergang/Härte = **off
 ### KeyProvider-Design (zu 4)
 
 Trait `TotpKeyProvider` mit zwei Implementierungen:
-- `AppKeyProvider` — KEK aus `LINEAL_TOTP_KEK` (Secret-File/`.env`, 32 Byte base64). Default.
-- `OpenBaoProvider` — KEK/Transit über OpenBAO (`LINEAL_TOTP_KEY_BACKEND=openbao`, Adresse/Token/Mount aus Config). Nutzt bevorzugt OpenBAO **Transit** (encrypt/decrypt bleibt im Dienst, KEK verlässt OpenBAO nie); Fallback: KEK als Secret lesen.
+- `AppKeyProvider` (**Default**) — KEK wird per **HKDF-SHA256 aus `session_secret`** abgeleitet (Domain-Info `"totp-kek-v1"`), genau wie `import.rs` heute at-rest-Token ableitet. **Kein neues Pflicht-Secret**, funktioniert in Dev, ist im Backup enthalten. Optionaler Override `LINEAL_TOTP_KEK` (32 Byte base64), falls ein von der Session getrennter Schlüssel gewünscht ist.
+- `OpenBaoProvider` — KEK/Transit über OpenBAO (`LINEAL_TOTP_KEY_BACKEND=openbao`, Adresse/Token/Mount aus Config). Nutzt OpenBAO **Transit** (encrypt/decrypt bleibt im Dienst, KEK verlässt OpenBAO nie). **Achtung:** mit diesem Backend wird OpenBAO zur **Login-Abhängigkeit** für TOTP-aktive Owner. In CI nicht verifizierbar → manueller Test gegen die Instanz des Eigentümers, nicht als „verifiziert" melden.
 
 Envelope: pro Secret ein zufälliger DEK (XChaCha20-Poly1305), DEK mit dem KEK gewrappt. Gespeichert: `secret_enc`, `dek_wrapped`, `key_backend`, `key_version`. Rotation tauscht nur die DEK-Wraps, nicht die Secrets.
+
+**KEK-Drift:** Eine Rotation von `session_secret` (Default-Backend) macht bestehende TOTP-Secrets ohne Re-Wrap unlesbar — dasselbe Verhalten wie bei den heutigen `import.rs`-Token. Muss dokumentiert sein; Re-Wrap-Pfad bei Bedarf über die Key-Version.
 
 ## Interaktionen mit bestehendem Code
 
@@ -75,6 +77,24 @@ Envelope: pro Secret ein zufälliger DEK (XChaCha20-Poly1305), DEK mit dem KEK g
 - **LIN-62 L-11** Cookie-Fehlerzähler / **LIN-48** gestaffelter Lockout: der 2FA-Zweitschritt braucht einen eigenen Fehlversuchs-Bucket.
 - **LIN-62 L-6** Bot-Key-`created_by`/Revoke: Enforcement-Logik muss `app`-User sauber ausnehmen (Überschneidung dokumentieren).
 - **LIN-22** Bots/App-User: Nachweis, dass API-Key-Pfad nie durch die 2FA-Pflicht blockiert wird.
+
+## Sicherheits-Verfeinerungen (advisor-Review, 15.11.)
+
+**A · Pending-Token mit `scope`.** `App::login` gibt ein Enum zurück: `Session` (kein TOTP) · `TotpRequired` · `EnrollRequired`. Der Pending-Token (stateless, HMAC über `user_id|org|scope|exp`, 5 min) trägt einen **Scope**:
+- `login` — Owner/Nutzer mit aktivem TOTP → `/auth/login/totp` prüft den Code, mintet dann die Session.
+- `enroll` — Owner **ohne** TOTP, Schonfrist abgelaufen → die Enroll-Endpunkte akzeptieren diesen Token **statt** einer Session; `enroll-confirm` mintet die volle Session. So hat der gesperrte Owner überhaupt eine Credential, um sich einzurichten (sonst Deadlock). Enroll-Endpunkte haben damit **zwei Auth-Modi**: Session (freiwillig aus den Einstellungen) oder `enroll`-Scope-Token (erzwungen).
+
+**B · Harte Sperre braucht Session-Widerruf.** Sessions leben 14 Tage, Schonfrist 7 — ohne Eingriff liefe der Zugang 14 Tage weiter. **Default:** der periodische Job **widerruft die Sessions** von Ownern, deren Deadline ohne bestätigtes TOTP abgelaufen ist. Zusätzlich **Default:** `enroll-confirm` widerruft die **übrigen** Sessions des Nutzers (GitHub-Stil, `revoke_other_sessions` existiert).
+
+**C · Code-Replay verhindern (RFC 6238 §5.2).** Ein erfolgreich benutzter Code darf im selben Fenster nicht erneut gelten. Spalte `last_used_step` auf `user_totp`; akzeptiere nur `step > last_used_step`. Per Test gepinnt.
+
+**D · Per-Konto-Lockout am Zweitschritt.** Stateless Token = kein Pro-Versuch-Zustand → ein Angreifer mit dem Passwort könnte über rotierende IPs gegen `/auth/login/totp` bruteforcen. TOTP- **und** Recovery-Code-Fehler laufen über einen `auth_failures`-Konto-Bucket (Schlüssel = `user_id`, z. B. 10 Fehler → 15 min), analog zur Brute-Force-Reservierung in `rest/auth.rs:103-125`. Audit `totp_failed`. Ein verbrauchter Pending-Token bleibt seine 5 min gültig (braucht trotzdem einen frischen Code) — akzeptiert.
+
+**Weitere Festlegungen:**
+- **Secret-Erzeugung:** echter CSPRNG (neue `rand`-Quelle in lineal-app), **nicht** aus UUIDv4 (Version/Variant-Bits). 20-Byte-Secret (RFC-6238-üblich).
+- **Grace „3 Logins":** per Test pinnen (3. Login passiert, 4. blockt — Off-by-one festnageln).
+- **`/login?next=` vs `search.redirect`:** heutige Diskrepanz (Map §9) beheben, damit der Redirect nach Passwort→TOTP→Session zurück zu `/oauth/authorize` überlebt. **E2E-Test:** anonymes `GET /oauth/authorize` → Login → TOTP → Authorize erfolgreich. Das macht „OAuth automatisch gedeckt" praktisch wahr, nicht nur theoretisch.
+- **TOTP-Core:** hand-gerollt (hmac + sha1), verifiziert gegen **RFC 6238 Appendix B** (8-stellig, Secret `12345678901234567890`), konstantzeitiger Vergleich.
 
 ## Vorgehen
 
