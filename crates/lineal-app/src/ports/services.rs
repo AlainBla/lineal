@@ -102,6 +102,25 @@ pub trait PasswordHasher: Send + Sync {
     async fn verify(&self, password: &str, hash: &str) -> AppResult<bool>;
 }
 
+/// Schlüssel-Backend für die Envelope-Verschlüsselung der TOTP-Secrets (LIN-70).
+///
+/// Jedes TOTP-Secret wird mit einem zufälligen Daten-Schlüssel (DEK) verschlüsselt;
+/// der DEK wird über dieses Backend mit dem Schlüssel-Verschlüsselungs-Schlüssel
+/// (KEK) gewrappt. So lässt sich der KEK rotieren oder das Backend wechseln, ohne
+/// Secrets neu zu erfassen. `app` = KEK aus dem Server-Secret (HKDF); `openbao` =
+/// KEK bleibt in OpenBAO (Transit), verlässt den Dienst nie.
+#[async_trait]
+pub trait TotpKeyProvider: Send + Sync {
+    /// Name des Backends für die Spalte `key_backend` (`"app"` | `"openbao"`).
+    fn backend(&self) -> &'static str;
+    /// Aktuelle Schlüsselversion für die Spalte `key_version`.
+    fn key_version(&self) -> i32;
+    /// Wrappt einen Daten-Schlüssel mit dem KEK.
+    async fn wrap_dek(&self, dek: &[u8]) -> AppResult<Vec<u8>>;
+    /// Entpackt einen gewrappten Daten-Schlüssel.
+    async fn unwrap_dek(&self, wrapped: &[u8]) -> AppResult<Vec<u8>>;
+}
+
 /// Eine zu versendende E-Mail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mail {

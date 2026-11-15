@@ -27,6 +27,7 @@ pub mod team;
 pub mod team_extra;
 pub mod team_lifecycle;
 pub mod template;
+pub mod totp;
 pub mod triage;
 pub mod user;
 pub mod view;
