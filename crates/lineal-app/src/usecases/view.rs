@@ -13,7 +13,7 @@ pub mod prefs;
 
 use crate::app::App;
 use crate::context::RequestCtx;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorKind};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
@@ -41,6 +41,8 @@ use uuid::Uuid;
 /// Längenlimits (docs/05 §4.1).
 pub const MAX_NAME_CHARS: usize = 80;
 pub const MAX_DESCRIPTION_CHARS: usize = 255;
+/// Höchstzahl gleichzeitig aktiver View-Abos je User (begrenzt den Fan-out-Aufwand, N18).
+pub const MAX_VIEW_SUBSCRIPTIONS: i64 = 100;
 
 /// Eine Ansicht samt Rechten des Betrachters.
 #[derive(Debug, Clone, PartialEq)]
@@ -329,6 +331,28 @@ pub(crate) async fn build_eval(
         initiative_edges,
         strict_refs: strict,
     })
+}
+
+/// Maskiert den Filter einer View für einen Betrachter, dem sie nicht gehört (N18): referenziert
+/// der Filter Teams/Labels/… außerhalb seiner Sicht, wird er durch `{}` ersetzt. `verify_filter_refs`
+/// liefert für unsichtbare Referenzen `not_found`; darauf (und auf ungültige gespeicherte Filter)
+/// wird fail-closed maskiert, andere Fehler werden durchgereicht.
+async fn mask_filter_for_viewer(
+    tx: &mut dyn Tx,
+    eval: &FilterEval,
+    model: ViewModel,
+    filter: &Value,
+) -> AppResult<Value> {
+    let Ok((any, _)) = parse_view_filter(model, filter) else {
+        return Ok(json!({}));
+    };
+    match tx.views().verify_filter_refs(&any, eval).await {
+        Ok(()) => Ok(filter.clone()),
+        Err(e) if matches!(e.kind, ErrorKind::NotFound | ErrorKind::InvalidRequest) => {
+            Ok(json!({}))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Kandidaten für eine View-Referenz: roh, letztes URL-Segment, Slug am Ende (`name-<slug>`).
@@ -632,8 +656,13 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let access = view_access(&snap, ctx)?;
-        let view = resolve_view_in(&mut *tx, &access, reference).await?;
+        let mut view = resolve_view_in(&mut *tx, &access, reference).await?;
         let can = can_edit(&snap, access.user_id, &view);
+        // Fremde (geteilte) Views: Filter-Referenzen auf Unsichtbares maskieren (N18).
+        if view.owner_id != access.user_id {
+            let eval = build_eval(&mut *tx, &snap, ctx, self.clock.now(), true, true).await?;
+            view.filter = mask_filter_for_viewer(&mut *tx, &eval, view.model, &view.filter).await?;
+        }
         info(&mut *tx, &snap, can, view).await
     }
 
@@ -673,9 +702,15 @@ impl App {
             )
             .await?;
         let me = access.user_id;
+        let eval = build_eval(&mut *tx, &snap, ctx, self.clock.now(), true, true).await?;
         let mut items = Vec::new();
-        for view in res.items {
+        for mut view in res.items {
             let can = can_edit(&snap, me, &view);
+            // Fremde (geteilte) Views: Filter-Referenzen auf Unsichtbares maskieren (N18).
+            if view.owner_id != me {
+                view.filter =
+                    mask_filter_for_viewer(&mut *tx, &eval, view.model, &view.filter).await?;
+            }
             items.push(info(&mut *tx, &snap, can, view).await?);
         }
         Ok(Page {
@@ -841,6 +876,14 @@ impl App {
         )
         .await?;
         let can = can_edit(&snap, access.user_id, &saved);
+        let mut saved = saved;
+        // Fremde (geteilte) Views: Filter-Referenzen auf Unsichtbares maskieren (N18). Admins
+        // können fremde geteilte Views bearbeiten, dürfen die Referenzen aber nicht sehen.
+        if saved.owner_id != access.user_id {
+            let eval = build_eval(&mut *tx, &snap, ctx, now, true, true).await?;
+            saved.filter =
+                mask_filter_for_viewer(&mut *tx, &eval, saved.model, &saved.filter).await?;
+        }
         let out = info(&mut *tx, &snap, can, saved).await?;
         tx.commit().await?;
         Ok(out)
@@ -878,6 +921,15 @@ impl App {
         if name.chars().count() > MAX_NAME_CHARS {
             name = name.chars().take(MAX_NAME_CHARS).collect();
         }
+        // Die Kopie gehört dem Duplizierenden: Filter-Referenzen außerhalb seiner Sicht werden
+        // maskiert, damit das Duplizieren keine fremden Views mit unsichtbaren Teams/Labels
+        // in seinen Besitz überträgt (N18).
+        let filter = if src.owner_id == access.user_id {
+            src.filter.clone()
+        } else {
+            let eval = build_eval(&mut *tx, &snap, ctx, now, true, true).await?;
+            mask_filter_for_viewer(&mut *tx, &eval, src.model, &src.filter).await?
+        };
         let view = tx
             .views()
             .insert_view(&NewCustomView {
@@ -887,7 +939,7 @@ impl App {
                 icon: src.icon.clone(),
                 color: src.color.clone(),
                 model: src.model,
-                filter: src.filter.clone(),
+                filter,
                 owner_id: access.user_id,
                 creator_id: access.user_id,
                 shared: false,
@@ -1477,6 +1529,19 @@ impl App {
             .views()
             .get_view_subscription(access.user_id, view.id)
             .await?;
+        // Abo-Limit (N18): nur begrenzen, wenn ein neues aktives Abo entsteht. Bestehende aktive
+        // Abos (nur Typen ändern) oder das Deaktivieren bleiben erlaubt.
+        let already_active = current.as_ref().is_some_and(|c| c.active);
+        if active && !already_active {
+            let n = tx
+                .views()
+                .count_active_view_subscriptions(access.user_id)
+                .await?;
+            if n >= MAX_VIEW_SUBSCRIPTIONS {
+                return Err(AppError::limit_exceeded("Too many view subscriptions.")
+                    .with_details(json!({ "limit": "maxViewSubscriptions" })));
+            }
+        }
         let mut types = types
             .or_else(|| current.map(|c| c.types))
             .unwrap_or_else(|| vec!["issueAddedToView".to_owned()]);

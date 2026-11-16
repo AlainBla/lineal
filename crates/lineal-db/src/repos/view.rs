@@ -837,6 +837,19 @@ impl ViewRepo for PgTx {
         }))
     }
 
+    async fn count_active_view_subscriptions(&mut self, user: UserId) -> AppResult<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM notification_subscription \
+             WHERE organization_id = $1 AND subscriber_id = $2 AND target_type = 'customView' \
+             AND active AND archived_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user.0)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
     async fn active_view_subscriptions(
         &mut self,
         view: ViewId,

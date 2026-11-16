@@ -1085,3 +1085,114 @@ async fn favorites_respect_issue_share_gate(pool: PgPool) {
         "ohne issueSharingEnabled darf das Ziel nicht sichtbar sein"
     );
 }
+
+/// N18: Eine geteilte View zeigt Nicht-Eigentümern keine Filter-Referenzen auf Teams, die sie
+/// nicht sehen dürfen. Bob (DES-Mitglied) teilt eine WEB-Team-View mit einem DES-Filter; Alice
+/// (Admin, kein DES-Mitglied) sieht die View, aber nicht die private Team-ID.
+#[sqlx::test(migrations = "./migrations")]
+async fn shared_view_filter_is_masked_for_non_members(pool: PgPool) {
+    let fx = setup(pool).await;
+    let des = fx.data.des.0.to_string();
+    let mut tv = cv("Design leak", json!({ "team": { "id": { "in": [des] } } }));
+    tv.shared = true;
+    tv.team = Some("WEB".into());
+    let created = create(&fx, &bob(), tv).await;
+    let id = created.view.id.to_string();
+    // Der Eigentümer (Bob, DES-Mitglied) behält den Rohfilter.
+    let bob_sees = fx.app.get_view(&bob(), &id).await.unwrap();
+    assert!(
+        bob_sees.view.filter.to_string().contains(&des),
+        "owner must keep raw filter"
+    );
+    // Alice sieht die WEB-Team-View (Admin), der Filter darf DES aber nicht preisgeben.
+    let alice_sees = fx.app.get_view(&alice(), &id).await.unwrap();
+    assert!(
+        !alice_sees.view.filter.to_string().contains(&des),
+        "private team id leaked via get_view: {}",
+        alice_sees.view.filter
+    );
+    // Gleiche Quelle wie das MCP-Tool list_custom_views.
+    let listed = fx
+        .app
+        .list_views(&alice(), ListViewsInput::default())
+        .await
+        .unwrap();
+    if let Some(v) = listed.items.iter().find(|i| i.view.id == created.view.id) {
+        assert!(
+            !v.view.filter.to_string().contains(&des),
+            "private team id leaked via list_views: {}",
+            v.view.filter
+        );
+    }
+    // Umgehung über Duplizieren: Alice wird Eigentümerin der Kopie, darf DES trotzdem nicht sehen.
+    let copy = fx.app.duplicate_view(&alice(), &id).await.unwrap();
+    assert!(
+        !copy.view.filter.to_string().contains(&des),
+        "private team id leaked via duplicate_view: {}",
+        copy.view.filter
+    );
+    // Umgehung über update_view: Alice (Admin) ändert nur den Namen; die Antwort darf den
+    // DES-Filter trotzdem nicht roh zurückgeben.
+    let updated = fx
+        .app
+        .update_view(
+            &alice(),
+            UpdateViewInput {
+                reference: id.clone(),
+                name: Some("Renamed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        !updated.view.filter.to_string().contains(&des),
+        "private team id leaked via update_view: {}",
+        updated.view.filter
+    );
+}
+
+/// N18: Die Zahl aktiver View-Abos je User ist begrenzt (Fan-out-Aufwand). Am Limit scheitert ein
+/// neues Abo; ein User darunter kann weiter abonnieren.
+#[sqlx::test(migrations = "./migrations")]
+async fn view_subscriptions_are_capped_per_user(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = &fx.data;
+    // 100 aktive customView-Abos für Alice (direkte Inserts bis ans Limit).
+    sqlx::query(
+        "INSERT INTO custom_view (organization_id, name, model_name, filter_data, owner_id, creator_id) \
+         SELECT $1, 'Fill ' || g, 'Issue', '{}'::jsonb, $2, $2 FROM generate_series(1, 100) g",
+    )
+    .bind(d.org.0)
+    .bind(d.alice.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO notification_subscription \
+         (organization_id, subscriber_id, target_type, custom_view_id, notification_subscription_types, active) \
+         SELECT $1, $2, 'customView', cv.id, ARRAY['issueAddedToView'], true FROM custom_view cv \
+         WHERE cv.organization_id = $1 AND cv.name LIKE 'Fill %'",
+    )
+    .bind(d.org.0)
+    .bind(d.alice.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    // Eine weitere eigene View: das Abonnieren muss am Limit scheitern.
+    let other = create(&fx, &alice(), cv("Other", json!({}))).await;
+    assert_eq!(
+        kind(
+            fx.app
+                .set_view_subscription(&alice(), &other.view.id.to_string(), true, None)
+                .await
+        ),
+        ErrorKind::LimitExceeded
+    );
+    // Bob liegt unter dem Limit und darf abonnieren.
+    let b = create(&fx, &bob(), cv("Bobs", json!({}))).await;
+    fx.app
+        .set_view_subscription(&bob(), &b.view.id.to_string(), true, None)
+        .await
+        .unwrap();
+}
