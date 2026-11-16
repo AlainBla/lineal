@@ -353,7 +353,23 @@ async fn write_upload(store: &LocalBlobStore, claims: &Claims, body: Body) -> Ap
             return Err(e);
         }
     };
-    tokio::fs::rename(&tmp, &data_path).await.map_err(io_err)?;
+    // web N1 (LIN-64): PUT-Token-Einmaligkeit. hard_link ist atomar und scheitert, wenn die
+    // Zieldatei schon existiert — so kann derselbe (noch gültige) PUT-Token die Datei nicht ein
+    // zweites Mal (ggf. groesser, nach dem Finalisieren) ueberschreiben und die Groessen-/Quota-
+    // Pruefung umgehen. rename wuerde dagegen ueberschreiben.
+    match tokio::fs::hard_link(&tmp, &data_path).await {
+        Ok(()) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(AppError::conflict("This upload URL has already been used."));
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(io_err(e));
+        }
+    }
     let meta = Meta {
         key: claims.key.clone(),
         content_type: claims.ct.clone().unwrap_or_default(),
@@ -844,6 +860,37 @@ mod tests {
                 .unwrap(),
             8
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LIN-64 web N1: ein PUT-Token ist einmalig – ein zweiter PUT auf denselben Key
+    /// ueberschreibt die Datei nicht (sonst liesse sich die Groessenpruefung umgehen).
+    #[tokio::test]
+    async fn upload_url_is_single_use() {
+        let dir = std::env::temp_dir().join(format!("lineal-blob-once-{}", Uuid::now_v7()));
+        let s = LocalBlobStore::new(
+            &dir,
+            "change-me-32-bytes-minimum-xxxxxxxx",
+            "http://x",
+            Arc::new(At(0)),
+        );
+        let claims = Claims {
+            op: "put".into(),
+            key: "org/once".into(),
+            ct: Some("text/plain".into()),
+            exp: 1,
+            max: None,
+        };
+        assert_eq!(
+            write_upload(&s, &claims, Body::from(vec![1u8; 4]))
+                .await
+                .unwrap(),
+            4
+        );
+        let err = write_upload(&s, &claims, Body::from(vec![2u8; 9000]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, lineal_app::ErrorKind::Conflict);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
