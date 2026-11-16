@@ -425,6 +425,24 @@ async fn membership_rules(pool: PgPool) {
     );
 }
 
+/// LIN-63 N7: Ein Admin darf das confirmPrivateJoin-Gate nicht über add_team_member umgehen,
+/// indem er sich selbst zu einem privaten Team hinzufügt.
+#[sqlx::test(migrations = "./migrations")]
+async fn add_team_member_self_add_to_private_needs_confirm(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // Owner, nicht Mitglied von DES (privat)
+    assert_eq!(
+        kind(
+            app.add_team_member(&alice, "DES", "alice@acme.example", false)
+                .await
+        ),
+        ErrorKind::InvalidRequest,
+        "Selbst-Hinzufuegen zu privatem Team braucht confirmPrivateJoin (ueber join_team)"
+    );
+    // Der legitime Weg bleibt: join_team mit Bestaetigung.
+    app.join_team(&alice, "DES", true).await.unwrap();
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn workflow_state_crud_and_deletion_rules(pool: PgPool) {
     let (app, data, pool) = setup(pool).await;

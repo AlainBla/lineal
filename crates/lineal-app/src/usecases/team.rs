@@ -1282,6 +1282,15 @@ impl App {
             return Err(invalid("user", "the user is suspended"));
         }
         let guest = target.role == UserRole::Guest;
+        // LIN-63 N7: Sich selbst zu einem privaten Team hinzuzufügen muss das
+        // confirmPrivateJoin-Gate durchlaufen (über join_team). Sonst macht sich ein Admin mit
+        // AddMember-Recht das private Team ohne die bewusste Bestätigung sichtbar.
+        if actor_id(ctx) == Some(target.id) && team.visibility == TeamVisibility::Private {
+            return Err(AppError::invalid_request(
+                "Joining a private team needs confirmPrivateJoin = true (use join).",
+            )
+            .with_details(json!({ "field": "confirmPrivateJoin" })));
+        }
         // Selbstbeitritt (`canJoin`, docs/02 §6.4): wer niemanden hinzufügen darf, darf sich selbst
         // zu einem beitretbaren Team hinzufügen (B8.06).
         let mut self_join = false;
