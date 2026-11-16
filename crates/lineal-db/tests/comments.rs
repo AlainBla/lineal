@@ -1186,10 +1186,17 @@ async fn upload_flow_prepare_put_finalize(pool: PgPool) {
             .headers
             .contains(&("content-type".into(), "image/png".into()))
     );
+    // LIN-64 N5: nur content-type wird zurueckgegeben; die frueheren wirkungslosen Header
+    // (x-content-length-range/cache-control/content-disposition) brachen bei CJK-/Emoji-Namen den
+    // Browser und sind entfernt.
+    assert_eq!(prepared.headers.len(), 1);
     assert!(
-        prepared
+        !prepared
             .headers
-            .contains(&("x-content-length-range".into(), "48213,48213".into()))
+            .iter()
+            .any(|(k, _)| k == "x-content-length-range"
+                || k == "cache-control"
+                || k == "content-disposition")
     );
     assert_eq!(prepared.expires_at, env.clock.now() + Duration::seconds(60));
     assert_eq!(prepared.suggested_title, "screenshot.png");
