@@ -104,13 +104,11 @@ describe("auth client", () => {
         new Response(JSON.stringify({ totpRequired: true, pendingToken: "pt1" }), { status: 200 }),
       );
     expect(await login("a@b.co", "pw", totp)).toEqual({ kind: "totp", pendingToken: "pt1" });
-    const enroll = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ enrollRequired: true, pendingToken: "pt2" }), {
-          status: 200,
-        }),
-      );
+    const enroll = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ enrollRequired: true, pendingToken: "pt2" }), {
+        status: 200,
+      }),
+    );
     expect(await login("a@b.co", "pw", enroll)).toEqual({ kind: "enroll", pendingToken: "pt2" });
   });
 

@@ -43,12 +43,16 @@ describe("totp-api", () => {
   it("totpEnrollConfirm returns recovery codes and throws on error", async () => {
     const ok = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ recoveryCodes: ["A", "B"] }), { status: 200 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ recoveryCodes: ["A", "B"] }), { status: 200 }),
+      );
     expect(await totpEnrollConfirm("123456", undefined, ok)).toEqual(["A", "B"]);
 
     const bad = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ message: "invalid code" }), { status: 400 }));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ message: "invalid code" }), { status: 400 }),
+      );
     await expect(totpEnrollConfirm("000000", undefined, bad)).rejects.toThrow("invalid code");
   });
 });
