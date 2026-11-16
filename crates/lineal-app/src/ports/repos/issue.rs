@@ -270,7 +270,7 @@ pub trait IssueRepo: Send {
         unimplemented_repo()
     }
     /// Alle früheren Kennungen (Aliase und frühere Team-Keys mit der aktuellen Nummer).
-    async fn previous_identifiers(&mut self, _issue: IssueId) -> AppResult<Vec<String>> {
+    async fn previous_identifiers(&mut self, _issue: IssueId) -> AppResult<Vec<(String, TeamId)>> {
         unimplemented_repo()
     }
     /// Offene (nicht archivierte, nicht gelöschte) Issues des Teams.

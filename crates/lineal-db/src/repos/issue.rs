@@ -729,29 +729,41 @@ impl IssueRepo for PgTx {
             .collect())
     }
 
-    async fn previous_identifiers(&mut self, issue: IssueId) -> AppResult<Vec<String>> {
-        let mut out: Vec<String> = sqlx::query_scalar(
-            "SELECT identifier FROM issue_identifier_alias WHERE organization_id = $1 AND issue_id = $2 \
-             AND archived_at IS NULL ORDER BY created_at, identifier",
+    async fn previous_identifiers(&mut self, issue: IssueId) -> AppResult<Vec<(String, TeamId)>> {
+        // LIN-63 (Residuum zu N4): jede Kennung mit ihrem Eigentuemer-Team zurueckgeben, damit der
+        // Aufrufer nach Sichtbarkeit filtern kann. Das Team wird deterministisch ueber team_key
+        // (inkl. ersetzter Keys, `replaced_at`) aufgeloest; der INNER JOIN laesst nicht aufloesbare
+        // Aliase wegfallen (deny-by-default, kein fail-open ueber umbenannte Teams).
+        let aliases: Vec<(String, Uuid)> = sqlx::query_as(
+            "WITH key_owner AS ( \
+                 SELECT key, id AS team_id FROM team WHERE organization_id = $1 \
+                 UNION ALL \
+                 SELECT key, team_id FROM team_key WHERE organization_id = $1 \
+             ) \
+             SELECT a.identifier, ko.team_id FROM issue_identifier_alias a \
+             JOIN key_owner ko ON ko.key = substring(a.identifier from '^(.*)-[0-9]+$') \
+             WHERE a.organization_id = $1 AND a.issue_id = $2 AND a.archived_at IS NULL \
+             ORDER BY a.created_at, a.identifier",
         )
         .bind(self.org.0)
         .bind(issue.0)
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        let keys: Vec<String> = sqlx::query_scalar(
-            "SELECT tk.key || '-' || i.number FROM issue i JOIN team_key tk ON tk.team_id = i.team_id \
-             AND tk.organization_id = i.organization_id WHERE i.organization_id = $1 AND i.id = $2 \
-             ORDER BY tk.replaced_at, tk.key",
+        let keys: Vec<(String, Uuid)> = sqlx::query_as(
+            "SELECT tk.key || '-' || i.number, i.team_id FROM issue i JOIN team_key tk \
+             ON tk.team_id = i.team_id AND tk.organization_id = i.organization_id \
+             WHERE i.organization_id = $1 AND i.id = $2 ORDER BY tk.replaced_at, tk.key",
         )
         .bind(self.org.0)
         .bind(issue.0)
         .fetch_all(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        for k in keys {
-            if !out.contains(&k) {
-                out.push(k);
+        let mut out: Vec<(String, TeamId)> = Vec::new();
+        for (ident, team) in aliases.into_iter().chain(keys) {
+            if !out.iter().any(|(s, _)| *s == ident) {
+                out.push((ident, TeamId(team)));
             }
         }
         Ok(out)
