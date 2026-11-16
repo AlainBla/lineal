@@ -155,7 +155,7 @@ async fn resolve_update(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
     reference: &str,
-) -> AppResult<(ProjectUpdate, Vec<lineal_domain::ids::TeamId>)> {
+) -> AppResult<(ProjectUpdate, Vec<lineal_domain::ids::TeamId>, Project)> {
     let nf = || {
         AppError::not_found(format!("Could not find status update \"{reference}\""))
             .with_details(json!({ "reference": reference, "type": "ProjectUpdate" }))
@@ -171,7 +171,13 @@ async fn resolve_update(
     if !teams.iter().any(|t| visible.contains(t)) {
         return Err(nf());
     }
-    Ok((u, teams))
+    // LIN-63 N13: Updates eines Projekts im Papierkorb verstecken. Der normale Projekt-Resolver
+    // filtert `!trashed`, dieser Pfad lädt das Update aber direkt über seine UUID.
+    let project = tx.projects().get(u.project_id).await?.ok_or_else(nf)?;
+    if project.trashed {
+        return Err(nf());
+    }
+    Ok((u, teams, project))
 }
 
 impl App {
@@ -218,7 +224,7 @@ impl App {
     ) -> AppResult<ProjectUpdateView> {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let (u, _) = resolve_update(&mut *tx, &snap, reference).await?;
+        let (u, _, _) = resolve_update(&mut *tx, &snap, reference).await?;
         view_of(&mut *tx, &snap, u, self.clock.now()).await
     }
 
@@ -319,8 +325,10 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
-        let (u, teams) = resolve_update(&mut *tx, &snap, reference).await?;
+        let (u, teams, project) = resolve_update(&mut *tx, &snap, reference).await?;
         require_manage(&snap, ctx, Action::PostProjectUpdate, &teams)?;
+        // N13: kein Schreiben auf einem archivierten Projekt (Papierkorb ist in resolve_update raus).
+        writable(&project)?;
         if resolve::user::actor_user_id(ctx) != Some(u.user_id) {
             return Err(
                 AppError::forbidden("Only the author can edit a status update.")
@@ -369,8 +377,10 @@ impl App {
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let now = self.clock.now();
-        let (u, teams) = resolve_update(&mut *tx, &snap, reference).await?;
+        let (u, teams, project) = resolve_update(&mut *tx, &snap, reference).await?;
         require_manage(&snap, ctx, Action::PostProjectUpdate, &teams)?;
+        // N13: kein Schreiben auf einem archivierten Projekt (Papierkorb ist in resolve_update raus).
+        writable(&project)?;
         let is_author = resolve::user::actor_user_id(ctx) == Some(u.user_id);
         if !(is_author || snap.actor.is_admin() || snap.actor.is_system()) {
             return Err(AppError::forbidden(

@@ -1129,6 +1129,38 @@ async fn initiative_status_projects_visibility_and_filters(pool: PgPool) {
 // Status-Updates
 // ---------------------------------------------------------------------------------------------
 
+/// LIN-63 N13: Status-Updates eines Projekts im Papierkorb dürfen nicht mehr les-/löschbar sein
+/// (resolve_update prüfte nur die Team-Sichtbarkeit, nicht den Papierkorb-Status des Projekts).
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn status_update_on_trashed_project_is_hidden(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // Lead des Seed-Projekts P-ENG-1
+    let u = app
+        .post_project_update(&alice, "P-ENG-1", "Start.", None, false)
+        .await
+        .unwrap();
+    let reference = u.update.id.to_string();
+    assert!(
+        app.get_project_update(&alice, &reference).await.is_ok(),
+        "lebendes Projekt: Update lesbar"
+    );
+
+    app.set_project_trashed(&alice, "P-ENG-1", true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        kind(app.get_project_update(&alice, &reference).await),
+        ErrorKind::NotFound,
+        "Papierkorb-Projekt: Update nicht mehr lesbar"
+    );
+    assert_eq!(
+        kind(app.delete_project_update(&alice, &reference).await),
+        ErrorKind::NotFound,
+        "Papierkorb-Projekt: Update nicht mehr löschbar"
+    );
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn project_status_updates_health_diff_and_rules(pool: PgPool) {
     let (app, _data, _pool) = setup(pool).await;
