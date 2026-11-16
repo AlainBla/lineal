@@ -2,7 +2,8 @@
 #
 # Lineal – Container-Images (docs/15 §3 Betrieb).
 #
-#   docker build --target server -t lineal-server .   # Binary `lineal` (serve, worker, migrate, seed, import)
+#   docker build --target server -t lineal-server .   # Binary `lineal` (serve, worker, migrate, import)
+#   (Demo-`seed` nur mit --build-arg SERVER_FEATURES=seed, siehe N12 unten; nicht im Prod-Image.)
 #   docker build --target web    -t lineal-web .      # nginx: Web-App + Reverse Proxy auf den Server
 #
 # Zusammen gestartet über `docker compose --profile app up -d` (siehe docker-compose.yml).
@@ -15,6 +16,11 @@ ARG NODE_VERSION=22
 # bringt stable mit; rustfmt/clippy werden für den Build nicht gebraucht).
 FROM rust:${RUST_VERSION}-bookworm AS rust-build
 WORKDIR /src
+# LIN-65 N12: Das Prod-Binary wird ohne das Default-Feature `seed` (und damit ohne lineal-testkit)
+# gebaut. `lineal seed --allow-insecure-demo-users` legt sonst Demo-Nutzer mit bekanntem Passwort
+# an und gehoert nicht in die Angriffsflaeche des Prod-Image. Der Test-Stack
+# (deploy/docker-compose.test.yml) reicht SERVER_FEATURES=seed durch, um den Seed zu behalten.
+ARG SERVER_FEATURES=
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY crates ./crates
 # Gepatchte Abhängigkeiten (vendor/yrs, siehe PATCH.md).
@@ -23,7 +29,7 @@ COPY vendor ./vendor
 COPY docs ./docs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p lineal-server \
+    cargo build --release --locked -p lineal-server --no-default-features ${SERVER_FEATURES:+--features "$SERVER_FEATURES"} \
     && install -D -m 0755 target/release/lineal /out/lineal
 
 # ---------------------------------------------------------------------------------------------

@@ -4,7 +4,10 @@
 # Eigenes Netz (172.31.97.0/24), Port 127.0.0.1:8097, Dev-Modus (Seed erlaubt), eigene Volumes
 # über den Projektnamen. Den Dev-`postgres` (Port 5440) nicht mitstarten.
 services:
+  # LIN-65 N12: Der Test-Stack baut das Binary MIT dem `seed`-Feature (Demo-Daten), das im
+  # Prod-Image bewusst fehlt. Gleicher Build-Arg fuer alle drei -> ein Image (lineal-server:latest).
   migrate:
+    build: &test-build { context: ., target: server, args: { SERVER_FEATURES: seed } }
     environment: &test-env
       DATABASE_URL: postgres://lineal:${LINEAL_DB_PASSWORD:-}@app-db:5432/lineal
       LINEAL_BASE_URL: http://localhost:8097
@@ -12,8 +15,10 @@ services:
       LINEAL_DEV: "1"
       LINEAL_WORKSPACE_CREATION: all
   server:
+    build: *test-build
     environment: *test-env
   worker:
+    build: *test-build
     environment: *test-env
   web:
     ports: !override
