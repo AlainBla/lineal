@@ -302,7 +302,10 @@ impl App {
             .ok_or_else(|| AppError::forbidden("Only users can invite."))?;
         let now = self.clock.now();
         // F2 (LIN-64): Raten-Limit je Einladender gegen Mail-Bombing an beliebige Adressen. Der
-        // Per-Call-Cap allein verhindert wiederholte Calls nicht.
+        // Per-Call-Cap allein verhindert wiederholte Calls nicht. Der advisory-Lock je Einladender
+        // serialisiert gleichzeitige Einladungen in dieser Tx, damit das Fenster-Limit nicht per
+        // Race (parallele Calls zaehlen alle unter dem Limit und fuegen dann ein) umgangen wird.
+        tx.advisory_lock("invite_rate", Some(inviter.0)).await?;
         let since = now - Duration::hours(INVITE_WINDOW_HOURS);
         let recent = tx
             .webhooks()
