@@ -229,16 +229,30 @@ info "Blob-Volume $BLOB_VOLUME ersetzen"
 # Wichtig: der DB-Restore oben lief bereits erfolgreich und beweist bei verschlüsselten Backups den
 # Schlüssel. Das `rm` leert das Volume VOR dem ersten tar-Byte – deshalb erst hier, nach bewiesenem
 # Schlüssel und geprüfter Chiffrat-Prüfsumme, damit ein falscher Schlüssel nicht das Volume leert.
+# LIN-65 N9: Das Backup-Archiv darf keine Sym-/Hardlinks oder `..`-Pfade enthalten (unsere Blobs
+# sind nur regulaere Dateien/Verzeichnisse). Solche Eintraege koennten beim Entpacken ueber das
+# Volume hinaus schreiben oder Links platzieren, denen die App spaeter folgt. Für das verschluesselte
+# Backup liefert die age-Entschluesselung (LIN-33) bereits Integritaet (ein manipuliertes Archiv
+# braeuchte den Backup-Schluessel); dort genuegt das Entfernen etwaiger Symlinks nach dem Entpacken.
+# Für das Klartext-Backup (keine kryptografische Integritaet) wird die Archivliste VOR dem Entpacken
+# geprueft und bei unsicheren Eintraegen abgebrochen.
 if (( ENCRYPTED )); then
   age -d -i "$AGE_ID" < "$BLOBS" \
     | docker run -i --rm -v "$BLOB_VOLUME:/data" \
-        alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf - --numeric-owner -C /data' \
+        alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf - --numeric-owner -C /data && find /data -type l -delete' \
     || die "Blob-Volume konnte nicht wiederhergestellt werden. server/worker/web bleiben gestoppt."
 else
   docker run --rm \
     -v "$BLOB_VOLUME:/data" \
     -v "$BACKUP_DIR:/backup:ro" \
-    alpine sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf /backup/blobs.tar.gz --numeric-owner -C /data' \
+    alpine sh -c '
+      if tar tzvf /backup/blobs.tar.gz | grep -Eq "^[lh]| -> |(^|/)\.\.(/|$)"; then
+        echo "Backup-Archiv enthaelt Sym-/Hardlinks oder Pfad-Traversal (..) — abgebrochen" >&2
+        exit 1
+      fi
+      find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + \
+        && tar xzf /backup/blobs.tar.gz --numeric-owner -C /data \
+        && find /data -type l -delete' \
     || die "Blob-Volume konnte nicht wiederhergestellt werden. server/worker/web bleiben gestoppt."
 fi
 
