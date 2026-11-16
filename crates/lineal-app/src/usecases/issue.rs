@@ -405,14 +405,33 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
 }
 
 /// Entfernt aus den Anzeigewerten alles, was auf für den Aufrufer unsichtbare Teams zeigt:
-/// die Kennung eines unsichtbaren Parents (N1) und die Zahl unsichtbarer Children (N1).
-/// `can_see` ist hier „Team im sichtbaren Set“.
+/// die Kennung eines unsichtbaren Parents (N1), die Zahl unsichtbarer Children (N1) sowie
+/// Team- und Projektnamen, wenn das eigene Team bzw. das Projekt unsichtbar ist (N2, für
+/// Freigabe-Empfänger). `can_see` ist hier „Team im sichtbaren Set“.
 async fn filter_extras(
     tx: &mut dyn Tx,
     visible: &BTreeSet<TeamId>,
     issue: &Issue,
     extras: &mut IssueExtras,
 ) -> AppResult<()> {
+    // N2: eigenes Team unsichtbar (nur über Freigabe sichtbar) → Teamname nicht preisgeben.
+    if !visible.contains(&issue.team_id) {
+        extras.team_name.clear();
+    }
+    // N2: Projekt unsichtbar → Projektname, -kennung und Meilensteinname nicht preisgeben.
+    if extras.project_name.is_some()
+        && let Some(pid) = issue.project_id
+    {
+        let project_visible = match tx.issues().get_project(pid).await? {
+            Some(p) => p.team_ids.iter().any(|t| visible.contains(t)),
+            None => false,
+        };
+        if !project_visible {
+            extras.project_name = None;
+            extras.project_identifier = None;
+            extras.milestone_name = None;
+        }
+    }
     // N1: Parent in unsichtbarem Team → Kennung nicht preisgeben.
     if extras.parent_identifier.is_some()
         && let Some(parent) = issue.parent_id
