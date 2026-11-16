@@ -315,16 +315,26 @@ impl LoginReservation {
 /// bleiben im Speicher, ihre Größe darf also nicht vom Absender abhängen.
 /// LIN-65 N13: Beim ERSTEN Erreichen eines Fehlversuch-Limits (Transition, einmal pro Fenster) auf
 /// dem `security`-Ziel warnen — so wird Passwort-Spraying/Brute-Force in den Logs sichtbar (bisher
-/// nur als 429/401) und kann alarmiert werden. Der Schluessel enthaelt nur die gehashte
-/// Account-Kennung und/oder die Client-IP, keine Roh-E-Mail.
+/// nur als 429/401) und kann alarmiert werden.
 fn log_limit_reached(key: &str, rule: Rule) {
     tracing::warn!(
         target: "security",
-        auth_key = %key,
+        counter = %redacted_key(key),
         limit = rule.limit,
         window_ms = rule.window_ms,
         "authentication failure limit reached"
     );
+}
+
+/// Loggbare Kurzform eines Zaehler-Schluessels: der Typ und — nur bei IP-/Cookie-Zaehlern — die
+/// Client-IP (betrieblich). Der (unsalted und damit umkehrbare) Account-Hash wird NIE geloggt,
+/// damit aus den Logs keine Kennungen rekonstruierbar sind.
+fn redacted_key(key: &str) -> String {
+    let kind = key.split([':', '|']).next().unwrap_or("key");
+    match key.split_once(':') {
+        Some(("ip" | "cookie", ip)) => format!("{kind}:{ip}"),
+        _ => kind.to_string(),
+    }
 }
 
 fn account_hash(account: &str) -> String {
@@ -347,6 +357,19 @@ fn account_hard_total_key(account: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// LIN-65 N13: Das Sicherheits-Log nennt nur Zaehler-Typ und (bei IP-/Cookie-Zaehlern) die IP;
+    /// der umkehrbare Account-Hash taucht nie auf.
+    #[test]
+    fn redacted_key_never_leaks_account_hash() {
+        assert_eq!(redacted_key("ip:203.0.113.7"), "ip:203.0.113.7");
+        assert_eq!(redacted_key("cookie:203.0.113.7"), "cookie:203.0.113.7");
+        assert_eq!(redacted_key("acct:deadbeefcafe|203.0.113.7"), "acct");
+        assert_eq!(redacted_key("acctt:deadbeefcafe"), "acctt");
+        assert_eq!(redacted_key("accth:deadbeefcafe"), "accth");
+        assert_eq!(redacted_key("acctpw:1a2b3c"), "acctpw");
+        assert_eq!(redacted_key(OVERFLOW_KEY), OVERFLOW_KEY);
+    }
 
     #[test]
     fn cookie_failures_do_not_block_the_login_ip() {
