@@ -404,31 +404,106 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
     Ok(())
 }
 
-async fn load_view(tx: &mut dyn Tx, issue: Issue, with_previous: bool) -> AppResult<IssueView> {
-    let mut extras = tx.issues().extras(&[issue.id]).await?;
+/// Entfernt aus den Anzeigewerten alles, was auf für den Aufrufer unsichtbare Teams zeigt:
+/// die Kennung eines unsichtbaren Parents (N1), die Zahl unsichtbarer Children (N1) sowie
+/// Team- und Projektnamen, wenn das eigene Team bzw. das Projekt unsichtbar ist (N2, für
+/// Freigabe-Empfänger). `can_see` ist hier „Team im sichtbaren Set“.
+async fn filter_extras(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    issue: &Issue,
+    extras: &mut IssueExtras,
+) -> AppResult<()> {
+    // N2: eigenes Team unsichtbar (nur über Freigabe sichtbar) → Teamname nicht preisgeben.
+    if !visible.contains(&issue.team_id) {
+        extras.team_name.clear();
+    }
+    // N2: Projekt unsichtbar → Projektname, -kennung und Meilensteinname nicht preisgeben.
+    if extras.project_name.is_some()
+        && let Some(pid) = issue.project_id
+    {
+        let project_visible = match tx.issues().get_project(pid).await? {
+            Some(p) => p.team_ids.iter().any(|t| visible.contains(t)),
+            None => false,
+        };
+        if !project_visible {
+            extras.project_name = None;
+            extras.project_identifier = None;
+            extras.milestone_name = None;
+        }
+    }
+    // N1: Parent in unsichtbarem Team → Kennung nicht preisgeben.
+    if extras.parent_identifier.is_some()
+        && let Some(parent) = issue.parent_id
+    {
+        let parent_visible = tx
+            .issues()
+            .get(parent, false)
+            .await?
+            .is_some_and(|p| visible.contains(&p.team_id));
+        if !parent_visible {
+            extras.parent_identifier = None;
+        }
+    }
+    // N1: nur Children in sichtbaren Teams zählen.
+    if extras.children_count > 0 {
+        let visible_children = tx
+            .issues()
+            .children(issue.id)
+            .await?
+            .into_iter()
+            .filter(|c| visible.contains(&c.team_id))
+            .count();
+        extras.children_count = visible_children as i64;
+    }
+    Ok(())
+}
+
+async fn load_view(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    issue: Issue,
+    with_previous: bool,
+) -> AppResult<IssueView> {
+    let visible = snap.visible_team_ids();
+    let mut extras = tx
+        .issues()
+        .extras(&[issue.id])
+        .await?
+        .remove(&issue.id)
+        .unwrap_or_default();
+    filter_extras(tx, &visible, &issue, &mut extras).await?;
     let previous_identifiers = if with_previous {
         tx.issues().previous_identifiers(issue.id).await?
     } else {
         Vec::new()
     };
     Ok(IssueView {
-        extras: extras.remove(&issue.id).unwrap_or_default(),
+        extras,
         issue,
         previous_identifiers,
     })
 }
 
-async fn load_views(tx: &mut dyn Tx, issues: Vec<Issue>) -> AppResult<Vec<IssueView>> {
+async fn load_views(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    issues: Vec<Issue>,
+) -> AppResult<Vec<IssueView>> {
+    let visible = snap.visible_team_ids();
     let ids: Vec<IssueId> = issues.iter().map(|i| i.id).collect();
     let mut extras: HashMap<IssueId, IssueExtras> = tx.issues().extras(&ids).await?;
-    Ok(issues
-        .into_iter()
-        .map(|issue| IssueView {
-            extras: extras.remove(&issue.id).unwrap_or_default(),
+    let mut out = Vec::with_capacity(issues.len());
+    for issue in issues {
+        let mut e = extras.remove(&issue.id).unwrap_or_default();
+        filter_extras(tx, &visible, &issue, &mut e).await?;
+        out.push(IssueView {
+            extras: e,
             issue,
             previous_identifiers: Vec::new(),
-        })
-        .collect())
+        });
+    }
+    Ok(out)
 }
 
 fn team_of(snap: &PolicySnapshot, id: TeamId) -> AppResult<&Team> {
@@ -760,7 +835,7 @@ impl App {
             },
         )
         .await?;
-        load_view(tx, stored, true).await
+        load_view(tx, &snap, stored, true).await
     }
 
     /// Ändert ein Issue (docs/03 §2.2, inkl. Teamwechsel nach docs/02 §7).
@@ -1100,7 +1175,7 @@ impl App {
 
         let labels_changed = !plan.added.is_empty() || !plan.removed.is_empty();
         if issue == old && !labels_changed && own.is_empty() {
-            return load_view(tx, issue, true).await;
+            return load_view(tx, &snap, issue, true).await;
         }
         // SLA-Regeln hängen an Priorität und Projekt: sofort neu auswerten, nicht erst im Minutenjob.
         if issue.priority != old.priority || issue.project_id != old.project_id {
@@ -1187,7 +1262,7 @@ impl App {
             )
             .await?;
         }
-        load_view(tx, saved, true).await
+        load_view(tx, &snap, saved, true).await
     }
 
     /// Teamwechsel nach docs/02 §7.2 (Schritte 1–13). Verändert `issue` in-memory und liefert die
@@ -1301,8 +1376,8 @@ impl App {
             return Err(resolve::issue::issue_not_found(reference));
         }
         let relations = relations::view(&mut *tx, &snap, ctx, issue.id).await?;
-        let state_history = state_spans(&mut *tx, &issue).await?;
-        let view = load_view(&mut *tx, issue, true).await?;
+        let state_history = state_spans(&mut *tx, &snap.visible_team_ids(), &issue).await?;
+        let view = load_view(&mut *tx, &snap, issue, true).await?;
         Ok(IssueDetail {
             view,
             relations,
@@ -1559,7 +1634,7 @@ impl App {
             order_by: input.order_by,
         };
         let res = tx.issues().list(&f, &page).await?;
-        let items = load_views(tx, res.items).await?;
+        let items = load_views(tx, &snap, res.items).await?;
         Ok(IssuePage {
             items,
             next: res.next,
@@ -1682,7 +1757,7 @@ impl App {
                 ));
             }
         } else if issue.archived_at.is_none() {
-            return load_view(&mut *tx, issue, true).await;
+            return load_view(&mut *tx, &snap, issue, true).await;
         }
         // Archivierten Status auf die erste Status derselben Kategorie abbilden.
         let state = resolve::state::by_id(&mut *tx, issue.state_id).await?;
@@ -1727,7 +1802,7 @@ impl App {
             },
         )
         .await?;
-        let view = load_view(&mut *tx, saved, true).await?;
+        let view = load_view(&mut *tx, &snap, saved, true).await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -1865,12 +1940,13 @@ impl App {
 }
 
 /// Felder eines History-Eintrags, deren Werte auf andere Objekte zeigen.
-const HISTORY_REF_FIELDS: [&str; 5] = [
+const HISTORY_REF_FIELDS: [&str; 6] = [
     "teamId",
     "parentId",
     "projectId",
     "cycleId",
     "projectMilestoneId",
+    "stateId",
 ];
 
 /// Ist das Objekt, auf das `value` im Feld `field` zeigt, für den Aufrufer sichtbar?
@@ -1887,6 +1963,13 @@ async fn history_ref_visible(
     let any_visible = |teams: &[TeamId]| teams.iter().any(|t| visible.contains(t));
     Ok(match field {
         "teamId" => visible.contains(&TeamId(uuid)),
+        // N4: Ein Status gehört zu einem Team; nach einem Teamwechsel zeigt `stateId.from`
+        // auf einen Status des (nun privaten) Altteams.
+        "stateId" => tx
+            .states()
+            .get(StateId(uuid))
+            .await?
+            .is_some_and(|s| visible.contains(&s.team_id)),
         "parentId" => tx
             .issues()
             .get(IssueId(uuid), false)
@@ -1920,9 +2003,44 @@ async fn history_ref_visible(
     })
 }
 
+/// Gehört das Label dem Aufrufer sichtbar (Workspace-Label oder Label eines sichtbaren Teams)?
+/// N4 schützt die Label-IDs eines *bestehenden* privaten Teams (die beim Teamwechsel aus dem
+/// Issue entfernt werden); ein nicht mehr auflösbares (gelöschtes) Label ist nur eine
+/// zusammenhanglose UUID ohne Team-Bezug und bleibt daher sichtbar.
+async fn history_label_visible(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    id: LabelId,
+) -> AppResult<bool> {
+    Ok(match tx.labels().get(LabelKind::Issue, id).await? {
+        Some(l) => l.team_id.is_none_or(|t| visible.contains(&t)),
+        None => true,
+    })
+}
+
+/// Behält aus einer Label-Liste nur die für den Aufrufer sichtbaren; leer wird zu `None`.
+async fn filter_history_labels(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    labels: Option<Vec<LabelId>>,
+) -> AppResult<Option<Vec<LabelId>>> {
+    let Some(labels) = labels else {
+        return Ok(None);
+    };
+    let mut kept = Vec::new();
+    for id in labels {
+        if history_label_visible(tx, visible, id).await? {
+            kept.push(id);
+        }
+    }
+    Ok((!kept.is_empty()).then_some(kept))
+}
+
 /// Entfernt aus der Historie alles, was auf unsichtbare Objekte zeigt: Relationsänderungen
 /// zu Issues, die der Aufrufer nicht sehen darf, entfallen; Verweise (`teamId`, `parentId`,
-/// `projectId`, `cycleId`, `projectMilestoneId`) auf unsichtbare Ziele werden `null`.
+/// `projectId`, `cycleId`, `projectMilestoneId`, `stateId`) auf unsichtbare Ziele werden `null`;
+/// nach einem Teamwechsel werden außerdem die Kennung (`identifier`) der Seite des unsichtbaren
+/// Teams sowie Label-IDs unsichtbarer Teams entfernt (N4).
 async fn redact_history(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
@@ -1934,6 +2052,20 @@ async fn redact_history(
     let mut out = Vec::with_capacity(entries.len());
     for mut e in entries {
         let had_relations = e.relation_changes.is_some();
+        let had_labels = e.added_label_ids.as_ref().is_some_and(|v| !v.is_empty())
+            || e.removed_label_ids.as_ref().is_some_and(|v| !v.is_empty());
+        // N4: Die Kennung ändert sich nur beim Teamwechsel; die Seite eines unsichtbaren Teams
+        // (bestimmt über die `teamId`-Änderung desselben Eintrags) darf nicht durchsickern.
+        let team_side_visible = |side: &str| -> Option<bool> {
+            e.changes
+                .get("teamId")
+                .and_then(|t| t.get(side))
+                .and_then(Value::as_str)
+                .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                .map(|u| visible.contains(&TeamId(u)))
+        };
+        let team_from_visible = team_side_visible("from");
+        let team_to_visible = team_side_visible("to");
         if let Some(Value::Array(items)) = e.relation_changes.take() {
             let mut kept = Vec::new();
             for item in items {
@@ -1972,15 +2104,34 @@ async fn redact_history(
                     }
                 }
             }
+            // N4: Kennung des unsichtbaren Alt- bzw. Zielteams aus der Teamwechsel-Änderung tilgen.
+            if let Some(Value::Object(sides)) = changes.get_mut("identifier") {
+                if team_from_visible == Some(false)
+                    && let Some(v) = sides.get_mut("from")
+                {
+                    *v = Value::Null;
+                }
+                if team_to_visible == Some(false)
+                    && let Some(v) = sides.get_mut("to")
+                {
+                    *v = Value::Null;
+                }
+            }
         }
-        // Ein Eintrag, der nur aus unsichtbaren Relationsänderungen bestand, würde leer
-        // erscheinen und verriete, dass dort etwas geschah (B8.24): unterdrücken.
+        // N4: Label-IDs unsichtbarer Teams nicht preisgeben (z. B. Labels des privaten Altteams,
+        // die beim Teamwechsel entfernt wurden).
+        e.added_label_ids = filter_history_labels(tx, &visible, e.added_label_ids.take()).await?;
+        e.removed_label_ids =
+            filter_history_labels(tx, &visible, e.removed_label_ids.take()).await?;
+        // Ein Eintrag, der nach der Maskierung nur noch aus unsichtbaren Relations- oder
+        // Label-Änderungen bestünde, würde leer erscheinen und verriete, dass dort etwas
+        // geschah (B8.24): unterdrücken.
         let changes_empty = match &e.changes {
             Value::Object(m) => m.is_empty(),
             Value::Null => true,
             _ => false,
         };
-        if had_relations
+        if (had_relations || had_labels)
             && e.relation_changes.is_none()
             && changes_empty
             && e.flags.is_empty()
@@ -2033,8 +2184,14 @@ async fn apply_state_filter(
     Ok(())
 }
 
-/// Verweildauer je Status aus der History (`stateHistory`).
-async fn state_spans(tx: &mut dyn Tx, issue: &Issue) -> AppResult<Vec<StateSpan>> {
+/// Verweildauer je Status aus der History (`stateHistory`). `visible` begrenzt die Ausgabe auf
+/// Status sichtbarer Teams: nach einem Teamwechsel würden sonst Statusnamen des (nun privaten)
+/// Altteams durchsickern (N4).
+async fn state_spans(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    issue: &Issue,
+) -> AppResult<Vec<StateSpan>> {
     let entries = tx.issues().list_history(issue.id, 1000).await?;
     let parse = |v: &Value| -> Option<StateId> {
         v.as_str()
@@ -2062,6 +2219,11 @@ async fn state_spans(tx: &mut dyn Tx, issue: &Issue) -> AppResult<Vec<StateSpan>
     let mut out = Vec::new();
     for (id, start, end) in spans {
         let state = resolve::state::by_id(tx, id).await?;
+        // N4: Spannen in Status unsichtbarer Teams (z. B. das private Altteam vor einem
+        // Teamwechsel) auslassen – sonst sickern deren Statusnamen durch.
+        if !visible.contains(&state.team_id) {
+            continue;
+        }
         out.push(StateSpan {
             state_id: id,
             name: state.name,

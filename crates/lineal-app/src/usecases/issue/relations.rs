@@ -190,7 +190,12 @@ async fn remove(
 }
 
 /// Folgt der Duplikat-Kette bis zum kanonischen Ende (docs/03 §4.3).
-async fn canonical_end(tx: &mut dyn Tx, start: Issue, dup: IssueId) -> AppResult<Issue> {
+async fn canonical_end(
+    tx: &mut dyn Tx,
+    env: &Env<'_>,
+    start: Issue,
+    dup: IssueId,
+) -> AppResult<Issue> {
     let mut cur = start;
     for _ in 0..16 {
         let rels = tx.issues().relations_of(cur.id).await?;
@@ -208,11 +213,17 @@ async fn canonical_end(tx: &mut dyn Tx, start: Issue, dup: IssueId) -> AppResult
                 );
             }
             Some(n) => {
-                cur = tx
+                let hop = tx
                     .issues()
                     .get(n, false)
                     .await?
                     .ok_or_else(|| AppError::internal("duplicate target vanished"))?;
+                // N3: Die Kette darf nicht ungeprueft in ein unsichtbares Issue springen –
+                // sonst haengen Relation, History und Abos an einem Issue, das der Aufrufer
+                // nicht sehen darf. Unsichtbares Team -> not_found (wie `target`).
+                env.snap
+                    .require_team(env.ctx, crate::policy::Action::UpdateIssue, hop.team_id)?;
+                cur = hop;
             }
             None => return Ok(cur),
         }
@@ -232,7 +243,7 @@ async fn mark_duplicate(
     own: &mut Delta,
 ) -> AppResult<()> {
     let first = target(tx, env, issue, reference).await?;
-    let canonical = canonical_end(tx, first, issue.id).await?;
+    let canonical = canonical_end(tx, env, first, issue.id).await?;
     if canonical.id == issue.id {
         return Err(
             AppError::invalid_request("an issue cannot be a duplicate of itself")
