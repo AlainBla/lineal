@@ -408,7 +408,7 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
 /// die Kennung eines unsichtbaren Parents (N1), die Zahl unsichtbarer Children (N1) sowie
 /// Team- und Projektnamen, wenn das eigene Team bzw. das Projekt unsichtbar ist (N2, für
 /// Freigabe-Empfänger). `can_see` ist hier „Team im sichtbaren Set“.
-async fn filter_extras(
+pub(crate) async fn filter_extras(
     tx: &mut dyn Tx,
     visible: &BTreeSet<TeamId>,
     issue: &Issue,

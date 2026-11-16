@@ -1678,19 +1678,27 @@ impl App {
             .collect();
         let mut issues = std::collections::HashMap::new();
         if !issue_ids.is_empty() {
+            // LIN-63 N1/N2 (Residuum): die GraphQL-Suche baute IssueView aus rohen `extras()` und
+            // umging damit den Sichtbarkeitsfilter des MCP-Pfads — Parent-Kennung, Team- und
+            // Projektnamen unsichtbarer Teams leckten. Dieselbe Filterung wie in load_views anwenden.
+            let visible: std::collections::BTreeSet<_> =
+                snap.visible_team_ids().into_iter().collect();
             let extras = tx.issues().extras(&issue_ids).await?;
             for id in issue_ids {
-                if let (Some(issue), Some(ex)) =
-                    (tx.issues().get(id, false).await?, extras.get(&id))
-                {
-                    issues.insert(
-                        id.0,
-                        IssueView {
-                            issue,
-                            extras: ex.clone(),
-                            previous_identifiers: Vec::new(),
-                        },
-                    );
+                if let Some(issue) = tx.issues().get(id, false).await? {
+                    if let Some(ex) = extras.get(&id) {
+                        let mut ex = ex.clone();
+                        crate::usecases::issue::filter_extras(&mut *tx, &visible, &issue, &mut ex)
+                            .await?;
+                        issues.insert(
+                            id.0,
+                            IssueView {
+                                issue,
+                                extras: ex,
+                                previous_identifiers: Vec::new(),
+                            },
+                        );
+                    }
                 }
             }
         }

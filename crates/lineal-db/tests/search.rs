@@ -357,6 +357,51 @@ async fn search_respects_issue_share_gate(pool: PgPool) {
     );
 }
 
+/// LIN-63 N1/N2 (Residuum): die GraphQL-Suche baute IssueView aus rohen `extras()` und umging den
+/// Sichtbarkeitsfilter — der Name des privaten Teams eines nur per Freigabe sichtbaren Issues leckte.
+#[sqlx::test(migrations = "./migrations")]
+async fn search_masks_private_team_name_on_shared_issue(pool: PgPool) {
+    let fx = setup(pool).await;
+    let d = fx.data;
+    // Issue im privaten Team DES (Alice ist kein Mitglied), mit Alice geteilt.
+    let shared = fx.issue(d.des, 141, "Quokka plan", 0).await;
+    sqlx::query(
+        "UPDATE organization SET limits = limits || '{\"issueSharingEnabled\": true}'::jsonb WHERE id = $1",
+    )
+    .bind(d.org.0)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issue_share (organization_id, issue_id, user_id) VALUES ($1,$2,$3)")
+        .bind(d.org.0)
+        .bind(shared)
+        .bind(d.alice.0)
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+
+    let page = fx
+        .app
+        .search(
+            &alice(),
+            SearchInput {
+                term: "quokka".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let view = page
+        .issues
+        .get(&shared)
+        .expect("das geteilte Issue muss in den Treffern sein");
+    assert!(
+        view.extras.team_name.is_empty(),
+        "privater DES-Teamname in den Such-Extras geleakt: {:?}",
+        view.extras.team_name
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn archived_are_included_with_a_penalty_trashed_never_and_guests_skip_initiatives(
     pool: PgPool,
