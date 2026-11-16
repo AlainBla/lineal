@@ -128,10 +128,35 @@ pub fn dev_from_env() -> bool {
     is_dev(std::env::var("LINEAL_DEV").ok())
 }
 
+/// LIN-65 N10: Loest einen Konfigurationswert auf. Ist `KEY` ungesetzt/leer, aber `KEY_FILE`
+/// gesetzt, wird der Dateiinhalt (ohne abschliessende Zeilenumbrueche) verwendet. So lassen sich
+/// Geheimnisse per Docker-/Compose-`secrets:` als Datei statt als Umgebungsvariable uebergeben
+/// (letztere sind in jedem `docker inspect` sichtbar). Die direkte Variable hat Vorrang.
+fn env_or_file<E, R>(key: &str, env: &E, read: &R) -> Option<String>
+where
+    E: Fn(&str) -> Option<String>,
+    R: Fn(&str) -> std::io::Result<String>,
+{
+    if let Some(v) = env(key).filter(|v| !v.is_empty()) {
+        return Some(v);
+    }
+    let path = env(&format!("{key}_FILE")).filter(|p| !p.is_empty())?;
+    match read(&path) {
+        Ok(s) => Some(s.trim_end_matches(['\n', '\r']).to_string()),
+        Err(e) => {
+            eprintln!("config: {key}_FILE ({path}) konnte nicht gelesen werden: {e}");
+            None
+        }
+    }
+}
+
 impl Config {
-    /// Liest die Konfiguration aus Umgebungsvariablen (siehe `.env.example`).
+    /// Liest die Konfiguration aus Umgebungsvariablen (siehe `.env.example`), mit `*_FILE`-Fallback
+    /// fuer Geheimnisse (siehe [`env_or_file`]).
     pub fn from_env() -> Result<Self> {
-        Self::from_lookup(|k| std::env::var(k).ok())
+        let env = |k: &str| std::env::var(k).ok();
+        let read = |p: &str| std::fs::read_to_string(p);
+        Self::from_lookup(|k| env_or_file(k, &env, &read))
     }
 
     /// Wie [`Config::from_env`], mit austauschbarer Quelle (Tests).
@@ -276,6 +301,39 @@ mod tests {
                 .is_err()
         );
         assert!(Config::from_lookup(|k| (k == "LINEAL_BIND").then(|| "nope".into())).is_err());
+    }
+
+    /// LIN-65 N10: `KEY_FILE` liefert den Dateiinhalt (ohne Zeilenumbruch); die direkte Variable
+    /// hat Vorrang und wird ohne Dateizugriff genommen.
+    #[test]
+    fn env_or_file_reads_file_fallback_and_prefers_direct() {
+        let env = |k: &str| (k == "LINEAL_SESSION_SECRET_FILE").then(|| "/run/secrets/sess".into());
+        let read = |p: &str| {
+            assert_eq!(p, "/run/secrets/sess");
+            Ok("a-real-secret-with-at-least-32-bytes!\n".to_string())
+        };
+        assert_eq!(
+            env_or_file("LINEAL_SESSION_SECRET", &env, &read).as_deref(),
+            Some("a-real-secret-with-at-least-32-bytes!")
+        );
+
+        let env2 = |k: &str| match k {
+            "LINEAL_SESSION_SECRET" => Some("direct-value-at-least-32-bytes-long!".into()),
+            "LINEAL_SESSION_SECRET_FILE" => Some("/unused".into()),
+            _ => None,
+        };
+        let read_panic = |_: &str| -> std::io::Result<String> {
+            panic!("Datei darf bei gesetzter Variable nicht gelesen werden")
+        };
+        assert_eq!(
+            env_or_file("LINEAL_SESSION_SECRET", &env2, &read_panic).as_deref(),
+            Some("direct-value-at-least-32-bytes-long!")
+        );
+
+        // Ungesetzt (weder Variable noch _FILE) -> None.
+        let none = |_: &str| None;
+        let read_none = |_: &str| -> std::io::Result<String> { unreachable!() };
+        assert!(env_or_file("LINEAL_SESSION_SECRET", &none, &read_none).is_none());
     }
 
     #[test]
