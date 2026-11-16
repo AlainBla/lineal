@@ -361,3 +361,151 @@ async fn clearing_lead_team_requires_permission(pool: PgPool) {
             .unwrap();
     assert_eq!(lead, Some(env.data.des.0));
 }
+
+// --- N14: Papierkorb kaskadiert Dokumente, Verknüpfen prüft Archiv, Zyklusfehler maskiert ------
+
+/// Hängt ein Dokument an die Initiative (per SQL, umgeht Authz).
+async fn insert_initiative_document(env: &Env, initiative: Uuid) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO document (id, organization_id, title, initiative_id, creator_id) \
+         VALUES ($1,$2,'Spezifikation',$3,$4)",
+    )
+    .bind(id)
+    .bind(env.data.org.0)
+    .bind(initiative)
+    .bind(env.data.bob.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    id
+}
+
+/// `(trashed, trashed_with_parent)` eines Dokuments.
+async fn doc_trashed(env: &Env, doc: Uuid) -> (bool, bool) {
+    sqlx::query_as::<_, (bool, bool)>(
+        "SELECT trashed, trashed_with_parent FROM document WHERE id = $1",
+    )
+    .bind(doc)
+    .fetch_one(&env.pool)
+    .await
+    .unwrap()
+}
+
+/// N14: Eine getrashte Initiative nimmt ihre Dokumente mit in den Papierkorb (wie Projekte);
+/// Wiederherstellen holt die mitgelöschten Dokumente zurück.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn trashing_initiative_cascades_documents(pool: PgPool) {
+    let env = setup(pool).await;
+    let init = insert_initiative(&env, "Mit Doc", Some(env.data.des)).await;
+    let doc = insert_initiative_document(&env, init).await;
+    let bob = ctx_for(SeedUser::Bob);
+
+    assert_eq!(doc_trashed(&env, doc).await, (false, false));
+
+    env.app
+        .trash_initiative(&bob, &init.to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        doc_trashed(&env, doc).await,
+        (true, true),
+        "Dokument muss mit der Initiative in den Papierkorb"
+    );
+
+    env.app
+        .restore_initiative(&bob, &init.to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        doc_trashed(&env, doc).await,
+        (false, false),
+        "Wiederherstellen holt das mitgelöschte Dokument zurück"
+    );
+}
+
+/// N14: Ein Projekt an eine archivierte (read-only) Initiative zu knüpfen ist unzulässig; die
+/// Archivprüfung greift vor dem Auflösen des Projekts.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn linking_project_to_archived_initiative_is_rejected(pool: PgPool) {
+    let env = setup(pool).await;
+    // Workspace-weite Initiative (kein Lead-Team) -> für die Owner-Alice sichtbar.
+    let init = insert_initiative(&env, "Archiviert", None).await;
+    // Seed-Projekt (Team ENG, Alice ist Mitglied).
+    let project = Uuid::from_u128(0x9201_EC70_0000_7000_8000_0000_0000_0001);
+    let alice = ctx_for(SeedUser::Alice);
+
+    env.app
+        .set_initiative_archived(&alice, &init.to_string(), true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        kind(
+            env.app
+                .set_initiative_project(&alice, &init.to_string(), &project.to_string(), true)
+                .await
+        ),
+        ErrorKind::InvalidRequest,
+        "archivierte Initiative ist read-only"
+    );
+}
+
+/// N14: Enthält ein erkannter Zyklus eine für den Aufrufer unsichtbare Initiative (privates
+/// Lead-Team), darf der Fehler deren Kennung `I-n` nicht verraten.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn cycle_error_masks_invisible_initiative(pool: PgPool) {
+    let env = setup(pool).await;
+    // A und B sind workspace-weit (für Alice sichtbar); X hat privates Lead-Team DES (unsichtbar).
+    let a = insert_initiative(&env, "Zyklus A", None).await;
+    let x = insert_initiative(&env, "Zyklus X geheim", Some(env.data.des)).await;
+    let b = insert_initiative(&env, "Zyklus B", None).await;
+
+    // Kette B -> X -> A (Kante = (parent, child)).
+    let mut tx = env.app.store.begin(env.data.org).await.unwrap();
+    tx.initiatives()
+        .insert_edge(InitiativeId(b), InitiativeId(x), 1.0, now())
+        .await
+        .unwrap();
+    tx.initiatives()
+        .insert_edge(InitiativeId(x), InitiativeId(a), 1.0, now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // Kennung von X ermitteln (für die Negativ-Assertion).
+    let x_number: i32 = sqlx::query_scalar("SELECT number FROM initiative WHERE id = $1")
+        .bind(x)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    let x_ident = format!("I-{x_number}");
+
+    // Alice fügt A als Elternteil von B hinzu -> Zyklus A -> B -> X -> A.
+    let alice = ctx_for(SeedUser::Alice);
+    let err = env
+        .app
+        .save_initiative(
+            &alice,
+            SaveInitiativeInput {
+                id: Some(b.to_string()),
+                parent_initiatives: vec![a.to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("Zyklus muss abgelehnt werden");
+
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    assert_eq!(err.details["reason"], "cycle");
+    let cycle = err.details["cycle"].to_string();
+    assert!(
+        !cycle.contains(&x_ident) && !err.message.contains(&x_ident),
+        "unsichtbare Initiative {x_ident} darf nicht erscheinen: {cycle} / {}",
+        err.message
+    );
+    assert!(
+        cycle.contains("a hidden initiative"),
+        "unsichtbarer Knoten muss maskiert sein: {cycle}"
+    );
+}

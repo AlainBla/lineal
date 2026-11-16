@@ -13,6 +13,7 @@ use crate::context::RequestCtx;
 use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
+use crate::ports::repos::document::DocParent;
 use crate::ports::repos::initiative::{
     Initiative, InitiativeFilter, InitiativeLabelRow, InitiativePatch, NewInitiative,
 };
@@ -731,11 +732,14 @@ impl App {
         if !input.parent_initiatives.is_empty() {
             tx.initiatives().lock_hierarchy().await?;
             let all = tx.initiatives().list_all().await?;
+            // Kennungen nur für sichtbare Initiativen nennen; unsichtbare (z. B. privates
+            // Lead-Team) werden maskiert, damit der Zyklusfehler keine fremden I-n verrät (N14).
             let ident = |i: InitiativeId| {
                 all.iter()
                     .find(|x| x.id == i)
+                    .filter(|x| resolve::initiative::is_visible(&snap, x))
                     .map(|x| x.identifier())
-                    .unwrap_or_else(|| i.to_string())
+                    .unwrap_or_else(|| "a hidden initiative".to_owned())
             };
             let mut edges = tx.initiatives().list_edges().await?;
             let limit = max_depth(&limits);
@@ -833,6 +837,12 @@ impl App {
         snap.require_workspace(ctx, Action::ManageInitiatives)?;
         require_enabled(&mut *tx).await?;
         let i = resolve::initiative::resolve_in(&mut *tx, &snap, initiative).await?;
+        if i.archived_at.is_some() || i.trashed {
+            return Err(AppError::invalid_request(
+                "The initiative is archived or deleted and read-only.",
+            )
+            .with_details(json!({ "reason": "initiative_archived" })));
+        }
         let p = resolve::project::resolve_in(&mut *tx, &snap, project).await?;
         let now = self.clock.now();
         let changed = if linked {
@@ -933,6 +943,9 @@ impl App {
                 now,
             )
             .await?;
+        // Gegenstück zum Kaskaden-Trash: mitgelöschte Dokumente wiederherstellen (N14).
+        self.restore_documents_of(&mut *tx, DocParent::Initiative(i.id))
+            .await?;
         emit(
             &mut *tx,
             ctx,
@@ -962,6 +975,9 @@ impl App {
                 },
                 now,
             )
+            .await?;
+        // Dokumente der Initiative folgen dem Papierkorb (wie bei Projekten, N14).
+        self.trash_documents_of(&mut *tx, DocParent::Initiative(i.id))
             .await?;
         emit(
             &mut *tx,
