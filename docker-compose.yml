@@ -83,7 +83,14 @@ services:
     image: lineal-server:latest
     command: ["migrate"]
     environment: &server-env
+      # `migrate` verbindet als Eigentuemer `lineal` (DDL). Server und Worker verbinden als
+      # de-privilegierte Rolle `lineal_app` (nur DML, LIN-61/S-09): sie uebernehmen bei gesetztem
+      # LINEAL_APP_DB_PASSWORD Benutzer und Passwort aus dieser Basis-URL. Ohne das Passwort
+      # verbinden auch sie als Eigentuemer (Rueckfall, unveraendertes Verhalten).
       DATABASE_URL: postgres://lineal:${LINEAL_DB_PASSWORD:-}@app-db:5432/lineal
+      # Passwort der Rolle `lineal_app`; `migrate` legt die Rolle damit an, Server/Worker verbinden
+      # sich damit. Leer/ungesetzt => Rolle wird nicht angelegt, App verbindet als Eigentuemer.
+      LINEAL_APP_DB_PASSWORD: ${LINEAL_APP_DB_PASSWORD:-}
       LINEAL_BASE_URL: ${LINEAL_BASE_URL:-http://localhost:8088}
       LINEAL_SESSION_SECRET: ${LINEAL_SESSION_SECRET:-}  # Pflicht, mind. 32 Zeichen: openssl rand -hex 32
       # Nur der nginx-Container (feste Adresse) darf X-Forwarded-For setzen – nicht das ganze

@@ -20,8 +20,10 @@
 #   3. Bestätigung, Vorabprüfung (DB-Verbindung der Anwendung, Passwort passt), Sicherung des
 #      Ist-Zustands (pg_dump nach <Backup-Verzeichnis>/../pre-restore-<Zeitstempel>.dump);
 #      danach: server, worker, web stoppen (Container werden nie neu angelegt)
-#   4. DB per pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error
-#      (atomar: bei einem Fehler bleibt der alte Datenstand)
+#   4. DB per pg_restore --clean --if-exists --no-owner --no-privileges --single-transaction
+#      --exit-on-error (atomar: bei einem Fehler bleibt der alte Datenstand). --no-privileges, damit
+#      die im Dump enthaltenen GRANTs an `lineal_app` (LIN-61) einen Restore in einen frischen
+#      Cluster ohne die Rolle nicht abbrechen; Schritt 6 (migrate) erteilt die Rechte neu.
 #   5. Inhalt des Volumes "<Projekt>_blobs" durch das Archiv ersetzen
 #   6. migrate ausführen (vor dem Start der Anwendung, damit das Schema zum Image passt)
 #   7. server, worker, web wieder starten
@@ -209,17 +211,17 @@ info "Sichere den Ist-Zustand nach $PRE_DUMP"
 info "server, worker, web stoppen"
 dc stop server worker web >/dev/null 2>&1 || true
 
-info "Datenbank wiederherstellen (pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error)"
+info "Datenbank wiederherstellen (pg_restore --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error)"
 # Verschlüsselt: age entschlüsselt im Stream in pg_restore. `set -o pipefail` lässt einen falschen
 # Schlüssel (age-Fehler) den Lauf abbrechen; --single-transaction hält die DB dabei unverändert.
 if (( ENCRYPTED )); then
   age -d -i "$AGE_ID" < "$DUMP" \
     | dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
-        --single-transaction --exit-on-error \
+        --no-privileges --single-transaction --exit-on-error \
     || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). Falscher Schlüssel? server/worker/web bleiben gestoppt. Ist-Zustand: $PRE_DUMP"
 else
   dc exec -T app-db pg_restore -U lineal -d lineal --clean --if-exists --no-owner \
-      --single-transaction --exit-on-error < "$DUMP" \
+      --no-privileges --single-transaction --exit-on-error < "$DUMP" \
     || die "pg_restore ist fehlgeschlagen (atomar: die Datenbank blieb unverändert). server/worker/web bleiben gestoppt; Ursache beheben und erneut ausführen. Ist-Zustand: $PRE_DUMP"
 fi
 
