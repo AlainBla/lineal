@@ -58,9 +58,15 @@ async fn upload_flow_over_mcp(pool: sqlx::PgPool) {
         prepared["uploadRequest"]["headers"]["content-type"],
         "image/png"
     );
+    // LIN-64 N5: nur content-type wird zurueckgegeben; die frueheren wirkungslosen Header
+    // (x-content-length-range/cache-control/content-disposition) sind entfernt (CJK-/Emoji-Fix).
     assert_eq!(
         prepared["uploadRequest"]["headers"]["x-content-length-range"],
-        "48213,48213"
+        Value::Null
+    );
+    assert_eq!(
+        prepared["uploadRequest"]["headers"]["content-disposition"],
+        Value::Null
     );
     assert_eq!(prepared["suggested"]["title"], "screenshot.png");
     assert_eq!(prepared["suggested"]["subtitle"], Value::Null);
