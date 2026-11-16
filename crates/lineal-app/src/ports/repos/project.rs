@@ -514,11 +514,16 @@ pub trait ProjectRepo: Send {
         unimplemented_repo()
     }
     /// Issues, die erst nach Anlegen plus Karenz in ihren Meilenstein kamen (docs/04 §3.6).
+    /// Liefert auch das Team je Issue, damit der Aufrufer unsichtbare Issues herausfiltern kann.
     async fn milestone_added_issues(
         &mut self,
         _project: ProjectId,
         _grace_days: i32,
-    ) -> AppResult<Vec<(MilestoneId, IssueId)>> {
+    ) -> AppResult<Vec<(MilestoneId, IssueId, TeamId)>> {
+        unimplemented_repo()
+    }
+    /// Aktuelles Team je Issue-UUID (für die Sichtprüfung eingefrorener Meilenstein-Snapshots).
+    async fn issue_teams(&mut self, _ids: &[uuid::Uuid]) -> AppResult<Vec<(uuid::Uuid, TeamId)>> {
         unimplemented_repo()
     }
     async fn milestone_issue_refs(

@@ -956,6 +956,8 @@ async fn normalize_project(
         d.team_ids = Some(out);
     }
     if let Some(ls) = d.label_ids.clone() {
+        // Labels privater (unsichtbarer) Teams sind nicht referenzierbar; Workspace-Labels bleiben (N11).
+        let visible = snap.visible_team_ids();
         let mut out = Vec::new();
         for (i, r) in ls.iter().enumerate() {
             let rows = if let Ok(u) = Uuid::parse_str(r) {
@@ -963,7 +965,10 @@ async fn normalize_project(
             } else {
                 tx.projects().find_labels_by_name(r).await?
             };
-            let Some(l) = rows.into_iter().next() else {
+            let Some(l) = rows
+                .into_iter()
+                .find(|l| l.team_id.is_none_or(|t| visible.contains(&t)))
+            else {
                 return Err(bad(
                     &format!("labelIds[{i}]"),
                     format!("unknown project label `{r}`"),

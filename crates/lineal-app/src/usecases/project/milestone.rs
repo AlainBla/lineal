@@ -12,8 +12,10 @@ use crate::ports::repos::project::{
 use crate::resolve;
 use chrono::NaiveDate;
 use lineal_domain::events::DomainEvent;
-use lineal_domain::ids::{MilestoneId, ProjectId};
+use lineal_domain::ids::{MilestoneId, ProjectId, TeamId};
 use serde_json::json;
+use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Eingebettete Projekt-Referenz (`ProjectRef`): UUID, Kennung, Name.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +89,7 @@ impl App {
         let views = milestone_views(
             &mut *tx,
             r.project.id,
+            &snap.visible_team_ids(),
             team_tz(&snap, r.project.lead_team_id),
             self.clock.now(),
         )
@@ -108,6 +111,7 @@ impl App {
         let views = milestone_views(
             &mut *tx,
             r.project.id,
+            &snap.visible_team_ids(),
             team_tz(&snap, r.project.lead_team_id),
             self.clock.now(),
         )
@@ -225,6 +229,7 @@ impl App {
         let views = milestone_views(
             &mut *tx,
             r.project.id,
+            &snap.visible_team_ids(),
             team_tz(&snap, r.project.lead_team_id),
             now,
         )
@@ -344,19 +349,33 @@ impl App {
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
         let r = resolve::project::resolve_in(&mut *tx, &snap, project).await?;
         let m = resolve::project::resolve_milestone(&mut *tx, r.project.id, milestone).await?;
-        let visible: Vec<String> = snap
-            .visible_team_ids()
-            .iter()
-            .map(|t| t.to_string())
-            .collect();
-        Ok(m.snapshot
+        let snapshot = m
+            .snapshot
             .and_then(|s| s.as_array().cloned())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Nach dem Einfrieren verschiebt sich ein Issue vielleicht in ein (jetzt) unsichtbares
+        // Team; die Sicht richtet sich nach dem aktuellen Team, nicht dem eingefrorenen (N5).
+        let ids: Vec<Uuid> = snapshot
+            .iter()
+            .filter_map(|i| i["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()))
+            .collect();
+        let live: HashMap<Uuid, TeamId> =
+            tx.projects().issue_teams(&ids).await?.into_iter().collect();
+        let visible = snap.visible_team_ids();
+        Ok(snapshot
             .into_iter()
             .filter(|i| {
-                i["teamId"]
-                    .as_str()
-                    .is_some_and(|t| visible.iter().any(|v| v == t))
+                let Some(id) = i["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) else {
+                    return false;
+                };
+                // Gelöschtes Issue: eingefrorenes Team als Rückfall.
+                let team = live.get(&id).copied().or_else(|| {
+                    i["teamId"]
+                        .as_str()
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                        .map(TeamId)
+                });
+                team.is_some_and(|t| visible.contains(&t))
             })
             .collect())
     }
@@ -403,6 +422,7 @@ impl App {
         let views = milestone_views(
             &mut *tx,
             project.id,
+            &snap.visible_team_ids(),
             team_tz(snap, project.lead_team_id),
             now,
         )

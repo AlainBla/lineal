@@ -1057,9 +1057,9 @@ impl ProjectRepo for PgTx {
         &mut self,
         project: ProjectId,
         grace_days: i32,
-    ) -> AppResult<Vec<(MilestoneId, IssueId)>> {
-        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT i.project_milestone_id, i.id FROM issue i JOIN project_milestone m \
+    ) -> AppResult<Vec<(MilestoneId, IssueId, TeamId)>> {
+        let rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+            "SELECT i.project_milestone_id, i.id, i.team_id FROM issue i JOIN project_milestone m \
              ON m.organization_id = i.organization_id AND m.id = i.project_milestone_id \
              WHERE i.organization_id = $1 AND i.project_id = $2 AND NOT i.trashed \
              AND GREATEST(i.created_at, COALESCE((SELECT max(h.created_at) FROM issue_history h \
@@ -1075,8 +1075,23 @@ impl ProjectRepo for PgTx {
         .map_err(db_err)?;
         Ok(rows
             .into_iter()
-            .map(|(m, i)| (MilestoneId(m), IssueId(i)))
+            .map(|(m, i, t)| (MilestoneId(m), IssueId(i), TeamId(t)))
             .collect())
+    }
+
+    async fn issue_teams(&mut self, ids: &[Uuid]) -> AppResult<Vec<(Uuid, TeamId)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT id, team_id FROM issue WHERE organization_id = $1 AND id = ANY($2)",
+        )
+        .bind(self.org.0)
+        .bind(ids)
+        .fetch_all(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.into_iter().map(|(i, t)| (i, TeamId(t))).collect())
     }
 
     async fn milestone_issue_refs(

@@ -285,7 +285,10 @@ impl App {
         let visible = snap.visible_team_ids();
         let mut scopes: Vec<Option<TeamId>> = vec![None];
         match (&input.team, kind) {
-            (_, LabelKind::Initiative) => {}
+            // Initiative-Labels nur für Akteure mit Initiative-Sicht (Gäste verboten, N15).
+            (_, LabelKind::Initiative) => {
+                snap.require_workspace(ctx, Action::ViewInitiatives)?;
+            }
             (Some(r), _) => {
                 let team = resolve::team::resolve_in(tx, &snap, r, Visibility::Content).await?;
                 for t in resolve::label::available_scopes(&snap.tree, team.id) {

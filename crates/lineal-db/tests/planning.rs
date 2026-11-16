@@ -7,11 +7,13 @@
 //! WP07: Planung (Projekte, Meilensteine, Cycles, Initiativen, Status-Updates) gegen echte Datenbank.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use lineal_app::ports::repos::label::LabelKind;
 use lineal_app::ports::repos::user::PageRequest;
 use lineal_app::ports::{Clock, IdGen, Store};
 use lineal_app::usecases::cycle::{CycleKind, CycleSettingsInput};
 use lineal_app::usecases::initiative::{ListInitiativesInput, SaveInitiativeInput};
-use lineal_app::usecases::project::milestone::SaveMilestoneInput;
+use lineal_app::usecases::label::ListLabelsInput;
+use lineal_app::usecases::project::milestone::{OpenIssues, SaveMilestoneInput};
 use lineal_app::usecases::project::{ListProjectsInput, SaveProjectInput, ViewOpts};
 use lineal_app::usecases::team::CreateTeamInput;
 use lineal_app::{App, ErrorKind, RequestCtx};
@@ -869,6 +871,111 @@ async fn milestones_order_progress_and_delete(pool: PgPool) {
         kind(app.list_milestones(&alice, &hidden.identifier).await),
         ErrorKind::NotFound
     );
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn milestone_added_and_snapshot_hide_private_team_issues(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // sieht ENG, nicht DES
+    let bob = ctx_for(SeedUser::Bob); // sieht ENG und DES
+    let org = data.org.0;
+
+    // Projekt mit ENG (Lead, sichtbar) und DES (privat) von Bob.
+    let proj = app
+        .save_project(
+            &bob,
+            SaveProjectInput {
+                lead_team: Some("ENG".into()),
+                ..teams_input(&["ENG", "DES"])
+            },
+        )
+        .await
+        .unwrap();
+    let pid = proj.project.id.0;
+
+    // Meilenstein (Uhr 2026-10-10).
+    let (_, m) = app
+        .save_milestone(
+            &bob,
+            SaveMilestoneInput {
+                project: proj.identifier.clone(),
+                name: Some("Go-Live".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mid = m.milestone.id.0;
+
+    // Je ein Issue aus ENG und DES, nach der Karenz (SCOPE_GRACE_DAYS=7) aufgenommen.
+    let eng_issue = issue(&pool, org, data.eng.0, 101, "started", None, Some(pid)).await;
+    let des_issue = issue(&pool, org, data.des.0, 102, "started", None, Some(pid)).await;
+    for id in [eng_issue, des_issue] {
+        sqlx::query(
+            "UPDATE issue SET project_milestone_id = $2, \
+             created_at = '2026-10-25T00:00:00Z' WHERE id = $1",
+        )
+        .bind(id)
+        .bind(mid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // added_issue_ids: Alice darf die UUID des DES-Issues nicht sehen (N5).
+    let (_, a_view) = app
+        .get_milestone(&alice, &proj.identifier, "Go-Live")
+        .await
+        .unwrap();
+    let a_added: Vec<Uuid> = a_view.added_issue_ids.iter().map(|i| i.0).collect();
+    assert!(a_added.contains(&eng_issue), "ENG-Issue bleibt sichtbar");
+    assert!(
+        !a_added.contains(&des_issue),
+        "DES-Issue-UUID darf nicht lecken"
+    );
+    // Bob sieht beide.
+    let (_, b_view) = app
+        .get_milestone(&bob, &proj.identifier, "Go-Live")
+        .await
+        .unwrap();
+    let b_added: Vec<Uuid> = b_view.added_issue_ids.iter().map(|i| i.0).collect();
+    assert!(b_added.contains(&eng_issue) && b_added.contains(&des_issue));
+
+    // Snapshot: abschließen (Issues bleiben), dann ENG-Issue nach DES verschieben.
+    app.complete_milestone(&bob, &proj.identifier, "Go-Live", OpenIssues::Keep, None)
+        .await
+        .unwrap();
+    let des_state = state_id(&pool, data.des.0, "started").await;
+    sqlx::query("UPDATE issue SET team_id = $2, state_id = $3 WHERE id = $1")
+        .bind(eng_issue)
+        .bind(data.des.0)
+        .bind(des_state)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Alice: das inzwischen private Issue verschwindet aus dem Snapshot (N5).
+    let a_snap = app
+        .milestone_snapshot(&alice, &proj.identifier, "Go-Live")
+        .await
+        .unwrap();
+    assert!(
+        !a_snap
+            .iter()
+            .any(|i| i["id"].as_str() == Some(eng_issue.to_string().as_str())),
+        "verschobenes Issue darf im Snapshot nicht mehr erscheinen"
+    );
+    assert!(
+        a_snap
+            .iter()
+            .all(|i| i["id"].as_str() != Some(des_issue.to_string().as_str())),
+        "DES-Issue war nie für Alice sichtbar"
+    );
+    // Bob sieht beide weiterhin.
+    let b_snap = app
+        .milestone_snapshot(&bob, &proj.identifier, "Go-Live")
+        .await
+        .unwrap();
+    assert_eq!(b_snap.len(), 2);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2327,4 +2434,119 @@ async fn stored_content_is_sanitized_and_validated(pool: PgPool) {
         ),
         ErrorKind::InvalidRequest
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Label-Sichtbarkeit (N11, N15)
+// ---------------------------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn project_labels_of_private_teams_are_hidden_and_not_assignable(pool: PgPool) {
+    let (app, data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // sieht ENG, nicht DES
+    let bob = ctx_for(SeedUser::Bob); // sieht ENG und DES
+    let org = data.org.0;
+
+    // Ein Projekt-Label je Scope: Workspace, ENG (sichtbar) und DES (privat).
+    for (name, team) in [
+        ("WsLabel", None),
+        ("EngLabel", Some(data.eng.0)),
+        ("DesLabel", Some(data.des.0)),
+    ] {
+        sqlx::query(
+            "INSERT INTO project_label (organization_id, name, color, team_id) \
+             VALUES ($1,$2,'#111111',$3)",
+        )
+        .bind(org)
+        .bind(name)
+        .bind(team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // Projekt mit ENG (Lead) und DES; Bob darf das ENG- und das DES-Label zuweisen.
+    let proj = app
+        .save_project(
+            &bob,
+            SaveProjectInput {
+                lead_team: Some("ENG".into()),
+                labels: Some(vec!["EngLabel".into(), "DesLabel".into()]),
+                ..teams_input(&["ENG", "DES"])
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(proj.labels.len(), 2, "Bob sieht und setzt beide Labels");
+
+    // Sicht (N11): Alice sieht das DES-Label nicht, das ENG-Label aber schon.
+    let v = app
+        .get_project(&alice, &proj.identifier, ViewOpts::default())
+        .await
+        .unwrap();
+    let names: Vec<_> = v.labels.iter().map(|l| l.name.clone()).collect();
+    assert!(names.contains(&"EngLabel".to_string()), "ENG-Label bleibt");
+    assert!(
+        !names.contains(&"DesLabel".to_string()),
+        "DES-Label darf nicht sichtbar sein"
+    );
+
+    // Zuweisbarkeit (N11): Alice kann das DES-Label nicht referenzieren.
+    assert_eq!(
+        kind(
+            app.save_project(
+                &alice,
+                SaveProjectInput {
+                    id: Some(proj.project.id.0.to_string()),
+                    labels: Some(vec!["DesLabel".into()]),
+                    ..Default::default()
+                }
+            )
+            .await
+        ),
+        ErrorKind::NotFound,
+        "DES-Label ist für Alice nicht zuweisbar"
+    );
+
+    // Nicht über-restriktiv: Alice darf das ENG-Label setzen – Bobs DES-Label bleibt erhalten.
+    app.save_project(
+        &alice,
+        SaveProjectInput {
+            id: Some(proj.project.id.0.to_string()),
+            labels: Some(vec!["EngLabel".into()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after = app
+        .get_project(&bob, &proj.identifier, ViewOpts::default())
+        .await
+        .unwrap();
+    let bob_names: Vec<_> = after.labels.iter().map(|l| l.name.clone()).collect();
+    assert!(
+        bob_names.contains(&"DesLabel".to_string()),
+        "Alice darf Bobs unsichtbares DES-Label nicht entfernen"
+    );
+    assert!(bob_names.contains(&"EngLabel".to_string()));
+}
+
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn initiative_labels_are_gated_for_guests(pool: PgPool) {
+    let (app, _data, _pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice); // Owner
+    let carol = ctx_for(SeedUser::Carol); // Gast
+
+    // Gäste dürfen Initiative-Labels nicht lesen (N15).
+    assert_eq!(
+        kind(
+            app.list_labels(&carol, LabelKind::Initiative, ListLabelsInput::default())
+                .await
+        ),
+        ErrorKind::Forbidden
+    );
+    // Nicht-Gäste weiterhin erlaubt (keine Über-Restriktion).
+    app.list_labels(&alice, LabelKind::Initiative, ListLabelsInput::default())
+        .await
+        .unwrap();
 }
