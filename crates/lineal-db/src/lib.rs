@@ -1,15 +1,17 @@
 //! PostgreSQL-Implementierung der Ports aus `lineal-app`.
 #![forbid(unsafe_code)]
 
+pub mod app_role;
 pub mod filter_sql;
 pub mod repos;
 pub mod search;
 pub mod store;
 
+pub use app_role::{APP_ROLE, app_role_options, ensure_app_role};
 pub use store::{PgStore, PgTx};
 
 use lineal_app::AppError;
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 
 /// Eingebettete Migrationen (`crates/lineal-db/migrations`).
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -75,6 +77,18 @@ pub async fn connect(
 ) -> Result<PgPool, sqlx::Error> {
     pool_options_with_timeout(max_connections, statement_timeout_ms)
         .connect(database_url)
+        .await
+}
+
+/// Wie [`connect`], aber aus fertigen [`PgConnectOptions`] (z. B. mit auf `lineal_app` geaenderten
+/// Zugangsdaten, siehe [`app_role_options`]).
+pub async fn connect_opts(
+    options: PgConnectOptions,
+    max_connections: u32,
+    statement_timeout_ms: Option<u32>,
+) -> Result<PgPool, sqlx::Error> {
+    pool_options_with_timeout(max_connections, statement_timeout_ms)
+        .connect_with(options)
         .await
 }
 

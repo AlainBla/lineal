@@ -88,7 +88,7 @@ pub struct CsvArgs {
 }
 
 pub async fn run(args: ImportArgs) -> Result<()> {
-    let (_config, pool, app) = super::connect(false).await?;
+    let (_config, pool, app) = super::connect(false, false).await?;
     match args.source {
         ImportSourceCmd::Linear(a) => linear(&pool, &app, a).await,
         ImportSourceCmd::LinearCsv(a) => csv(&pool, &app, a).await,

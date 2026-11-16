@@ -30,7 +30,7 @@ pub async fn run(args: TotpArgs) -> Result<()> {
 }
 
 async fn reset(email: &str) -> Result<()> {
-    let (_config, pool, _app) = super::connect(false).await?;
+    let (_config, pool, _app) = super::connect(false, false).await?;
     let rows: Vec<(Uuid, Uuid)> =
         sqlx::query_as("SELECT id, organization_id FROM \"user\" WHERE lower(email) = lower($1)")
             .bind(email)

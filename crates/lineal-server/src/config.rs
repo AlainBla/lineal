@@ -11,6 +11,11 @@ const DEFAULT_SESSION_SECRET: &str = "change-me-32-bytes-minimum-xxxxxxxx";
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    /// `LINEAL_APP_DB_PASSWORD`: Passwort der de-privilegierten Rolle `lineal_app` (LIN-61/S-09).
+    /// Gesetzt => Server und Worker verbinden sich als `lineal_app` (nur DML), `migrate` legt die
+    /// Rolle an. Ungesetzt/leer => Rueckfall auf die bisherige einzelne `DATABASE_URL`
+    /// (Eigentuemer), damit Dev/Test und bestehende Installationen unveraendert laufen.
+    pub app_db_password: Option<String>,
     pub base_url: String,
     /// `LINEAL_FILES_BASE_URL`: eigene, cookielose Origin für die Inline-Ansicht von HTML-Anhängen
     /// (Weg B, `docs/superpowers/specs/2026-11-13-html-anhang-tab.md`). `None` = Feature aus, HTML
@@ -214,6 +219,7 @@ impl Config {
         };
         Ok(Self {
             database_url: get("DATABASE_URL").unwrap_or_else(|| DEFAULT_DATABASE_URL.into()),
+            app_db_password: get("LINEAL_APP_DB_PASSWORD").filter(|s| !s.trim().is_empty()),
             base_url,
             files_base_url,
             session_secret,
@@ -434,6 +440,30 @@ mod tests {
         assert!(with(false, Some("maybe"), None).is_err());
         assert!(with(false, Some("admins"), Some("alice@acme.example")).is_err());
         assert!(with(false, Some("admins"), Some("not-a-uuid")).is_err());
+    }
+
+    #[test]
+    fn app_db_password_is_optional_and_trimmed() {
+        // Ungesetzt => None (Rueckfall auf die Eigentuemer-URL, LIN-61/S-09).
+        let dev = |k: &str| (k == "LINEAL_DEV").then(|| "1".into());
+        assert_eq!(Config::from_lookup(dev).unwrap().app_db_password, None);
+        // Leer/nur Whitespace => None.
+        let empty = |k: &str| match k {
+            "LINEAL_DEV" => Some("1".into()),
+            "LINEAL_APP_DB_PASSWORD" => Some("  ".into()),
+            _ => None,
+        };
+        assert_eq!(Config::from_lookup(empty).unwrap().app_db_password, None);
+        // Gesetzt => uebernommen.
+        let set = |k: &str| match k {
+            "LINEAL_DEV" => Some("1".into()),
+            "LINEAL_APP_DB_PASSWORD" => Some("s3cret".into()),
+            _ => None,
+        };
+        assert_eq!(
+            Config::from_lookup(set).unwrap().app_db_password.as_deref(),
+            Some("s3cret")
+        );
     }
 
     #[test]

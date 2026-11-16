@@ -84,7 +84,8 @@ Bereinigt gegenüber `docs/dev/offene-punkte.md` (erledigte Punkte entfernt):
 
 | Variable | Default | Bedeutung |
 |---|---|---|
-| `DATABASE_URL` | `postgres://lineal:lineal@localhost:5440/lineal` | PostgreSQL ≥ 15 |
+| `DATABASE_URL` | `postgres://lineal:lineal@localhost:5440/lineal` | PostgreSQL ≥ 15. `migrate` und Betreiber-Befehle (`create-workspace`, `seed`, `import`, `totp`) verbinden damit als Eigentuemer |
+| `LINEAL_APP_DB_PASSWORD` | leer (Rückfall auf Eigentuemer) | Passwort der de-privilegierten Rolle `lineal_app` (LIN-61/S-09). Gesetzt => `lineal migrate` legt die Rolle an/aktualisiert sie und erteilt nur DML-Rechte; `serve` und `worker` verbinden damit (Benutzer/Passwort überschreiben `DATABASE_URL`). Leer => `serve`/`worker` verbinden als Eigentuemer (unverändertes Verhalten). Empfohlen; nur URL-sichere Zeichen, z. B. `openssl rand -hex 24` |
 | `LINEAL_BASE_URL` | `http://localhost:8080` | öffentliche URL (Links, Cookie-`Secure` bei `https://`, Standard-Origin für CSRF) |
 | `LINEAL_FILES_BASE_URL` | leer (Feature aus) | eigene, cookielose Origin für die Inline-Ansicht von HTML-Anhängen (Weg B, KOL-478, §3.4b). Muss sich von `LINEAL_BASE_URL` unterscheiden; aktiviert den Datei-Origin-Guard |
 | `LINEAL_SESSION_SECRET` | – (Pflicht, ≥ 32 Byte) | signiert Blob-URLs, Consent-Nonces, verschlüsselt Import-Tokens; ohne `LINEAL_DEV=1` Pflicht, der Beispielwert wird abgelehnt |
@@ -143,6 +144,7 @@ Das Passwort wird nie als Argument übergeben. Bevorzugt ist die interaktive Abf
 ```bash
 export LINEAL_SESSION_SECRET="$(openssl rand -hex 32)"   # Pflicht; z. B. in .env ablegen
 export LINEAL_DB_PASSWORD="$(openssl rand -hex 24)"      # Pflicht: Passwort der App-Datenbank
+export LINEAL_APP_DB_PASSWORD="$(openssl rand -hex 24)"  # Empfohlen: Passwort der Rolle `lineal_app`
 docker compose --profile app up -d --build               # migrate (einmalig), server, worker, web
 # Ersteinrichtung (statt seed): Workspace und Owner anlegen (fragt das Passwort
 # interaktiv ohne Echo ab – `run --rm` hat ein TTY; Secret nicht als Kommando-Präfix).
@@ -150,6 +152,8 @@ docker compose --profile app run --rm migrate \
   create-workspace --name "Acme" --owner-email alice@acme.example --owner-name "Alice"
 # Web-App: http://localhost:8088 (LINEAL_HTTP_PORT), Login mit der Owner-E-Mail
 ```
+
+**De-privilegierte App-Rolle (LIN-61/S-09).** Der Server und der Worker verbinden sich nicht mehr als Eigentuemer/Superuser, sondern als Rolle `lineal_app` mit nur DML-Rechten (SELECT/INSERT/UPDATE/DELETE, Sequenzen, Funktionen) auf das Schema `public` – kein DDL, kein Superuser, keine Ownership, `NOBYPASSRLS`. `lineal migrate` (läuft als Eigentuemer) legt die Rolle bei gesetztem `LINEAL_APP_DB_PASSWORD` idempotent an und erteilt die Rechte (inkl. `ALTER DEFAULT PRIVILEGES`, so dass neue Migrationen keine Anpassung brauchen); Server und Worker überschreiben Benutzer/Passwort der `DATABASE_URL` auf `lineal_app`. Ist `LINEAL_APP_DB_PASSWORD` nicht gesetzt (Dev/Test, bestehende Installationen), verbinden Server und Worker weiterhin als Eigentuemer – Verhalten unverändert. RLS ist bewusst noch nicht umgesetzt (eigener Folge-Task, `docs/superpowers/specs/2026-11-16-rls-folgeschritt.md`); die Rolle `lineal` (= `POSTGRES_USER` von `app-db`) bleibt Superuser und wird nur für Migrationen/Betrieb genutzt.
 
 Der App-Stack hat eine eigene Datenbank `app-db` (postgres:16, Volume `appdata`, kein veröffentlichter Port) und teilt sich nichts mit der Entwicklungs-DB `postgres` (Port 5440). Ohne `LINEAL_DB_PASSWORD` startet `app-db` nicht (klare Meldung im Log). Die Entwicklungs-DB `postgres` liegt im Profil `dev` (`docker compose --profile dev up -d`), damit sie beim Prod-Deploy (`--profile app`) nicht mitstartet (LIN-41); sie braucht keine Variablen. `LINEAL_WORKSPACE_CREATION` (Default `disabled`) und `LINEAL_INSTANCE_ADMINS` werden an Server und Worker durchgereicht; Vorlage in `.env.example`.
 

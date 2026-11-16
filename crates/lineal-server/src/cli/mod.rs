@@ -16,6 +16,7 @@ use clap::{Parser, Subcommand};
 use lineal_app::App;
 use lineal_db::PgStore;
 use sqlx::PgPool;
+use sqlx::postgres::PgConnectOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -78,18 +79,40 @@ pub async fn run(cli: Cli) -> Result<()> {
 
 /// Verbindung, Store und `App` aus der Umgebung. `enforce_statement_timeout` gilt nur für den
 /// Request-bedienenden Pool (serve); Migrationen, Import und Worker verbinden ohne `statement_timeout`.
-pub(crate) async fn connect(enforce_statement_timeout: bool) -> Result<(Config, PgPool, Arc<App>)> {
+///
+/// `use_app_role` (LIN-61/S-09): `true` für die Anwendung (serve, worker) – ist
+/// `LINEAL_APP_DB_PASSWORD` gesetzt, verbindet der Pool als de-privilegierte Rolle `lineal_app`
+/// (nur DML). `false` für Migrationen und Betreiber-Befehle (migrate, seed, create-workspace,
+/// import, totp): sie verbinden als Eigentuemer aus `DATABASE_URL`. Ohne gesetztes Passwort fällt
+/// auch die Anwendung auf die Eigentuemer-URL zurück (Dev/Test, bestehende Installationen).
+pub(crate) async fn connect(
+    enforce_statement_timeout: bool,
+    use_app_role: bool,
+) -> Result<(Config, PgPool, Arc<App>)> {
     let config = Config::from_env()?;
     let statement_timeout = enforce_statement_timeout
         .then_some(config.db_statement_timeout_ms)
         .flatten();
-    let pool = lineal_db::connect(
-        &config.database_url,
-        config.db_max_connections,
-        statement_timeout,
-    )
-    .await
-    .context("cannot connect to the database (is `docker compose up -d` running?)")?;
+    let mut options: PgConnectOptions = config
+        .database_url
+        .parse()
+        .context("DATABASE_URL is not a valid PostgreSQL connection URL")?;
+    if use_app_role {
+        match config.app_db_password.as_deref() {
+            Some(password) => options = lineal_db::app_role_options(options, password),
+            // Stiller Rückfall auf den Eigentuemer wäre in Prod die Art, wie S-09 ein Jahr lang
+            // ungedeployt bliebe – daher ein deutlicher Hinweis (nicht im Dev-Modus).
+            None if !config.dev => tracing::warn!(
+                "connecting as the database owner; set LINEAL_APP_DB_PASSWORD to use the \
+                 de-privileged `{}` role (LIN-61/S-09)",
+                lineal_db::APP_ROLE
+            ),
+            None => {}
+        }
+    }
+    let pool = lineal_db::connect_opts(options, config.db_max_connections, statement_timeout)
+        .await
+        .context("cannot connect to the database (is `docker compose up -d` running?)")?;
     let app = build_app(Arc::new(PgStore::new(pool.clone())), &config);
     Ok((config, pool, app))
 }
