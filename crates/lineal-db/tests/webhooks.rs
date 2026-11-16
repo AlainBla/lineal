@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use lineal_app::ports::repos::StoredEvent;
 use lineal_app::ports::{Clock, Store};
 use lineal_app::usecases::invitation::{AcceptInvitationInput, InviteUsersInput};
-use lineal_app::usecases::issue::CreateIssueInput;
+use lineal_app::usecases::issue::{CreateIssueInput, UpdateIssueInput};
 use lineal_app::usecases::project::SaveProjectInput;
 use lineal_app::usecases::team::UpdateTeamInput;
 use lineal_app::usecases::team_lifecycle::{OpenIssuesOnRetirement, SubTeamHandling};
@@ -520,6 +520,51 @@ async fn project_payload_hides_private_teams_from_workspace_hooks(pool: PgPool) 
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn updated_from_hides_private_teams_from_workspace_hooks(pool: PgPool) {
+    let fx = setup(pool).await;
+    let ws = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    // Bob ist Mitglied des privaten Teams DES und des öffentlichen Teams ENG. Er legt ein Issue
+    // in DES an und verschiebt es nach ENG; der Workspace-Hook sieht nur den Wechsel nach ENG.
+    let created = fx
+        .app
+        .create_issue(&bob(), issue("DES", "Secret"))
+        .await
+        .unwrap();
+    fx.app
+        .update_issue(
+            &bob(),
+            UpdateIssueInput {
+                id: created.issue.id.to_string(),
+                team: Some("ENG".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    plan_all(&fx).await;
+    let d = deliveries(&fx, ws.id).await;
+    let des = fx.data.des.0.to_string();
+    // Die Update-Zustellung trägt `updatedFrom`; die alte, private teamId darf dort nicht stehen.
+    let upd = d
+        .iter()
+        .find(|p| p["action"] == serde_json::json!("update"))
+        .unwrap_or_else(|| panic!("no update delivery: {d:?}"));
+    assert!(
+        upd["updatedFrom"]["teamId"].is_null(),
+        "updatedFrom.teamId leaked: {upd:?}"
+    );
+    assert!(
+        !upd["updatedFrom"].to_string().contains(&des),
+        "private Team-ID in updatedFrom: {upd:?}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn retries_follow_the_plan_and_the_webhook_is_disabled_after_failures(pool: PgPool) {
     let fx = setup(pool).await;
     let hook = fx
@@ -680,6 +725,71 @@ async fn a_successful_delivery_resets_the_failure_counter(pool: PgPool) {
             .len(),
         1
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn webhook_mutations_are_audited(pool: PgPool) {
+    let fx = setup(pool).await;
+    let hook = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    // URL-Änderung (Pfad und Query dürfen nicht im Audit-Log landen).
+    fx.app
+        .update_webhook(
+            &alice(),
+            hook.id,
+            UpdateWebhookInput {
+                url: Some("https://93.184.216.34/changed-path?token=sekret".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    // Secret-Rotation.
+    let new_secret = fx
+        .app
+        .rotate_webhook_secret(&alice(), hook.id)
+        .await
+        .unwrap()
+        .secret
+        .unwrap();
+    // Eine Zustellung erzeugen und erneut senden.
+    fx.app
+        .create_issue(&alice(), issue("ENG", "A"))
+        .await
+        .unwrap();
+    plan_all(&fx).await;
+    let log = fx
+        .app
+        .list_webhook_deliveries(&alice(), hook.id)
+        .await
+        .unwrap();
+    assert_eq!(log.len(), 1);
+    fx.app
+        .resend_webhook_delivery(&alice(), hook.id, log[0].id)
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT action, details::text FROM audit_log WHERE organization_id = $1 \
+         AND target_type = 'webhook' ORDER BY occurred_at, id",
+    )
+    .bind(fx.data.org.0)
+    .fetch_all(&fx.pool)
+    .await
+    .unwrap();
+    let actions: Vec<&str> = rows.iter().map(|(a, _)| a.as_str()).collect();
+    assert!(actions.contains(&"webhook.updated"), "{actions:?}");
+    assert!(actions.contains(&"webhook.secret_rotated"), "{actions:?}");
+    assert!(actions.contains(&"webhook.delivery_resent"), "{actions:?}");
+    // Weder Secret noch vollständige URL (Pfad/Query) im Audit-Log.
+    let all: String = rows.iter().map(|(_, d)| d.clone()).collect();
+    assert!(!all.contains("changed-path"), "URL-Pfad geloggt: {all}");
+    assert!(!all.contains("sekret"), "URL-Query geloggt: {all}");
+    assert!(!all.contains(&new_secret), "Secret geloggt: {all}");
 }
 
 // ---------------------------------------------------------------------------
