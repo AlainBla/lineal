@@ -16,7 +16,10 @@ use serde_json::json;
 use std::time::Duration;
 use uuid::Uuid;
 
-const GET_TTL: Duration = Duration::from_secs(10 * 60);
+// web N2 (LIN-64): Signierte Download-URLs sind kurzlebige Bearer-Token — wer die URL vor Ablauf
+// hat, kann die Datei laden; ein Entzug vor Ablauf ist nicht vorgesehen. Die TTL ist einheitlich
+// mit Anhaengen (eine Quelle: attachment::GET_TTL, 5 min) statt zuvor abweichender 10 min.
+const GET_TTL: Duration = crate::usecases::attachment::GET_TTL;
 
 /// Verweis auf ein Dokument.
 #[derive(Debug, Clone, PartialEq)]

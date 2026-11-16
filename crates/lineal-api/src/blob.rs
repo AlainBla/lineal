@@ -14,7 +14,7 @@ use axum::extract::Path;
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST,
 };
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -606,6 +606,19 @@ pub async fn download(
         .zip(request_host(&headers))
         .is_some_and(|(want, got)| want == got);
     let (disposition_kind, csp) = presentation_delivery(&meta.content_type, files_origin);
+    // web N4 (LIN-64): Nicht inline darstellbare Typen werden als Download (`attachment`)
+    // ausgeliefert. Dafuer den Content-Type auf application/octet-stream zwingen, damit
+    // hochgeladenes HTML/JS/SVG selbst bei einer kuenftigen HTML-Injection nicht als CSP-konformes
+    // Skript interpretiert werden kann (das globale `nosniff` greift dann), und per
+    // Cross-Origin-Resource-Policy: same-origin nicht cross-origin eingebettet wird. Inline-Typen
+    // (Bilder/PDF/Video) und die HTML-Praesentation (Weg B) behalten ihren echten Typ, damit die
+    // App sie wie vorgesehen cross-origin anzeigen bzw. einbetten kann.
+    let is_attachment = disposition_kind == "attachment";
+    let served_ct: &str = if is_attachment {
+        "application/octet-stream"
+    } else {
+        &meta.content_type
+    };
     let disposition = format!(
         "{disposition_kind}; filename=\"{}\"",
         download_filename(&meta.key, &meta.content_type)
@@ -614,9 +627,15 @@ pub async fn download(
     let h = res.headers_mut();
     h.insert(
         CONTENT_TYPE,
-        HeaderValue::from_str(&meta.content_type)
+        HeaderValue::from_str(served_ct)
             .unwrap_or(HeaderValue::from_static("application/octet-stream")),
     );
+    if is_attachment {
+        h.insert(
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
+        );
+    }
     h.insert(CONTENT_LENGTH, HeaderValue::from(meta.size));
     if let Ok(v) = HeaderValue::from_str(&disposition) {
         h.insert(CONTENT_DISPOSITION, v);
@@ -892,5 +911,26 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, lineal_app::ErrorKind::Conflict);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LIN-64 web N4: nicht inline-sichere Typen werden als `attachment` ausgeliefert (download()
+    /// sendet dafuer application/octet-stream + CORP: same-origin); inline-sichere Typen und die
+    /// HTML-Praesentation auf der Datei-Origin behalten ihren echten Typ.
+    #[test]
+    fn presentation_decides_disposition_for_n4() {
+        assert_eq!(presentation_delivery("image/png", false).0, "inline");
+        assert_eq!(presentation_delivery("application/pdf", false).0, "inline");
+        assert_eq!(presentation_delivery("text/html", false).0, "attachment");
+        assert_eq!(
+            presentation_delivery("image/svg+xml", false).0,
+            "attachment"
+        );
+        assert_eq!(
+            presentation_delivery("application/javascript", false).0,
+            "attachment"
+        );
+        let (kind, csp) = presentation_delivery("text/html", true);
+        assert_eq!(kind, "inline");
+        assert_eq!(csp, PRESENTATION_CSP);
     }
 }

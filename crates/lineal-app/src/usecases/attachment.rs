@@ -214,14 +214,6 @@ pub fn normalize_url(raw: &str) -> AppResult<String> {
     ))
 }
 
-fn disposition(filename: &str) -> String {
-    let safe: String = filename
-        .chars()
-        .map(|c| if matches!(c, '"' | '\\') { '_' } else { c })
-        .collect();
-    format!("attachment; filename=\"{safe}\"")
-}
-
 impl App {
     /// Präfix der dauerhaften Asset-URLs dieses Servers (`{base_url}/assets/`).
     pub fn asset_prefix(&self) -> String {
@@ -390,18 +382,12 @@ impl App {
         Ok(PreparedUpload {
             url: put_url,
             method: "PUT",
-            headers: vec![
-                ("content-type".into(), content_type),
-                (
-                    "x-content-length-range".into(),
-                    format!("{0},{0}", input.size),
-                ),
-                (
-                    "cache-control".into(),
-                    "public, max-age=31536000".to_owned(),
-                ),
-                ("content-disposition".into(), disposition(&filename)),
-            ],
+            // web N5 (LIN-64): Nur content-type zurueckgeben. Den validiert der PUT-Handler; die
+            // frueheren Header x-content-length-range / cache-control / content-disposition wurden
+            // beim PUT serverseitig ignoriert (Groesse per signierter Reservierung, Download-
+            // Disposition serverseitig aus dem Key) und brachen bei CJK-/Emoji-Dateinamen den
+            // Browser (Headers.set TypeError -> leere Reservierung).
+            headers: vec![("content-type".into(), content_type)],
             asset_url: format!("{}{key}", self.asset_prefix()),
             expires_at: now + ChronoDuration::seconds(PUT_TTL.as_secs() as i64),
             suggested_title: title,
