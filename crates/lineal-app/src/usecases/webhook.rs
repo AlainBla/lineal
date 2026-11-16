@@ -468,21 +468,40 @@ pub fn visible_teams_for_hook(
 /// Entfernt Teams, die der Empfänger nicht sehen darf, aus der serialisierten Entität
 /// (`teamIds`, `teams`, `leadTeamId`/`leadTeam`, `teamId`/`team`).
 pub fn strip_hidden_teams(data: &mut Value, hidden: &BTreeSet<String>) {
+    strip_teams(data, &|s| hidden.contains(s));
+}
+
+/// Wie [`strip_hidden_teams`], aber mit einem Prädikat „diese Team-ID ist verborgen". Nullt
+/// Team-Referenzen (`teamIds`, `teams`, `leadTeamId`/`leadTeam`, `teamId`/`team`) nach Prädikat.
+fn strip_teams(data: &mut Value, is_hidden: &dyn Fn(&str) -> bool) {
     let Some(obj) = data.as_object_mut() else {
         return;
     };
-    let is_hidden = |v: &Value| v.as_str().is_some_and(|s| hidden.contains(s));
+    let hidden = |v: &Value| v.as_str().is_some_and(is_hidden);
     if let Some(Value::Array(a)) = obj.get_mut("teamIds") {
-        a.retain(|v| !is_hidden(v));
+        a.retain(|v| !hidden(v));
     }
     if let Some(Value::Array(a)) = obj.get_mut("teams") {
-        a.retain(|t| !t.get("id").is_some_and(is_hidden));
+        a.retain(|t| !t.get("id").is_some_and(hidden));
     }
     for (id_key, obj_key) in [("leadTeamId", "leadTeam"), ("teamId", "team")] {
-        if obj.get(id_key).is_some_and(is_hidden) {
+        if obj.get(id_key).is_some_and(hidden) {
             obj.insert(id_key.into(), Value::Null);
             obj.insert(obj_key.into(), Value::Null);
         }
+    }
+}
+
+/// Darf dieser Hook das Team sehen? Team-Hook: nur sein eigenes Team; Workspace-Hook
+/// (`all_public_teams`): nur aktuell öffentliche Teams.
+fn hook_can_see_team(
+    hook: &WebhookRecord,
+    team: TeamId,
+    visibility_of: &dyn Fn(TeamId) -> Option<TeamVisibility>,
+) -> bool {
+    match hook.team_id {
+        Some(t) => t == team,
+        None => hook.all_public_teams && visibility_of(team) == Some(TeamVisibility::Public),
     }
 }
 
@@ -769,20 +788,44 @@ impl App {
             .ok_or_else(webhook_not_found)?;
         Self::authorize_webhook(&snap, ctx, &w).map_err(|e| hide_forbidden(e, &w, &snap))?;
         let mut patch = WebhookPatch::default();
+        let mut changed: Vec<&'static str> = Vec::new();
+        let mut audit_host: Option<String> = None;
         if let Some(l) = &input.label {
             patch.label = Some(validate_label(l)?);
+            changed.push("label");
         }
         if let Some(u) = &input.url {
-            patch.url = Some(self.check_webhook_target(u).await?);
+            let url = self.check_webhook_target(u).await?;
+            // Nur der Host landet im Audit-Log: Pfad und Query können Zugangsdaten enthalten.
+            audit_host = url::Url::parse(&url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned));
+            patch.url = Some(url);
+            changed.push("url");
         }
         patch.enabled = input.enabled;
+        if input.enabled.is_some() {
+            changed.push("enabled");
+        }
         if let Some(t) = &input.resource_types {
             patch.resource_types = Some(validate_resource_types(t)?);
+            changed.push("resourceTypes");
         }
         let updated = tx
             .webhooks()
             .update_webhook(id, &patch, self.clock.now())
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "webhook.updated",
+                "webhook",
+                Some(id.0),
+                json!({ "changed": changed, "host": audit_host }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(updated)
     }
@@ -814,6 +857,12 @@ impl App {
                 self.clock.now(),
             )
             .await?;
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new("webhook.secret_rotated", "webhook", Some(id.0), json!({})),
+        )
+        .await?;
         tx.commit().await?;
         Ok(WebhookView {
             webhook: updated,
@@ -891,6 +940,17 @@ impl App {
                     .with_details(json!({ "type": "WebhookDelivery" })),
             );
         }
+        self.record_audit(
+            &mut *tx,
+            ctx,
+            AuditEvent::new(
+                "webhook.delivery_resent",
+                "webhook",
+                Some(id.0),
+                json!({ "delivery": delivery.to_string() }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -998,12 +1058,21 @@ impl App {
                 .map(|t| t.0.to_string())
                 .collect();
             strip_hidden_teams(&mut hook_data, &hidden);
+            // `updatedFrom` kann Vorher-Teams nennen, die dieser Hook nicht sehen darf (etwa die
+            // alte, private `teamId` nach einem Team-Wechsel). Solche Referenzen werden maskiert (N17).
+            let mut hook_updated_from = updated_from.clone();
+            if let Some(uf) = hook_updated_from.as_mut() {
+                strip_teams(uf, &|s| {
+                    Uuid::parse_str(s)
+                        .is_ok_and(|u| !hook_can_see_team(&hook, TeamId(u), &visibility))
+                });
+            }
             let payload = build_payload(
                 &mapped,
                 actor.clone(),
                 ev.created_at,
                 hook_data,
-                updated_from.clone(),
+                hook_updated_from,
                 &url,
                 ev.org_id.0,
             );

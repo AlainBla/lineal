@@ -436,6 +436,10 @@ pub trait ViewRepo: Send {
     ) -> AppResult<Option<ViewSubscription>> {
         unimplemented_repo()
     }
+    /// Anzahl aktiver View-Abos eines Users (für das Abo-Limit).
+    async fn count_active_view_subscriptions(&mut self, _user: UserId) -> AppResult<i64> {
+        unimplemented_repo()
+    }
     /// Alle aktiven Abos auf die View, die den Ereignistyp `ntype` enthalten (Fan-out-Hook).
     async fn active_view_subscriptions(
         &mut self,
