@@ -152,36 +152,22 @@ fn not_found() -> AppError {
     AppError::not_found("Notification not found.")
 }
 
-/// Eigene Notification, deren Bezugsobjekt noch sichtbar ist (sonst `not_found`).
+/// Eigene Notification, deren Bezugsobjekt noch sichtbar ist (sonst `not_found`). Die
+/// Sichtbarkeit (Team, Freigabe, Dokument über Elternobjekt, `NOT trashed`) wird im Repo über
+/// dasselbe `visible_sql`-Prädikat wie `list_notifications` geprüft (N16).
 async fn fetch_visible(
     tx: &mut dyn Tx,
     snap: &PolicySnapshot,
+    ctx: &RequestCtx,
     user: UserId,
     id: NotificationId,
 ) -> AppResult<NotificationView> {
-    let view = tx
-        .notifications()
-        .get_notification(user, id)
+    let visible: Vec<TeamId> = snap.visible_team_ids().into_iter().collect();
+    let share_enabled = crate::resolve::issue::share_recipient(snap, ctx).is_some();
+    tx.notifications()
+        .get_notification(user, share_enabled, &visible, id)
         .await?
-        .ok_or_else(not_found)?;
-    let visible = snap.visible_team_ids();
-    let ok = match (&view.issue_team_id, view.n.project_id) {
-        (Some(team), _) => {
-            visible.contains(team)
-                || match view.n.issue_id {
-                    Some(issue) => tx.documents().issue_shared_with(issue, user).await?,
-                    None => false,
-                }
-        }
-        (None, Some(project)) if view.n.target_type == "project" => tx
-            .notifications()
-            .project_team_ids(project)
-            .await?
-            .iter()
-            .any(|t| visible.contains(t)),
-        _ => true,
-    };
-    if ok { Ok(view) } else { Err(not_found()) }
+        .ok_or_else(not_found)
 }
 
 fn issue_not_found(reference: &str) -> AppError {
@@ -269,7 +255,7 @@ impl App {
         let user = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
         Ok(to_item(view, &base))
     }
@@ -311,7 +297,7 @@ impl App {
         }
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         if let Some(until) = input.snoozed_until_at {
             tx.notifications()
                 .snooze_group(user, &view.n.group_key, until, now)
@@ -329,7 +315,7 @@ impl App {
             );
         }
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
         for notification_id in changed {
             push_notification_event(
@@ -356,12 +342,12 @@ impl App {
         let user = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         tx.notifications()
             .mark_group_read(user, &view.n.group_key, self.clock.now())
             .await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
         push_notification_event(
             &mut *tx,
@@ -420,12 +406,12 @@ impl App {
         let user = me(ctx)?;
         let mut tx = self.store.begin(ctx.org_id).await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         tx.notifications()
             .set_group_archived(user, &view.n.group_key, archive, self.clock.now())
             .await?;
         let snap = PolicySnapshot::load(&mut *tx, ctx).await?;
-        let view = fetch_visible(&mut *tx, &snap, user, id).await?;
+        let view = fetch_visible(&mut *tx, &snap, ctx, user, id).await?;
         let base = org_base(self, &mut *tx).await?;
         push_notification_event(
             &mut *tx,

@@ -1491,3 +1491,120 @@ async fn mention_resolves_unique_name_when_display_name_differs(pool: PgPool) {
         .unwrap();
     assert!(ambiguous.mentioned_user_ids.is_empty());
 }
+
+// --- N9: attachmentLinkURL belebt keinen gelöschten Upload, überschreibt keinen fremden Link ---
+
+/// N9: Ein gelöschter Upload darf nicht über `attachmentLinkURL` mit derselben URL wiederbelebt
+/// werden (sonst kehrt eine entfernte Datei herunterladbar zurück).
+#[sqlx::test(migrations = "./migrations")]
+async fn link_upsert_does_not_revive_deleted_upload(pool: PgPool) {
+    let env = setup(pool).await;
+    let issue = make_issue(&env, env.data.eng).await;
+    let bob = ctx_for(SeedUser::Bob);
+    // Hochgeladener, dann gelöschter Anhang (archived_at gesetzt) belegt die Asset-URL.
+    let upload = Uuid::now_v7();
+    let url = "https://example.com/assets/secret-file";
+    sqlx::query(
+        "INSERT INTO attachment (id, organization_id, issue_id, url, title, source_type, \
+         content_type, size, storage_key, creator_id, archived_at, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,'Geheime Datei','upload','image/png',10,'key-secret',$5,now(),now(),now())",
+    )
+    .bind(upload)
+    .bind(env.data.org.0)
+    .bind(issue)
+    .bind(url)
+    .bind(env.data.bob.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+
+    // Der gelöschte Upload ist unsichtbar.
+    assert_eq!(
+        kind(env.app.get_attachment(&bob, &upload.to_string()).await),
+        ErrorKind::NotFound
+    );
+
+    // Link-Upsert mit derselben URL -> Konflikt, keine Wiederbelebung.
+    assert_eq!(
+        kind(
+            env.app
+                .link_attachment(
+                    &bob,
+                    LinkAttachmentInput {
+                        issue: issue.to_string(),
+                        url: url.into(),
+                        ..Default::default()
+                    }
+                )
+                .await
+        ),
+        ErrorKind::Conflict
+    );
+
+    // Weiterhin gelöscht und nicht gelistet.
+    assert_eq!(
+        kind(env.app.get_attachment(&bob, &upload.to_string()).await),
+        ErrorKind::NotFound
+    );
+    assert!(
+        env.app
+            .list_issue_attachments(&bob, &issue.to_string())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// N9: Ein noch bestehender Link eines anderen Autors wird durch den Upsert nicht überschrieben.
+#[sqlx::test(migrations = "./migrations")]
+async fn link_upsert_does_not_overwrite_foreign_link(pool: PgPool) {
+    let env = setup(pool).await;
+    let issue = make_issue(&env, env.data.eng).await;
+    let bob = ctx_for(SeedUser::Bob);
+    // Alice (anderer Autor) hat den Link angelegt (per SQL, bereits normalisierte URL).
+    let link = Uuid::now_v7();
+    let url = "https://example.com/pr/9";
+    sqlx::query(
+        "INSERT INTO attachment (id, organization_id, issue_id, url, title, source_type, metadata, \
+         creator_id, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,'Alice Titel','url','{}'::jsonb,$5,now(),now())",
+    )
+    .bind(link)
+    .bind(env.data.org.0)
+    .bind(issue)
+    .bind(url)
+    .bind(env.data.alice.0)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+
+    // Bob upsertet dieselbe URL mit neuem Titel -> fremder Link bleibt unverändert.
+    let res = env
+        .app
+        .link_attachment(
+            &bob,
+            LinkAttachmentInput {
+                issue: issue.to_string(),
+                url: url.into(),
+                title: Some("Bob Titel".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!res.created);
+    assert_eq!(
+        res.view.attachment.title, "Alice Titel",
+        "fremder Link darf nicht überschrieben werden"
+    );
+    assert!(
+        events(&env, "AttachmentUpdated").await.is_empty(),
+        "unveränderter fremder Link löst kein Update-Ereignis aus"
+    );
+    let title: String = sqlx::query_scalar("SELECT title FROM attachment WHERE id = $1")
+        .bind(link)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(title, "Alice Titel");
+}

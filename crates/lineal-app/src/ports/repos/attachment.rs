@@ -49,6 +49,17 @@ pub struct NewLink {
     pub now: DateTime<Utc>,
 }
 
+/// Ergebnis von [`AttachmentRepo::upsert_link`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkUpsert {
+    /// Neuer Link angelegt oder ein gelöschter Link wiederhergestellt.
+    Created,
+    /// Bestehender Link des Aufrufers aktualisiert.
+    Updated,
+    /// Bestehender Link eines anderen Autors unverändert gelassen (N9).
+    Unchanged,
+}
+
 /// Hochgeladene Datei als Anhang.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewUpload {
@@ -97,8 +108,9 @@ pub trait AttachmentRepo: Send {
         not_implemented()
     }
 
-    /// Legt den Link an oder aktualisiert ihn (`true` = neu angelegt bzw. wiederhergestellt).
-    async fn upsert_link(&mut self, l: &NewLink) -> AppResult<(Attachment, bool)> {
+    /// Legt den Link an, aktualisiert ihn oder lässt einen fremden Link unverändert (N9).
+    /// Uploads mit derselben URL werden nicht wiederbelebt.
+    async fn upsert_link(&mut self, l: &NewLink) -> AppResult<(Attachment, LinkUpsert)> {
         not_implemented()
     }
     async fn insert_upload(&mut self, u: &NewUpload) -> AppResult<Attachment> {

@@ -518,10 +518,12 @@ pub trait NotificationRepo: Send {
         unimplemented_repo()
     }
 
-    /// Eigene Notification (fremde → `None`).
+    /// Eigene Notification, deren Bezugsobjekt noch sichtbar ist (fremde oder unsichtbare → `None`).
     async fn get_notification(
         &mut self,
         _user: UserId,
+        _share_enabled: bool,
+        _visible_teams: &[TeamId],
         _id: NotificationId,
     ) -> AppResult<Option<NotificationView>> {
         unimplemented_repo()

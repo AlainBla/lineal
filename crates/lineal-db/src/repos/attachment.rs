@@ -4,11 +4,13 @@ use crate::db_err;
 use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use lineal_app::AppResult;
 use lineal_app::ports::repos::AttachmentRepo;
-use lineal_app::ports::repos::attachment::{Attachment, IssueRef, NewLink, NewUpload, Reservation};
+use lineal_app::ports::repos::attachment::{
+    Attachment, IssueRef, LinkUpsert, NewLink, NewUpload, Reservation,
+};
+use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow)]
@@ -97,18 +99,19 @@ impl AttachmentRepo for PgTx {
         }))
     }
 
-    async fn upsert_link(&mut self, l: &NewLink) -> AppResult<(Attachment, bool)> {
-        let existing: Option<(Uuid, Option<DateTime<Utc>>)> = sqlx::query_as(
-            "SELECT id, archived_at FROM attachment \
-             WHERE organization_id = $1 AND issue_id = $2 AND url = $3 FOR UPDATE",
-        )
-        .bind(self.org.0)
-        .bind(l.issue_id.0)
-        .bind(&l.url)
-        .fetch_optional(&mut *self.tx)
-        .await
-        .map_err(db_err)?;
-        let Some((id, archived_at)) = existing else {
+    async fn upsert_link(&mut self, l: &NewLink) -> AppResult<(Attachment, LinkUpsert)> {
+        let existing: Option<(Uuid, Option<DateTime<Utc>>, Option<String>, Option<Uuid>)> =
+            sqlx::query_as(
+                "SELECT id, archived_at, source_type, creator_id FROM attachment \
+                 WHERE organization_id = $1 AND issue_id = $2 AND url = $3 FOR UPDATE",
+            )
+            .bind(self.org.0)
+            .bind(l.issue_id.0)
+            .bind(&l.url)
+            .fetch_optional(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+        let Some((id, archived_at, source_type, creator_id)) = existing else {
             let row = sqlx::query_as::<_, AttachmentRow>(&format!(
                 "INSERT INTO attachment (id, organization_id, issue_id, url, title, subtitle, \
                  source_type, metadata, creator_id, created_at, updated_at) \
@@ -127,8 +130,31 @@ impl AttachmentRepo for PgTx {
             .fetch_one(&mut *self.tx)
             .await
             .map_err(db_err)?;
-            return Ok((row.into(), true));
+            return Ok((row.into(), LinkUpsert::Created));
         };
+        // N9: Der (issue, url)-Slot ist durch einen Upload belegt. Ein Link-Upsert darf einen
+        // (auch gelöschten) Upload nicht wiederbeleben oder überschreiben – sonst holt
+        // attachmentLinkURL eine entfernte Datei zurück.
+        if source_type.as_deref() != Some("url") {
+            return Err(AppError::conflict(
+                "An uploaded attachment with this URL already exists on the issue.",
+            )
+            .with_details(json!({ "reason": "attachment_url_conflict" })));
+        }
+        let revive = archived_at.is_some();
+        // N9: Einen noch bestehenden Link eines anderen Autors nicht überschreiben; der Aufruf
+        // ist idempotent und lässt den fremden Anhang unverändert.
+        if !revive && creator_id.is_some() && creator_id != l.creator_id.map(|u| u.0) {
+            let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+                "SELECT {COLS} FROM attachment WHERE organization_id = $1 AND id = $2"
+            ))
+            .bind(self.org.0)
+            .bind(id)
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            return Ok((row.into(), LinkUpsert::Unchanged));
+        }
         let row = sqlx::query_as::<_, AttachmentRow>(&format!(
             "UPDATE attachment SET title = $3, subtitle = $4, \
              metadata = COALESCE($5, metadata), archived_at = NULL, \
@@ -141,13 +167,18 @@ impl AttachmentRepo for PgTx {
         .bind(&l.title)
         .bind(&l.subtitle)
         .bind(&l.metadata)
-        .bind(archived_at.is_some())
+        .bind(revive)
         .bind(l.creator_id.map(|u| u.0))
         .bind(l.now)
         .fetch_one(&mut *self.tx)
         .await
         .map_err(db_err)?;
-        Ok((row.into(), archived_at.is_some()))
+        let outcome = if revive {
+            LinkUpsert::Created
+        } else {
+            LinkUpsert::Updated
+        };
+        Ok((row.into(), outcome))
     }
 
     async fn insert_upload(&mut self, u: &NewUpload) -> AppResult<Attachment> {
