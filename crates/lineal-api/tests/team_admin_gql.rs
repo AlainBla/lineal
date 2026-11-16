@@ -295,12 +295,30 @@ async fn key_without_admin_scope_cannot_use_admin_role_shortcuts(pool: sqlx::PgP
         res.errors
     );
 
-    // Mit Scope `admin` (Session bzw. Key mit admin) bleibt alles erlaubt.
+    // LIN-63 N7: Selbst-Hinzufuegen zu einem privaten Team ist jetzt auch mit admin-Scope gesperrt
+    // (das muss ueber teamJoin mit confirmPrivateJoin laufen).
     let res = run(
         &schema,
         ctx_for(SeedUser::Alice),
         join,
         json!({"t": "DES", "u": alice}),
+    )
+    .await;
+    assert_eq!(
+        code(&res).as_str(),
+        "invalid_request",
+        "self-add to a private team is gated by confirmPrivateJoin: {:?}",
+        res.errors
+    );
+
+    // Mit Scope `admin` bleibt der Shortcut sonst erlaubt: Owner fuegt einen ANDEREN Nutzer
+    // (Carol) dem privaten Team hinzu.
+    let carol = SeedData::acme().carol.to_string();
+    let res = run(
+        &schema,
+        ctx_for(SeedUser::Alice),
+        join,
+        json!({"t": "DES", "u": carol}),
     )
     .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
