@@ -69,7 +69,14 @@ pub(crate) async fn project_snapshot(
     let status = statuses.iter().find(|s| s.id == p.status_id);
     let rows = tx.projects().issue_rows(p.id).await?;
     let scope = super::view::ProjectScope::from_rows(&rows);
-    let milestones = milestone_views(&mut *tx, p.id, team_tz(snap, p.lead_team_id), now).await?;
+    let milestones = milestone_views(
+        &mut *tx,
+        p.id,
+        &snap.visible_team_ids(),
+        team_tz(snap, p.lead_team_id),
+        now,
+    )
+    .await?;
     let lead_name = match p.lead_id {
         Some(id) => tx.users().get(id).await?.map(|u| u.name),
         None => None,

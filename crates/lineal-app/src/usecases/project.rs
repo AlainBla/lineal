@@ -279,6 +279,9 @@ pub(crate) async fn resolve_labels(
     for t in project_teams {
         available.extend(snap.tree.ancestors(*t).iter().map(|a| a.id));
     }
+    // Nur Labels sichtbarer Teams sind zuweisbar; Workspace-Labels (team_id None) bleiben (N11).
+    let visible = snap.visible_team_ids();
+    available.retain(|t| visible.contains(t));
     let is_available = |l: &ProjectLabelRow| l.team_id.is_none_or(|t| available.contains(&t));
     let unknown = |r: &str| {
         AppError::not_found(format!("Could not find project label \"{r}\""))
@@ -1162,8 +1165,18 @@ impl App {
         let existing_labels = tx.projects().labels_of(project.id).await?;
         let mut label_rows: Option<Vec<ProjectLabelRow>> = None;
         if let Some(refs) = &input.labels {
-            label_rows =
-                Some(resolve_labels(tx, snap, refs, &final_teams, &existing_labels).await?);
+            let mut rows = resolve_labels(tx, snap, refs, &final_teams, &existing_labels).await?;
+            // Labels unsichtbarer Teams bleiben erhalten – der Aufrufer kann sie weder sehen
+            // noch zuweisen und darf sie beim Speichern nicht stillschweigend entfernen (N11).
+            let visible = snap.visible_team_ids();
+            for l in &existing_labels {
+                if l.team_id.is_some_and(|t| !visible.contains(&t))
+                    && !rows.iter().any(|r| r.id == l.id)
+                {
+                    rows.push(l.clone());
+                }
+            }
+            label_rows = Some(rows);
         } else if teams_touched && !removed.is_empty() {
             // Labels, die nur über entfernte Teams verfügbar waren, werden entfernt.
             let mut available: BTreeSet<TeamId> = final_teams.iter().copied().collect();

@@ -18,7 +18,7 @@ use chrono_tz::Tz;
 use lineal_domain::enums::{StateType, UserRole};
 use lineal_domain::ids::{IssueId, MilestoneId, ProjectId, TeamId, UserId};
 use lineal_domain::rules::progress::{Stats, stats};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Scope und Fortschritt (immer über **alle** Issues, docs/02 §5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -129,6 +129,7 @@ pub(crate) async fn load_user(
 pub async fn milestone_views(
     tx: &mut dyn Tx,
     project: ProjectId,
+    visible: &BTreeSet<TeamId>,
     lead_tz: Tz,
     now: DateTime<Utc>,
 ) -> AppResult<Vec<MilestoneView>> {
@@ -157,12 +158,15 @@ pub async fn milestone_views(
         changes.entry(c.milestone_id).or_default().push(c);
     }
     let mut added: HashMap<MilestoneId, Vec<IssueId>> = HashMap::new();
-    for (m, i) in tx
+    for (m, i, t) in tx
         .projects()
         .milestone_added_issues(project, SCOPE_GRACE_DAYS)
         .await?
     {
-        added.entry(m).or_default().push(i);
+        // UUIDs von Issues aus unsichtbaren Teams nicht preisgeben (N5).
+        if visible.contains(&t) {
+            added.entry(m).or_default().push(i);
+        }
     }
     Ok(milestones
         .into_iter()
@@ -262,7 +266,9 @@ pub async fn build_views(
                 }
             }
         }
-        let labels = tx.projects().labels_of(p.id).await?;
+        let mut labels = tx.projects().labels_of(p.id).await?;
+        // Labels privater (unsichtbarer) Teams nicht zeigen; Workspace-Labels bleiben (N11).
+        labels.retain(|l| l.team_id.is_none_or(|t| visible.contains(&t)));
         let mut inits = Vec::new();
         for (pid, iid) in init_rows.iter().filter(|(pid, _)| *pid == p.id) {
             let _ = pid;
@@ -278,7 +284,7 @@ pub async fn build_views(
             }
         }
         let milestones = if opts.milestones {
-            milestone_views(tx, p.id, team_tz(snap, p.lead_team_id), now).await?
+            milestone_views(tx, p.id, &visible, team_tz(snap, p.lead_team_id), now).await?
         } else {
             Vec::new()
         };
