@@ -190,4 +190,17 @@ async fn team_move_history_hides_old_private_team(pool: PgPool) {
         .collect::<Vec<_>>()
         .join(";");
     assert!(bob_spans.contains(&des_state_backlog), "{bob_spans}");
+
+    // Residuum zu N4: previousIdentifiers darf die alte Kennung des privaten Altteams DES nicht
+    // an Alice zeigen; Bob (DES-Mitglied) sieht sie sehr wohl.
+    assert!(
+        !detail.view.previous_identifiers.contains(&old_ident),
+        "previousIdentifiers leakt die alte DES-Kennung an Alice: {:?}",
+        detail.view.previous_identifiers
+    );
+    assert!(
+        bob_detail.view.previous_identifiers.contains(&old_ident),
+        "Bob (DES-Mitglied) muss die alte Kennung in previousIdentifiers sehen: {:?}",
+        bob_detail.view.previous_identifiers
+    );
 }

@@ -474,7 +474,21 @@ async fn load_view(
         .unwrap_or_default();
     filter_extras(tx, &visible, &issue, &mut extras).await?;
     let previous_identifiers = if with_previous {
-        tx.issues().previous_identifiers(issue.id).await?
+        let raw = tx.issues().previous_identifiers(issue.id).await?;
+        // LIN-63 (Residuum zu N4): alte Kennungen eines inzwischen unsichtbaren Teams (z. B. "DES-1"
+        // nach Wechsel aus einem privaten Team) nicht preisgeben. Nur Kennungen entfernen, deren
+        // Team-Key-Präfix zu einem bekannten, aber unsichtbaren Team gehört — eigene (ersetzte) Keys
+        // des aktuellen Teams und unbekannte Präfixe bleiben.
+        let key_to_team: std::collections::HashMap<&str, TeamId> =
+            snap.tree.all().map(|t| (t.key.as_str(), t.id)).collect();
+        raw.into_iter()
+            .filter(|ident| match ident.rfind('-') {
+                Some(pos) => key_to_team
+                    .get(&ident[..pos])
+                    .is_none_or(|tid| visible.contains(tid)),
+                None => true,
+            })
+            .collect()
     } else {
         Vec::new()
     };
