@@ -404,31 +404,87 @@ async fn emit(tx: &mut dyn Tx, ctx: &RequestCtx, event: DomainEvent) -> AppResul
     Ok(())
 }
 
-async fn load_view(tx: &mut dyn Tx, issue: Issue, with_previous: bool) -> AppResult<IssueView> {
-    let mut extras = tx.issues().extras(&[issue.id]).await?;
+/// Entfernt aus den Anzeigewerten alles, was auf für den Aufrufer unsichtbare Teams zeigt:
+/// die Kennung eines unsichtbaren Parents (N1) und die Zahl unsichtbarer Children (N1).
+/// `can_see` ist hier „Team im sichtbaren Set“.
+async fn filter_extras(
+    tx: &mut dyn Tx,
+    visible: &BTreeSet<TeamId>,
+    issue: &Issue,
+    extras: &mut IssueExtras,
+) -> AppResult<()> {
+    // N1: Parent in unsichtbarem Team → Kennung nicht preisgeben.
+    if extras.parent_identifier.is_some()
+        && let Some(parent) = issue.parent_id
+    {
+        let parent_visible = tx
+            .issues()
+            .get(parent, false)
+            .await?
+            .is_some_and(|p| visible.contains(&p.team_id));
+        if !parent_visible {
+            extras.parent_identifier = None;
+        }
+    }
+    // N1: nur Children in sichtbaren Teams zählen.
+    if extras.children_count > 0 {
+        let visible_children = tx
+            .issues()
+            .children(issue.id)
+            .await?
+            .into_iter()
+            .filter(|c| visible.contains(&c.team_id))
+            .count();
+        extras.children_count = visible_children as i64;
+    }
+    Ok(())
+}
+
+async fn load_view(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    issue: Issue,
+    with_previous: bool,
+) -> AppResult<IssueView> {
+    let visible = snap.visible_team_ids();
+    let mut extras = tx
+        .issues()
+        .extras(&[issue.id])
+        .await?
+        .remove(&issue.id)
+        .unwrap_or_default();
+    filter_extras(tx, &visible, &issue, &mut extras).await?;
     let previous_identifiers = if with_previous {
         tx.issues().previous_identifiers(issue.id).await?
     } else {
         Vec::new()
     };
     Ok(IssueView {
-        extras: extras.remove(&issue.id).unwrap_or_default(),
+        extras,
         issue,
         previous_identifiers,
     })
 }
 
-async fn load_views(tx: &mut dyn Tx, issues: Vec<Issue>) -> AppResult<Vec<IssueView>> {
+async fn load_views(
+    tx: &mut dyn Tx,
+    snap: &PolicySnapshot,
+    issues: Vec<Issue>,
+) -> AppResult<Vec<IssueView>> {
+    let visible = snap.visible_team_ids();
     let ids: Vec<IssueId> = issues.iter().map(|i| i.id).collect();
     let mut extras: HashMap<IssueId, IssueExtras> = tx.issues().extras(&ids).await?;
-    Ok(issues
-        .into_iter()
-        .map(|issue| IssueView {
-            extras: extras.remove(&issue.id).unwrap_or_default(),
+    let mut out = Vec::with_capacity(issues.len());
+    for issue in issues {
+        let mut e = extras.remove(&issue.id).unwrap_or_default();
+        filter_extras(tx, &visible, &issue, &mut e).await?;
+        out.push(IssueView {
+            extras: e,
             issue,
             previous_identifiers: Vec::new(),
-        })
-        .collect())
+        });
+    }
+    Ok(out)
 }
 
 fn team_of(snap: &PolicySnapshot, id: TeamId) -> AppResult<&Team> {
@@ -760,7 +816,7 @@ impl App {
             },
         )
         .await?;
-        load_view(tx, stored, true).await
+        load_view(tx, &snap, stored, true).await
     }
 
     /// Ändert ein Issue (docs/03 §2.2, inkl. Teamwechsel nach docs/02 §7).
@@ -1100,7 +1156,7 @@ impl App {
 
         let labels_changed = !plan.added.is_empty() || !plan.removed.is_empty();
         if issue == old && !labels_changed && own.is_empty() {
-            return load_view(tx, issue, true).await;
+            return load_view(tx, &snap, issue, true).await;
         }
         // SLA-Regeln hängen an Priorität und Projekt: sofort neu auswerten, nicht erst im Minutenjob.
         if issue.priority != old.priority || issue.project_id != old.project_id {
@@ -1187,7 +1243,7 @@ impl App {
             )
             .await?;
         }
-        load_view(tx, saved, true).await
+        load_view(tx, &snap, saved, true).await
     }
 
     /// Teamwechsel nach docs/02 §7.2 (Schritte 1–13). Verändert `issue` in-memory und liefert die
@@ -1302,7 +1358,7 @@ impl App {
         }
         let relations = relations::view(&mut *tx, &snap, ctx, issue.id).await?;
         let state_history = state_spans(&mut *tx, &issue).await?;
-        let view = load_view(&mut *tx, issue, true).await?;
+        let view = load_view(&mut *tx, &snap, issue, true).await?;
         Ok(IssueDetail {
             view,
             relations,
@@ -1559,7 +1615,7 @@ impl App {
             order_by: input.order_by,
         };
         let res = tx.issues().list(&f, &page).await?;
-        let items = load_views(tx, res.items).await?;
+        let items = load_views(tx, &snap, res.items).await?;
         Ok(IssuePage {
             items,
             next: res.next,
@@ -1682,7 +1738,7 @@ impl App {
                 ));
             }
         } else if issue.archived_at.is_none() {
-            return load_view(&mut *tx, issue, true).await;
+            return load_view(&mut *tx, &snap, issue, true).await;
         }
         // Archivierten Status auf die erste Status derselben Kategorie abbilden.
         let state = resolve::state::by_id(&mut *tx, issue.state_id).await?;
@@ -1727,7 +1783,7 @@ impl App {
             },
         )
         .await?;
-        let view = load_view(&mut *tx, saved, true).await?;
+        let view = load_view(&mut *tx, &snap, saved, true).await?;
         tx.commit().await?;
         Ok(view)
     }

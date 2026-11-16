@@ -218,7 +218,7 @@ impl App {
             ));
         }
         if issue.archived_at.is_some() {
-            return load_view(&mut *tx, issue, true).await;
+            return load_view(&mut *tx, &snap, issue, true).await;
         }
         issue.archived_at = Some(now);
         let saved = tx.issues().save(&issue, now).await?;
@@ -246,7 +246,7 @@ impl App {
             },
         )
         .await?;
-        let view = load_view(&mut *tx, saved, true).await?;
+        let view = load_view(&mut *tx, &snap, saved, true).await?;
         tx.commit().await?;
         Ok(view)
     }
