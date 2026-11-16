@@ -8,7 +8,9 @@ use crate::error::{AppError, AppResult};
 use crate::policy::{Action, PolicySnapshot};
 use crate::ports::Tx;
 use crate::ports::repos::NewEvent;
-use crate::ports::repos::attachment::{Attachment, IssueRef, NewLink, NewUpload, Reservation};
+use crate::ports::repos::attachment::{
+    Attachment, IssueRef, LinkUpsert, NewLink, NewUpload, Reservation,
+};
 use crate::resolve;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use lineal_domain::events::DomainEvent;
@@ -600,7 +602,7 @@ impl App {
             )
             .await?;
         let now = self.clock.now();
-        let (attachment, created) = tx
+        let (attachment, outcome) = tx
             .attachments()
             .upsert_link(&NewLink {
                 id: AttachmentId(self.ids.new_uuid()),
@@ -613,6 +615,7 @@ impl App {
                 now,
             })
             .await?;
+        let created = outcome == LinkUpsert::Created;
         if created {
             tx.attachments()
                 .add_history(
@@ -624,16 +627,30 @@ impl App {
                 )
                 .await?;
         }
-        let event = if created {
-            DomainEvent::AttachmentCreated {
-                attachment_id: attachment.id,
+        // Unchanged (fremder Link) löst kein Ereignis aus; sonst Created/Updated.
+        match outcome {
+            LinkUpsert::Created => {
+                tx.outbox()
+                    .push(NewEvent::from_ctx(
+                        DomainEvent::AttachmentCreated {
+                            attachment_id: attachment.id,
+                        },
+                        ctx,
+                    ))
+                    .await?;
             }
-        } else {
-            DomainEvent::AttachmentUpdated {
-                attachment_id: attachment.id,
+            LinkUpsert::Updated => {
+                tx.outbox()
+                    .push(NewEvent::from_ctx(
+                        DomainEvent::AttachmentUpdated {
+                            attachment_id: attachment.id,
+                        },
+                        ctx,
+                    ))
+                    .await?;
             }
-        };
-        tx.outbox().push(NewEvent::from_ctx(event, ctx)).await?;
+            LinkUpsert::Unchanged => {}
+        }
         let last_sync_id = tx.last_sync_id().await?;
         let view = self
             .attachment_view(&mut *tx, attachment, issue.identifier)
