@@ -1091,6 +1091,13 @@ impl WebhookRepo for PgTx {
     async fn list_invitations(&mut self, pending_only: bool) -> AppResult<Vec<InvitationRecord>> {
         self.list_invitations_impl(pending_only).await
     }
+    async fn count_invitations_since(
+        &mut self,
+        inviter: UserId,
+        since: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        self.count_invitations_since_impl(inviter, since).await
+    }
     async fn find_pending_invitation(
         &mut self,
         email: &str,

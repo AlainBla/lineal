@@ -31,6 +31,11 @@ use uuid::Uuid;
 pub const INVITATION_TTL_DAYS: i64 = 7;
 /// Höchstzahl E-Mail-Adressen je Aufruf.
 pub const MAX_INVITES_PER_CALL: usize = 50;
+/// Raten-Limit gegen Mail-Bombing (LIN-64 F2): hoechstens so viele Einladungen je Einladender im
+/// Fenster. Ueber MAX_INVITES_PER_CALL hinaus sind mehrere Voll-Calls moeglich, aber dauerhaftes
+/// Versenden an beliebige Adressen wird gestoppt.
+pub const MAX_INVITES_PER_WINDOW: i64 = 200;
+pub const INVITE_WINDOW_HOURS: i64 = 24;
 
 /// Eingabe für `invite_users`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -296,6 +301,19 @@ impl App {
         let inviter = resolve::user::actor_user_id(ctx)
             .ok_or_else(|| AppError::forbidden("Only users can invite."))?;
         let now = self.clock.now();
+        // F2 (LIN-64): Raten-Limit je Einladender gegen Mail-Bombing an beliebige Adressen. Der
+        // Per-Call-Cap allein verhindert wiederholte Calls nicht.
+        let since = now - Duration::hours(INVITE_WINDOW_HOURS);
+        let recent = tx
+            .webhooks()
+            .count_invitations_since(inviter, since)
+            .await?;
+        if recent + emails.len() as i64 > MAX_INVITES_PER_WINDOW {
+            return Err(AppError::limit_exceeded(format!(
+                "Invitation limit reached ({MAX_INVITES_PER_WINDOW} per {INVITE_WINDOW_HOURS}h). Try again later."
+            ))
+            .with_details(json!({ "limit": "invitesPerWindow" })));
+        }
         let mut created = Vec::new();
         for email in &emails {
             if let Some(u) = tx.users().find_by_email(email).await?

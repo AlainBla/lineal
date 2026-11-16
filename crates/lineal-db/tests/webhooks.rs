@@ -2095,3 +2095,52 @@ async fn accept_does_not_hash_before_validating_the_token(pool: PgPool) {
         "gültige Annahme hasht das Passwort"
     );
 }
+
+/// LIN-64 F2: Einladungen sind je Einladender im Zeitfenster begrenzt (gegen Mail-Bombing an
+/// beliebige Adressen). Ist das Fenster voll, wird abgelehnt; nach Ablauf wieder erlaubt.
+#[sqlx::test(migrations = "./migrations")]
+async fn invite_users_rate_limits_per_inviter_against_mail_bombing(pool: PgPool) {
+    use lineal_app::usecases::invitation::{INVITE_WINDOW_HOURS, MAX_INVITES_PER_WINDOW};
+    let fx = setup(pool).await;
+    let now = fx.clock.now();
+    // Fenster in einem Insert mit bereits erstellten Einladungen von alice fuellen (schnell).
+    sqlx::query(
+        "INSERT INTO invitation \
+         (id, organization_id, email, role, team_ids, inviter_id, token_hash, status, \
+          expires_at, last_sent_at, created_at, updated_at) \
+         SELECT gen_random_uuid(), $1, 'fill' || g || '@acme.example', 'user', '{}'::uuid[], $2, \
+                md5(g::text), 'pending', $3, $4, $4, $4 \
+         FROM generate_series(1, $5) g",
+    )
+    .bind(fx.data.org.0)
+    .bind(fx.data.alice.0)
+    .bind(now + Duration::days(7))
+    .bind(now)
+    .bind(MAX_INVITES_PER_WINDOW)
+    .execute(&fx.pool)
+    .await
+    .unwrap();
+    // Limit erreicht -> weitere Einladung abgelehnt.
+    assert_eq!(
+        kind(
+            fx.app
+                .invite_users(
+                    &alice(),
+                    invite(&["spam@acme.example"], UserRole::User, &[])
+                )
+                .await
+        ),
+        ErrorKind::LimitExceeded
+    );
+    // Fenster abgelaufen -> die alten Einladungen zaehlen nicht mehr, wieder erlaubt.
+    fx.clock.advance((INVITE_WINDOW_HOURS + 1) * 3600);
+    let ok = fx
+        .app
+        .invite_users(
+            &alice(),
+            invite(&["spam@acme.example"], UserRole::User, &[]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.len(), 1);
+}

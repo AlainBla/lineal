@@ -463,6 +463,14 @@ pub trait WebhookRepo: Send {
     async fn list_invitations(&mut self, _pending_only: bool) -> AppResult<Vec<InvitationRecord>> {
         unimplemented_repo()
     }
+    /// Anzahl Einladungen, die dieser Einladende seit `since` erstellt hat (Raten-Limit, LIN-64 F2).
+    async fn count_invitations_since(
+        &mut self,
+        _inviter: UserId,
+        _since: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        unimplemented_repo()
+    }
     /// Offene (`pending`, nicht abgelaufene) Einladung zu einer E-Mail.
     async fn find_pending_invitation(
         &mut self,

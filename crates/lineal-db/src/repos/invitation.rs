@@ -108,6 +108,24 @@ impl PgTx {
         row.map(record).transpose()
     }
 
+    pub(crate) async fn count_invitations_since_impl(
+        &mut self,
+        inviter: UserId,
+        since: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM invitation \
+             WHERE organization_id = $1 AND inviter_id = $2 AND created_at >= $3",
+        )
+        .bind(self.org.0)
+        .bind(inviter.0)
+        .bind(since)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(n)
+    }
+
     pub(crate) async fn list_invitations_impl(
         &mut self,
         pending_only: bool,
