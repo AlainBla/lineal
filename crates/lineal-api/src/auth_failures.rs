@@ -148,6 +148,9 @@ impl AuthFailures {
             };
         }
         e.count = e.count.saturating_add(1);
+        if e.count == rule.limit {
+            log_limit_reached(key, rule);
+        }
     }
 
     /// Reserviert atomar einen Versuch auf `key` (Zählen vor dem Prüfen). `Err(Sekunden)`, wenn
@@ -177,6 +180,9 @@ impl AuthFailures {
             return Err(u64::try_from(left).unwrap_or(1));
         }
         e.count += 1;
+        if e.count == rule.limit {
+            log_limit_reached(key, rule);
+        }
         Ok(())
     }
 
@@ -307,6 +313,20 @@ impl LoginReservation {
 
 /// Hash der normalisierten Adresse: Die Schlüssel entstehen vor jeder Prüfung der Eingabe und
 /// bleiben im Speicher, ihre Größe darf also nicht vom Absender abhängen.
+/// LIN-65 N13: Beim ERSTEN Erreichen eines Fehlversuch-Limits (Transition, einmal pro Fenster) auf
+/// dem `security`-Ziel warnen — so wird Passwort-Spraying/Brute-Force in den Logs sichtbar (bisher
+/// nur als 429/401) und kann alarmiert werden. Der Schluessel enthaelt nur die gehashte
+/// Account-Kennung und/oder die Client-IP, keine Roh-E-Mail.
+fn log_limit_reached(key: &str, rule: Rule) {
+    tracing::warn!(
+        target: "security",
+        auth_key = %key,
+        limit = rule.limit,
+        window_ms = rule.window_ms,
+        "authentication failure limit reached"
+    );
+}
+
 fn account_hash(account: &str) -> String {
     format!("{:x}", Sha256::digest(account.trim().to_lowercase()))
 }
