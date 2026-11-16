@@ -1463,3 +1463,62 @@ async fn b1_18_parallel_creates_get_unique_sort_orders(pool: PgPool) {
     .unwrap();
     assert_eq!(dup, 0, "doppelte Template-Positionen");
 }
+
+/// N6: Zwei Owner stufen sich nicht gleichzeitig beide herab. Ohne Serialisierung lesen beide
+/// Transaktionen noch zwei Owner und lassen 0 Owner zurück; mit Advisory-Lock gewinnt genau
+/// eine Herabstufung, mindestens ein Owner bleibt.
+#[sqlx::test(migrations = "./migrations")]
+async fn b1_last_owner_demotion_has_one_winner(pool: PgPool) {
+    use lineal_app::Actor;
+    use lineal_domain::enums::UserRole;
+    let fx = setup(pool).await;
+    let bob_owner = {
+        let mut c = ctx_for(SeedUser::Bob);
+        c.actor = Actor::User {
+            id: fx.data.bob,
+            role: UserRole::Owner,
+        };
+        c
+    };
+    let alice_id = fx.data.alice.to_string();
+    let bob_id = fx.data.bob.to_string();
+    for round in 0..ROUNDS {
+        // Beide sind Owner.
+        sqlx::query(
+            "UPDATE \"user\" SET role = 'owner' WHERE organization_id = $1 AND id = ANY($2)",
+        )
+        .bind(fx.data.org.0)
+        .bind(&[fx.data.alice.0, fx.data.bob.0][..])
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+        let (a, b) = (fx.app.clone(), fx.app.clone());
+        let (ac, bc) = (alice(), bob_owner.clone());
+        let (bid, aid) = (bob_id.clone(), alice_id.clone());
+        let (r1, r2) = tokio::join!(
+            async move { a.set_user_role(&ac, &bid, UserRole::Admin).await },
+            async move { b.set_user_role(&bc, &aid, UserRole::Admin).await },
+        );
+        let flat = [
+            r1.as_ref().map(|_| ()).map_err(|e| e.clone()),
+            r2.as_ref().map(|_| ()).map_err(|e| e.clone()),
+        ];
+        assert_no_internal("owner demote race", &flat);
+        let owners: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM \"user\" WHERE organization_id = $1 AND role = 'owner'",
+        )
+        .bind(fx.data.org.0)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+        assert!(
+            owners >= 1,
+            "round {round}: no owners left ({r1:?} / {r2:?})"
+        );
+        assert_eq!(
+            [r1.is_ok(), r2.is_ok()].iter().filter(|x| **x).count(),
+            1,
+            "round {round}: exactly one demotion must win ({r1:?} / {r2:?})"
+        );
+    }
+}

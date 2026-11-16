@@ -419,6 +419,9 @@ impl App {
             snap.require_workspace(ctx, Action::UpdateWorkspaceSettings)?;
         }
         if target.role == UserRole::Owner && role != UserRole::Owner {
+            // Serialisiert alle Owner-Herabstufungen/-Sperren gegeneinander: sonst zählen zwei
+            // gleichzeitige Transaktionen beide noch zwei Owner und lassen 0 zurück (N6).
+            tx.advisory_lock("workspace_owners", None).await?;
             let owners = tx
                 .users()
                 .list(
@@ -505,6 +508,8 @@ impl App {
                 return Err(AppError::invalid_request("you cannot suspend yourself"));
             }
             if target.role == UserRole::Owner {
+                // Dieselbe Sperre wie bei der Rollen-Herabstufung (N6).
+                tx.advisory_lock("workspace_owners", None).await?;
                 let owners = tx
                     .users()
                     .list(
