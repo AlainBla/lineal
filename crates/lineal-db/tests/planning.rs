@@ -1161,6 +1161,72 @@ async fn status_update_on_trashed_project_is_hidden(pool: PgPool) {
     );
 }
 
+/// LIN-63 N10: `setInitiatives` (Ersetzen) darf eine Initiative mit privatem, für den Aufrufer
+/// unsichtbarem Lead-Team nicht durch bloßes Weglassen aus dem Projekt entfernen.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn set_initiatives_keeps_invisible_links(pool: PgPool) {
+    let (app, _data, pool) = setup(pool).await;
+    let alice = ctx_for(SeedUser::Alice);
+    let bob = ctx_for(SeedUser::Bob);
+    // bob legt eine Initiative mit privatem Lead-Team (DES) an — für alice unsichtbar.
+    let hidden = app
+        .save_initiative(
+            &bob,
+            SaveInitiativeInput {
+                name: Some("Design-Ziele".into()),
+                lead_team: Some(Some("DES".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    // bob (sieht beide) verlinkt sie mit P-ENG-1.
+    app.save_project(
+        &bob,
+        SaveProjectInput {
+            id: Some("P-ENG-1".into()),
+            add_initiatives: vec![hidden.identifier.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let hidden_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM initiative WHERE name = 'Design-Ziele'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let linked = |pool: PgPool, iid: Uuid| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM initiative_to_project WHERE project_id = $1 AND initiative_id = $2",
+        )
+        .bind(seed_project_id().0)
+        .bind(iid)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(linked(pool.clone(), hidden_id).await, 1, "verlinkt");
+
+    // alice ersetzt die Initiativen des Projekts durch eine leere Liste.
+    app.save_project(
+        &alice,
+        SaveProjectInput {
+            id: Some("P-ENG-1".into()),
+            set_initiatives: Some(vec![]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        linked(pool.clone(), hidden_id).await,
+        1,
+        "unsichtbare Initiative bleibt trotz setInitiatives([]) verlinkt"
+    );
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn project_status_updates_health_diff_and_rules(pool: PgPool) {
     let (app, _data, _pool) = setup(pool).await;

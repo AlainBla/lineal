@@ -1311,18 +1311,26 @@ impl App {
                     target.push(resolve::initiative::resolve_in(tx, snap, r).await?.id);
                 }
                 let target = dedupe(target);
-                (
-                    target
-                        .iter()
-                        .copied()
-                        .filter(|t| !current.contains(t))
-                        .collect(),
-                    current
-                        .iter()
-                        .copied()
-                        .filter(|c| !target.contains(c))
-                        .collect(),
-                )
+                let to_add: Vec<InitiativeId> = target
+                    .iter()
+                    .copied()
+                    .filter(|t| !current.contains(t))
+                    .collect();
+                // LIN-63 N10: Beim Ersetzen nur SICHTBARE Initiativen entfernen. Eine Initiative mit
+                // privatem Lead-Team ist für den Aufrufer unsichtbar; sie darf nicht durch bloßes
+                // Weglassen aus `setInitiatives` entlinkt werden.
+                let mut to_remove: Vec<InitiativeId> = Vec::new();
+                for c in &current {
+                    if target.contains(c) {
+                        continue;
+                    }
+                    if let Some(i) = tx.initiatives().get(*c).await? {
+                        if resolve::initiative::is_visible(snap, &i) {
+                            to_remove.push(*c);
+                        }
+                    }
+                }
+                (to_add, to_remove)
             } else {
                 let mut add = Vec::new();
                 for r in &input.add_initiatives {
