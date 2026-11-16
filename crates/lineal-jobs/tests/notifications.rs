@@ -3159,3 +3159,116 @@ async fn notifications_respect_issue_share_gate(pool: PgPool) {
         "ohne issueSharingEnabled darf die Notification nicht über die Freigabe sichtbar sein"
     );
 }
+
+/// N16: Eine Dokument-Benachrichtigung muss beim Einzelabruf und im Digest die Sichtbarkeit des
+/// Dokuments (Teamzugriff) und den Papierkorb nachprüfen; sonst liest/erhält ein Ex-Mitglied sie.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn document_notification_rechecks_visibility_and_trash(pool: PgPool) {
+    let e = env_at(pool, Some(t(2026, 10, 7, 10, 0))).await;
+    let (alice, bob) = (e.d.alice, e.d.bob);
+    let ctx = ctx_for(SeedUser::Bob);
+
+    // Dokument am privaten Team DES (Bob ist Mitglied, Alice nicht).
+    let doc = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO document (id, organization_id, title, team_id, creator_id) \
+         VALUES ($1,$2,'Geheimes Dokument',$3,$4)",
+    )
+    .bind(doc)
+    .bind(e.d.org.0)
+    .bind(e.d.des.0)
+    .bind(alice.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+
+    // Erwähnung Bobs im Dokument -> Dokument-Benachrichtigung (per SQL). created_at an der Testuhr,
+    // damit der Digest-Verzug greift.
+    let base = e.app.clock.now();
+    let notif = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO notification (id, organization_id, user_id, type, category, target_type, \
+         actor_id, document_id, dedup_key, created_at, updated_at) \
+         VALUES ($1,$2,$3,'documentCommentMention','mentions','document',$4,$5,'seed:doc',$6,$6)",
+    )
+    .bind(notif)
+    .bind(e.d.org.0)
+    .bind(bob.0)
+    .bind(alice.0)
+    .bind(doc)
+    .bind(base)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let id = NotificationId(notif);
+
+    // Als DES-Mitglied sieht Bob die Benachrichtigung.
+    assert!(e.app.get_notification(&ctx, id).await.is_ok());
+
+    // Bob verliert die DES-Mitgliedschaft.
+    sqlx::query("DELETE FROM team_membership WHERE user_id = $1 AND team_id = $2")
+        .bind(bob.0)
+        .bind(e.d.des.0)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+
+    // Einzelabruf, Öffnen und Liste -> not_found/leer.
+    assert_eq!(
+        e.app.get_notification(&ctx, id).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    assert_eq!(
+        e.app.open_notification(&ctx, id).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    assert!(
+        e.app
+            .list_notifications(&ctx, Default::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // Digest: kein Versand an das Ex-Mitglied.
+    let now = e.app.clock.now();
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::hours(1))
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(e.mails.0.lock().unwrap().is_empty());
+
+    // Wieder Mitglied -> Kontrolle: die Benachrichtigung ist mail- und lesbar.
+    sqlx::query(
+        "INSERT INTO team_membership (organization_id, team_id, user_id, owner) VALUES ($1,$2,$3,false)",
+    )
+    .bind(e.d.org.0)
+    .bind(e.d.des.0)
+    .bind(bob.0)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    assert!(e.app.get_notification(&ctx, id).await.is_ok());
+    assert_eq!(
+        e.app
+            .send_email_digests(now + Duration::hours(1))
+            .await
+            .unwrap(),
+        1
+    );
+
+    // Getrashtes Dokument: Einzelabruf wieder not_found (NOT dv.trashed), obwohl Bob Mitglied ist.
+    sqlx::query("UPDATE document SET trashed = true WHERE id = $1")
+        .bind(doc)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        e.app.get_notification(&ctx, id).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+}

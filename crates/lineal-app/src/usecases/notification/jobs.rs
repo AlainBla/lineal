@@ -230,6 +230,26 @@ impl App {
                 // Zum Versandzeitpunkt noch Zugriff auf das Bezugsobjekt? (kein Inhalt aus entzogenen Teams)
                 let mut allowed: Vec<&NotificationView> = Vec::new();
                 for v in &views {
+                    // N16: Dokument-Benachrichtigungen über das Elternobjekt prüfen (wie der
+                    // Fan-out) und getrashte Dokumente ausschließen – sonst mailt der Digest
+                    // einem Ex-Mitglied weiter Titel/Aktivität eines entzogenen Dokuments.
+                    if v.n.target_type == "document" {
+                        let Some(doc_id) = v.n.document_id else {
+                            continue;
+                        };
+                        let Some(facts) = tx.notifications().document_facts(doc_id).await? else {
+                            continue;
+                        };
+                        if facts.trashed {
+                            continue;
+                        }
+                        let mut fan = Fan::new(&mut *tx, now, None).await?;
+                        fan.workspace_only = facts.workspace_only;
+                        if fan.can_see_any(user, &facts.teams).await? {
+                            allowed.push(v);
+                        }
+                        continue;
+                    }
                     let teams = match (v.issue_team_id, v.n.project_id) {
                         (Some(t), _) => vec![t],
                         (None, Some(p)) if v.n.target_type == "project" => {

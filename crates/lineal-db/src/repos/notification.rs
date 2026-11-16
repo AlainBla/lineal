@@ -57,7 +57,7 @@ fn visible_sql(vis: &str, share: bool) -> String {
 /// (der Fan-out erzeugt sie nicht für Gäste).
 fn doc_visible_sql(n: &str, vis: &str) -> String {
     format!(
-        "({n}.document_id IS NULL OR EXISTS (SELECT 1 FROM document dv WHERE dv.id = {n}.document_id AND ( \
+        "({n}.document_id IS NULL OR EXISTS (SELECT 1 FROM document dv WHERE dv.id = {n}.document_id AND NOT dv.trashed AND ( \
            (dv.issue_id IS NOT NULL AND EXISTS (SELECT 1 FROM issue dvi WHERE dvi.id = dv.issue_id AND dvi.team_id = ANY({vis}))) \
            OR (dv.issue_id IS NULL AND dv.project_id IS NOT NULL AND EXISTS (SELECT 1 FROM project_team dvp \
                 WHERE dvp.project_id = dv.project_id AND dvp.team_id = ANY({vis}))) \
@@ -527,14 +527,22 @@ impl NotificationRepo for PgTx {
     async fn get_notification(
         &mut self,
         user: UserId,
+        share_enabled: bool,
+        visible: &[TeamId],
         id: NotificationId,
     ) -> AppResult<Option<NotificationView>> {
-        let sql =
-            format!("{VIEW_SELECT} WHERE n.organization_id = $1 AND n.user_id = $2 AND n.id = $3");
+        // N16: Dieselbe Sichtbarkeits-Gatterung wie `list_notifications`, damit ein Ex-Mitglied
+        // eine einzelne Notification zu einem jetzt unsichtbaren/getrashten Bezugsobjekt nicht
+        // mehr lesen oder bearbeiten kann.
+        let sql = format!(
+            "{VIEW_SELECT} WHERE n.organization_id = $1 AND n.user_id = $2 AND n.id = $3 AND {}",
+            visible_sql("$4", share_enabled)
+        );
         let row: Option<ViewRow> = sqlx::query_as(&sql)
             .bind(self.org.0)
             .bind(user.0)
             .bind(id.0)
+            .bind(uuids(visible))
             .fetch_optional(&mut *self.tx)
             .await
             .map_err(db_err)?;
