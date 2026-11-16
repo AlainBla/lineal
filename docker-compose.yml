@@ -82,7 +82,6 @@ services:
     build: &server-build { context: ., target: server }
     image: lineal-server:latest
     command: ["migrate"]
-    secrets: [session_secret]
     environment: &server-env
       # `migrate` verbindet als Eigentuemer `lineal` (DDL). Server und Worker verbinden als
       # de-privilegierte Rolle `lineal_app` (nur DML, LIN-61/S-09): sie uebernehmen bei gesetztem
@@ -93,12 +92,11 @@ services:
       # sich damit. Leer/ungesetzt => Rolle wird nicht angelegt, App verbindet als Eigentuemer.
       LINEAL_APP_DB_PASSWORD: ${LINEAL_APP_DB_PASSWORD:-}
       LINEAL_BASE_URL: ${LINEAL_BASE_URL:-http://localhost:8088}
-      # LIN-65 N10: Das Session-Secret (HMAC-Signierschluessel) steht NICHT als Wert in der
-      # Umgebung (sonst in jedem `docker inspect` sichtbar), sondern wird allen App-Diensten als
-      # gemountetes Compose-`secret` (Datei /run/secrets/session_secret) uebergeben; die App liest
-      # es ueber LINEAL_SESSION_SECRET_FILE. Hier steht nur der Dateipfad (kein Geheimnis). Auch
-      # `migrate` braucht ihn, weil es beim Start die vollstaendige Config laedt.
-      LINEAL_SESSION_SECRET_FILE: /run/secrets/session_secret
+      LINEAL_SESSION_SECRET: ${LINEAL_SESSION_SECRET:-}  # Pflicht, mind. 32 Zeichen: openssl rand -hex 32
+      # LIN-65 N10 (Config-Teil erledigt): config.rs liest alternativ LINEAL_SESSION_SECRET_FILE.
+      # Die Compose-Umstellung auf ein Datei-Secret ist zurueckgestellt — `secrets: { environment }`
+      # ist mit `read_only: true` (Hardening) nicht nutzbar (braucht `file:`-Quelle = Host-File).
+      # Folgeschritt: /opt/lineal/secrets/session_secret (600) anlegen + `secrets: { file: ... }`.
       # Nur der nginx-Container (feste Adresse) darf X-Forwarded-For setzen – nicht das ganze
       # Subnetz, sonst zählte auch das Gateway (Host) als vertrauenswürdiger Proxy.
       LINEAL_TRUSTED_PROXIES: 172.31.88.10/32
@@ -125,7 +123,6 @@ services:
     command: ["serve"]
     extra_hosts: &host-gateway ["host.docker.internal:host-gateway"]
     environment: *server-env
-    secrets: [session_secret]
     volumes:
       - blobs:/data/blobs
     networks: [default, edge]
@@ -155,7 +152,6 @@ services:
     command: ["worker"]
     extra_hosts: *host-gateway
     environment: *server-env
-    secrets: [session_secret]
     volumes:
       - blobs:/data/blobs
     depends_on:
@@ -198,11 +194,3 @@ volumes:
   pgdata:
   appdata:
   blobs:
-
-secrets:
-  # LIN-65 N10: Das Session-Secret kommt weiterhin aus der Umgebung (.env: LINEAL_SESSION_SECRET),
-  # wird server/worker aber als gemountete Datei (/run/secrets/session_secret) statt als
-  # Container-Env uebergeben — so steht es nicht mehr in `docker inspect`. Erfordert Docker Compose
-  # v2.23+ (environment-Quelle fuer secrets); kein zusaetzliches Host-File noetig.
-  session_secret:
-    environment: LINEAL_SESSION_SECRET
