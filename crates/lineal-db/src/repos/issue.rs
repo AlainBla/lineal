@@ -734,16 +734,23 @@ impl IssueRepo for PgTx {
         // Aufrufer nach Sichtbarkeit filtern kann. Das Team wird deterministisch ueber team_key
         // (inkl. ersetzter Keys, `replaced_at`) aufgeloest; der INNER JOIN laesst nicht aufloesbare
         // Aliase wegfallen (deny-by-default, kein fail-open ueber umbenannte Teams).
+        // Auf dem gespeicherten `team_key` der Alias-Zeile auflösen (kein Identifier-Parsing).
+        // key_owner mappt Key -> Team über den aktuellen team.key UND historische team_key-Einträge.
+        // GROUP BY ... HAVING count(DISTINCT team_id)=1: ein Key, der (durch Wiederverwendung über
+        // mehrere Teams) nicht eindeutig einem Team gehört, wird verworfen (fail-closed statt den
+        // Alias einem womöglich sichtbaren Team zuzuordnen).
         let aliases: Vec<(String, Uuid)> = sqlx::query_as(
             "WITH key_owner AS ( \
                  SELECT key, id AS team_id FROM team WHERE organization_id = $1 \
-                 UNION ALL \
+                 UNION \
                  SELECT key, team_id FROM team_key WHERE organization_id = $1 \
              ) \
-             SELECT a.identifier, ko.team_id FROM issue_identifier_alias a \
-             JOIN key_owner ko ON ko.key = substring(a.identifier from '^(.*)-[0-9]+$') \
+             SELECT a.identifier, (array_agg(DISTINCT ko.team_id))[1] AS team_id FROM issue_identifier_alias a \
+             JOIN key_owner ko ON ko.key = a.team_key \
              WHERE a.organization_id = $1 AND a.issue_id = $2 AND a.archived_at IS NULL \
-             ORDER BY a.created_at, a.identifier",
+             GROUP BY a.identifier \
+             HAVING count(DISTINCT ko.team_id) = 1 \
+             ORDER BY min(a.created_at), a.identifier",
         )
         .bind(self.org.0)
         .bind(issue.0)
