@@ -11,6 +11,11 @@ ignore = [
     # smallstr: nur „unmaintained“, keine Sicherheitslücke; transitive Abhängigkeit des
     # gepatchten yrs (vendor/yrs). Entfällt mit der Rückkehr auf ein offizielles yrs-Release.
     { id = "RUSTSEC-2026-0215", reason = "transitiv über vendor/yrs, nur unmaintained" },
+    # chrono/chrono-tz: seit 17.11.2026 als „unmaintained“ markiert, keine Sicherheitslücke
+    # und kein sicheres Upgrade. Tief eingebettet (u. a. async-graphql). Migration auf
+    # jiff/time ist ein eigenes Vorhaben; bis dahin bewusst ignoriert.
+    { id = "RUSTSEC-2026-0543", reason = "chrono nur unmaintained, kein CVE, Migration offen" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz nur unmaintained, kein CVE, Migration offen" },
 ]
 
 [licenses]
