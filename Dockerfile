@@ -68,7 +68,7 @@ CMD ["serve"]
 # ---------------------------------------------------------------------------------------------
 # Laufzeit Web: nginx (unprivilegiert, Port 8080) liefert die SPA aus und leitet API-Pfade weiter.
 # S-10/LIN-35: nginx auf die stabile 1.28-Linie (1.27 war abgekündigt), per Index-Digest gepinnt.
-FROM nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8 AS web
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e AS web
 # Alpine-Sicherheitspatches einspielen: nginxinc baut die 1.28-alpine-Linie nicht neu, der
 # gepinnte Basis-Digest bringt daher veraltete Pakete (libssl3/libcrypto3, curl, libexpat,
 # libpng, zlib ...). `apk upgrade` zieht die aktuellen Patches derselben Alpine-Release-Linie
