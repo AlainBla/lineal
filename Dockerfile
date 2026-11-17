@@ -74,8 +74,18 @@ FROM nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafb
 # libpng, zlib ...). `apk upgrade` zieht die aktuellen Patches derselben Alpine-Release-Linie
 # nach; der Basis-Digest bleibt gepinnt (reproduzierbare Grundlage). Muss als root laufen,
 # danach zurück auf die unprivilegierte uid 101 des Basis-Images.
+#
+# LIN-67-Fix (CVE-2026-42945/-49975/-27654/-9256): Das Basis-Image pinnt in /etc/apk/world nginx
+# UND seine Zusatzmodule (geoip, image-filter, njs, xslt) auf die exakte Basis-Version. Weil die
+# Module im Alpine-Repo der nginx-Sicherheitsversion hinterherhinken, haelt dieser Exakt-Pin auch
+# nginx selbst zurueck — `apk upgrade` kann die nginx-CVEs sonst nicht schliessen. lineal nutzt
+# keines der Module (kein load_module in deploy/nginx.conf), daher werden sie entfernt; danach
+# loest `apk add --upgrade nginx` (ohne Version) den Pin und zieht die jeweils neueste nginx-
+# Patchversion derselben 1.28-Linie.
 USER root
-RUN apk --no-cache upgrade
+RUN apk --no-cache del nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt \
+    && apk --no-cache add --upgrade nginx \
+    && apk --no-cache upgrade
 USER 101
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 # Snippet mit den Sicherheits-Headern NUR nach snippets/ (nicht conf.d/, siehe Datei-Kopf):
