@@ -307,14 +307,20 @@ export async function createComment(input: {
   body: string;
   parentId?: string;
 }): Promise<Comment> {
+  // Bei einer Antwort NUR `parentId` senden: `issueId` + `parentId` zusammen lehnt das Backend ab
+  // („Provide either a parent object or a comment to reply to, not both"), weil `issueId` dort als
+  // Elternobjekt zählt. Thread-Wurzel wird serverseitig aus dem Parent abgeleitet.
+  const vars: { issueId?: string; body: string; parentId?: string } = input.parentId
+    ? { body: input.body, parentId: input.parentId }
+    : { issueId: input.issueId, body: input.body };
   const res = await gqlRequest<
     { commentCreate: { success: boolean; comment: Comment | null } },
-    { input: typeof input }
+    { input: typeof vars }
   >(
     `mutation CommentCreate($input: CommentCreateInput!) {
       commentCreate(input: $input) { success comment { ${COMMENT_FIELDS} } }
     }`,
-    { input },
+    { input: vars },
   );
   if (!res.commentCreate.success || !res.commentCreate.comment) throw new Error("Comment failed");
   return res.commentCreate.comment;
