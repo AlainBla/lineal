@@ -1012,6 +1012,7 @@ async fn mentions_notify_the_mentioned_issue_without_editing_it(pool: PgPool) {
                 reply_to: None,
                 body: format!("siehe {}", target.identifier),
                 quoted_text: None,
+                ..Default::default()
             },
         )
         .await

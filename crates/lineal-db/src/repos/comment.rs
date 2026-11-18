@@ -9,6 +9,7 @@ use lineal_app::ports::repos::comment::{
     Comment, CommentQuery, MentionCandidate, NewComment, ParentKind, ParentRef, ParentScope,
     Reaction, ReactionTarget,
 };
+use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::OrderBy;
 use lineal_app::{AppError, AppResult};
 use lineal_domain::ids::*;
@@ -29,6 +30,7 @@ struct CommentRow {
     initiative_update_id: Option<Uuid>,
     document_id: Option<Uuid>,
     parent_id: Option<Uuid>,
+    source: String,
     quoted_text: Option<String>,
     anchor_start: Option<String>,
     anchor_end: Option<String>,
@@ -44,7 +46,7 @@ struct CommentRow {
 }
 
 const COMMENT_COLS: &str = "id, user_id, body, issue_id, project_id, project_milestone_id, \
-    project_update_id, initiative_id, initiative_update_id, document_id, parent_id, quoted_text, \
+    project_update_id, initiative_id, initiative_update_id, document_id, parent_id, source, quoted_text, \
     anchor_start, anchor_end, edited_at, resolved_at, resolving_comment_id, resolving_user_id, deleted_at, version, \
     created_at, updated_at, archived_at";
 
@@ -73,6 +75,7 @@ impl CommentRow {
             body: self.body,
             parent,
             parent_id: self.parent_id.map(CommentId),
+            source: HistorySource::parse(&self.source),
             quoted_text: self.quoted_text,
             anchor_start: self.anchor_start,
             anchor_end: self.anchor_end,
@@ -398,8 +401,8 @@ impl CommentRepo for PgTx {
     async fn insert(&mut self, c: &NewComment) -> AppResult<Comment> {
         let col = parent_col(c.parent.kind());
         let row = sqlx::query_as::<_, CommentRow>(&format!(
-            "INSERT INTO comment (id, organization_id, body, user_id, {col}, parent_id, quoted_text, \
-             created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING {COMMENT_COLS}"
+            "INSERT INTO comment (id, organization_id, body, user_id, {col}, parent_id, source, quoted_text, \
+             created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING {COMMENT_COLS}"
         ))
         .bind(c.id.0)
         .bind(self.org.0)
@@ -407,6 +410,7 @@ impl CommentRepo for PgTx {
         .bind(c.user_id.map(|u| u.0))
         .bind(c.parent.uuid())
         .bind(c.parent_id.map(|p| p.0))
+        .bind(c.source.as_str())
         .bind(&c.quoted_text)
         .bind(c.now)
         .fetch_one(&mut *self.tx)

@@ -97,6 +97,7 @@ async fn comments_on_private_initiative_follow_lead_team(pool: PgPool) {
                 reply_to: None,
                 body: "intern".into(),
                 quoted_text: None,
+                ..Default::default()
             },
         )
         .await
@@ -145,6 +146,7 @@ async fn comments_on_private_initiative_follow_lead_team(pool: PgPool) {
                         reply_to: None,
                         body: "x".into(),
                         quoted_text: None,
+                        ..Default::default()
                     },
                 )
                 .await

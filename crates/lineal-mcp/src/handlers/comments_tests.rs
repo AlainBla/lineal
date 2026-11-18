@@ -142,6 +142,7 @@ async fn save_list_and_delete_comments(pool: sqlx::PgPool) {
     assert_eq!(root["onBehalfOf"], Value::Null);
     assert_eq!(root["author"]["name"], "Alice Example");
     assert_eq!(root["editedAt"], Value::Null);
+    assert_eq!(root["source"], "mcp", "created through MCP");
     assert_eq!(root["attachments"], json!([]));
     assert_eq!(root["reactions"], json!([]));
     assert!(
@@ -162,6 +163,7 @@ async fn save_list_and_delete_comments(pool: sqlx::PgPool) {
     .await
     .unwrap();
     assert_eq!(reply["parentId"], root_id);
+    assert_eq!(reply["source"], "mcp", "reply created through MCP");
     let reply2 = call(
         &env,
         SeedUser::Alice,
@@ -236,6 +238,7 @@ async fn save_list_and_delete_comments(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(edited["body"], "Edited text");
     assert!(edited["editedAt"].is_string());
+    assert_eq!(edited["source"], "mcp", "editing keeps the original source");
 
     // Delete: Antwort löschbar, Antwort `{success,id}`; Wurzel mit Antworten wird Platzhalter
     let del = call(

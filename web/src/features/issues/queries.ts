@@ -25,7 +25,7 @@ export const ISSUE_FIELDS = `
 `;
 
 const COMMENT_FIELDS = `
-  id body userId user { id name displayName } issueId parentId quotedText editedAt resolvedAt
+  id body userId user { id name displayName } issueId parentId source quotedText editedAt resolvedAt
   reactionData { emoji count userIds } createdAt updatedAt
 `;
 

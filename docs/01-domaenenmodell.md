@@ -857,6 +857,7 @@ Kommentar mit polymorphem Elternobjekt. Threads haben genau eine Ebene: Top-Leve
 | `initiativeUpdateId` | UUID | nein | `null` | Eltern: Initiative-Statusbericht | FK → InitiativeUpdate |
 | `documentId` | UUID | nein | `null` | Eltern: Dokument | FK → Document |
 | `parentId` | UUID | nein | `null` | Top-Level-Kommentar, auf den geantwortet wird | FK → Comment; Index |
+| `source` | String | ja | `user` | Herkunft der Erstellung für die Quellenanzeige (`via MCP`/`via API`, [03 §8.2](03-issues-workflow.md)) | `user`/`automation`/`api`/`mcp`/`import`/`system`; einmalig beim Anlegen gesetzt |
 | `quotedText` | String | nein | `null` | Markierter Text bei Inline-Kommentaren (nur Top-Level) | |
 | `editedAt` | DateTime | nein | `null` | Letzte Bearbeitung durch den Autor | |
 | `resolvedAt` | DateTime | nein | `null` | Thread aufgelöst | nur Top-Level |

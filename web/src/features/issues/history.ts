@@ -29,7 +29,7 @@ export interface DescribedEntry {
 
 const PRIORITY_NAMES = ["No priority", "Urgent", "High", "Medium", "Low"];
 
-const SOURCE_LABEL: Record<string, string> = {
+export const SOURCE_LABEL: Record<string, string> = {
   automation: "Automation",
   api: "API",
   mcp: "MCP",

@@ -30,6 +30,7 @@ const comment = (over: Partial<Comment> & Pick<Comment, "id" | "body">): Comment
   initiativeUpdateId: null,
   documentId: null,
   parentId: null,
+  source: "user",
   quotedText: null,
   anchorStart: null,
   anchorEnd: null,
