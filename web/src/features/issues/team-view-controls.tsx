@@ -159,6 +159,18 @@ export function GroupedIssueList({
   onFocus: (id: string) => void;
   display?: readonly DisplayProperty[];
 }) {
+  const rows = (issues: IssueGroup["issues"]) =>
+    issues.map((issue) => (
+      <IssueRow
+        key={issue.id}
+        issue={issue}
+        ws={ws}
+        lookup={lookup}
+        focused={focusedId === issue.id}
+        onFocus={onFocus}
+        display={display}
+      />
+    ));
   return (
     <div role="list" aria-label="Issues">
       {groups.map((g) => (
@@ -167,17 +179,17 @@ export function GroupedIssueList({
             {g.label}
             <span className="text-xs text-muted-foreground">{g.issues.length}</span>
           </h2>
-          {g.issues.map((issue) => (
-            <IssueRow
-              key={issue.id}
-              issue={issue}
-              ws={ws}
-              lookup={lookup}
-              focused={focusedId === issue.id}
-              onFocus={onFocus}
-              display={display}
-            />
-          ))}
+          {g.subGroups
+            ? g.subGroups.map((sg) => (
+                <section key={sg.key} aria-label={`${g.label} / ${sg.label}`}>
+                  <h3 className="flex h-7 items-center gap-2 border-b border-border px-8 text-xs font-medium text-muted-foreground">
+                    {sg.label}
+                    <span className="text-muted-foreground">{sg.issues.length}</span>
+                  </h3>
+                  {rows(sg.issues)}
+                </section>
+              ))
+            : rows(g.issues)}
         </section>
       ))}
     </div>

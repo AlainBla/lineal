@@ -8,9 +8,13 @@ import { teamPaths } from "@/app/nav";
 import { Button } from "@/components/ui/button";
 import { NotFound } from "@/components/not-found";
 import {
+  applySubGrouping,
   applyVisibility,
+  flatIssues,
   groupIssues,
   sortIssues,
+  type GroupNames,
+  type IssueGroup,
   type SortContext,
 } from "@/features/views/display-options";
 import { useViewIssues } from "@/features/views/queries";
@@ -137,28 +141,54 @@ export function TeamIssuesPage({
     () => sortColumns(groupByState(states, visible, view)),
     [states, visible, view, sortColumns],
   );
-  // Andere Gruppierung als nach Status: eigene Liste (ohne Mehrfachauswahl).
-  const customGrouping = layout === "list" && controls.options.grouping !== "status";
-  const customGroups = useMemo(() => {
-    if (!customGrouping) return [];
+  const names = useMemo<GroupNames>(() => {
     const cycles = new Map(
       (meta.data?.cycles ?? []).map((c) => [c.id, c.name ?? `Cycle ${c.number}`]),
     );
-    return groupIssues(sortIssues(visible, controls.options, sortCtx), controls.options.grouping, {
+    return {
       assignee: lookup.assigneeName,
       project: lookup.projectName,
       team: () => meta.data?.team.name ?? null,
       cycle: (id) => cycles.get(id) ?? null,
       milestone: lookup.milestoneName,
-    });
-  }, [customGrouping, visible, controls.options, sortCtx, lookup, meta.data]);
+    };
+  }, [lookup, meta.data]);
+  // Andere Gruppierung als nach Status: eigene Liste (ohne Mehrfachauswahl).
+  const customGrouping = layout === "list" && controls.options.grouping !== "status";
+  const customGroups = useMemo(
+    () =>
+      customGrouping
+        ? groupIssues(
+            sortIssues(visible, controls.options, sortCtx),
+            controls.options.grouping,
+            names,
+          )
+        : [],
+    [customGrouping, visible, controls.options, sortCtx, names],
+  );
+  // Zweite Gruppierungsebene (Sub-Grouping, LIN-74): nur Liste, Wert gesetzt und ≠ Hauptgruppierung.
+  const subActive =
+    layout === "list" &&
+    controls.options.subGrouping !== "none" &&
+    controls.options.subGrouping !== controls.options.grouping;
+  const subGroups = useMemo<IssueGroup[]>(() => {
+    if (!subActive) return [];
+    const base = groupIssues(
+      sortIssues(visible, controls.options, sortCtx),
+      controls.options.grouping,
+      names,
+    );
+    return applySubGrouping(base, controls.options.subGrouping, names);
+  }, [subActive, visible, controls.options, sortCtx, names]);
 
   const grid = useMemo(
     () =>
-      customGrouping
-        ? customGroups.map((g) => g.issues.map((i) => i.id))
-        : (layout === "board" ? visibility.shown : groups).map((g) => g.issues.map((i) => i.id)),
-    [layout, visibility.shown, groups, customGrouping, customGroups],
+      subActive
+        ? [flatIssues(subGroups).map((i) => i.id)]
+        : customGrouping
+          ? customGroups.map((g) => g.issues.map((i) => i.id))
+          : (layout === "board" ? visibility.shown : groups).map((g) => g.issues.map((i) => i.id)),
+    [layout, visibility.shown, groups, customGrouping, customGroups, subActive, subGroups],
   );
   // Fokus auf nicht mehr vorhandenes Issue (gefiltert, verschoben, Spalte versteckt) verwerfen.
   const focused: Issue | null =
@@ -277,6 +307,17 @@ export function TeamIssuesPage({
         // Ohne manuelle Sortierung ändert nur ein Statuswechsel die Kartenposition.
         movesCard={(patch) => patch.stateId !== undefined || !ordered}
         onDrop={({ issue, patch }) => patch && actions.setSortOrder(issue, patch, states)}
+      />
+    );
+  } else if (subActive) {
+    body = (
+      <GroupedIssueList
+        groups={subGroups}
+        ws={ws}
+        lookup={lookup}
+        focusedId={focused?.id ?? null}
+        onFocus={setFocusedId}
+        display={controls.options.displayProperties}
       />
     );
   } else if (customGrouping) {
