@@ -158,7 +158,11 @@ export function TeamIssuesPage({
   const customGroups = useMemo(
     () =>
       customGrouping
-        ? groupIssues(sortIssues(visible, controls.options, sortCtx), controls.options.grouping, names)
+        ? groupIssues(
+            sortIssues(visible, controls.options, sortCtx),
+            controls.options.grouping,
+            names,
+          )
         : [],
     [customGrouping, visible, controls.options, sortCtx, names],
   );

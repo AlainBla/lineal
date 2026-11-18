@@ -10,8 +10,20 @@ import { resetKnownUsers } from "./users";
 
 // LIN-74: Sub-Grouping (zweite Ebene) muss auch auf den Team-Listen wirken.
 const ISSUES = [
-  makeIssue({ id: "a", identifier: "ENG-1", title: "Erstes", stateId: "s-todo", assigneeId: "u-bob" }),
-  makeIssue({ id: "b", identifier: "ENG-2", title: "Zweites", stateId: "s-todo", assigneeId: null }),
+  makeIssue({
+    id: "a",
+    identifier: "ENG-1",
+    title: "Erstes",
+    stateId: "s-todo",
+    assigneeId: "u-bob",
+  }),
+  makeIssue({
+    id: "b",
+    identifier: "ENG-2",
+    title: "Zweites",
+    stateId: "s-todo",
+    assigneeId: null,
+  }),
 ];
 
 function harness() {
@@ -53,9 +65,7 @@ describe("Team-Liste Sub-Grouping (LIN-74)", () => {
     await setSubGrouping("Assignee");
 
     // Verschachtelte Abschnitte „Todo / <Assignee>" müssen erscheinen.
-    await waitFor(() =>
-      expect(document.querySelector('section[aria-label*=" / "]')).toBeTruthy(),
-    );
+    await waitFor(() => expect(document.querySelector('section[aria-label*=" / "]')).toBeTruthy());
     const labels = Array.from(document.querySelectorAll('section[aria-label*=" / "]')).map((s) =>
       s.getAttribute("aria-label"),
     );
