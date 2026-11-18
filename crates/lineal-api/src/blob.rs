@@ -538,8 +538,23 @@ fn extension_for(content_type: &str) -> Option<&'static str> {
         "text/plain" => "txt",
         "text/markdown" => "md",
         "text/csv" => "csv",
+        "text/html" => "html",
         "application/json" => "json",
         "application/zip" => "zip",
+        "application/gzip" => "gz",
+        "application/rtf" => "rtf",
+        // Office Open XML (Word/Excel/PowerPoint).
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        // Legacy Microsoft Office.
+        "application/msword" => "doc",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.ms-powerpoint" => "ppt",
+        // OpenDocument.
+        "application/vnd.oasis.opendocument.text" => "odt",
+        "application/vnd.oasis.opendocument.spreadsheet" => "ods",
+        "application/vnd.oasis.opendocument.presentation" => "odp",
         "video/mp4" => "mp4",
         "video/webm" => "webm",
         "audio/mpeg" => "mp3",
@@ -838,6 +853,32 @@ mod tests {
         assert_eq!(
             download_filename("org/x/blob", "application/x-unknown"),
             "blob"
+        );
+        // LIN-85: Office-Typen bekommen eine Endung, damit die Datei öffenbar ist (statt nackter UUID).
+        assert_eq!(
+            download_filename(
+                "org/x/01a1-uuid",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+            "01a1-uuid.pptx"
+        );
+        assert_eq!(
+            download_filename(
+                "org/x/01a1-uuid",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+            "01a1-uuid.docx"
+        );
+        assert_eq!(
+            download_filename(
+                "org/x/01a1-uuid",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            "01a1-uuid.xlsx"
+        );
+        assert_eq!(
+            download_filename("org/x/01a1-uuid", "application/msword"),
+            "01a1-uuid.doc"
         );
     }
 
