@@ -92,6 +92,10 @@ services:
       # sich damit. Leer/ungesetzt => Rolle wird nicht angelegt, App verbindet als Eigentuemer.
       LINEAL_APP_DB_PASSWORD: ${LINEAL_APP_DB_PASSWORD:-}
       LINEAL_BASE_URL: ${LINEAL_BASE_URL:-http://localhost:8088}
+      # Eigene, cookielose Origin fuer die Inline-Ansicht von HTML-Anhaengen (KOL-478, docs/15 §3.4b).
+      # Leer = Feature aus; muss sich von LINEAL_BASE_URL unterscheiden und aktiviert den App-Guard
+      # (Host == Datei-Origin & Pfad ausserhalb /files/ => 404).
+      LINEAL_FILES_BASE_URL: ${LINEAL_FILES_BASE_URL:-}
       LINEAL_SESSION_SECRET: ${LINEAL_SESSION_SECRET:-}  # Pflicht, mind. 32 Zeichen: openssl rand -hex 32
       # LIN-65 N10 (Config-Teil erledigt): config.rs liest alternativ LINEAL_SESSION_SECRET_FILE.
       # Die Compose-Umstellung auf ein Datei-Secret ist zurueckgestellt — `secrets: { environment }`
