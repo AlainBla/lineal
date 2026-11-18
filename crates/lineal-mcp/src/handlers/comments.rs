@@ -6,6 +6,7 @@ use super::teams_users::ts;
 use crate::envelope::{self, decode_cursor, encode_cursor, parse_limit, query_fingerprint};
 use chrono::{DateTime, SecondsFormat, Utc};
 use lineal_app::ports::repos::comment::ParentKind;
+use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::ports::repos::user::{OrderBy, PageCursor};
 use lineal_app::usecases::attachment::AssetInfo;
 use lineal_app::usecases::comment::{
@@ -126,6 +127,7 @@ fn comment_json(
         "id": c.id.to_string(),
         "body": c.body,
         "parentId": c.parent_id.map(|p| p.to_string()),
+        "source": c.source.as_str(),
         "quotedText": c.quoted_text,
         "resolvedAt": c.resolved_at.map(ts),
         "author": v.author.as_ref().map(|a| envelope::user_ref(a.id, &a.name)),
@@ -240,6 +242,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                     CreateCommentInput {
                         reply_to: Some(parent_id.to_owned()),
                         body: body.to_owned(),
+                        source: HistorySource::Mcp,
                         ..Default::default()
                     },
                 )
@@ -255,6 +258,7 @@ pub async fn handle(app: &App, ctx: &RequestCtx, tool: &str, args: Value) -> App
                     CreateCommentInput {
                         parent: Some(parent),
                         body: body.to_owned(),
+                        source: HistorySource::Mcp,
                         ..Default::default()
                     },
                 )

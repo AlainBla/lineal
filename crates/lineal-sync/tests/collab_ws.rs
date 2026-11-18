@@ -1134,6 +1134,7 @@ async fn comment_anchors_survive_edits_and_detach_when_text_is_removed(pool: PgP
                 reply_to: None,
                 body: "Warum schön?".into(),
                 quoted_text: Some("schöne".into()),
+                ..Default::default()
             },
         )
         .await
@@ -1216,6 +1217,7 @@ async fn inline_comment_is_validated_before_anything_is_stored(pool: PgPool) {
         reply_to: None,
         body: "Frage".into(),
         quoted_text: Some(quoted.into()),
+        ..Default::default()
     };
     let count = |e: &Env| {
         let pool = e.pool.clone();

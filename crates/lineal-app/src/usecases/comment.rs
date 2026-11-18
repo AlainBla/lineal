@@ -14,6 +14,7 @@ use crate::ports::repos::NewEvent;
 use crate::ports::repos::comment::{
     Comment, CommentQuery, NewComment, ParentKind, ParentRef, ParentScope, Reaction, ReactionTarget,
 };
+use crate::ports::repos::issue::HistorySource;
 use crate::ports::repos::user::{OrderBy, PageCursor};
 use lineal_domain::enums::UserRole;
 use lineal_domain::events::DomainEvent;
@@ -108,6 +109,8 @@ pub struct CreateCommentInput {
     pub body: String,
     /// Inline-Kommentar: zitierte Textstelle.
     pub quoted_text: Option<String>,
+    /// Herkunft der Erstellung (Default `user`; MCP setzt `mcp`, API `api`).
+    pub source: HistorySource,
 }
 
 /// Eingabe für [`App::list_comments`].
@@ -794,6 +797,7 @@ impl App {
                 body,
                 parent,
                 parent_id: root,
+                source: input.source,
                 quoted_text,
                 now,
             })

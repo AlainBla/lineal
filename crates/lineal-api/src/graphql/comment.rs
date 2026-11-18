@@ -4,7 +4,7 @@
 //! Lösch-Payloads heißen `CommentDeletePayload`/`ReactionDeletePayload`/`AttachmentDeletePayload`,
 //! damit sie nicht mit dem `DeletePayload` anderer Bereiche kollidieren.
 
-use crate::context::{app, request_ctx};
+use crate::context::{app, history_source, request_ctx};
 use crate::graphql::org::gql_err;
 use crate::pagination::{Cursor, MAX_PAGE_SIZE, PageInfo, PaginationOrderBy, page_request};
 use async_graphql::{Context, InputObject, Object, SimpleObject};
@@ -59,6 +59,8 @@ pub struct CommentGql {
     pub initiative_update_id: Option<String>,
     pub document_id: Option<String>,
     pub parent_id: Option<String>,
+    /// Herkunft der Erstellung (`user`/`api`/`mcp`/…) für die Quellenanzeige in der Kommentar-Karte.
+    pub source: String,
     pub quoted_text: Option<String>,
     /// Positionsanker (Base64 relativer Positionen) und Zustand `attached`/`detached` (docs/06 §1.8).
     pub anchor_start: Option<String>,
@@ -95,6 +97,7 @@ impl From<CommentView> for CommentGql {
             initiative_update_id: pick(ParentKind::InitiativeUpdate),
             document_id: pick(ParentKind::Document),
             parent_id: c.parent_id.map(|p| p.to_string()),
+            source: c.source.as_str().to_owned(),
             quoted_text: c.quoted_text,
             anchor_start: c.anchor_start,
             anchor_end: c.anchor_end,
@@ -551,14 +554,16 @@ impl CommentMutation {
             (Some(a), Some(b)) => Some((a.clone(), b.clone())),
             _ => return Err(invalid("anchorStart and anchorEnd must be given together")),
         };
+        let rc = request_ctx(ctx)?;
         let m = app(ctx)?
             .create_comment_anchored(
-                request_ctx(ctx)?,
+                rc,
                 CreateCommentInput {
                     parent: parent_spec(&input)?,
                     reply_to: input.parent_id.clone(),
                     body: input.body.clone(),
                     quoted_text: input.quoted_text.clone(),
+                    source: history_source(rc),
                 },
                 anchor,
             )

@@ -62,7 +62,7 @@ fn code(res: &async_graphql::Response) -> String {
         .to_owned()
 }
 
-const CREATE: &str = "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success lastSyncId comment { id body parentId quotedText issueId user { name displayName } reactionData { emoji count userIds } } } }";
+const CREATE: &str = "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success lastSyncId comment { id body parentId quotedText issueId source user { name displayName } reactionData { emoji count userIds } } } }";
 
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn comment_lifecycle_over_graphql(pool: sqlx::PgPool) {
@@ -93,6 +93,7 @@ async fn comment_lifecycle_over_graphql(pool: sqlx::PgPool) {
     assert_eq!(c["comment"]["issueId"], eng.to_string());
     assert_eq!(c["comment"]["quotedText"], "timeout");
     assert_eq!(c["comment"]["user"]["displayName"], "alice");
+    assert_eq!(c["comment"]["source"], "user", "web session comment");
     let root = c["comment"]["id"].as_str().unwrap().to_owned();
 
     // Antwort, Reaktion (zweimal idempotent), Auflösen

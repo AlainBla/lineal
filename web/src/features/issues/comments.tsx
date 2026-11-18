@@ -25,7 +25,7 @@ import {
 import { uploadImageAsset } from "./assets";
 import { Avatar } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { describeHistory, type HistoryResolver } from "./history";
+import { describeHistory, SOURCE_LABEL, type HistoryResolver } from "./history";
 import { relativeTime } from "./model";
 import { keys, setSubscription } from "./queries";
 import { useSingleFlight } from "@/lib/use-single-flight";
@@ -305,6 +305,7 @@ function CommentCard({
   const isAdmin = session?.user.role === "owner" || session?.user.role === "admin";
   const resolved = !!comment.resolvedAt;
   const author = comment.user?.displayName || comment.user?.name || "Unknown user";
+  const via = SOURCE_LABEL[comment.source] ?? null;
   return (
     <article
       id={`comment-${comment.id}`}
@@ -314,6 +315,7 @@ function CommentCard({
       <header className="mb-1 flex items-center gap-2 text-sm">
         <Avatar name={author} />
         <span className="font-medium">{author}</span>
+        {via && <span className="text-xs text-subtle-foreground">(via {via})</span>}
         <a
           href={`#comment-${comment.id}`}
           className="text-xs text-subtle-foreground hover:underline"

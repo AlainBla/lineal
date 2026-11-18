@@ -37,6 +37,7 @@ function comment(id: string, userId: string, name: string, over: Record<string, 
     user: { id: userId, name: name.toLowerCase(), displayName: name },
     issueId: "i1",
     parentId: null,
+    source: "user",
     quotedText: null,
     editedAt: null,
     resolvedAt: null,
@@ -72,6 +73,20 @@ describe("Kommentar-Aktionen (F.03)", () => {
     expect(within(other).queryByRole("button", { name: "Edit comment" })).toBeNull();
     expect(within(other).queryByRole("button", { name: "Delete comment" })).toBeNull();
     expect(within(other).getByRole("button", { name: "Resolve thread" })).toBeInTheDocument();
+  });
+
+  it("zeigt die Herkunft (via MCP) nur bei nicht-manuellen Kommentaren", async () => {
+    mockGraphql(
+      handlers([
+        comment("c1", "user-bob", "Bob", { source: "mcp" }),
+        comment("c2", "user-alice", "Alice", { source: "user" }),
+      ]),
+    );
+    await renderWithApp(view());
+    const bot = await screen.findByRole("article", { name: "Comment by Bob" });
+    expect(within(bot).getByText("(via MCP)")).toBeInTheDocument();
+    const human = screen.getByRole("article", { name: "Comment by Alice" });
+    expect(within(human).queryByText(/\(via /)).toBeNull();
   });
 
   it("bearbeitet einen Kommentar", async () => {

@@ -9,6 +9,7 @@
 
 use super::{SeedUser, ctx_for};
 use chrono::NaiveDate;
+use lineal_app::ports::repos::issue::HistorySource;
 use lineal_app::usecases::comment::{CreateCommentInput, ParentSpec};
 use lineal_app::usecases::document::{ParentRefs, SaveDocumentInput};
 use lineal_app::usecases::issue::CreateIssueInput;
@@ -520,6 +521,7 @@ pub async fn run(app: &App) -> AppResult<()> {
                 reply_to: None,
                 body: body.into(),
                 quoted_text: None,
+                source: HistorySource::User,
             },
         )
         .await?;

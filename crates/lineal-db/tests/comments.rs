@@ -378,6 +378,7 @@ async fn delete_rules(pool: PgPool) {
                 body: "Why this value?".into(),
                 quoted_text: Some("timeout = 30".into()),
                 reply_to: None,
+                ..Default::default()
             },
         )
         .await

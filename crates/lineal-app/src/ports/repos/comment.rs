@@ -1,5 +1,6 @@
 //! Repository-Port `CommentRepo`: Kommentare, Reaktionen, Eltern-Auflösung (WP09).
 
+use super::issue::HistorySource;
 use super::user::{OrderBy, PageCursor};
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
@@ -93,6 +94,8 @@ pub struct Comment {
     pub parent: ParentRef,
     /// Wurzelkommentar des Threads (`None` = Top-Level).
     pub parent_id: Option<CommentId>,
+    /// Herkunft der Erstellung (`user`/`api`/`mcp`/…), einmalig beim Anlegen gesetzt.
+    pub source: HistorySource,
     pub quoted_text: Option<String>,
     /// Positionsanker (Base64 relativer Positionen, WP36) eines Inline-Kommentars am Dokumentinhalt.
     pub anchor_start: Option<String>,
@@ -117,6 +120,8 @@ pub struct NewComment {
     pub body: String,
     pub parent: ParentRef,
     pub parent_id: Option<CommentId>,
+    /// Herkunft der Erstellung; Pflichtfeld, damit jede Konstruktionsstelle sie bewusst setzt.
+    pub source: HistorySource,
     pub quoted_text: Option<String>,
     pub now: DateTime<Utc>,
 }

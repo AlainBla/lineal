@@ -362,6 +362,7 @@ async fn add_comment(
     ids: &dyn crate::ports::IdGen,
     issue: IssueId,
     body: Option<&str>,
+    source: HistorySource,
     now: DateTime<Utc>,
 ) -> AppResult<()> {
     let Some(body) = body else { return Ok(()) };
@@ -377,6 +378,7 @@ async fn add_comment(
             body,
             parent: ParentRef::Issue(issue),
             parent_id: None,
+            source,
             quoted_text: None,
             now,
         })
@@ -469,6 +471,7 @@ impl App {
             self.ids.as_ref(),
             saved.id,
             input.comment.as_deref(),
+            input.source,
             now,
         )
         .await?;
@@ -542,6 +545,7 @@ impl App {
             self.ids.as_ref(),
             saved.id,
             input.comment.as_deref(),
+            input.source,
             now,
         )
         .await?;
@@ -597,6 +601,7 @@ impl App {
             self.ids.as_ref(),
             issue.id,
             input.comment.as_deref(),
+            input.source,
             now,
         )
         .await?;

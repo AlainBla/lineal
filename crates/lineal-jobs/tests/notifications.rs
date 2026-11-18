@@ -2316,6 +2316,7 @@ async fn guest_with_share_is_mentioned_and_notified(pool: PgPool) {
         reply_to: None,
         body: body.into(),
         quoted_text: None,
+        ..Default::default()
     };
     // Ohne Freigabe: keine Erwähnung.
     let m = e

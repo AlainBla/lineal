@@ -231,6 +231,10 @@ type Comment {
 	initiativeUpdateId: String
 	documentId: String
 	parentId: String
+	"""
+	Herkunft der Erstellung (`user`/`api`/`mcp`/…) für die Quellenanzeige in der Kommentar-Karte.
+	"""
+	source: String!
 	quotedText: String
 	"""
 	Positionsanker (Base64 relativer Positionen) und Zustand `attached`/`detached` (docs/06 §1.8).
