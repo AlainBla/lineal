@@ -15,6 +15,7 @@ import type { IssuePatch } from "./model";
 import {
   createComment,
   createIssue,
+  createLabel,
   batchUpdateIssues,
   createReaction,
   deleteComment,
@@ -29,10 +30,12 @@ import {
   fetchTeams,
   keys,
   updateIssue,
+  type CreateLabelVars,
   type IssueBatchVars,
   type IssueCreateVars,
   type IssueList,
   type IssueUpdateVars,
+  type TeamMeta,
 } from "./queries";
 import { errorMessage, showToast } from "./toast-store";
 import { commentAuthors, useRememberUsers } from "./users";
@@ -201,6 +204,27 @@ export function useCreateIssue() {
       void qc.invalidateQueries({ queryKey: keys.issues });
       void qc.invalidateQueries({ queryKey: ["issue"] });
       void qc.invalidateQueries({ queryKey: keys.issueDetails });
+    },
+  });
+}
+
+/**
+ * Legt ein Team-Label an (LIN-87, Label-Picker). Das neue Label wird optimistisch in die
+ * Team-Metadaten gelegt, damit es sofort im Picker erscheint; danach werden sie neu geladen.
+ */
+export function useCreateLabel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateLabelVars) => createLabel(input),
+    onSuccess: (label) => {
+      if (label.teamId) {
+        qc.setQueryData<TeamMeta>(keys.teamMeta(label.teamId), (old) =>
+          old && !old.labels.some((l) => l.id === label.id)
+            ? { ...old, labels: [...old.labels, label] }
+            : old,
+        );
+      }
+      void qc.invalidateQueries({ queryKey: ["team-meta"] });
     },
   });
 }

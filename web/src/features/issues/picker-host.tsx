@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useSession } from "@/app/auth";
 import type { Issue } from "@/gql/graphql";
 
-import { useTeamMeta } from "./hooks";
+import { useCreateLabel, useTeamMeta } from "./hooks";
 import { useIssueActions } from "./issue-actions";
 import { toggleLabel } from "./model";
 import { PropertyPicker } from "./picker";
@@ -68,6 +68,7 @@ export function IssuePickerHost({
   const kind = request?.kind;
   const meta = useTeamMeta(issue?.teamId);
   const actions = useIssueActions();
+  const createLabelMutation = useCreateLabel();
   const session = useSession();
   const users = useAssignableUsers(issue?.teamId);
   // Mehrfachauswahl: lokale Zwischenstände, bis der Cache die Änderung zeigt.
@@ -164,6 +165,18 @@ export function IssuePickerHost({
       );
     case "labels": {
       const all = meta.data?.labels ?? [];
+      // Label-Recht (LIN-87): `ManageTeamLabels` erlaubt `is_team_owner || (is_member &&
+      // labelManagement == "member")` ohne Gast-Ausschluss. `labelManagement` ist immer der Default
+      // "member" – kein GraphQL-/MCP-/Import-Pfad setzt die Team-securitySettings. Damit ist
+      // `viewer.isOwner || viewer.isMember` exakt die Server-Regel; ein Fehler-Toast fängt den Rest ab.
+      const viewer = meta.data?.team.viewer;
+      const canCreateLabels =
+        !!issue.teamId && (viewer?.isOwner === true || viewer?.isMember === true);
+      const addLabel = (id: string, base: string[]) => {
+        const next = [...base, id];
+        setLabelOverride({ id: issue.id, ids: next });
+        actions.setLabels(issue, next);
+      };
       return (
         <PropertyPicker
           {...common}
@@ -175,6 +188,25 @@ export function IssuePickerHost({
             setLabelOverride({ id: issue.id, ids: next });
             actions.setLabels(issue, next);
           }}
+          {...(canCreateLabels
+            ? {
+                createLabel: (term) => `Create label "${term}"`,
+                onCreate: (term) => {
+                  if (createLabelMutation.isPending) return;
+                  createLabelMutation.mutate(
+                    { name: term, teamId: issue.teamId },
+                    {
+                      onSuccess: (label) => addLabel(label.id, labelIds),
+                      onError: (err) =>
+                        showToast({
+                          message: errorMessage(err, "Could not create the label."),
+                          tone: "error",
+                        }),
+                    },
+                  );
+                },
+              }
+            : {})}
         />
       );
     }

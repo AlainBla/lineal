@@ -1,4 +1,5 @@
-import { Check } from "lucide-react";
+import { defaultFilter } from "cmdk";
+import { Check, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -40,6 +41,13 @@ export interface PickerBodyProps {
   autoFocus?: boolean;
   /** Nach einer Einzelauswahl aufrufen (Dialog schließen bzw. Flyout/Menü schließen). */
   onDone?: () => void;
+  /**
+   * Opt-in (LIN-87): Legt den eingegebenen Begriff als neue Option an. Die Zeile erscheint nur, wenn
+   * der getrimmte Suchtext keine vorhandene Option trifft (cmdk-Filter). Der Picker bleibt offen.
+   */
+  onCreate?: (term: string) => void;
+  /** Beschriftung der Anlegen-Zeile; nur mit `onCreate` genutzt. */
+  createLabel?: (term: string) => string;
 }
 
 interface PropertyPickerProps extends Omit<PickerBodyProps, "autoFocus" | "onDone"> {
@@ -81,6 +89,8 @@ export function PickerBody({
   emptyText = "No results.",
   autoFocus = false,
   onDone,
+  onCreate,
+  createLabel,
 }: PickerBodyProps) {
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -97,6 +107,15 @@ export function PickerBody({
     onSelect(id);
     if (!multi) onDone?.();
   };
+
+  // Anlegen-Zeile (LIN-87): nur wenn ein Begriff eingegeben ist und keine Option ihn trifft. Wir
+  // nutzen cmdks eigenen Filter (`defaultFilter`), damit die Entscheidung exakt der Liste entspricht;
+  // ein Treffer (auch gleichnamig, case-insensitive) blendet die Zeile aus (Dedup).
+  const trimmed = query.trim();
+  const hasMatch =
+    trimmed !== "" &&
+    options.some((o) => defaultFilter(`${o.label} ${o.id}`, trimmed, o.keywords) > 0);
+  const showCreate = !!onCreate && trimmed !== "" && !hasMatch;
 
   const explicitDigits = options.some((o) => o.digit !== undefined);
   const digitOf = (o: PickerOption, i: number): string | undefined =>
@@ -128,7 +147,28 @@ export function PickerBody({
           onPointerDown={(e) => e.preventDefault()}
           onMouseDown={(e) => e.preventDefault()}
         >
-          <CommandEmpty>{emptyText}</CommandEmpty>
+          {/* Bei aktiver Anlegen-Zeile kein „No results.“ (cmdk trimmt Item-Werte, der Filter nicht –
+              bei nachlaufendem Leerzeichen wäre die Zeile sonst gefiltert; `forceMount` hält sie da). */}
+          <CommandEmpty>{showCreate ? null : emptyText}</CommandEmpty>
+          {showCreate && (
+            <CommandItem
+              key="__create__"
+              forceMount
+              value={trimmed}
+              onSelect={() => {
+                onCreate?.(trimmed);
+                // Suchfeld leeren: blendet die Zeile sofort aus (kein Doppel-Anlegen) und zeigt das
+                // neue Element samt Häkchen, sobald die Metadaten aktualisiert sind.
+                setQuery("");
+              }}
+              data-picker-create
+            >
+              <Plus />
+              <span className="truncate">
+                {createLabel ? createLabel(trimmed) : `Create "${trimmed}"`}
+              </span>
+            </CommandItem>
+          )}
           {options.map((o, i) => (
             <CommandItem
               key={o.id}
