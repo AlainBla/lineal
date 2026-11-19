@@ -103,7 +103,7 @@ export interface TeamMeta {
 }
 
 const TEAM_META_QUERY = `query TeamMeta($team: String!) {
-  team(id: $team) { id key name displayName parentId icon color issueEstimationType cyclesEnabled triageEnabled }
+  team(id: $team) { id key name displayName parentId icon color issueEstimationType cyclesEnabled triageEnabled viewer { isMember isOwner } }
   workflowStates(teamId: $team) { id teamId name type color position isDefault }
   issueLabels(teamId: $team, includeGroups: true) { id name color teamId parentId isGroup groupType }
   cycles(teamId: $team) { id teamId number name startsAt endsAt isActive isNext isPast }
@@ -128,6 +128,37 @@ export async function fetchTeamMeta(team: string, signal?: AbortSignal): Promise
     cycles: res.cycles,
     projects: res.projects,
   };
+}
+
+/** Eingabe von `issueLabelCreate` (nur einfache Team-Labels, LIN-87). */
+export interface CreateLabelVars extends Record<string, unknown> {
+  name: string;
+  teamId?: string;
+  color?: string;
+}
+
+/**
+ * Legt ein Issue-Label an und liefert das neue Label (inkl. `id`, die zum Anhängen ans Issue nötig
+ * ist; die Settings-Mutation gibt sie nicht zurück). Farbe wird weggelassen – der Server vergibt
+ * seine Standardfarbe.
+ */
+export async function createLabel(input: CreateLabelVars): Promise<IssueLabel> {
+  const res = await gqlRequest<
+    { issueLabelCreate: { success: boolean; issueLabel: IssueLabel | null } },
+    { input: CreateLabelVars }
+  >(
+    `mutation IssueLabelCreate($input: IssueLabelCreateInput!) {
+      issueLabelCreate(input: $input) {
+        success
+        issueLabel { id name color teamId parentId isGroup groupType }
+      }
+    }`,
+    { input },
+  );
+  if (!res.issueLabelCreate.issueLabel) {
+    throw new Error("Could not create the label.");
+  }
+  return res.issueLabelCreate.issueLabel;
 }
 
 export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Issue> {

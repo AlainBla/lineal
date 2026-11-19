@@ -73,6 +73,15 @@ describe("PropertyPicker per Tastatur", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("ohne onCreate (andere Picker) bleibt es bei „No results.“ ohne Anlegen-Zeile", async () => {
+    const onSelect = vi.fn();
+    await renderWithApp(<Harness onSelect={onSelect} />);
+    const input = await screen.findByPlaceholderText("Change status…");
+    await userEvent.type(input, "zzz");
+    expect(await screen.findByText("No results.")).toBeInTheDocument();
+    expect(screen.queryByText(/Create/)).toBeNull();
+  });
+
   it("Mehrfachauswahl bleibt offen und meldet jede Umschaltung", async () => {
     const onSelect = vi.fn();
     await renderWithApp(<Harness multi onSelect={onSelect} />);
@@ -252,5 +261,108 @@ describe("IssuePickerHost", () => {
     await screen.findByText("Alice");
     expect(screen.queryByText("Carol (Gast)")).toBeNull();
     expect(gql.of("KnownUsers").some((c) => c.variables.team === "team-eng")).toBe(true);
+  });
+
+  const labelsMeta = (over: Partial<ReturnType<typeof labelMetaBase>> = {}) => ({
+    ...labelMetaBase(),
+    ...over,
+  });
+  function labelMetaBase() {
+    return {
+      team: TEAM_META.team,
+      workflowStates: TEAM_META.states,
+      issueLabels: TEAM_META.labels,
+      cycles: [],
+      projects: [],
+    };
+  }
+
+  it("Label-Picker: zeigt die Anlegen-Zeile, wenn der Begriff kein Label trifft (LIN-87)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    mockGraphql({ TeamMeta: () => labelsMeta() });
+    await renderWithApp(<Host request={{ kind: "labels", issue }} />);
+    const input = await screen.findByPlaceholderText("Change labels…");
+    await screen.findByText("Bug");
+    await userEvent.type(input, "Design System");
+    expect(await screen.findByText('Create label "Design System"')).toBeInTheDocument();
+  });
+
+  it("Label-Picker: Anlegen-Zeile bleibt bei nachlaufendem Leerzeichen sichtbar (LIN-87)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    mockGraphql({ TeamMeta: () => labelsMeta() });
+    await renderWithApp(<Host request={{ kind: "labels", issue }} />);
+    const input = await screen.findByPlaceholderText("Change labels…");
+    await screen.findByText("Bug");
+    await userEvent.type(input, "Design ");
+    expect(await screen.findByText('Create label "Design"')).toBeInTheDocument();
+  });
+
+  it("Label-Picker: keine Anlegen-Zeile, wenn ein gleichnamiges Label existiert (LIN-87)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    mockGraphql({ TeamMeta: () => labelsMeta() });
+    await renderWithApp(<Host request={{ kind: "labels", issue }} />);
+    const input = await screen.findByPlaceholderText("Change labels…");
+    await screen.findByText("Bug");
+    await userEvent.type(input, "bug");
+    expect(screen.queryByText(/Create label/)).toBeNull();
+    expect(screen.getByText("Bug")).toBeInTheDocument();
+  });
+
+  it("Label-Picker: keine Anlegen-Zeile ohne Label-Recht (LIN-87)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    mockGraphql({
+      TeamMeta: () =>
+        labelsMeta({
+          team: { ...TEAM_META.team, viewer: { isMember: false, isOwner: false, canJoin: false } },
+        }),
+    });
+    await renderWithApp(<Host request={{ kind: "labels", issue }} />);
+    const input = await screen.findByPlaceholderText("Change labels…");
+    await screen.findByText("Bug");
+    await userEvent.type(input, "Design System");
+    expect(screen.queryByText(/Create label/)).toBeNull();
+  });
+
+  it("Label-Picker: Anlegen erstellt das Label und hängt es ans Issue (LIN-87)", async () => {
+    const issue = makeIssue({ id: "i1", identifier: "ENG-1" });
+    const gql = mockGraphql({
+      TeamMeta: () => labelsMeta(),
+      IssueLabelCreate: (v) => ({
+        issueLabelCreate: {
+          success: true,
+          issueLabel: {
+            id: "l-new",
+            name: (v.input as { name: string }).name,
+            color: "#95A2B3",
+            teamId: "team-eng",
+            parentId: null,
+            isGroup: false,
+            groupType: null,
+          },
+        },
+      }),
+      IssueUpdate: (v) => ({
+        issueUpdate: { success: true, issue: { ...issue, ...(v.input as object) } },
+      }),
+    });
+    const client = newClient();
+    client.setQueryData(keys.issue("ENG-1"), issue);
+    await renderWithApp(<Host request={{ kind: "labels", issue }} />, client);
+    const input = await screen.findByPlaceholderText("Change labels…");
+    await screen.findByText("Bug");
+    await userEvent.type(input, "Design System");
+    await screen.findByText('Create label "Design System"');
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(gql.of("IssueLabelCreate")).toHaveLength(1));
+    expect(gql.of("IssueLabelCreate")[0]!.variables).toEqual({
+      input: { name: "Design System", teamId: "team-eng" },
+    });
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toEqual({
+      id: "i1",
+      input: { labelIds: ["l-new"] },
+    });
+    // Mehrfachauswahl: der Picker bleibt nach dem Anlegen offen.
+    expect(screen.getByPlaceholderText("Change labels…")).toBeInTheDocument();
   });
 });

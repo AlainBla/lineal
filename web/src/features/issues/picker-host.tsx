@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import type { Issue } from "@/gql/graphql";
 
-import { useTeamMeta } from "./hooks";
+import { useCreateLabel, useTeamMeta } from "./hooks";
 import { useIssueActions } from "./issue-actions";
 import { toggleLabel } from "./model";
 import { PropertyPicker } from "./picker";
@@ -68,12 +68,21 @@ export function IssuePickerHost({
   const kind = request?.kind;
   const meta = useTeamMeta(issue?.teamId);
   const actions = useIssueActions();
+  const createLabelMutation = useCreateLabel();
   const session = useSession();
   const users = useAssignableUsers(issue?.teamId);
   // Mehrfachauswahl: lokale Zwischenstände, bis der Cache die Änderung zeigt.
   const [labelOverride, setLabelOverride] = useState<{ id: string; ids: string[] } | null>(null);
   const labelIds =
     issue && labelOverride?.id === issue.id ? labelOverride.ids : (issue?.labelIds ?? []);
+  // Immer die aktuell gewählten Labels – damit ein asynchrones Anlegen nicht eine zwischenzeitliche
+  // Umschaltung überschreibt (nutzt den Stand zum Zeitpunkt der Server-Antwort, nicht des Klicks).
+  const labelIdsRef = useRef<string[]>(labelIds);
+  // Ref nach jedem Render synchronisieren (Schreiben im Effect, Lesen nur in Callbacks). Kein
+  // Dep-Array: `labelIds` ist je Render ein neues Array.
+  useEffect(() => {
+    labelIdsRef.current = labelIds;
+  });
 
   const estimationType = meta.data?.team.issueEstimationType ?? "notUsed";
   const cyclesEnabled = meta.data?.team.cyclesEnabled ?? false;
@@ -164,6 +173,19 @@ export function IssuePickerHost({
       );
     case "labels": {
       const all = meta.data?.labels ?? [];
+      // Label-Recht (LIN-87): `ManageTeamLabels` erlaubt `is_team_owner || (is_member &&
+      // labelManagement == "member")` ohne Gast-Ausschluss. `labelManagement` ist immer der Default
+      // "member" – kein GraphQL-/MCP-/Import-Pfad setzt die Team-securitySettings. Damit ist
+      // `viewer.isOwner || viewer.isMember` exakt die Server-Regel; ein Fehler-Toast fängt den Rest ab.
+      const viewer = meta.data?.team.viewer;
+      const canCreateLabels =
+        !!issue.teamId && (viewer?.isOwner === true || viewer?.isMember === true);
+      const addLabel = (id: string) => {
+        const base = labelIdsRef.current;
+        const next = base.includes(id) ? base : [...base, id];
+        setLabelOverride({ id: issue.id, ids: next });
+        actions.setLabels(issue, next);
+      };
       return (
         <PropertyPicker
           {...common}
@@ -175,6 +197,25 @@ export function IssuePickerHost({
             setLabelOverride({ id: issue.id, ids: next });
             actions.setLabels(issue, next);
           }}
+          {...(canCreateLabels
+            ? {
+                createLabel: (term) => `Create label "${term}"`,
+                onCreate: (term) => {
+                  if (createLabelMutation.isPending) return;
+                  createLabelMutation.mutate(
+                    { name: term, teamId: issue.teamId },
+                    {
+                      onSuccess: (label) => addLabel(label.id),
+                      onError: (err) =>
+                        showToast({
+                          message: errorMessage(err, "Could not create the label."),
+                          tone: "error",
+                        }),
+                    },
+                  );
+                },
+              }
+            : {})}
         />
       );
     }
