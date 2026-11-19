@@ -64,8 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+      # Vorkompiliertes Binary statt `cargo install`: cargo-deny ≥0.22 verlangt rustc ≥1.95,
+      # der Runner-Default liegt darunter — der Quell-Build bräche sonst bei jedem Lauf.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - run: cargo deny check advisories bans licenses
 
   web:
