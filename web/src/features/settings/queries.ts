@@ -240,7 +240,22 @@ export function useWorkflowMutations() {
           }`,
           v,
         ),
-      onSuccess: done,
+      // Optimistisch: Farbe/Name/Position sofort im States-Cache spiegeln, bei Fehler zurückrollen
+      // (LIN-73). `v` bleibt unberührt, damit die Request-Variablen `{ id, input }` bleiben.
+      onMutate: async (v) => {
+        await qc.cancelQueries({ queryKey: ["settings", "states"] });
+        const prev = qc.getQueriesData<WorkflowState[]>({ queryKey: ["settings", "states"] });
+        qc.setQueriesData<WorkflowState[]>({ queryKey: ["settings", "states"] }, (list) =>
+          Array.isArray(list)
+            ? list.map((s) => (s.id === v.id ? ({ ...s, ...v.input } as WorkflowState) : s))
+            : list,
+        );
+        return { prev };
+      },
+      onError: (_e, _v, ctx) => {
+        ctx?.prev.forEach(([key, data]) => qc.setQueryData(key, data));
+      },
+      onSettled: done,
     }),
     archive: useMutation({
       mutationFn: async (v: { id: string; targetStateId?: string }) =>
