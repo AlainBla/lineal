@@ -95,6 +95,11 @@ pub struct IssueExtras {
     pub children_count: i64,
     /// Anzahl der (nicht archivierten) Anhänge/Links.
     pub link_count: i64,
+    /// Offene Blocker dieses Issues als `(Kennung, Team)`: Issues, die dieses Issue blockieren und
+    /// nicht abgeschlossen sind (nicht completed/canceled/duplicate). `filter_extras` entfernt
+    /// Blocker aus für den Aufrufer unsichtbaren Teams, damit der „Blocked"-Indikator in Liste und
+    /// Board ohne Nachladen der Relationen und ohne Leak fremder Kennungen auskommt (LIN-79).
+    pub blocked_by: Vec<(String, TeamId)>,
 }
 
 /// Quelle eines History-Eintrags (`issue_history.source`).

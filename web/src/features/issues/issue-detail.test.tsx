@@ -687,3 +687,94 @@ describe("Issue-Detail", () => {
     }
   });
 });
+
+describe("Blocked-Indikator (LIN-79)", () => {
+  const relatedOpen = {
+    id: "r5",
+    identifier: "ENG-5",
+    title: "Zahlungsanbieter anbinden",
+    stateType: "started",
+    stateName: "In Progress",
+    stateColor: "#F2C94C",
+  };
+
+  it("zeigt im Header ein barrierefreies Blocked-Badge, das die Blocker nennt", async () => {
+    const blocked = makeIssue({
+      id: "i1",
+      identifier: "ENG-120",
+      title: "Checkout überarbeiten",
+      stateId: "s-progress",
+      blockedByIdentifiers: ["ENG-5", "ENG-9"],
+    });
+    mockGraphql({ ...handlers(), IssueDetail: () => ({ issue: blocked }) });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+    const badge = await screen.findByTestId("blocked-badge");
+    expect(badge).toHaveTextContent("Blocked");
+    expect(within(badge).getByLabelText("Blocked by ENG-5, ENG-9")).toBeInTheDocument();
+  });
+
+  it("blendet das Badge aus, wenn keine offenen Blocker vorhanden sind", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+    await screen.findByLabelText("Title");
+    expect(screen.queryByTestId("blocked-badge")).toBeNull();
+  });
+
+  it("zeigt das Badge, nachdem über den Dialog ein Blocker angelegt wurde", async () => {
+    let detailIssue = makeIssue({
+      id: "i1",
+      identifier: "ENG-120",
+      title: "Checkout überarbeiten",
+      stateId: "s-progress",
+    });
+    const gql = mockGraphql({
+      ...handlers(),
+      IssueDetail: () => ({ issue: detailIssue }),
+      IssuePickerSearch: () => ({
+        searchIssues: {
+          nodes: [
+            { issue: { id: "i1", identifier: "ENG-120", title: "Dieses", stateType: "started" } },
+            { issue: { id: "i9", identifier: "ENG-132", title: "Blocker", stateType: "started" } },
+          ],
+        },
+      }),
+      IssueRelationCreate: () => {
+        // Der Server kennt ENG-120 jetzt als blockiert durch ENG-132.
+        detailIssue = { ...detailIssue, blockedByIdentifiers: ["ENG-132"] };
+        return { issueRelationCreate: { success: true } };
+      },
+    });
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    expect(screen.queryByTestId("blocked-badge")).toBeNull();
+    // „Blocked by" (m b) über den Picker anlegen.
+    await userEvent.keyboard("m");
+    await userEvent.keyboard("b");
+    const input = await screen.findByLabelText("Search issues");
+    await userEvent.type(input, "ENG-132");
+    await screen.findByRole("option", { name: /ENG-132/ });
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(gql.of("IssueRelationCreate")).toHaveLength(1));
+    // Das Badge erscheint, weil der `["issue", ref]`-Cache invalidiert und neu geladen wird.
+    expect(await screen.findByTestId("blocked-badge")).toBeInTheDocument();
+  });
+
+  it("hebt in der Relationsliste die 'Blocked by'-Zeile mit Icon hervor", async () => {
+    mockGraphql(
+      handlers({
+        relations: {
+          blocks: [],
+          blockedBy: [relatedOpen],
+          relatedTo: [],
+          duplicateOf: null,
+          duplicates: [],
+        },
+      }),
+    );
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+    const related = await screen.findByLabelText("Related issues");
+    const row = (await within(related).findByText("ENG-5")).closest("a")!;
+    expect(within(row).getByText("Blocked by")).toBeInTheDocument();
+    expect(within(row).getAllByLabelText("Blocked by").length).toBeGreaterThan(0);
+  });
+});

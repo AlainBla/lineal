@@ -390,6 +390,116 @@ async fn issue_children_relations_and_history_fields(pool: sqlx::PgPool) {
     assert_eq!(bob["issue"]["children"].as_array().unwrap().len(), 2);
 }
 
+/// Kennungen offener Blocker über den Listenpfad abfragen (`issues`).
+async fn blocked_ids(
+    schema: &lineal_api::graphql::LinealSchema,
+    who: SeedUser,
+    identifier: &str,
+) -> Vec<String> {
+    let list = data(
+        run(
+            schema,
+            who,
+            r#"{ issues(teamId: "ENG", first: 50) { nodes { identifier blockedByIdentifiers } } }"#,
+        )
+        .await,
+    );
+    list["issues"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["identifier"] == identifier)
+        .unwrap_or_else(|| panic!("{identifier} not in list"))["blockedByIdentifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// LIN-79: `blockedByIdentifiers` zählt nur offene, sichtbare, nicht gelöschte Blocker – und ist am
+/// Listenpfad (ohne Nachladen der Relationen) verfügbar.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn blocked_by_identifiers_track_open_visible_blockers(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let schema = build_schema(test_app(Arc::new(store)));
+
+    // ENG-1 … ENG-3 (Alice), DES-1 (Bob, für Alice unsichtbar).
+    for (team, who, title) in [
+        ("ENG", SeedUser::Alice, "Blocker"),
+        ("ENG", SeedUser::Alice, "Blockiert"),
+        ("ENG", SeedUser::Alice, "Papierkorb-Blocker"),
+        ("DES", SeedUser::Bob, "Geheimer Blocker"),
+    ] {
+        let q = format!(
+            r#"mutation {{ issueCreate(input: {{teamId: "{team}", title: "{title}"}}) {{ success }} }}"#
+        );
+        assert!(run(&schema, who, &q).await.errors.is_empty(), "{title}");
+    }
+
+    // ENG-1 blockiert ENG-2 ⇒ ENG-2 ist „blocked by ENG-1"; die Richtung darf nicht kippen.
+    let rel = |issue: &str, related: &str| {
+        format!(
+            r#"mutation {{ issueRelationCreate(input: {{issueId: "{issue}", relatedIssueId: "{related}", type: "blocks"}}) {{ success }} }}"#
+        )
+    };
+    data(run(&schema, SeedUser::Alice, &rel("ENG-1", "ENG-2")).await);
+    // ENG-3 blockiert ENG-2, wird aber gleich in den Papierkorb gelegt.
+    data(run(&schema, SeedUser::Alice, &rel("ENG-3", "ENG-2")).await);
+    // DES-1 (privates Team) blockiert ENG-2; Bob darf beide sehen und die Relation anlegen.
+    data(run(&schema, SeedUser::Bob, &rel("DES-1", "ENG-2")).await);
+
+    // Alice: ENG-2 ist blockiert durch ENG-1 und ENG-3 – nicht durch das unsichtbare DES-1.
+    assert_eq!(
+        blocked_ids(&schema, SeedUser::Alice, "ENG-2").await,
+        vec!["ENG-1".to_owned(), "ENG-3".to_owned()]
+    );
+    // Der Blocker selbst ist nicht blockiert (Richtung stimmt).
+    assert!(
+        blocked_ids(&schema, SeedUser::Alice, "ENG-1")
+            .await
+            .is_empty()
+    );
+
+    // Bob sieht zusätzlich das DES-1 als Blocker (Sichtbarkeit).
+    assert_eq!(
+        blocked_ids(&schema, SeedUser::Bob, "ENG-2").await,
+        vec!["DES-1".to_owned(), "ENG-1".to_owned(), "ENG-3".to_owned()]
+    );
+
+    // ENG-3 in den Papierkorb ⇒ zählt nicht mehr.
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"mutation { issueDelete(id: "ENG-3") { success } }"#,
+        )
+        .await,
+    );
+    assert_eq!(
+        blocked_ids(&schema, SeedUser::Alice, "ENG-2").await,
+        vec!["ENG-1".to_owned()]
+    );
+
+    // ENG-1 auf „Done" (completed) ⇒ kein offener Blocker mehr, der Indikator verschwindet.
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            r#"mutation { issueUpdate(id: "ENG-1", input: {stateId: "Done"}) { success } }"#,
+        )
+        .await,
+    );
+    assert!(
+        blocked_ids(&schema, SeedUser::Alice, "ENG-2")
+            .await
+            .is_empty()
+    );
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn detail_fields_are_budgeted_per_request(pool: sqlx::PgPool) {
     let store = PgStore::new(pool);

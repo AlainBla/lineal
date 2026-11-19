@@ -62,6 +62,11 @@ pub struct IssueGql {
     pub triaged_at: Option<String>,
     /// Anzahl der Anhänge/Links („Link count“).
     pub link_count: i32,
+    /// Kennungen offener Blocker: Issues, die dieses Issue blockieren und nicht abgeschlossen sind
+    /// (nicht completed/canceled/duplicate). Leer ⇒ nicht blockiert. In Listen und auf dem Board
+    /// ohne Nachladen der Relationen verfügbar; der Aufrufer sieht nur Blocker aus sichtbaren Teams
+    /// (LIN-79).
+    pub blocked_by_identifiers: Vec<String>,
 }
 
 impl From<IssueView> for IssueGql {
@@ -104,6 +109,12 @@ impl From<IssueView> for IssueGql {
             started_triage_at: ts(i.started_triage_at),
             triaged_at: ts(i.triaged_at),
             link_count: i32::try_from(v.extras.link_count).unwrap_or(i32::MAX),
+            blocked_by_identifiers: v
+                .extras
+                .blocked_by
+                .into_iter()
+                .map(|(ident, _team)| ident)
+                .collect(),
         }
     }
 }
