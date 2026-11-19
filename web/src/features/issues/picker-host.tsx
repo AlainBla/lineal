@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useSession } from "@/app/auth";
 import type { Issue } from "@/gql/graphql";
@@ -75,6 +75,14 @@ export function IssuePickerHost({
   const [labelOverride, setLabelOverride] = useState<{ id: string; ids: string[] } | null>(null);
   const labelIds =
     issue && labelOverride?.id === issue.id ? labelOverride.ids : (issue?.labelIds ?? []);
+  // Immer die aktuell gewählten Labels – damit ein asynchrones Anlegen nicht eine zwischenzeitliche
+  // Umschaltung überschreibt (nutzt den Stand zum Zeitpunkt der Server-Antwort, nicht des Klicks).
+  const labelIdsRef = useRef<string[]>(labelIds);
+  // Ref nach jedem Render synchronisieren (Schreiben im Effect, Lesen nur in Callbacks). Kein
+  // Dep-Array: `labelIds` ist je Render ein neues Array.
+  useEffect(() => {
+    labelIdsRef.current = labelIds;
+  });
 
   const estimationType = meta.data?.team.issueEstimationType ?? "notUsed";
   const cyclesEnabled = meta.data?.team.cyclesEnabled ?? false;
@@ -172,8 +180,9 @@ export function IssuePickerHost({
       const viewer = meta.data?.team.viewer;
       const canCreateLabels =
         !!issue.teamId && (viewer?.isOwner === true || viewer?.isMember === true);
-      const addLabel = (id: string, base: string[]) => {
-        const next = [...base, id];
+      const addLabel = (id: string) => {
+        const base = labelIdsRef.current;
+        const next = base.includes(id) ? base : [...base, id];
         setLabelOverride({ id: issue.id, ids: next });
         actions.setLabels(issue, next);
       };
@@ -196,7 +205,7 @@ export function IssuePickerHost({
                   createLabelMutation.mutate(
                     { name: term, teamId: issue.teamId },
                     {
-                      onSuccess: (label) => addLabel(label.id, labelIds),
+                      onSuccess: (label) => addLabel(label.id),
                       onError: (err) =>
                         showToast({
                           message: errorMessage(err, "Could not create the label."),

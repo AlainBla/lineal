@@ -189,6 +189,86 @@ describe("Kontextmenü auf Tickets", () => {
     expect(screen.getByRole("option", { name: /Bug/ })).toBeInTheDocument();
   });
 
+  it("Labels-Flyout: Anlegen-Zeile erscheint bei fehlendem Treffer, nicht bei Treffer (LIN-87)", async () => {
+    mockGraphql(base);
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Labels…/ }));
+    // Radix-Submenü + jsdom: Suchtext per `change` setzen (userEvent.type verliert hier den Fokus).
+    const input = await screen.findByPlaceholderText("Change labels…");
+    fireEvent.change(input, { target: { value: "Design System" } });
+    expect(await screen.findByText('Create label "Design System"')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "bug" } });
+    expect(screen.queryByText(/Create label/)).toBeNull();
+  });
+
+  it("Labels-Flyout: Anlegen erstellt das Label (Team-Scope) und hängt es ans Issue (LIN-87)", async () => {
+    const gql = mockGraphql({
+      ...base,
+      IssueLabelCreate: (v) => ({
+        issueLabelCreate: {
+          success: true,
+          issueLabel: {
+            id: "l-new",
+            name: (v.input as { name: string }).name,
+            color: "#95A2B3",
+            teamId: "team-eng",
+            parentId: null,
+            isGroup: false,
+            groupType: null,
+          },
+        },
+      }),
+      IssueUpdate: (v) => ({
+        issueUpdate: { issue: { ...ISSUES[0]!, id: v.id as string, ...(v.input as object) } },
+      }),
+    });
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Labels…/ }));
+    const input = await screen.findByPlaceholderText("Change labels…");
+    fireEvent.change(input, { target: { value: "Design System" } });
+    fireEvent.click(await screen.findByRole("option", { name: /Create label/ }));
+    await waitFor(() => expect(gql.of("IssueLabelCreate")).toHaveLength(1));
+    expect(gql.of("IssueLabelCreate")[0]!.variables).toEqual({
+      input: { name: "Design System", teamId: "team-eng" },
+    });
+    await waitFor(() => expect(gql.of("IssueUpdate")).toHaveLength(1));
+    expect(gql.of("IssueUpdate")[0]!.variables).toMatchObject({
+      id: "a",
+      input: { labelIds: ["l-new"] },
+    });
+    // Mehrfachauswahl: das Flyout bleibt nach dem Anlegen offen.
+    expect(screen.getByPlaceholderText("Change labels…")).toBeInTheDocument();
+  });
+
+  it("Labels-Flyout: keine Anlegen-Zeile ohne Label-Recht (LIN-87)", async () => {
+    mockGraphql({
+      ...base,
+      TeamMeta: () => ({
+        team: { ...TEAM_META.team, viewer: { isMember: false, isOwner: false, canJoin: false } },
+        workflowStates: TEAM_META.states,
+        issueLabels: TEAM_META.labels,
+        cycles: [],
+        projects: [],
+      }),
+    });
+    await renderWithApp(page());
+    await screen.findByText("Erstes Ticket");
+    const user = userEvent.setup();
+    await openMenu("Erstes Ticket");
+    await user.click(screen.getByRole("menuitem", { name: /^Labels…/ }));
+    const input = await screen.findByPlaceholderText("Change labels…");
+    fireEvent.change(input, { target: { value: "Design System" } });
+    // Bug existiert weiter, aber es gibt keinen Treffer für „Design System“ – trotzdem keine Zeile.
+    expect(screen.queryByText(/Create label/)).toBeNull();
+    expect(await screen.findByText("No results.")).toBeInTheDocument();
+  });
+
   it("Due-date-Untermenü setzt eine Voreinstellung", async () => {
     const gql = mockGraphql({
       ...base,
