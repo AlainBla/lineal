@@ -73,6 +73,16 @@ describe("chipToFilter (docs/05 §1.6)", () => {
     expect(chipToFilter(chip({ field: "project", op: "is", values: ["none"] }))).toEqual({
       project: { null: true },
     });
+    // LIN-82: Projekte UND "No project" zusammen -> or:[id.in, null]. Der Server muss den
+    // verschachtelten `null` auf der nullbaren Projekt-Relation zulassen (filter.rs ProjectFilter).
+    expect(
+      chipToFilter(chip({ field: "project", op: "is", values: ["none", "p-1", "p-2"] })),
+    ).toEqual({
+      project: { or: [{ id: { in: ["p-1", "p-2"] } }, { null: true }] },
+    });
+    expect(chipToFilter(chip({ field: "project", op: "isNot", values: ["none", "p-1"] }))).toEqual({
+      project: { and: [{ id: { nin: ["p-1"] } }, { null: false }] },
+    });
     expect(chipToFilter(chip({ field: "cycle", op: "is", values: ["current"] }))).toEqual({
       cycle: { isActive: { eq: true } },
     });
