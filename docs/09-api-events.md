@@ -433,6 +433,7 @@ Regeln:
 - Admins können per Workspace-Einstellung `allowMemberApiKeys: Boolean` verbieten, dass Nicht-Admins Keys anlegen.
 - Widerruf: der Eigentümer in seinen Einstellungen, Admins für beliebige Keys des Workspace (`apiKeyRevoke(id)` bzw. `DELETE /api-keys/{id}`); setzt `revokedAt`, wirkt sofort.
 - Wird der User deaktiviert oder verliert er die Rolle, gelten seine Keys sofort nur noch im neuen Rahmen bzw. gar nicht.
+- Keys müssen nicht einem Menschen gehören: Admins legen **Bots** (User mit Rolle `app`) an und statten sie mit eigenen Keys aus, damit Automationen als Bot statt als Person erscheinen. Anleitung in [16 – Bots & API-Keys](16-bots-api-keys.md).
 
 ### 2.3 OAuth 2.0
 

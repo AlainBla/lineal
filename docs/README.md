@@ -28,6 +28,7 @@ Grundlage (Stand 2026-10-10):
 | 13 | [Import aus Linear](13-import-linear.md) | Migration eines Linear-Workspaces: Mapping, Phasen, Delta-Import, Sicherheit |
 | 14 | [Firmenweite Sicht](14-firmenweite-sicht.md) | Teamübergreifende Issues, Dashboard, Roadmap, Auslastung |
 | 15 | [Umsetzungsstand](15-umsetzungsstand.md) | Was implementiert ist, bekannte Lücken, Betrieb (Env, Jobs, Ports), Sicherheitsmaßnahmen, Entscheidungen bei Widersprüchen |
+| 16 | [Bots & API-Keys](16-bots-api-keys.md) | Anleitung: Bot anlegen und mit API-Key ausstatten, damit Automationen als Bot statt als Person auftreten (LIN-22) |
 
 Eine gerenderte Übersicht mit allen Diagrammen liegt in [index.html](index.html).
 
