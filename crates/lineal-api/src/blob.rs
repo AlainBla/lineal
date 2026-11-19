@@ -617,12 +617,19 @@ fn download_filename(original: Option<&str>, key: &str, content_type: &str) -> S
     }
 }
 
-/// Entschärft den ursprünglichen Dateinamen für die Header-Verwendung: Steuerzeichen entfernen,
-/// Pfadtrenner neutralisieren – aber Unicode (CJK/Emoji) erhalten, das RFC 5987 kodiert.
+/// Entschärft den ursprünglichen Dateinamen für die Header-Verwendung: Steuerzeichen und
+/// unsichtbare Bidi-/Format-Zeichen entfernen, Pfadtrenner neutralisieren – aber sichtbares
+/// Unicode (CJK/Emoji) erhalten, das RFC 5987 kodiert.
+///
+/// Die Bidi-/Format-Zeichen (Kategorie Cf) würden `is_control()` passieren und im bevorzugten
+/// `filename*`-Wert überleben; beim Anzeigen im Browser ermöglichen sie Right-to-Left-Override-
+/// Spoofing (z. B. `report<U+202E>cod.exe` erscheint als `report.exe...`). `std` kennt keine
+/// Unicode-Kategorien, darum die betroffenen Bereiche explizit (U+200B–200F, U+202A–202E,
+/// U+2066–2069, U+FEFF).
 fn sanitize_original(name: &str) -> String {
     let clean: String = name
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !is_disallowed_name_char(*c))
         .map(|c| if matches!(c, '/' | '\\') { '_' } else { c })
         .collect();
     let clean = clean.trim();
@@ -631,6 +638,15 @@ fn sanitize_original(name: &str) -> String {
     } else {
         clean.to_owned()
     }
+}
+
+/// Steuerzeichen oder unsichtbares Bidi-/Format-Zeichen (Spoofing-Gefahr im angezeigten Namen).
+fn is_disallowed_name_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c as u32,
+            0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069 | 0xFEFF
+        )
 }
 
 /// Prozent-Kodierung nach RFC 5987 (`ext-value`): nur `attr-char` bleiben stehen, alles andere wird
@@ -1049,6 +1065,30 @@ mod tests {
         assert_eq!(
             download_filename(Some("   "), "org/x/uuid", "image/png"),
             "uuid.png"
+        );
+    }
+
+    #[test]
+    fn original_name_strips_bidi_override_spoofing() {
+        // U+202E (Right-to-Left Override) würde `report<U+202E>cod.exe` als `report.exe...`
+        // anzeigen; es wird aus dem Namen entfernt, bevor es in den `filename*`-Wert gelangt.
+        assert_eq!(
+            download_filename(Some("report\u{202E}cod.exe"), "org/x/uuid", "text/plain"),
+            "reportcod.exe"
+        );
+        // Weitere unsichtbare Format-/Bidi-Zeichen fallen ebenso weg; sichtbares CJK bleibt.
+        assert_eq!(
+            sanitize_original("\u{FEFF}月\u{200F}次\u{2066}.txt"),
+            "月次.txt"
+        );
+        // Und der erzeugte Header trägt keine der gefährlichen Codepoints mehr.
+        let disp = content_disposition(
+            "attachment",
+            &download_filename(Some("a\u{202E}b.txt"), "org/x/uuid", "text/plain"),
+        );
+        assert!(
+            !disp.contains("%E2%80%AE"),
+            "bidi override must be gone: {disp}"
         );
     }
 
