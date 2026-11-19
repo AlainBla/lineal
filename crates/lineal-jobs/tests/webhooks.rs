@@ -4,7 +4,9 @@
 
 use async_trait::async_trait;
 use lineal_app::ports::Store;
-use lineal_app::usecases::issue::CreateIssueInput;
+use lineal_app::usecases::issue::{
+    BatchPatch, BatchUpdateInput, CreateIssueInput, UpdateIssueInput,
+};
 use lineal_app::usecases::project::milestone::{OpenIssues, SaveMilestoneInput};
 use lineal_app::usecases::webhook::{CreateWebhookInput, sign};
 use lineal_app::{App, RequestCtx};
@@ -343,4 +345,112 @@ async fn consumer_delivers_over_http_and_does_not_follow_redirects(pool: PgPool)
         rows.contains(&("pending".to_string(), Some(302))),
         "{rows:?}"
     );
+}
+
+/// Plant die neuen Outbox-Events und stellt die dadurch fälligen Zustellungen zu; liefert ihre Zahl.
+/// Da erfolgreiche Zustellungen nicht erneut fällig werden, zählt der Rückgabewert genau die je
+/// Schritt neu entstandenen Zustellungen.
+async fn flush(app: &App, rec: &Recorder) -> usize {
+    plan(app).await;
+    deliver_due(app, rec, app.clock.now(), 50).await.unwrap()
+}
+
+/// LIN-77: Ein Hook mit `issue_status_changes_only` erhält Issue-`update`-Events nur bei echtem
+/// Statuswechsel (`stateId`). Nicht-Status-Updates – auch per Bulk – bleiben draußen, während ein
+/// gewöhnlicher Hook sie weiterhin erhält (Negativtest ist nicht leer). create bleibt unberührt.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn status_only_hook_skips_non_status_updates(pool: PgPool) {
+    let (app, _) = setup(pool.clone(), "http://lineal.test").await;
+    // Zwei Workspace-Hooks auf Issue; nur der erste filtert auf Statuswechsel.
+    app.create_webhook(
+        &alice(),
+        CreateWebhookInput {
+            url: "http://127.0.0.1:9/status".into(),
+            all_public_teams: true,
+            resource_types: vec!["Issue".into()],
+            issue_status_changes_only: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    app.create_webhook(
+        &alice(),
+        CreateWebhookInput {
+            url: "http://127.0.0.1:9/all".into(),
+            all_public_teams: true,
+            resource_types: vec!["Issue".into()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let rec = Recorder::default();
+    let created = app.create_issue(&alice(), issue()).await.unwrap();
+    let id = created.issue.id.to_string();
+
+    // Schritt 1 – Anlage: beide Hooks erhalten das create-Event (Flag ist kein Filter für create).
+    assert_eq!(flush(&app, &rec).await, 2, "create geht an beide Hooks");
+
+    // Schritt 2 – Bulk-Änderung OHNE Statuswechsel (Priorität): nur der ungefilterte Hook.
+    app.issue_batch_update(
+        &alice(),
+        BatchUpdateInput {
+            ids: vec![id.clone()],
+            patch: BatchPatch {
+                priority: Some(1),
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        flush(&app, &rec).await,
+        1,
+        "Nicht-Status-Bulk-Update nur an den ungefilterten Hook"
+    );
+
+    // Schritt 3 – Statuswechsel: beide Hooks.
+    app.update_issue(
+        &alice(),
+        UpdateIssueInput {
+            id: id.clone(),
+            state: Some("In Progress".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        flush(&app, &rec).await,
+        2,
+        "Statuswechsel geht an beide Hooks"
+    );
+
+    // Gesamtbild je Ziel-URL.
+    let reqs = rec.0.lock().unwrap().clone();
+    let by_path = |p: &str| -> Vec<Value> {
+        reqs.iter()
+            .filter(|r| r.url.path() == p)
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect()
+    };
+    let status = by_path("/status");
+    let all = by_path("/all");
+    // Gefilterter Hook: create + Statuswechsel, NICHT die Prioritätsänderung.
+    let status_actions: Vec<&str> = status
+        .iter()
+        .map(|v| v["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(status_actions, ["create", "update"], "{status:?}");
+    assert_eq!(
+        status[1]["data"]["state"]["name"], "In Progress",
+        "das einzige Update am gefilterten Hook ist der Statuswechsel"
+    );
+    // Ungefilterter Hook: create + zwei Updates (Priorität und Status) – beweist, dass das
+    // ausgefilterte Update real existierte und sonst zugestellt worden wäre.
+    let all_updates = all.iter().filter(|v| v["action"] == "update").count();
+    assert_eq!(all_updates, 2, "{all:?}");
 }

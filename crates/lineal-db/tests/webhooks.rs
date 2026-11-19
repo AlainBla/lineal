@@ -105,6 +105,7 @@ fn ws_hook(types: &[&str]) -> CreateWebhookInput {
         team: None,
         all_public_teams: true,
         resource_types: types.iter().map(|s| (*s).to_string()).collect(),
+        ..Default::default()
     }
 }
 
@@ -2143,4 +2144,82 @@ async fn invite_users_rate_limits_per_inviter_against_mail_bombing(pool: PgPool)
         .await
         .unwrap();
     assert_eq!(ok.len(), 1);
+}
+
+/// LIN-77: Das Flag `issue_status_changes_only` ist standardmäßig false, lässt sich bei der Anlage
+/// setzen und per Update setzen/löschen; `None` lässt es unverändert.
+#[sqlx::test(migrations = "./migrations")]
+async fn status_filter_flag_defaults_false_and_round_trips(pool: PgPool) {
+    let fx = setup(pool).await;
+
+    // Standard: ohne Angabe false.
+    let plain = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    assert!(!plain.issue_status_changes_only);
+
+    // Bei der Anlage setzbar und persistiert.
+    let filtered = fx
+        .app
+        .create_webhook(
+            &alice(),
+            CreateWebhookInput {
+                issue_status_changes_only: true,
+                ..ws_hook(&["Issue"])
+            },
+        )
+        .await
+        .unwrap()
+        .webhook;
+    assert!(filtered.issue_status_changes_only);
+    let reloaded = fx.app.get_webhook(&alice(), filtered.id).await.unwrap();
+    assert!(reloaded.issue_status_changes_only);
+
+    // Update mit None lässt das Flag unberührt.
+    let untouched = fx
+        .app
+        .update_webhook(
+            &alice(),
+            filtered.id,
+            UpdateWebhookInput {
+                label: Some(Some("x".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(untouched.issue_status_changes_only);
+
+    // Update kann das Flag löschen …
+    let cleared = fx
+        .app
+        .update_webhook(
+            &alice(),
+            filtered.id,
+            UpdateWebhookInput {
+                issue_status_changes_only: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!cleared.issue_status_changes_only);
+
+    // … und wieder setzen.
+    let set_again = fx
+        .app
+        .update_webhook(
+            &alice(),
+            filtered.id,
+            UpdateWebhookInput {
+                issue_status_changes_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(set_again.issue_status_changes_only);
 }

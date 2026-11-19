@@ -275,6 +275,7 @@ async fn private_initiative_events_skip_all_public_teams_hooks(pool: PgPool) {
                 team: None,
                 all_public_teams: true,
                 resource_types: vec!["Initiative".into()],
+                ..Default::default()
             },
         )
         .await

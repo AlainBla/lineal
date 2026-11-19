@@ -47,6 +47,8 @@ pub struct WebhookGql {
     pub team_id: Option<String>,
     pub all_public_teams: bool,
     pub resource_types: Vec<String>,
+    /// LIN-77: nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen.
+    pub issue_status_changes_only: bool,
     pub creator_id: String,
     pub consecutive_failures: i32,
     pub disabled_reason: Option<String>,
@@ -65,6 +67,7 @@ impl From<WebhookRecord> for WebhookGql {
             team_id: w.team_id.map(|t| t.to_string()),
             all_public_teams: w.all_public_teams,
             resource_types: w.resource_types,
+            issue_status_changes_only: w.issue_status_changes_only,
             creator_id: w.creator_id.to_string(),
             consecutive_failures: w.consecutive_failures,
             disabled_reason: w.disabled_reason,
@@ -119,6 +122,9 @@ pub struct WebhookCreateInput {
     #[graphql(default)]
     pub all_public_teams: bool,
     pub resource_types: Vec<String>,
+    /// LIN-77: nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen (Default false).
+    #[graphql(default)]
+    pub issue_status_changes_only: bool,
 }
 
 #[derive(InputObject)]
@@ -127,6 +133,8 @@ pub struct WebhookUpdateInput {
     pub url: Option<String>,
     pub enabled: Option<bool>,
     pub resource_types: Option<Vec<String>>,
+    /// LIN-77: Statuswechsel-Filter setzen/löschen (`null` = unverändert).
+    pub issue_status_changes_only: Option<bool>,
 }
 
 #[derive(SimpleObject)]
@@ -312,6 +320,7 @@ impl WebhookMutation {
                     team: input.team_id,
                     all_public_teams: input.all_public_teams,
                     resource_types: input.resource_types,
+                    issue_status_changes_only: input.issue_status_changes_only,
                 },
             )
             .await
@@ -338,6 +347,7 @@ impl WebhookMutation {
                     url: input.url,
                     enabled: input.enabled,
                     resource_types: input.resource_types,
+                    issue_status_changes_only: input.issue_status_changes_only,
                 },
             )
             .await
