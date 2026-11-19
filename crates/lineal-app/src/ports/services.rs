@@ -76,6 +76,23 @@ pub trait BlobStore: Send + Sync {
         let _ = max_size;
         self.signed_put_url(key, content_type, ttl).await
     }
+    /// Wie [`Self::signed_put_url_sized`], zusätzlich mit dem ursprünglichen Dateinamen (LIN-85):
+    /// der Store hinterlegt ihn an der Datei, damit der spätere Download ihn als
+    /// `Content-Disposition`-Namen verwendet statt des Speicher-Schlüssels (nackte UUID). Der
+    /// Standard ignoriert den Namen (Stores ohne Durchsetzung, Fakes) und delegiert an die
+    /// größenbeschränkte Variante.
+    async fn signed_put_url_named(
+        &self,
+        key: &str,
+        content_type: &str,
+        max_size: u64,
+        filename: &str,
+        ttl: Duration,
+    ) -> AppResult<String> {
+        let _ = filename;
+        self.signed_put_url_sized(key, content_type, max_size, ttl)
+            .await
+    }
     /// Signierte Download-URL (GET).
     async fn signed_get_url(&self, key: &str, ttl: Duration) -> AppResult<String>;
 }

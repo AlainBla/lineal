@@ -55,6 +55,10 @@ struct Claims {
     /// Reservierte Größe in Bytes (nur Upload): der PUT darf sie nicht überschreiten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max: Option<u64>,
+    /// Ursprünglicher Dateiname (nur Upload, LIN-85): wird an der Datei hinterlegt und beim
+    /// Download als `Content-Disposition`-Name verwendet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fname: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -62,6 +66,10 @@ struct Meta {
     key: String,
     content_type: String,
     size: u64,
+    /// Ursprünglicher Dateiname aus dem Upload (LIN-85). Fehlt bei Altbeständen und bei
+    /// `put_bytes`-Importen → Download fällt auf den Schlüsselnamen (`<uuid>.<ext>`) zurück.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
 }
 
 /// `BlobStore` auf dem lokalen Dateisystem; die URLs zeigen auf `{base_url}/uploads|files/{token}`.
@@ -260,6 +268,8 @@ impl BlobStore for LocalBlobStore {
             key: key.to_owned(),
             content_type: content_type.to_owned(),
             size: bytes.len() as u64,
+            // Direktschreiben (Import) kennt keinen ursprünglichen Dateinamen → Schlüssel-Fallback.
+            filename: None,
         };
         tokio::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap_or_default())
             .await
@@ -281,6 +291,7 @@ impl BlobStore for LocalBlobStore {
                 ct: Some(content_type.into()),
                 exp: self.expiry(ttl),
                 max: None,
+                fname: None,
             },
         ))
     }
@@ -301,6 +312,32 @@ impl BlobStore for LocalBlobStore {
                 ct: Some(content_type.into()),
                 exp: self.expiry(ttl),
                 max: Some(max_size),
+                fname: None,
+            },
+        ))
+    }
+
+    async fn signed_put_url_named(
+        &self,
+        key: &str,
+        content_type: &str,
+        max_size: u64,
+        filename: &str,
+        ttl: Duration,
+    ) -> AppResult<String> {
+        check_key(key)?;
+        // Nur nicht-leere Namen mitsignieren; ein leerer Name führt beim Download ohnehin auf den
+        // Schlüssel-Fallback.
+        let fname = (!filename.trim().is_empty()).then(|| filename.to_owned());
+        Ok(self.url(
+            "uploads",
+            &Claims {
+                op: "put".into(),
+                key: key.into(),
+                ct: Some(content_type.into()),
+                exp: self.expiry(ttl),
+                max: Some(max_size),
+                fname,
             },
         ))
     }
@@ -315,6 +352,7 @@ impl BlobStore for LocalBlobStore {
                 ct: None,
                 exp: self.expiry(ttl),
                 max: None,
+                fname: None,
             },
         ))
     }
@@ -374,6 +412,8 @@ async fn write_upload(store: &LocalBlobStore, claims: &Claims, body: Body) -> Ap
         key: claims.key.clone(),
         content_type: claims.ct.clone().unwrap_or_default(),
         size,
+        // LIN-85: ursprünglichen Dateinamen aus dem signierten PUT-Token an der Datei hinterlegen.
+        filename: claims.fname.clone(),
     };
     tokio::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap_or_default())
         .await
@@ -563,12 +603,109 @@ fn extension_for(content_type: &str) -> Option<&'static str> {
     })
 }
 
-/// Dateiname für `Content-Disposition`: letzter Key-Teil, bereinigt, ggf. mit Endung.
-fn download_filename(key: &str, content_type: &str) -> String {
-    let name = filename_of(key);
+/// Anzeigename für `Content-Disposition` (LIN-85): bevorzugt den ursprünglichen Upload-Namen
+/// (unicode-erhaltend, nur entschärft), sonst den letzten Key-Teil (ASCII, UUID). In beiden Fällen
+/// wird eine Endung aus dem Content-Type ergänzt, wenn der Name keine hat.
+fn download_filename(original: Option<&str>, key: &str, content_type: &str) -> String {
+    let name = match original {
+        Some(f) if !f.trim().is_empty() => sanitize_original(f),
+        _ => filename_of(key),
+    };
     match extension_for(content_type) {
         Some(ext) if !name.contains('.') => format!("{name}.{ext}"),
         _ => name,
+    }
+}
+
+/// Entschärft den ursprünglichen Dateinamen für die Header-Verwendung: Steuerzeichen und
+/// unsichtbare Bidi-/Format-Zeichen entfernen, Pfadtrenner neutralisieren – aber sichtbares
+/// Unicode (CJK/Emoji) erhalten, das RFC 5987 kodiert.
+///
+/// Die Bidi-/Format-Zeichen (Kategorie Cf) würden `is_control()` passieren und im bevorzugten
+/// `filename*`-Wert überleben; beim Anzeigen im Browser ermöglichen sie Right-to-Left-Override-
+/// Spoofing (z. B. `report<U+202E>cod.exe` erscheint als `report.exe...`). `std` kennt keine
+/// Unicode-Kategorien, darum die betroffenen Bereiche explizit (U+200B–200F, U+202A–202E,
+/// U+2066–2069, U+FEFF).
+fn sanitize_original(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .filter(|c| !is_disallowed_name_char(*c))
+        .map(|c| if matches!(c, '/' | '\\') { '_' } else { c })
+        .collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        "file".into()
+    } else {
+        clean.to_owned()
+    }
+}
+
+/// Steuerzeichen oder unsichtbares Bidi-/Format-Zeichen (Spoofing-Gefahr im angezeigten Namen).
+fn is_disallowed_name_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c as u32,
+            0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069 | 0xFEFF
+        )
+}
+
+/// Prozent-Kodierung nach RFC 5987 (`ext-value`): nur `attr-char` bleiben stehen, alles andere wird
+/// als UTF-8-Bytes `%XX` kodiert. Für den `filename*`-Parameter nicht-ASCII-tauglicher Namen.
+fn rfc5987_encode(s: &str) -> String {
+    use std::fmt::Write;
+    s.bytes()
+        .fold(String::with_capacity(s.len()), |mut out, b| {
+            match b {
+                b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'!'
+                | b'#'
+                | b'$'
+                | b'&'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~' => out.push(b as char),
+                _ => {
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+            out
+        })
+}
+
+/// Baut den `Content-Disposition`-Wert. Immer ein ASCII-sicherer `filename="…"` (sonst verwirft
+/// `HeaderValue::from_str` den gesamten Header und der Download verlöre `attachment`); weicht der
+/// ASCII-Fallback vom echten Namen ab (Nicht-ASCII, `"`, `\`), zusätzlich `filename*=UTF-8''…`
+/// nach RFC 5987, das moderne Browser bevorzugen.
+fn content_disposition(kind: &str, name: &str) -> String {
+    let ascii: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ascii = if ascii.trim().is_empty() {
+        "file".to_owned()
+    } else {
+        ascii
+    };
+    if ascii == name {
+        format!("{kind}; filename=\"{ascii}\"")
+    } else {
+        format!(
+            "{kind}; filename=\"{ascii}\"; filename*=UTF-8''{}",
+            rfc5987_encode(name)
+        )
     }
 }
 
@@ -634,9 +771,9 @@ pub async fn download(
     } else {
         &meta.content_type
     };
-    let disposition = format!(
-        "{disposition_kind}; filename=\"{}\"",
-        download_filename(&meta.key, &meta.content_type)
+    let disposition = content_disposition(
+        disposition_kind,
+        &download_filename(meta.filename.as_deref(), &meta.key, &meta.content_type),
     );
     let mut res = Body::from_stream(tokio_util::io::ReaderStream::new(file)).into_response();
     let h = res.headers_mut();
@@ -756,6 +893,7 @@ mod tests {
                 ct: None,
                 exp: 9_999_999,
                 max: None,
+                fname: None,
             })
             .unwrap(),
         );
@@ -839,24 +977,25 @@ mod tests {
         assert!(meta.to_string_lossy().ends_with(".json"));
         assert_eq!(filename_of("a/b/../ev il.html"), "ev_il.html");
         assert_eq!(
-            download_filename("org/x/01a1-uuid", "image/png"),
+            download_filename(None, "org/x/01a1-uuid", "image/png"),
             "01a1-uuid.png"
         );
         assert_eq!(
-            download_filename("org/x/01a1-uuid", "IMAGE/JPEG; q=1"),
+            download_filename(None, "org/x/01a1-uuid", "IMAGE/JPEG; q=1"),
             "01a1-uuid.jpg"
         );
         assert_eq!(
-            download_filename("org/x/report.pdf", "image/png"),
+            download_filename(None, "org/x/report.pdf", "image/png"),
             "report.pdf"
         );
         assert_eq!(
-            download_filename("org/x/blob", "application/x-unknown"),
+            download_filename(None, "org/x/blob", "application/x-unknown"),
             "blob"
         );
         // LIN-85: Office-Typen bekommen eine Endung, damit die Datei öffenbar ist (statt nackter UUID).
         assert_eq!(
             download_filename(
+                None,
                 "org/x/01a1-uuid",
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             ),
@@ -864,6 +1003,7 @@ mod tests {
         );
         assert_eq!(
             download_filename(
+                None,
                 "org/x/01a1-uuid",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             ),
@@ -871,15 +1011,121 @@ mod tests {
         );
         assert_eq!(
             download_filename(
+                None,
                 "org/x/01a1-uuid",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
             "01a1-uuid.xlsx"
         );
         assert_eq!(
-            download_filename("org/x/01a1-uuid", "application/msword"),
+            download_filename(None, "org/x/01a1-uuid", "application/msword"),
             "01a1-uuid.doc"
         );
+    }
+
+    #[test]
+    fn legacy_meta_without_filename_still_parses() {
+        // LIN-85: Altbestand-Metadaten (vor dem neuen Feld) müssen weiter deserialisieren – sonst
+        // fände `head`/`download` jede bestehende Datei als „korrupt"/fehlend.
+        let meta: Meta =
+            serde_json::from_str(r#"{"key":"org/x/uuid","content_type":"image/png","size":3}"#)
+                .expect("legacy meta parses");
+        assert_eq!(meta.filename, None);
+        // Und der neue Serialize lässt das Feld weg, wenn es fehlt (kompakt, abwärtskompatibel).
+        assert!(!serde_json::to_string(&meta).unwrap().contains("filename"));
+    }
+
+    #[test]
+    fn download_filename_prefers_the_original_upload_name() {
+        // LIN-85: ist der ursprüngliche Name hinterlegt, gewinnt er über die UUID im Key.
+        assert_eq!(
+            download_filename(
+                Some("Fehleruebersicht.pptx"),
+                "org/x/01a1-uuid",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+            "Fehleruebersicht.pptx"
+        );
+        // Endung fehlt im Namen → aus dem Content-Type ergänzt.
+        assert_eq!(
+            download_filename(Some("report"), "org/x/01a1-uuid", "application/pdf"),
+            "report.pdf"
+        );
+        // Unicode bleibt im Anzeigenamen erhalten (RFC-5987-Kodierung erst im Header).
+        assert_eq!(
+            download_filename(Some("月次報告.xlsx"), "org/x/uuid", "text/plain"),
+            "月次報告.xlsx"
+        );
+        // Pfadtrenner werden neutralisiert, der Name nicht auf den Key zurückgesetzt.
+        assert_eq!(
+            download_filename(Some("a/b\\c.txt"), "org/x/uuid", "text/plain"),
+            "a_b_c.txt"
+        );
+        // Leer/Whitespace → Schlüssel-Fallback (UUID + Endung).
+        assert_eq!(
+            download_filename(Some("   "), "org/x/uuid", "image/png"),
+            "uuid.png"
+        );
+    }
+
+    #[test]
+    fn original_name_strips_bidi_override_spoofing() {
+        // U+202E (Right-to-Left Override) würde `report<U+202E>cod.exe` als `report.exe...`
+        // anzeigen; es wird aus dem Namen entfernt, bevor es in den `filename*`-Wert gelangt.
+        assert_eq!(
+            download_filename(Some("report\u{202E}cod.exe"), "org/x/uuid", "text/plain"),
+            "reportcod.exe"
+        );
+        // Weitere unsichtbare Format-/Bidi-Zeichen fallen ebenso weg; sichtbares CJK bleibt.
+        assert_eq!(
+            sanitize_original("\u{FEFF}月\u{200F}次\u{2066}.txt"),
+            "月次.txt"
+        );
+        // Und der erzeugte Header trägt keine der gefährlichen Codepoints mehr.
+        let disp = content_disposition(
+            "attachment",
+            &download_filename(Some("a\u{202E}b.txt"), "org/x/uuid", "text/plain"),
+        );
+        assert!(
+            !disp.contains("%E2%80%AE"),
+            "bidi override must be gone: {disp}"
+        );
+    }
+
+    #[test]
+    fn content_disposition_is_ascii_safe_and_rfc5987_for_non_ascii() {
+        // Reiner ASCII-Name → nur `filename="…"` (byte-identisch zum bisherigen Verhalten).
+        assert_eq!(
+            content_disposition("attachment", "Fehleruebersicht.pptx"),
+            "attachment; filename=\"Fehleruebersicht.pptx\""
+        );
+        // Leerzeichen sind im quoted-string erlaubt, kein `filename*` nötig.
+        assert_eq!(
+            content_disposition("inline", "my report.pdf"),
+            "inline; filename=\"my report.pdf\""
+        );
+        // CJK → ASCII-Fallback (Platzhalter) plus RFC-5987-`filename*`.
+        assert_eq!(
+            content_disposition("attachment", "月次.xlsx"),
+            "attachment; filename=\"__.xlsx\"; filename*=UTF-8''%E6%9C%88%E6%AC%A1.xlsx"
+        );
+        // Emoji ebenso.
+        assert_eq!(
+            content_disposition("attachment", "🎉.png"),
+            "attachment; filename=\"_.png\"; filename*=UTF-8''%F0%9F%8E%89.png"
+        );
+        // Anführungszeichen/Backslash im Namen werden im Fallback ersetzt und per `filename*`
+        // sicher transportiert – der Header bleibt wohlgeformt.
+        let got = content_disposition("attachment", "a\"b\\c.txt");
+        assert_eq!(
+            got,
+            "attachment; filename=\"a_b_c.txt\"; filename*=UTF-8''a%22b%5Cc.txt"
+        );
+        // Jeder erzeugte Wert ist als Header-Value akzeptabel (ASCII, keine Steuerzeichen) – sonst
+        // verwürfe `HeaderValue::from_str` den Header und der Download verlöre `attachment`.
+        for name in ["a\"b\\c.txt", "月次.xlsx", "🎉.png", "x\u{7f}.bin"] {
+            assert!(HeaderValue::from_str(&content_disposition("attachment", name)).is_ok());
+        }
     }
 
     #[tokio::test]
@@ -898,6 +1144,7 @@ mod tests {
             ct: Some("text/plain".into()),
             exp: 1,
             max: None,
+            fname: None,
         };
         let err = write_upload(&s, &claims("big"), Body::from(vec![0u8; 20]))
             .await
@@ -940,6 +1187,7 @@ mod tests {
             ct: Some("text/plain".into()),
             exp: 1,
             max: None,
+            fname: None,
         };
         assert_eq!(
             write_upload(&s, &claims, Body::from(vec![1u8; 4]))

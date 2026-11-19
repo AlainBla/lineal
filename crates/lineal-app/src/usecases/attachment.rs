@@ -350,10 +350,11 @@ impl App {
         );
         let put_url = self
             .blobs
-            .signed_put_url_sized(
+            .signed_put_url_named(
                 &key,
                 &content_type,
                 u64::try_from(input.size).unwrap_or(0),
+                &filename,
                 PUT_TTL,
             )
             .await?;
