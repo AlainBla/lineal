@@ -429,30 +429,10 @@ impl AuthFailures {
     fn reserve_all(&self, keys: &[(String, Rule)], now_ms: i64) -> Result<(), u64> {
         let mut state = self.lock();
         let state = &mut *state;
-        let count_new = |state: &State| {
-            keys.iter()
-                .filter(|(k, _)| !state.entries.contains_key(k))
-                .count()
-        };
-        let mut new_keys = count_new(state);
-        // Kapazität für die NEUEN Schlüssel. Passen sie nicht, erst (ratenbegrenzt) abgelaufene
-        // Einträge zurückgewinnen und neu zählen — so wird an der Ablehnungs-Schwelle aufgeräumt,
-        // nicht erst bei voller Tabelle (sonst würden gültige, aber abgelaufene 1h/24h-Einträge nie
-        // zurückgewonnen).
-        if state.entries.len() + new_keys > self.max_keys
-            && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
-        {
-            Self::purge_expired(state, now_ms);
-            new_keys = count_new(state);
-        }
-        // Passt es auch nach dem Purge nicht (genuin volle Tabelle = massive verteilte Flut), NICHT
-        // hart ablehnen, sondern auf den gemeinsamen Reset-Überlauf-Bucket zurückfallen — so bleibt
-        // der Passwort-Reset grob verfügbar statt platformweit gesperrt. Fail-closed erst, wenn auch
-        // der Überlauf über seinem (höheren) Limit ist.
-        if state.entries.len() + new_keys > self.max_keys {
-            return Self::reserve_reset_overflow(state, now_ms);
-        }
-        // Prüfpass: keine Mutation; jedes Limit.
+        // 1. Granularer Prüfpass ZUERST und IMMER (auch bei voller Tabelle): ein bereits vorhandener,
+        //    aktiver Schlüssel am Limit wird stets abgelehnt. So kann der Überlauf unten NIE einen
+        //    Schlüssel durchlassen, den ein granulares Limit geblockt hätte (kein Bypass). Keine
+        //    Mutation.
         for (key, rule) in keys {
             if let Some(e) = state.entries.get(key)
                 && Self::active(e, *rule, now_ms)
@@ -462,21 +442,50 @@ impl AuthFailures {
                 return Err(u64::try_from(left).unwrap_or(1));
             }
         }
-        // Commit-Pass: alle Schlüssel sind frei → erhöhen/anlegen.
+        // 2. Kapazität NUR für die NEUEN Schlüssel. Passen sie nicht, erst (ratenbegrenzt) abgelaufene
+        //    Einträge zurückgewinnen und neu zählen (Purge an der Ablehnungs-Schwelle).
+        let count_new = |state: &State| {
+            keys.iter()
+                .filter(|(k, _)| !state.entries.contains_key(k))
+                .count()
+        };
+        let mut new_keys = count_new(state);
+        if state.entries.len() + new_keys > self.max_keys
+            && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
+        {
+            Self::purge_expired(state, now_ms);
+            new_keys = count_new(state);
+        }
+        // Passen die NEUEN Schlüssel auch nach dem Purge nicht (genuin volle Tabelle = massive
+        // verteilte Flut), ihre Kapazitätslast auf den gemeinsamen Überlauf-Bucket laden statt hart
+        // abzulehnen. Die granularen Limits der VORHANDENEN Schlüssel gelten unverändert (oben
+        // geprüft). Ist der Überlauf selbst über seinem (höheren) Limit → fail-closed, ohne Commit.
+        let overflow = state.entries.len() + new_keys > self.max_keys;
+        if overflow {
+            Self::reserve_reset_overflow(state, now_ms)?;
+        }
+        // 3. Commit-Pass: vorhandene Schlüssel normal erhöhen; neue nur anlegen, wenn KEIN Überlauf
+        //    (im Überlauf tragen sie keine eigene Zeile — ihre Last steckt im Überlauf-Bucket).
         for (key, rule) in keys {
-            let e = state.entries.entry(key.clone()).or_insert(Entry {
-                count: 0,
-                window_start_ms: now_ms,
-                window_ms: rule.window_ms,
-            });
-            if !Self::active(e, *rule, now_ms) {
-                *e = Entry {
-                    count: 0,
-                    window_start_ms: now_ms,
-                    window_ms: rule.window_ms,
-                };
+            if let Some(e) = state.entries.get_mut(key) {
+                if !Self::active(e, *rule, now_ms) {
+                    *e = Entry {
+                        count: 0,
+                        window_start_ms: now_ms,
+                        window_ms: rule.window_ms,
+                    };
+                }
+                e.count = e.count.saturating_add(1);
+            } else if !overflow {
+                state.entries.insert(
+                    key.clone(),
+                    Entry {
+                        count: 1,
+                        window_start_ms: now_ms,
+                        window_ms: rule.window_ms,
+                    },
+                );
             }
-            e.count = e.count.saturating_add(1);
         }
         Ok(())
     }
@@ -999,6 +1008,32 @@ mod tests {
             f.reserve_password_reset("zzz@acme.example", Some("9.9.9.250"), 0)
                 .is_err(),
             "über dem Überlauf-Limit wird abgelehnt"
+        );
+    }
+
+    /// LIN-58 (MEDIUM): Der Überlauf darf KEIN granulares Limit umgehen. Bei voller Tabelle wird ein
+    /// bereits am Limit stehender vorhandener Schlüssel weiterhin abgelehnt; nur genuin NEUE
+    /// Schlüssel laufen über den Überlauf.
+    #[test]
+    fn reset_overflow_does_not_bypass_granular_limits() {
+        let f = AuthFailures::with_max_keys(4);
+        // a@/1.1.1.1 bis zum Stundenlimit (3) ausschöpfen — füllt die Tabelle (4 Schlüssel).
+        for _ in 0..3 {
+            f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+                .unwrap();
+        }
+        assert_eq!(f.len(), 4);
+        // Volle Tabelle UND vorhandener Schlüssel am Limit → weiterhin abgelehnt (kein Bypass).
+        assert!(
+            f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+                .is_err(),
+            "am Limit stehender vorhandener Schlüssel wird nicht per Überlauf durchgelassen"
+        );
+        // Genuin neue E-Mail/IP wird trotz voller Tabelle per Überlauf zugelassen.
+        assert!(
+            f.reserve_password_reset("z@acme.example", Some("2.2.2.2"), 0)
+                .is_ok(),
+            "neue E-Mail/IP wird per Überlauf zugelassen"
         );
     }
 
