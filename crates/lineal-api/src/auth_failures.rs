@@ -72,6 +72,15 @@ pub const RESET_DAY_RULE: Rule = Rule {
 /// Obergrenze gehaltener Schlüssel.
 pub const MAX_KEYS: usize = 200_000;
 const OVERFLOW_KEY: &str = "\0overflow";
+/// LIN-58: Gemeinsamer Überlauf-Bucket NUR für den (getrennten) Reset-Zähler. Spiegelt den Login-
+/// Überlauf: ist die Reset-Tabelle voll (massive verteilte Flut), teilen sich neue Schlüssel diesen
+/// einen Bucket, statt dass jeder Reset hart abgelehnt wird (kein platformweiter Reset-Lockout).
+const RESET_OVERFLOW_KEY: &str = "\0reset_overflow";
+/// Grober globaler Degraded-Cap des Reset-Überlaufs (nur bei voller Tabelle aktiv).
+pub const RESET_OVERFLOW_RULE: Rule = Rule {
+    limit: 60,
+    window_ms: 60 * 60_000,
+};
 const PURGE_INTERVAL_MS: i64 = 1_000;
 
 #[derive(Debug, Clone, Copy)]
@@ -420,25 +429,30 @@ impl AuthFailures {
     fn reserve_all(&self, keys: &[(String, Rule)], now_ms: i64) -> Result<(), u64> {
         let mut state = self.lock();
         let state = &mut *state;
-        if state.entries.len() >= self.max_keys && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
+        let count_new = |state: &State| {
+            keys.iter()
+                .filter(|(k, _)| !state.entries.contains_key(k))
+                .count()
+        };
+        let mut new_keys = count_new(state);
+        // Kapazität für die NEUEN Schlüssel. Passen sie nicht, erst (ratenbegrenzt) abgelaufene
+        // Einträge zurückgewinnen und neu zählen — so wird an der Ablehnungs-Schwelle aufgeräumt,
+        // nicht erst bei voller Tabelle (sonst würden gültige, aber abgelaufene 1h/24h-Einträge nie
+        // zurückgewonnen).
+        if state.entries.len() + new_keys > self.max_keys
+            && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
         {
             Self::purge_expired(state, now_ms);
+            new_keys = count_new(state);
         }
-        // Prüfpass: keine Mutation. Zuerst Kapazität für neue Schlüssel, dann jedes Limit.
-        let new_keys = keys
-            .iter()
-            .filter(|(k, _)| !state.entries.contains_key(k))
-            .count();
+        // Passt es auch nach dem Purge nicht (genuin volle Tabelle = massive verteilte Flut), NICHT
+        // hart ablehnen, sondern auf den gemeinsamen Reset-Überlauf-Bucket zurückfallen — so bleibt
+        // der Passwort-Reset grob verfügbar statt platformweit gesperrt. Fail-closed erst, wenn auch
+        // der Überlauf über seinem (höheren) Limit ist.
         if state.entries.len() + new_keys > self.max_keys {
-            tracing::warn!("password reset counter full; rejecting a new key");
-            let wait = keys
-                .iter()
-                .map(|(_, r)| r.window_ms)
-                .max()
-                .unwrap_or(60_000)
-                / 1000;
-            return Err(u64::try_from(wait).unwrap_or(60));
+            return Self::reserve_reset_overflow(state, now_ms);
         }
+        // Prüfpass: keine Mutation; jedes Limit.
         for (key, rule) in keys {
             if let Some(e) = state.entries.get(key)
                 && Self::active(e, *rule, now_ms)
@@ -464,6 +478,37 @@ impl AuthFailures {
             }
             e.count = e.count.saturating_add(1);
         }
+        Ok(())
+    }
+
+    /// Reset-Überlauf: ein einziger gemeinsamer Bucket mit grobem, höherem Limit. Spiegelt den
+    /// Login-Überlauf (`record`/`blocked_for`), nur für den getrennten Reset-Zähler. `Err` = auch der
+    /// Überlauf ist über seinem Limit.
+    fn reserve_reset_overflow(state: &mut State, now_ms: i64) -> Result<(), u64> {
+        if now_ms - state.last_warn_ms >= 60_000 {
+            state.last_warn_ms = now_ms;
+            tracing::warn!("password reset counter full; new keys share the reset overflow bucket");
+        }
+        let e = state
+            .entries
+            .entry(RESET_OVERFLOW_KEY.to_owned())
+            .or_insert(Entry {
+                count: 0,
+                window_start_ms: now_ms,
+                window_ms: RESET_OVERFLOW_RULE.window_ms,
+            });
+        if !Self::active(e, RESET_OVERFLOW_RULE, now_ms) {
+            *e = Entry {
+                count: 0,
+                window_start_ms: now_ms,
+                window_ms: RESET_OVERFLOW_RULE.window_ms,
+            };
+        }
+        if e.count >= RESET_OVERFLOW_RULE.limit {
+            let left = (RESET_OVERFLOW_RULE.window_ms - (now_ms - e.window_start_ms)) / 1000 + 1;
+            return Err(u64::try_from(left).unwrap_or(1));
+        }
+        e.count = e.count.saturating_add(1);
         Ok(())
     }
 
@@ -927,6 +972,65 @@ mod tests {
                 .reserve_login("alice@acme.example", Some("v4:9.9.9.9"), false, 1_000)
                 .is_ok(),
             "Login bleibt trotz Reset-Flut nutzbar"
+        );
+    }
+
+    /// LIN-58 (MEDIUM 2): Ist die Reset-Tabelle voll, werden neue Anfragen NICHT hart abgelehnt,
+    /// sondern laufen über den gemeinsamen Überlauf-Bucket — bis dessen eigenes (höheres) Limit
+    /// erreicht ist. Kein platformweiter Reset-Lockout.
+    #[test]
+    fn reset_overflow_admits_requests_when_the_table_is_full() {
+        let f = AuthFailures::with_max_keys(4);
+        // Eine Anfrage füllt die Tabelle (2 IP- + 2 E-Mail-Schlüssel).
+        f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+            .unwrap();
+        assert_eq!(f.len(), 4);
+        // Weitere Anfragen (je neue E-Mail/IP) passen nicht mehr → Überlauf statt harter Ablehnung.
+        for i in 0..RESET_OVERFLOW_RULE.limit {
+            f.reserve_password_reset(
+                &format!("u{i}@acme.example"),
+                Some(&format!("9.9.9.{i}")),
+                0,
+            )
+            .unwrap_or_else(|_| panic!("Überlauf muss Anfrage {i} zulassen"));
+        }
+        // Erst wenn der Überlauf selbst voll ist, wird fail-closed abgelehnt.
+        assert!(
+            f.reserve_password_reset("zzz@acme.example", Some("9.9.9.250"), 0)
+                .is_err(),
+            "über dem Überlauf-Limit wird abgelehnt"
+        );
+    }
+
+    /// LIN-58 (MEDIUM 1): Der Purge wird an der ABLEHNUNGS-Schwelle (`len + new > max`) versucht,
+    /// nicht erst bei `len >= max`. So gewinnt eine Anfrage abgelaufene 1h/24h-Einträge zurück und
+    /// läuft NORMAL (granular) durch, statt vorschnell in den Überlauf zu fallen.
+    #[test]
+    fn reset_purge_runs_at_the_rejection_threshold_and_reclaims_expired() {
+        let f = AuthFailures::with_max_keys(4);
+        f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+            .unwrap();
+        assert_eq!(f.len(), 4);
+        // 25 h später sind alle vier Einträge abgelaufen. Die neue Anfrage überschreitet die
+        // Ablehnungs-Schwelle, muss sie aber per Purge zurückgewinnen und normal durchgehen.
+        let later = 25 * 60 * 60_000;
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        assert_eq!(
+            f.len(),
+            4,
+            "abgelaufene Einträge zurückgewonnen, kein Überlauf-Schlüssel"
+        );
+        // Beweis des NORMALEN granularen Zählens (nicht Überlauf mit Limit 60): das Stundenlimit 3
+        // je E-Mail greift — über den Überlauf wären 4 Anfragen alle erlaubt.
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        assert!(
+            f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+                .is_err(),
+            "normales Stundenlimit (3) greift → Purge hat zurückgewonnen"
         );
     }
 
