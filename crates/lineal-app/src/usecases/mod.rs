@@ -21,6 +21,7 @@ pub mod label;
 pub mod notification;
 pub mod org;
 pub mod overview;
+pub mod password_reset;
 pub mod project;
 pub mod state;
 pub mod team;

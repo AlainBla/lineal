@@ -57,15 +57,41 @@ pub const ACCOUNT_HARD_TOTAL_RULE: Rule = Rule {
     limit: 1000,
     window_ms: 15 * 60_000,
 };
+/// LIN-58: Passwort-Reset-Anfragen je E-Mail und je IP — 3 pro Stunde und 5 pro Tag (jeweils
+/// eigener Zähler, da ein `Entry` genau ein Fenster trägt). Schnelle In-Memory-Sperre VOR jeder
+/// DB-Arbeit; das neustart-feste Konto-Limit (Zeilen in `password_reset`) liegt zusätzlich darunter.
+pub const RESET_HOUR_RULE: Rule = Rule {
+    limit: 3,
+    window_ms: 60 * 60_000,
+};
+pub const RESET_DAY_RULE: Rule = Rule {
+    limit: 5,
+    window_ms: 24 * 60 * 60_000,
+};
+
 /// Obergrenze gehaltener Schlüssel.
 pub const MAX_KEYS: usize = 200_000;
 const OVERFLOW_KEY: &str = "\0overflow";
+/// LIN-58: Gemeinsamer Überlauf-Bucket NUR für den (getrennten) Reset-Zähler. Spiegelt den Login-
+/// Überlauf: ist die Reset-Tabelle voll (massive verteilte Flut), teilen sich neue Schlüssel diesen
+/// einen Bucket, statt dass jeder Reset hart abgelehnt wird (kein platformweiter Reset-Lockout).
+const RESET_OVERFLOW_KEY: &str = "\0reset_overflow";
+/// Grober globaler Degraded-Cap des Reset-Überlaufs (nur bei voller Tabelle aktiv).
+pub const RESET_OVERFLOW_RULE: Rule = Rule {
+    limit: 60,
+    window_ms: 60 * 60_000,
+};
 const PURGE_INTERVAL_MS: i64 = 1_000;
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
     count: u32,
     window_start_ms: i64,
+    /// Fensterlänge dieses Zählers. Wird beim Anlegen/Zurücksetzen aus der Regel übernommen, damit
+    /// `purge_expired` jede Zeile mit IHRER Länge räumt — sonst würden langlebige Zähler (Stunden-/
+    /// Tagesfenster des Reset-Limits, LIN-58) bei voller Tabelle fälschlich nach der IP-Fensterlänge
+    /// (60 s) entfernt.
+    window_ms: i64,
 }
 
 #[derive(Default)]
@@ -75,10 +101,35 @@ struct State {
     last_warn_ms: i64,
 }
 
+/// Senke für Audit-Ereignisse aus dem Zähler (LIN-58 Teil 3). Wird beim Erreichen des Account-
+/// Gesamtlimits (verteilter Angriff) aufgerufen. Die Implementierung (im API-Adapter) muss sofort
+/// zurückkehren — die eigentliche, asynchrone Audit-Schreibarbeit läuft losgelöst (`tokio::spawn`),
+/// damit der Zähler-Lock nicht blockiert.
+pub trait LockoutAudit: Send + Sync {
+    /// `account` = Klartext-Adresse (zum Auflösen der Workspaces; wird nicht geloggt),
+    /// `ip_count` = Zahl aktiver (Account, IP)-Paare im Fenster, `failures` = Stand des
+    /// Gesamtzählers, `window_ms` = Fensterlänge, `allowed_known_ip` = für eine bekannte IP (S-23)
+    /// durchgelassen.
+    fn distributed_lockout(
+        &self,
+        account: &str,
+        ip_count: u32,
+        failures: u32,
+        window_ms: i64,
+        allowed_known_ip: bool,
+    );
+}
+
+/// Request-Extension für den GETRENNTEN Passwort-Reset-Zähler (LIN-58). Eigener Typ, damit er neben
+/// dem Login-`Arc<AuthFailures>` als zweite Extension koexistieren kann, ohne ihn zu überschreiben.
+#[derive(Clone)]
+pub struct ResetFailures(pub std::sync::Arc<AuthFailures>);
+
 /// Prozessweiter Zähler für Fehlversuche.
 pub struct AuthFailures {
     state: Mutex<State>,
     max_keys: usize,
+    audit: Option<std::sync::Arc<dyn LockoutAudit>>,
 }
 
 impl Default for AuthFailures {
@@ -92,7 +143,15 @@ impl AuthFailures {
         Self {
             state: Mutex::new(State::default()),
             max_keys: max_keys.max(2),
+            audit: None,
         }
+    }
+
+    /// Hängt die Audit-Senke für `auth.distributed_lockout` an (LIN-58 Teil 3).
+    #[must_use]
+    pub fn with_audit(mut self, audit: std::sync::Arc<dyn LockoutAudit>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -140,11 +199,13 @@ impl AuthFailures {
         let e = state.entries.entry(key.to_owned()).or_insert(Entry {
             count: 0,
             window_start_ms: now_ms,
+            window_ms: rule.window_ms,
         });
         if !Self::active(e, rule, now_ms) {
             *e = Entry {
                 count: 0,
                 window_start_ms: now_ms,
+                window_ms: rule.window_ms,
             };
         }
         e.count = e.count.saturating_add(1);
@@ -156,6 +217,12 @@ impl AuthFailures {
     /// Reserviert atomar einen Versuch auf `key` (Zählen vor dem Prüfen). `Err(Sekunden)`, wenn
     /// das Limit erreicht ist oder die Tabelle voll ist und `key` neu wäre.
     pub fn reserve(&self, key: &str, rule: Rule, now_ms: i64) -> Result<(), u64> {
+        self.reserve_counted(key, rule, now_ms).map(|_| ())
+    }
+
+    /// Wie [`Self::reserve`], liefert aber bei Erfolg den neuen Zählerstand (für die Erkennung des
+    /// Limit-Übergangs; LIN-58 Teil 3).
+    fn reserve_counted(&self, key: &str, rule: Rule, now_ms: i64) -> Result<u32, u64> {
         let mut state = self.lock();
         let state = &mut *state;
         if state.entries.len() >= self.max_keys && !state.entries.contains_key(key) {
@@ -168,11 +235,13 @@ impl AuthFailures {
         let e = state.entries.entry(key.to_owned()).or_insert(Entry {
             count: 0,
             window_start_ms: now_ms,
+            window_ms: rule.window_ms,
         });
         if !Self::active(e, rule, now_ms) {
             *e = Entry {
                 count: 0,
                 window_start_ms: now_ms,
+                window_ms: rule.window_ms,
             };
         }
         if e.count >= rule.limit {
@@ -183,7 +252,7 @@ impl AuthFailures {
         if e.count == rule.limit {
             log_limit_reached(key, rule);
         }
-        Ok(())
+        Ok(e.count)
     }
 
     /// Gibt eine Reservierung zurück (erfolgreicher Login).
@@ -195,15 +264,12 @@ impl AuthFailures {
 
     fn purge_expired(state: &mut State, now_ms: i64) {
         state.last_purge_ms = now_ms;
-        // Nur abgelaufene Fenster entfernen; aktive Zähler bleiben (kein Zurücksetzen).
-        state.entries.retain(|k, e| {
-            let w = if k.starts_with("acct") {
-                ACCOUNT_RULE.window_ms
-            } else {
-                IP_RULE.window_ms
-            };
-            now_ms - e.window_start_ms < w
-        });
+        // Nur abgelaufene Fenster entfernen; aktive Zähler bleiben (kein Zurücksetzen). Jede Zeile
+        // trägt ihre eigene Fensterlänge, damit langlebige Zähler (Reset-Limit, LIN-58) nicht nach
+        // der kurzen IP-Fensterlänge geräumt werden.
+        state
+            .entries
+            .retain(|_, e| now_ms - e.window_start_ms < e.window_ms);
     }
 
     pub fn len(&self) -> usize {
@@ -251,12 +317,10 @@ impl AuthFailures {
     ) -> Result<LoginReservation, u64> {
         let ip = ip_key.unwrap_or("-");
         let mut held = Vec::new();
-        // Harte Limits je IP, je Paar (Account, IP) und das harte Gesamtlimit – immer. Das harte
-        // Gesamtlimit zählt auch die per bekannter IP durchgelassenen Fehlversuche.
+        // Harte Limits je IP und je Paar (Account, IP) – immer.
         for (key, rule) in [
             (format!("ip:{ip}"), IP_RULE),
             (pair_key(account, ip), ACCOUNT_RULE),
-            (account_hard_total_key(account), ACCOUNT_HARD_TOTAL_RULE),
         ] {
             match self.reserve(&key, rule, now_ms) {
                 Ok(()) => held.push(key),
@@ -268,14 +332,57 @@ impl AuthFailures {
                 }
             }
         }
+        // Hartes Gesamtlimit je Account – zählt auch per bekannter IP durchgelassene Fehlversuche.
+        // LIN-58 Teil 3: Beim Übergang (count == limit) `auth.distributed_lockout` auditieren.
+        let hard = account_hard_total_key(account);
+        match self.reserve_counted(&hard, ACCOUNT_HARD_TOTAL_RULE, now_ms) {
+            Ok(count) => {
+                held.push(hard);
+                if count == ACCOUNT_HARD_TOTAL_RULE.limit {
+                    self.report_lockout(
+                        account,
+                        count,
+                        ACCOUNT_HARD_TOTAL_RULE.window_ms,
+                        false,
+                        now_ms,
+                    );
+                }
+            }
+            Err(wait) => {
+                for k in &held {
+                    self.release(k);
+                }
+                return Err(wait);
+            }
+        }
         // Weiches Gesamtlimit je Account (verteilte Angriffe) – bekannte IPs dürfen hindurch.
         let total = account_total_key(account);
-        match self.reserve(&total, ACCOUNT_TOTAL_RULE, now_ms) {
-            Ok(()) => held.push(total),
+        match self.reserve_counted(&total, ACCOUNT_TOTAL_RULE, now_ms) {
+            Ok(count) => {
+                held.push(total);
+                // Übergang: verteilter Angriff hat gerade das weiche Gesamtlimit erreicht.
+                if count == ACCOUNT_TOTAL_RULE.limit {
+                    self.report_lockout(
+                        account,
+                        count,
+                        ACCOUNT_TOTAL_RULE.window_ms,
+                        false,
+                        now_ms,
+                    );
+                }
+            }
             Err(wait) => {
                 if ip_known {
+                    // ~277: bekannte IP wird trotz erreichtem Gesamtlimit durchgelassen (S-23).
                     tracing::warn!(
                         "distributed login failures reached the account limit; a known IP was allowed through"
+                    );
+                    self.report_lockout(
+                        account,
+                        ACCOUNT_TOTAL_RULE.limit,
+                        ACCOUNT_TOTAL_RULE.window_ms,
+                        true,
+                        now_ms,
                     );
                 } else {
                     for k in &held {
@@ -286,6 +393,163 @@ impl AuthFailures {
             }
         }
         Ok(LoginReservation { keys: held })
+    }
+
+    /// Reserviert die Passwort-Reset-Limits (LIN-58): je IP UND je E-Mail, jeweils 3/Stunde und
+    /// 5/Tag. Diese Instanz ist GETRENNT vom Login-Zähler (eigene Tabelle), damit eine Reset-Flut
+    /// nie die Login-Tabelle füllen und so platformweite Login-429 auslösen kann.
+    ///
+    /// Die IP-Schlüssel werden ZUERST geprüft, dann die E-Mail-Schlüssel: eine bereits gesperrte IP
+    /// legt keine E-Mail-Einträge an. Alles-oder-nichts und EINTRAGSNEUTRAL bei Ablehnung: geprüft
+    /// wird unter EINEM Lock VOR jeder Mutation; nur wenn alle vier Schlüssel durchgehen, werden sie
+    /// erhöht/angelegt. Ein abgelehnter Versuch legt KEINEN Eintrag an und gibt nichts frei.
+    /// `ip = None` fällt auf einen gemeinsamen `"-"`-Bucket (die E-Mail-Limits gelten trotzdem).
+    pub fn reserve_password_reset(
+        &self,
+        email: &str,
+        ip: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), u64> {
+        let email_hash = account_hash(email);
+        let ip = ip.unwrap_or("-");
+        // IP zuerst (eine gesperrte IP darf keine E-Mail-Einträge erzeugen).
+        let keys = [
+            (format!("rpwih:{ip}"), RESET_HOUR_RULE),
+            (format!("rpwid:{ip}"), RESET_DAY_RULE),
+            (format!("rpweh:{email_hash}"), RESET_HOUR_RULE),
+            (format!("rpwed:{email_hash}"), RESET_DAY_RULE),
+        ];
+        self.reserve_all(&keys, now_ms)
+    }
+
+    /// Reserviert mehrere Schlüssel atomar: entweder alle oder keiner. Prüft unter EINEM Lock, ob
+    /// jeder Schlüssel noch frei ist (und ob die neuen Schlüssel in die Tabelle passen), und erhöht
+    /// erst dann. Bei Ablehnung wird NICHTS angelegt oder verändert (kein Rollback-Leck). `Err` ist
+    /// die Wartezeit in Sekunden des zuerst blockierenden Schlüssels bzw. bei voller Tabelle.
+    fn reserve_all(&self, keys: &[(String, Rule)], now_ms: i64) -> Result<(), u64> {
+        let mut state = self.lock();
+        let state = &mut *state;
+        // 1. Granularer Prüfpass ZUERST und IMMER (auch bei voller Tabelle): ein bereits vorhandener,
+        //    aktiver Schlüssel am Limit wird stets abgelehnt. So kann der Überlauf unten NIE einen
+        //    Schlüssel durchlassen, den ein granulares Limit geblockt hätte (kein Bypass). Keine
+        //    Mutation.
+        for (key, rule) in keys {
+            if let Some(e) = state.entries.get(key)
+                && Self::active(e, *rule, now_ms)
+                && e.count >= rule.limit
+            {
+                let left = (rule.window_ms - (now_ms - e.window_start_ms)) / 1000 + 1;
+                return Err(u64::try_from(left).unwrap_or(1));
+            }
+        }
+        // 2. Kapazität NUR für die NEUEN Schlüssel. Passen sie nicht, erst (ratenbegrenzt) abgelaufene
+        //    Einträge zurückgewinnen und neu zählen (Purge an der Ablehnungs-Schwelle).
+        let count_new = |state: &State| {
+            keys.iter()
+                .filter(|(k, _)| !state.entries.contains_key(k))
+                .count()
+        };
+        let mut new_keys = count_new(state);
+        if state.entries.len() + new_keys > self.max_keys
+            && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
+        {
+            Self::purge_expired(state, now_ms);
+            new_keys = count_new(state);
+        }
+        // Passen die NEUEN Schlüssel auch nach dem Purge nicht (genuin volle Tabelle = massive
+        // verteilte Flut), ihre Kapazitätslast auf den gemeinsamen Überlauf-Bucket laden statt hart
+        // abzulehnen. Die granularen Limits der VORHANDENEN Schlüssel gelten unverändert (oben
+        // geprüft). Ist der Überlauf selbst über seinem (höheren) Limit → fail-closed, ohne Commit.
+        let overflow = state.entries.len() + new_keys > self.max_keys;
+        if overflow {
+            Self::reserve_reset_overflow(state, now_ms)?;
+        }
+        // 3. Commit-Pass: vorhandene Schlüssel normal erhöhen; neue nur anlegen, wenn KEIN Überlauf
+        //    (im Überlauf tragen sie keine eigene Zeile — ihre Last steckt im Überlauf-Bucket).
+        for (key, rule) in keys {
+            if let Some(e) = state.entries.get_mut(key) {
+                if !Self::active(e, *rule, now_ms) {
+                    *e = Entry {
+                        count: 0,
+                        window_start_ms: now_ms,
+                        window_ms: rule.window_ms,
+                    };
+                }
+                e.count = e.count.saturating_add(1);
+            } else if !overflow {
+                state.entries.insert(
+                    key.clone(),
+                    Entry {
+                        count: 1,
+                        window_start_ms: now_ms,
+                        window_ms: rule.window_ms,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Reset-Überlauf: ein einziger gemeinsamer Bucket mit grobem, höherem Limit. Spiegelt den
+    /// Login-Überlauf (`record`/`blocked_for`), nur für den getrennten Reset-Zähler. `Err` = auch der
+    /// Überlauf ist über seinem Limit.
+    fn reserve_reset_overflow(state: &mut State, now_ms: i64) -> Result<(), u64> {
+        if now_ms - state.last_warn_ms >= 60_000 {
+            state.last_warn_ms = now_ms;
+            tracing::warn!("password reset counter full; new keys share the reset overflow bucket");
+        }
+        let e = state
+            .entries
+            .entry(RESET_OVERFLOW_KEY.to_owned())
+            .or_insert(Entry {
+                count: 0,
+                window_start_ms: now_ms,
+                window_ms: RESET_OVERFLOW_RULE.window_ms,
+            });
+        if !Self::active(e, RESET_OVERFLOW_RULE, now_ms) {
+            *e = Entry {
+                count: 0,
+                window_start_ms: now_ms,
+                window_ms: RESET_OVERFLOW_RULE.window_ms,
+            };
+        }
+        if e.count >= RESET_OVERFLOW_RULE.limit {
+            let left = (RESET_OVERFLOW_RULE.window_ms - (now_ms - e.window_start_ms)) / 1000 + 1;
+            return Err(u64::try_from(left).unwrap_or(1));
+        }
+        e.count = e.count.saturating_add(1);
+        Ok(())
+    }
+
+    /// Zahl der im Account-Fenster aktiven (Account, IP)-Paare ≈ Zahl verteilter Quell-IPs. Für die
+    /// `ipCount`-Angabe im Lockout-Audit (LIN-58 Teil 3).
+    fn distinct_ips_for_account(&self, account: &str, now_ms: i64) -> u32 {
+        let prefix = format!("acct:{}|", account_hash(account));
+        let state = self.lock();
+        state
+            .entries
+            .iter()
+            .filter(|(k, e)| {
+                k.starts_with(&prefix) && now_ms - e.window_start_ms < ACCOUNT_RULE.window_ms
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Meldet einen verteilten Lockout an die Audit-Senke (falls angehängt).
+    fn report_lockout(
+        &self,
+        account: &str,
+        failures: u32,
+        window_ms: i64,
+        allowed_known_ip: bool,
+        now_ms: i64,
+    ) {
+        if let Some(audit) = &self.audit {
+            let ip_count = self.distinct_ips_for_account(account, now_ms);
+            audit.distributed_lockout(account, ip_count, failures, window_ms, allowed_known_ip);
+        }
     }
 
     /// Ob das Gesamtlimit des Accounts aktuell erreicht ist (für den „bekannte IP"-Pfad im Handler,
@@ -614,6 +878,281 @@ mod tests {
             f.reserve_login("eve@acme.example", Some("v4:12.9.9.9"), true, 1_000)
                 .is_err()
         );
+    }
+
+    /// LIN-58: Reset-Limit 3/Stunde und 5/Tag, je E-Mail UND je IP.
+    #[test]
+    fn password_reset_limit_is_three_per_hour_five_per_day_per_email_and_ip() {
+        let f = AuthFailures::default();
+        let hour = 60 * 60_000;
+        // Erste 3 (Stundenlimit) ok, die 4. ist gesperrt.
+        for _ in 0..3 {
+            f.reserve_password_reset("alice@acme.example", Some("1.1.1.1"), 0)
+                .unwrap();
+        }
+        assert!(
+            f.reserve_password_reset("alice@acme.example", Some("1.1.1.1"), 0)
+                .is_err(),
+            "4. Anfrage in der Stunde ist gesperrt"
+        );
+        // Eine andere E-Mail von DERSELBEN IP ist auch gesperrt (IP-Stundenlimit erschöpft).
+        assert!(
+            f.reserve_password_reset("bob@acme.example", Some("1.1.1.1"), 0)
+                .is_err(),
+            "per-IP-Limit greift über E-Mails hinweg"
+        );
+        // Dieselbe E-Mail von einer ANDEREN IP: Stundenlimit der E-Mail ist ebenfalls erschöpft.
+        assert!(
+            f.reserve_password_reset("alice@acme.example", Some("2.2.2.2"), 0)
+                .is_err(),
+            "per-E-Mail-Limit greift über IPs hinweg"
+        );
+        // Nächste Stunde: Stundenlimit frisch, aber das Tageslimit (5) bleibt. Noch 2 ok, dann Schluss.
+        f.reserve_password_reset("alice@acme.example", Some("1.1.1.1"), hour + 1)
+            .unwrap();
+        f.reserve_password_reset("alice@acme.example", Some("1.1.1.1"), hour + 1)
+            .unwrap();
+        assert!(
+            f.reserve_password_reset("alice@acme.example", Some("1.1.1.1"), hour + 1)
+                .is_err(),
+            "6. Anfrage am Tag ist gesperrt (Tageslimit 5)"
+        );
+    }
+
+    /// LIN-58 (HIGH-Fix): Eine abgelehnte Reset-Anfrage legt KEINEN Eintrag an (atomar, kein
+    /// Rollback-Leck). Der frühere `reserve` + `release`-Pfad hinterließ je abgelehnter fremder
+    /// E-Mail Null-Zähler-Einträge und konnte so die Tabelle füllen; das darf nicht mehr passieren.
+    #[test]
+    fn a_rejected_reset_creates_no_entries() {
+        let f = AuthFailures::default();
+        // IP 7.7.7.7 über E-Mail A erschöpfen (Stundenlimit 3).
+        for _ in 0..3 {
+            f.reserve_password_reset("a@acme.example", Some("7.7.7.7"), 0)
+                .unwrap();
+        }
+        let before = f.len();
+        // Frische E-Mail B auf der erschöpften IP: abgelehnt — und OHNE neue Einträge (IP zuerst
+        // geprüft, atomar). Der frühere Code hätte hier zwei Null-Zähler-`rpwe*:B`-Einträge geleakt.
+        assert!(
+            f.reserve_password_reset("b@acme.example", Some("7.7.7.7"), 0)
+                .is_err()
+        );
+        assert_eq!(
+            f.len(),
+            before,
+            "ein abgelehnter Reset darf keinen Eintrag anlegen"
+        );
+        // B wurde nicht belastet: auf einer anderen IP sind noch volle 3× möglich.
+        for _ in 0..3 {
+            f.reserve_password_reset("b@acme.example", Some("8.8.8.8"), 0)
+                .unwrap();
+        }
+        assert!(
+            f.reserve_password_reset("b@acme.example", Some("8.8.8.8"), 0)
+                .is_err(),
+            "B hat jetzt sein Stundenlimit (3) erreicht"
+        );
+    }
+
+    /// LIN-58 (HIGH-Fix): Der Reset-Zähler ist eine eigene Instanz (eigene Tabelle). Eine Reset-Flut,
+    /// die die Reset-Tabelle bis zur Obergrenze füllt, lässt den Login-Zähler völlig unberührt — kein
+    /// platformweites Login-429 mehr. Pre-Fix teilten sich beide dieselbe Tabelle.
+    #[test]
+    fn a_reset_flood_cannot_exhaust_the_login_table() {
+        let login = AuthFailures::with_max_keys(100);
+        let reset = AuthFailures::with_max_keys(50);
+        // Reset-Tabelle mit vielen verschiedenen E-Mails/IPs bis zur Obergrenze fluten.
+        for i in 0..1_000 {
+            let _ = reset.reserve_password_reset(
+                &format!("u{i}@acme.example"),
+                Some(&format!("v4:1.2.{}.{}", i / 256, i % 256)),
+                1_000,
+            );
+        }
+        assert!(
+            reset.len() <= 50,
+            "Reset-Tabelle bleibt begrenzt: {}",
+            reset.len()
+        );
+        // Der (getrennte) Login-Zähler ist leer und voll funktionsfähig.
+        assert!(login.is_empty());
+        assert!(
+            login
+                .reserve_login("alice@acme.example", Some("v4:9.9.9.9"), false, 1_000)
+                .is_ok(),
+            "Login bleibt trotz Reset-Flut nutzbar"
+        );
+    }
+
+    /// LIN-58 (MEDIUM 2): Ist die Reset-Tabelle voll, werden neue Anfragen NICHT hart abgelehnt,
+    /// sondern laufen über den gemeinsamen Überlauf-Bucket — bis dessen eigenes (höheres) Limit
+    /// erreicht ist. Kein platformweiter Reset-Lockout.
+    #[test]
+    fn reset_overflow_admits_requests_when_the_table_is_full() {
+        let f = AuthFailures::with_max_keys(4);
+        // Eine Anfrage füllt die Tabelle (2 IP- + 2 E-Mail-Schlüssel).
+        f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+            .unwrap();
+        assert_eq!(f.len(), 4);
+        // Weitere Anfragen (je neue E-Mail/IP) passen nicht mehr → Überlauf statt harter Ablehnung.
+        for i in 0..RESET_OVERFLOW_RULE.limit {
+            f.reserve_password_reset(
+                &format!("u{i}@acme.example"),
+                Some(&format!("9.9.9.{i}")),
+                0,
+            )
+            .unwrap_or_else(|_| panic!("Überlauf muss Anfrage {i} zulassen"));
+        }
+        // Erst wenn der Überlauf selbst voll ist, wird fail-closed abgelehnt.
+        assert!(
+            f.reserve_password_reset("zzz@acme.example", Some("9.9.9.250"), 0)
+                .is_err(),
+            "über dem Überlauf-Limit wird abgelehnt"
+        );
+    }
+
+    /// LIN-58 (MEDIUM): Der Überlauf darf KEIN granulares Limit umgehen. Bei voller Tabelle wird ein
+    /// bereits am Limit stehender vorhandener Schlüssel weiterhin abgelehnt; nur genuin NEUE
+    /// Schlüssel laufen über den Überlauf.
+    #[test]
+    fn reset_overflow_does_not_bypass_granular_limits() {
+        let f = AuthFailures::with_max_keys(4);
+        // a@/1.1.1.1 bis zum Stundenlimit (3) ausschöpfen — füllt die Tabelle (4 Schlüssel).
+        for _ in 0..3 {
+            f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+                .unwrap();
+        }
+        assert_eq!(f.len(), 4);
+        // Volle Tabelle UND vorhandener Schlüssel am Limit → weiterhin abgelehnt (kein Bypass).
+        assert!(
+            f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+                .is_err(),
+            "am Limit stehender vorhandener Schlüssel wird nicht per Überlauf durchgelassen"
+        );
+        // Genuin neue E-Mail/IP wird trotz voller Tabelle per Überlauf zugelassen.
+        assert!(
+            f.reserve_password_reset("z@acme.example", Some("2.2.2.2"), 0)
+                .is_ok(),
+            "neue E-Mail/IP wird per Überlauf zugelassen"
+        );
+    }
+
+    /// LIN-58 (MEDIUM 1): Der Purge wird an der ABLEHNUNGS-Schwelle (`len + new > max`) versucht,
+    /// nicht erst bei `len >= max`. So gewinnt eine Anfrage abgelaufene 1h/24h-Einträge zurück und
+    /// läuft NORMAL (granular) durch, statt vorschnell in den Überlauf zu fallen.
+    #[test]
+    fn reset_purge_runs_at_the_rejection_threshold_and_reclaims_expired() {
+        let f = AuthFailures::with_max_keys(4);
+        f.reserve_password_reset("a@acme.example", Some("1.1.1.1"), 0)
+            .unwrap();
+        assert_eq!(f.len(), 4);
+        // 25 h später sind alle vier Einträge abgelaufen. Die neue Anfrage überschreitet die
+        // Ablehnungs-Schwelle, muss sie aber per Purge zurückgewinnen und normal durchgehen.
+        let later = 25 * 60 * 60_000;
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        assert_eq!(
+            f.len(),
+            4,
+            "abgelaufene Einträge zurückgewonnen, kein Überlauf-Schlüssel"
+        );
+        // Beweis des NORMALEN granularen Zählens (nicht Überlauf mit Limit 60): das Stundenlimit 3
+        // je E-Mail greift — über den Überlauf wären 4 Anfragen alle erlaubt.
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+            .unwrap();
+        assert!(
+            f.reserve_password_reset("b@acme.example", Some("2.2.2.2"), later)
+                .is_err(),
+            "normales Stundenlimit (3) greift → Purge hat zurückgewonnen"
+        );
+    }
+
+    /// LIN-58: Langlebige Zähler (Reset-Tagesfenster) überleben das Räumen bei voller Tabelle — der
+    /// frühere `purge_expired` hätte sie nach der IP-Fensterlänge (60 s) gelöscht.
+    #[test]
+    fn long_window_reset_keys_survive_table_pressure() {
+        let f = AuthFailures::with_max_keys(50);
+        // Tageszähler für eine E-Mail anlegen (3 Anfragen; Stundenlimit 3, Tageslimit 5).
+        for _ in 0..3 {
+            f.reserve_password_reset("victim@acme.example", Some("5.5.5.5"), 1_000)
+                .unwrap();
+        }
+        // Tabelle mit kurzen IP-Zählern fluten (löst Purge aus), weit nach 60 s — der alte
+        // `purge_expired` hätte den Tageszähler (window_start = 1_000) jetzt fälschlich geräumt.
+        for i in 0..5_000 {
+            f.record_ip(&format!("v4:fake{i}"), 100_000 + i64::from(i % 100));
+        }
+        // Nächste Stunde: das Stundenlimit ist frisch, der Tageszähler (window 24 h) steht noch bei 3.
+        let next_hour = 1_000 + 60 * 60_000 + 1_000;
+        f.reserve_password_reset("victim@acme.example", Some("5.5.5.5"), next_hour)
+            .unwrap();
+        f.reserve_password_reset("victim@acme.example", Some("5.5.5.5"), next_hour)
+            .unwrap();
+        assert!(
+            f.reserve_password_reset("victim@acme.example", Some("5.5.5.5"), next_hour)
+                .is_err(),
+            "der Tageszähler wurde fälschlich geräumt (Tageslimit 5 müsste greifen)"
+        );
+    }
+
+    /// LIN-58 Teil 3: Beim Erreichen des Account-Gesamtlimits (verteilter Angriff) wird die Audit-
+    /// Senke genau einmal (Übergang) aufgerufen; eine durchgelassene bekannte IP ruft sie erneut
+    /// mit `allowed_known_ip = true` auf.
+    #[test]
+    fn distributed_lockout_audit_fires_at_the_transition() {
+        #[derive(Default)]
+        struct Rec {
+            calls: std::sync::Mutex<Vec<(u32, u32, i64, bool)>>,
+        }
+        impl LockoutAudit for Rec {
+            fn distributed_lockout(
+                &self,
+                _account: &str,
+                ip_count: u32,
+                failures: u32,
+                window_ms: i64,
+                allowed_known_ip: bool,
+            ) {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((ip_count, failures, window_ms, allowed_known_ip));
+            }
+        }
+        let rec = Arc::new(Rec::default());
+        let f = AuthFailures::default().with_audit(rec.clone());
+        // 100 Fehlversuche von je eigener IP erreichen das weiche Gesamtlimit (ACCOUNT_TOTAL_RULE).
+        for i in 0..100 {
+            f.reserve_login(
+                "bob@acme.example",
+                Some(&format!(
+                    "v4:10.{}.{}.{}",
+                    i / 65536,
+                    (i / 256) % 256,
+                    i % 256
+                )),
+                false,
+                1_000,
+            )
+            .unwrap();
+        }
+        {
+            let calls = rec.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "genau ein Übergang: {calls:?}");
+            let (ip_count, failures, window_ms, allowed) = calls[0];
+            assert_eq!(failures, ACCOUNT_TOTAL_RULE.limit);
+            assert_eq!(window_ms, ACCOUNT_TOTAL_RULE.window_ms);
+            assert!(!allowed, "Übergang ist keine Durchlass-Meldung");
+            assert!(ip_count >= 90, "ip_count ≈ Zahl verteilter IPs: {ip_count}");
+        }
+        // Eine bekannte IP wird durchgelassen (S-23) und erneut auditiert.
+        f.reserve_login("bob@acme.example", Some("v4:10.9.9.9"), true, 1_000)
+            .unwrap();
+        let calls = rec.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "Durchlass-Meldung kommt hinzu");
+        assert!(calls[1].3, "zweiter Aufruf markiert die durchgelassene IP");
     }
 
     /// Das harte Gesamtlimit zählt auch per bekannter IP durchgelassene Fehlversuche und sperrt bei

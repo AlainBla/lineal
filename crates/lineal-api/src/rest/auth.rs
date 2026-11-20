@@ -284,6 +284,91 @@ pub async fn logout(
     res
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordBody {
+    pub email: String,
+    /// `urlKey` des Workspace; nötig, wenn die E-Mail in mehreren Workspaces existiert (wie Login).
+    #[serde(default, rename = "urlKey", alias = "workspace")]
+    pub url_key: Option<String>,
+}
+
+/// Neutrale Antwort auf jede Reset-Anfrage – identisch, ob ein Konto existiert, nicht existiert oder
+/// das Limit erreicht ist (keine Enumeration über Status, Body oder Header).
+fn forgot_password_ok() -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "message": "If an account exists for that email, we've sent a password reset link."
+        })),
+    )
+        .into_response()
+}
+
+/// `POST /auth/forgot-password`: `{ "email", "urlKey"? }`. Antwortet IMMER mit demselben `200`.
+///
+/// Enumeration-/Timing-Schutz: Der Handler macht nur die schnelle In-Memory-Ratenreservierung und
+/// stößt die gesamte eigentliche Arbeit (Lookup, Schreiben, Mailversand) in einer losgelösten Task
+/// an — die Antwortzeit hängt damit nicht von der Kontoexistenz ab. Bei erreichtem Limit wird nichts
+/// angestoßen, aber dieselbe Antwort geliefert.
+pub async fn forgot_password(
+    State(app): State<Arc<App>>,
+    reset_fails: Option<Extension<crate::auth_failures::ResetFailures>>,
+    client: Option<Extension<ClientIp>>,
+    Json(body): Json<ForgotPasswordBody>,
+) -> Response {
+    let now_ms = app.clock.now().timestamp_millis();
+    let client_ip = client.as_ref().map(|Extension(c)| c.0.to_string());
+    let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
+    // GETRENNTER Reset-Zähler (eigene Tabelle): eine Reset-Flut kann nie die Login-Tabelle füllen.
+    let allowed = match &reset_fails {
+        Some(Extension(crate::auth_failures::ResetFailures(f))) => f
+            .reserve_password_reset(body.email.trim(), ip_key.as_deref(), now_ms)
+            .is_ok(),
+        None => true,
+    };
+    if allowed {
+        let app = app.clone();
+        let email = body.email.clone();
+        let url_key = body.url_key.clone();
+        let ip = client_ip.clone();
+        tokio::spawn(async move {
+            if let Err(e) = app
+                .deliver_password_reset(&email, url_key.as_deref(), ip.as_deref())
+                .await
+            {
+                tracing::warn!(error = %e, "password reset delivery failed");
+            }
+        });
+    }
+    forgot_password_ok()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordBody {
+    pub token: String,
+    #[serde(rename = "newPassword", alias = "new_password")]
+    pub new_password: String,
+}
+
+/// `POST /auth/reset-password`: `{ "token", "newPassword" }`. Setzt KEINE Session (frischer Login).
+/// Unbekannte, abgelaufene oder verbrauchte Tokens antworten einheitlich neutral.
+pub async fn reset_password(
+    State(app): State<Arc<App>>,
+    client: Option<Extension<ClientIp>>,
+    request_id: Option<Extension<RequestId>>,
+    Json(body): Json<ResetPasswordBody>,
+) -> Response {
+    let client_ip = client.map(|Extension(c)| c.0.to_string());
+    let request_id = request_id.map(|Extension(r)| r.0);
+    match app
+        .reset_password(&body.token, &body.new_password, client_ip, request_id)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))).into_response(),
+        Err(e) => error_response(e),
+    }
+}
+
 /// `GET /auth/me`: der eingeloggte User (Session-Cookie oder `Authorization`-Header).
 pub async fn me(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     let cookie = session_cookie_value(&headers);
@@ -351,7 +436,10 @@ mod tests {
     use http_body_util::BodyExt;
     use lineal_app::ports::Store;
     use lineal_db::PgStore;
-    use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
+    use lineal_testkit::{
+        NeverMailer, RecordingMailer, SeedData, SeedUser, ctx_for, seed, test_app, test_app_with,
+        test_app_with_mailer,
+    };
     use tower::ServiceExt;
 
     /// Testpasswort für Alice: >= 12 Zeichen (Mindestlänge, LIN-62 L-8). Nicht das 10-stellige
@@ -658,5 +746,372 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(send(&r, me).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    // ----- LIN-58: Self-Service-Passwort-Reset ------------------------------------------------
+
+    use lineal_app::usecases::auth::CreateApiKeyInput;
+    use lineal_app::usecases::user::CreateUserInput;
+
+    /// Extrahiert den Klartext-Token aus dem Reset-Link im Mail-Body.
+    fn token_from_mail(body: &str) -> String {
+        let start = body.find("token=").expect("token in mail") + "token=".len();
+        body[start..]
+            .split(|c: char| c.is_whitespace())
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Seedt den Workspace, setzt Alices Passwort und liefert eine App mit aufzeichnendem Mailer.
+    async fn reset_app(pool: sqlx::PgPool) -> (std::sync::Arc<lineal_app::App>, RecordingMailer) {
+        let store = PgStore::new(pool);
+        let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+        seed::run(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let mailer = RecordingMailer::new();
+        let app = test_app_with_mailer(
+            std::sync::Arc::new(store),
+            std::sync::Arc::new(mailer.clone()),
+        );
+        app.set_user_password(&ctx_for(SeedUser::Alice), "me", PW)
+            .await
+            .unwrap();
+        (app, mailer)
+    }
+
+    const NEW_PW: &str = "fresh-password-abc-123";
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn reset_is_single_use_and_revokes_sessions_and_api_keys(pool: sqlx::PgPool) {
+        let (app, mailer) = reset_app(pool).await;
+        // Bestehende Zugangsdaten: eine Session und ein API-Key.
+        let login = app
+            .login(LoginInput {
+                email: "alice@acme.example".into(),
+                password: PW.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(app.principal_for_token(&login.token).await.is_ok());
+        let key = app
+            .create_api_key(
+                &ctx_for(SeedUser::Alice),
+                CreateApiKeyInput {
+                    label: "ci".into(),
+                    scopes: vec!["read".into()],
+                    teams: None,
+                    expires_at: None,
+                },
+            )
+            .await
+            .unwrap()
+            .key;
+        assert!(app.principal_for_token(&key).await.is_ok());
+
+        // Reset anfordern: genau eine Mail mit einem `lin_reset_`-Token.
+        app.deliver_password_reset("alice@acme.example", None, None)
+            .await
+            .unwrap();
+        let sent = mailer.sent();
+        assert_eq!(sent.len(), 1, "genau eine Reset-Mail");
+        assert_eq!(sent[0].to, "alice@acme.example");
+        let token = token_from_mail(&sent[0].body);
+        assert!(token.starts_with("lin_reset_"), "Token: {token}");
+
+        // Einlösen: Erfolg, danach sind Session UND API-Key ungültig.
+        app.reset_password(&token, NEW_PW, None, None)
+            .await
+            .unwrap();
+        assert!(
+            app.principal_for_token(&login.token).await.is_err(),
+            "alte Session muss widerrufen sein"
+        );
+        assert!(
+            app.principal_for_token(&key).await.is_err(),
+            "API-Key muss widerrufen sein"
+        );
+        // Einmalig: zweites Einlösen scheitert.
+        assert!(
+            app.reset_password(&token, "another-good-pw-999", None, None)
+                .await
+                .is_err(),
+            "Token ist einmalig"
+        );
+        // Manipuliertes/unbekanntes Token scheitert.
+        assert!(
+            app.reset_password(&format!("{token}x"), NEW_PW, None, None)
+                .await
+                .is_err()
+        );
+
+        // Mit dem neuen Passwort kann sich Alice frisch anmelden.
+        assert!(
+            app.login(LoginInput {
+                email: "alice@acme.example".into(),
+                password: NEW_PW.into(),
+                ..Default::default()
+            })
+            .await
+            .is_ok()
+        );
+
+        // Audit-Eintrag `auth.password_reset` wurde geschrieben.
+        let audit = app
+            .list_audit_log(
+                &ctx_for(SeedUser::Alice),
+                lineal_app::usecases::audit::ListAuditInput {
+                    action: Some("auth.password_reset".into()),
+                    first: Some(10),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(audit.entries.len(), 1, "ein Reset-Audit-Eintrag");
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn reset_mail_goes_to_the_stored_address_not_the_typed_one(pool: sqlx::PgPool) {
+        let (app, mailer) = reset_app(pool).await;
+        // Groß geschrieben eingegeben: die Mail geht trotzdem an die gespeicherte Adresse.
+        app.deliver_password_reset("ALICE@ACME.EXAMPLE", None, None)
+            .await
+            .unwrap();
+        assert_eq!(mailer.sent().len(), 1);
+        assert_eq!(mailer.sent()[0].to, "alice@acme.example");
+        // Nicht-ASCII-Eingabe wird gar nicht erst nachgeschlagen (kein `lower()`-Folding-Risiko).
+        app.deliver_password_reset("alice@acme.examplе", None, None) // kyrillisches 'е'
+            .await
+            .unwrap();
+        assert_eq!(mailer.sent().len(), 1, "Nicht-ASCII-Eingabe sendet nichts");
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn reset_requires_min_12_and_does_not_burn_the_token(pool: sqlx::PgPool) {
+        let (app, mailer) = reset_app(pool).await;
+        app.deliver_password_reset("alice@acme.example", None, None)
+            .await
+            .unwrap();
+        let token = token_from_mail(&mailer.sent()[0].body);
+        // Zu kurz: abgelehnt (Feld `password`), Token NICHT verbraucht.
+        let err = app
+            .reset_password(&token, "short", None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.details["field"], "password");
+        // Gültiges Passwort löst dasselbe Token danach noch ein.
+        app.reset_password(&token, NEW_PW, None, None)
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn no_email_for_passwordless_bot_or_unknown_accounts(pool: sqlx::PgPool) {
+        let (app, mailer) = reset_app(pool.clone()).await;
+        // Passwortloses Konto (SSO-artig): per Einladung ohne Passwort angelegt.
+        app.create_user(
+            &ctx_for(SeedUser::Alice),
+            CreateUserInput {
+                name: "No Pass".into(),
+                email: "nopass@acme.example".into(),
+                role: lineal_domain::enums::UserRole::User,
+                password: None,
+                teams: vec!["ENG".into()],
+            },
+        )
+        .await
+        .unwrap();
+        // Bot/`app`-Konto MIT Passwort-Hash (soll trotzdem keine Mail bekommen).
+        {
+            let store = PgStore::new(pool.clone());
+            let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+            tx.users()
+                .insert(&lineal_app::ports::repos::user::NewUser {
+                    id: lineal_domain::ids::UserId::new_v7(),
+                    name: "Bot".into(),
+                    display_name: "botuser".into(),
+                    email: "bot@acme.example".into(),
+                    role: lineal_domain::enums::UserRole::App,
+                    password_hash: Some("fake:whatever".into()),
+                    now: app.clock.now(),
+                })
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        for email in [
+            "nopass@acme.example",
+            "bot@acme.example",
+            "ghost@acme.example",
+        ] {
+            app.deliver_password_reset(email, None, None).await.unwrap();
+        }
+        assert!(
+            mailer.sent().is_empty(),
+            "weder passwortlose noch Bot- noch unbekannte Konten bekommen eine Mail: {:?}",
+            mailer.sent()
+        );
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn expired_token_is_rejected(pool: sqlx::PgPool) {
+        let (app, mailer) = reset_app(pool.clone()).await;
+        app.deliver_password_reset("alice@acme.example", None, None)
+            .await
+            .unwrap();
+        let token = token_from_mail(&mailer.sent()[0].body);
+        // Zweite App auf DEMSELBEN Store, aber 31 Minuten später (TTL 30 min).
+        let later = lineal_testkit::FixedClock(app.clock.now() + chrono::Duration::minutes(31));
+        let app_later = test_app_with(
+            std::sync::Arc::new(PgStore::new(pool.clone())),
+            std::sync::Arc::new(later),
+            std::sync::Arc::new(NeverMailer),
+        );
+        assert!(
+            app_later
+                .reset_password(&token, NEW_PW, None, None)
+                .await
+                .is_err(),
+            "abgelaufenes Token muss abgelehnt werden"
+        );
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn distributed_lockout_audit_is_recorded(pool: sqlx::PgPool) {
+        let (app, _) = reset_app(pool).await;
+        app.record_distributed_lockout("alice@acme.example", 42, 100, 900_000, false)
+            .await
+            .unwrap();
+        let audit = app
+            .list_audit_log(
+                &ctx_for(SeedUser::Alice),
+                lineal_app::usecases::audit::ListAuditInput {
+                    action: Some("auth.distributed_lockout".into()),
+                    first: Some(10),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(audit.entries.len(), 1, "ein Lockout-Audit-Eintrag");
+        assert_eq!(audit.entries[0].details["ipCount"], 42);
+    }
+
+    // ----- HTTP-Ebene --------------------------------------------------------------------------
+
+    fn forgot_req(body: serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/auth/forgot-password")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn forgot_password_response_is_identical_for_existing_unknown_and_rate_limited(
+        pool: sqlx::PgPool,
+    ) {
+        let r = setup(pool).await;
+        let existing = send(&r, forgot_req(json!({ "email": "alice@acme.example" }))).await;
+        let unknown = send(&r, forgot_req(json!({ "email": "ghost@acme.example" }))).await;
+        // Status und Body identisch; kein Cookie, kein Existenz-Signal.
+        assert_eq!(existing.0, StatusCode::OK);
+        assert_eq!((existing.0, &existing.2), (unknown.0, &unknown.2));
+        assert!(existing.1.get(header::SET_COOKIE).is_none());
+
+        // Über das Limit (3/Stunde je E-Mail): weiterhin dieselbe Antwort.
+        let mut last = existing.clone();
+        for _ in 0..5 {
+            last = send(&r, forgot_req(json!({ "email": "alice@acme.example" }))).await;
+        }
+        assert_eq!(last.0, StatusCode::OK);
+        assert_eq!(&last.2, &existing.2, "auch im Limit dieselbe Antwort");
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn forgot_password_rate_limit_caps_delivered_mail(pool: sqlx::PgPool) {
+        // Beweist, dass der (getrennte) Reset-Zähler über den Router wirklich greift: 6 Anfragen für
+        // dasselbe existierende Konto führen zu höchstens 3 Mails (Stundenlimit) — die weiteren
+        // nehmen den blockierten „kein Versand"-Zweig.
+        let store = PgStore::new(pool);
+        let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+        seed::run(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let mailer = RecordingMailer::new();
+        let app = test_app_with_mailer(
+            std::sync::Arc::new(store),
+            std::sync::Arc::new(mailer.clone()),
+        );
+        app.set_user_password(&ctx_for(SeedUser::Alice), "me", PW)
+            .await
+            .unwrap();
+        let r = router(app, false);
+        for _ in 0..6 {
+            let (status, _, _) =
+                send(&r, forgot_req(json!({ "email": "alice@acme.example" }))).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        // Auf die losgelösten Versand-Tasks warten (blockierte Anfragen spawnen nicht).
+        for _ in 0..100 {
+            if mailer.sent().len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            mailer.sent().len(),
+            3,
+            "genau 3 Mails (Stundenlimit); die weiteren Anfragen wurden gesperrt"
+        );
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn forgot_password_returns_without_waiting_for_the_mailer(pool: sqlx::PgPool) {
+        // Mailer, der nie zurückkehrt: der Handler darf nicht inline auf ihn warten.
+        let store = PgStore::new(pool);
+        let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+        seed::run(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let app =
+            test_app_with_mailer(std::sync::Arc::new(store), std::sync::Arc::new(NeverMailer));
+        let r = router(app, false);
+        let fut = send(&r, forgot_req(json!({ "email": "alice@acme.example" })));
+        let (status, _, _) = tokio::time::timeout(std::time::Duration::from_secs(5), fut)
+            .await
+            .expect("Handler muss sofort antworten, nicht auf den Mailer warten");
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn reset_password_endpoint_rejects_invalid_token_and_weak_password(pool: sqlx::PgPool) {
+        let r = setup(pool).await;
+        let reset = |body: serde_json::Value| {
+            Request::builder()
+                .method("POST")
+                .uri("/auth/reset-password")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        // Unbekanntes Token: 400, neutraler Grund.
+        let (status, _, body) = send(
+            &r,
+            reset(json!({ "token": "lin_reset_bogus", "newPassword": NEW_PW })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["details"]["reason"], "invalid_token");
+        // Zu kurzes Passwort: 400, Feld `password` (vor dem Einlösen geprüft).
+        let (status, _, body) = send(
+            &r,
+            reset(json!({ "token": "lin_reset_bogus", "newPassword": "short" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["details"]["field"], "password");
     }
 }

@@ -86,6 +86,9 @@ pub struct Platform {
     pub cfg: Arc<PlatformConfig>,
     /// Brute-Force-Zähler für fehlgeschlagene Authentifizierungen.
     pub fails: Arc<crate::auth_failures::AuthFailures>,
+    /// GETRENNTER Zähler für Passwort-Reset-Anfragen (LIN-58): eigene Tabelle, damit eine Reset-Flut
+    /// nie die Login-Tabelle füllen kann.
+    pub reset_fails: Arc<crate::auth_failures::AuthFailures>,
 }
 
 fn cors(origins: &[String]) -> CorsLayer {
@@ -137,9 +140,17 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
         app: app.clone(),
         limiter: Arc::new(RateLimiter::default()),
         cfg: Arc::new(cfg),
-        fails: Arc::new(crate::auth_failures::AuthFailures::default()),
+        // LIN-58 Teil 3: Zähler mit Audit-Senke für `auth.distributed_lockout`.
+        fails: Arc::new(
+            crate::auth_failures::AuthFailures::default().with_audit(Arc::new(
+                crate::lockout_audit::AppLockoutAudit::new(app.clone()),
+            )),
+        ),
+        // LIN-58: eigener Reset-Zähler (getrennte Tabelle vom Login).
+        reset_fails: Arc::new(crate::auth_failures::AuthFailures::default()),
     };
     let fails = platform.fails.clone();
+    let reset_fails = crate::auth_failures::ResetFailures(platform.reset_fails.clone());
     let security = platform.cfg.security;
     let cors_origins = platform.cfg.cors_origins.clone();
     let trusted = Arc::new(platform.cfg.trusted_proxies.clone());
@@ -154,6 +165,7 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
     let mut router = router
         .layer(Extension(app))
         .layer(Extension(fails))
+        .layer(Extension(reset_fails))
         .layer(from_fn_with_state(files_host, files_origin_guard))
         .layer(from_fn_with_state(platform.clone(), rate_limit::middleware))
         .layer(from_fn_with_state(platform.clone(), auth::middleware))

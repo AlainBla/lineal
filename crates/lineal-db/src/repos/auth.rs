@@ -6,7 +6,8 @@ use crate::store::PgTx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::repos::auth::{
-    ApiKeyRecord, LoginCandidate, NewApiKey, NewSession, OAuthGrant, SessionRecord,
+    ApiKeyRecord, LoginCandidate, NewApiKey, NewPasswordReset, NewSession, OAuthGrant,
+    SessionRecord,
 };
 use lineal_app::ports::repos::{AuthRepo, CredentialKind, Principal};
 use lineal_app::{Actor, AppResult, Scopes};
@@ -506,6 +507,94 @@ impl AuthRepo for PgTx {
             .await
             .map_err(db_err)?;
         Ok(())
+    }
+
+    // --- Passwort-Reset (LIN-58) -------------------------------------------------------------
+
+    async fn insert_password_reset(&mut self, r: &NewPasswordReset) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO password_reset \
+             (id, organization_id, user_id, token_hash, requested_ip, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(r.id)
+        .bind(r.org_id.0)
+        .bind(r.user_id.0)
+        .bind(&r.token_hash)
+        .bind(&r.requested_ip)
+        .bind(r.now)
+        .bind(r.expires_at)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn invalidate_password_resets(
+        &mut self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let res = sqlx::query(
+            "UPDATE password_reset SET used_at = $3 \
+             WHERE organization_id = $1 AND user_id = $2 AND used_at IS NULL",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn count_password_resets_since(
+        &mut self,
+        user_id: UserId,
+        since: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM password_reset \
+             WHERE organization_id = $1 AND user_id = $2 AND created_at >= $3",
+        )
+        .bind(self.org.0)
+        .bind(user_id.0)
+        .bind(since)
+        .fetch_one(&mut *self.tx)
+        .await
+        .map_err(db_err)
+    }
+
+    async fn find_password_reset_org(&mut self, token_hash: &str) -> AppResult<Option<OrgId>> {
+        // Mandantenübergreifend über den global eindeutigen Token-Hash (nur zum Routen).
+        let row: Option<Uuid> =
+            sqlx::query_scalar("SELECT organization_id FROM password_reset WHERE token_hash = $1")
+                .bind(token_hash)
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(db_err)?;
+        Ok(row.map(OrgId))
+    }
+
+    async fn consume_password_reset(
+        &mut self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<UserId>> {
+        // Atomar: der `used_at IS NULL`-Filter in der UPDATE-WHERE serialisiert konkurrierende
+        // Einlösungen — genau eine gewinnt, alle weiteren treffen 0 Zeilen.
+        let row: Option<Uuid> = sqlx::query_scalar(
+            "UPDATE password_reset SET used_at = $3 \
+             WHERE organization_id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > $3 \
+             RETURNING user_id",
+        )
+        .bind(self.org.0)
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(row.map(UserId))
     }
 
     async fn revoke_oauth_tokens_of_user(
