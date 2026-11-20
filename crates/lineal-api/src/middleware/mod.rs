@@ -137,7 +137,12 @@ pub fn apply_with(router: Router, app: Arc<App>, cfg: PlatformConfig) -> Router 
         app: app.clone(),
         limiter: Arc::new(RateLimiter::default()),
         cfg: Arc::new(cfg),
-        fails: Arc::new(crate::auth_failures::AuthFailures::default()),
+        // LIN-58 Teil 3: Zähler mit Audit-Senke für `auth.distributed_lockout`.
+        fails: Arc::new(
+            crate::auth_failures::AuthFailures::default().with_audit(Arc::new(
+                crate::lockout_audit::AppLockoutAudit::new(app.clone()),
+            )),
+        ),
     };
     let fails = platform.fails.clone();
     let security = platform.cfg.security;

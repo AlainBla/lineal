@@ -9,6 +9,7 @@ pub mod client_ip;
 pub mod context;
 pub mod error;
 pub mod graphql;
+pub mod lockout_audit;
 pub mod middleware;
 pub mod oauth;
 pub mod pagination;

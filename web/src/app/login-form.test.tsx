@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { login, normalizeSession, validateLogin } from "@/app/auth";
 import { LoginForm } from "@/app/login-form";
+import { renderWithApp } from "@/features/issues/test-fixtures";
 
 describe("validateLogin", () => {
   it("requires email and password", () => {
@@ -23,7 +24,7 @@ describe("LoginForm", () => {
   it("shows field errors, focuses the first invalid field and does not submit", async () => {
     const user = userEvent.setup();
     const submit = vi.fn();
-    render(<LoginForm onSuccess={() => {}} submit={submit} />);
+    await renderWithApp(<LoginForm onSuccess={() => {}} submit={submit} />);
     await user.click(screen.getByRole("button", { name: "Log in" }));
     const email = screen.getByLabelText("Email");
     expect(email).toHaveAttribute("aria-invalid", "true");
@@ -37,7 +38,7 @@ describe("LoginForm", () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue({ kind: "ok" });
     const onSuccess = vi.fn();
-    render(<LoginForm onSuccess={onSuccess} submit={submit} />);
+    await renderWithApp(<LoginForm onSuccess={onSuccess} submit={submit} />);
     await user.type(screen.getByLabelText("Email"), " alice@acme.example ");
     await user.type(screen.getByLabelText("Password"), "s3cret");
     await user.click(screen.getByRole("button", { name: "Log in" }));
@@ -48,7 +49,7 @@ describe("LoginForm", () => {
   it("moves to the two-factor step when the server asks for it", async () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue({ kind: "totp", pendingToken: "pt1" });
-    render(<LoginForm onSuccess={() => {}} submit={submit} />);
+    await renderWithApp(<LoginForm onSuccess={() => {}} submit={submit} />);
     await user.type(screen.getByLabelText("Email"), "alice@acme.example");
     await user.type(screen.getByLabelText("Password"), "s3cretpassword");
     await user.click(screen.getByRole("button", { name: "Log in" }));
@@ -59,7 +60,7 @@ describe("LoginForm", () => {
     const user = userEvent.setup();
     const submit = vi.fn().mockResolvedValue({ kind: "error", reason: "invalid_credentials" });
     const onSuccess = vi.fn();
-    render(<LoginForm onSuccess={onSuccess} submit={submit} />);
+    await renderWithApp(<LoginForm onSuccess={onSuccess} submit={submit} />);
     await user.type(screen.getByLabelText("Email"), "alice@acme.example");
     await user.type(screen.getByLabelText("Password"), "nope");
     await user.click(screen.getByRole("button", { name: "Log in" }));

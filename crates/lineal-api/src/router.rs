@@ -49,6 +49,8 @@ pub fn routes(app: Arc<App>, dev: bool) -> Router {
         .route("/graphql/schema.graphql", get(schema_sdl))
         .route("/auth/login", post(rest::auth::login))
         .route("/auth/login/totp", post(rest::totp::login_totp))
+        .route("/auth/forgot-password", post(rest::auth::forgot_password))
+        .route("/auth/reset-password", post(rest::auth::reset_password))
         .route("/auth/logout", post(rest::auth::logout))
         .route("/auth/me", get(rest::auth::me))
         .route("/auth/totp/status", get(rest::totp::status))
