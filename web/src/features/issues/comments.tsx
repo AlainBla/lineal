@@ -575,11 +575,17 @@ export function ActivitySection({ issue, lookup }: { issue: Issue; lookup: Issue
         </ol>
       )}
       {comments.isLoading && <Skeleton className="h-16 w-full" />}
-      <CommentComposer
-        issueId={issue.id}
-        placeholder="Leave a comment…"
-        ariaLabel="Leave a comment"
-      />
+      {/* LIN-84: Haupt-Composer unten fixieren, damit er bei vielen Kommentaren immer erreichbar ist.
+          `sticky bottom-0` reserviert seinen Platz im Fluss (letzter Kommentar wird nicht verdeckt)
+          und heftet sich beim Scrollen an den unteren Rand des Scroll-Containers. Antwort-Composer
+          in den Threads bleiben inline. `-mx-6` spannt die Leiste über das `px-6` des Detail-Bereichs. */}
+      <div className="sticky bottom-0 z-10 -mx-6 mt-1 border-t border-border bg-background px-6 pt-3 pb-4">
+        <CommentComposer
+          issueId={issue.id}
+          placeholder="Leave a comment…"
+          ariaLabel="Leave a comment"
+        />
+      </div>
     </section>
   );
 }

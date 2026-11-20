@@ -742,6 +742,52 @@ impl App {
             .await
             .unwrap_or(false)
     }
+
+    /// LIN-58 Teil 3: Schreibt den Audit-Eintrag `auth.distributed_lockout`, wenn das Account-
+    /// Gesamtlimit durch verteilte Fehlversuche (viele IPs) erreicht wurde. Aufgerufen aus dem
+    /// Brute-Force-Zähler (`auth_failures`), der nur die Klartext-Adresse kennt; hier wird sie auf
+    /// die betroffenen Workspaces/Nutzer aufgelöst und je Workspace ein Eintrag geschrieben.
+    ///
+    /// `ip_count` = Zahl der im Fenster aktiven (Account, IP)-Paare (≈ verteilte Quell-IPs),
+    /// `failures` = Stand des Account-Gesamtzählers, `window_ms` = Fensterlänge,
+    /// `allowed_known_ip` = die Sperre wurde für eine bekannte IP (S-23) durchgelassen. Es werden
+    /// WEDER die Adresse NOCH ein Adress-Hash gespeichert (nur die Ziel-User-ID), wie beim
+    /// Fehlversuch-Audit. Gibt es kein passendes Konto, passiert nichts (nur das `warn!` greift).
+    pub async fn record_distributed_lockout(
+        &self,
+        email: &str,
+        ip_count: u32,
+        failures: u32,
+        window_ms: i64,
+        allowed_known_ip: bool,
+    ) -> AppResult<()> {
+        let mut sys = self.store.begin_system().await?;
+        let candidates = sys.auth().find_login_candidates(email.trim(), None).await?;
+        drop(sys);
+        for c in candidates {
+            let ctx = user_ctx(c.org_id, c.user_id, c.role, None, String::new(), None);
+            let entry = super::audit::entry_from_ctx(
+                self.ids.new_uuid(),
+                self.clock.now(),
+                &ctx,
+                AuditEvent::new(
+                    "auth.distributed_lockout",
+                    "user",
+                    Some(c.user_id.0),
+                    json!({
+                        "ipCount": ip_count,
+                        "failures": failures,
+                        "windowMs": window_ms,
+                        "allowedKnownIp": allowed_known_ip,
+                    }),
+                ),
+            );
+            let mut tx = self.store.begin(c.org_id).await?;
+            tx.audit().append(&entry).await?;
+            tx.commit().await?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

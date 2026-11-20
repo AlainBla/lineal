@@ -227,6 +227,8 @@ struct ExtrasRow {
     label_ids: Vec<Uuid>,
     children_count: i64,
     link_count: i64,
+    blocked_by_identifiers: Vec<String>,
+    blocked_by_team_ids: Vec<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -685,7 +687,17 @@ impl IssueRepo for PgTx {
                COALESCE((SELECT array_agg(l.id ORDER BY l.name, l.id) FROM issue_to_label il \
                  JOIN issue_label l ON l.id = il.label_id WHERE il.issue_id = i.id), '{}') AS label_ids, \
                (SELECT count(*) FROM issue ch WHERE ch.parent_id = i.id AND NOT ch.trashed) AS children_count, \
-               (SELECT count(*) FROM attachment at WHERE at.issue_id = i.id AND at.archived_at IS NULL) AS link_count \
+               (SELECT count(*) FROM attachment at WHERE at.issue_id = i.id AND at.archived_at IS NULL) AS link_count, \
+               COALESCE((SELECT array_agg(b.identifier ORDER BY b.identifier, b.id) FROM issue_relation r \
+                 JOIN issue b ON b.organization_id = r.organization_id AND b.id = r.issue_id \
+                 WHERE r.organization_id = i.organization_id AND r.type = 'blocks' \
+                   AND r.related_issue_id = i.id AND NOT b.trashed \
+                   AND b.state_type NOT IN ('completed', 'canceled', 'duplicate')), '{}') AS blocked_by_identifiers, \
+               COALESCE((SELECT array_agg(b.team_id ORDER BY b.identifier, b.id) FROM issue_relation r \
+                 JOIN issue b ON b.organization_id = r.organization_id AND b.id = r.issue_id \
+                 WHERE r.organization_id = i.organization_id AND r.type = 'blocks' \
+                   AND r.related_issue_id = i.id AND NOT b.trashed \
+                   AND b.state_type NOT IN ('completed', 'canceled', 'duplicate')), '{}') AS blocked_by_team_ids \
              FROM issue i \
              JOIN workflow_state s ON s.id = i.state_id \
              JOIN team t ON t.id = i.team_id \
@@ -723,6 +735,11 @@ impl IssueRepo for PgTx {
                         label_ids: r.label_ids.into_iter().map(LabelId).collect(),
                         children_count: r.children_count,
                         link_count: r.link_count,
+                        blocked_by: r
+                            .blocked_by_identifiers
+                            .into_iter()
+                            .zip(r.blocked_by_team_ids.into_iter().map(TeamId))
+                            .collect(),
                     },
                 )
             })

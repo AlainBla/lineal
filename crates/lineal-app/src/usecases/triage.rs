@@ -279,10 +279,22 @@ async fn prelude(
     Ok((issue, team))
 }
 
-async fn view_of(tx: &mut dyn Tx, issue: Issue) -> AppResult<IssueView> {
-    let mut extras = tx.issues().extras(&[issue.id]).await?;
+async fn view_of(
+    tx: &mut dyn Tx,
+    visible: &std::collections::BTreeSet<lineal_domain::ids::TeamId>,
+    issue: Issue,
+) -> AppResult<IssueView> {
+    let mut extras = tx
+        .issues()
+        .extras(&[issue.id])
+        .await?
+        .remove(&issue.id)
+        .unwrap_or_default();
+    // Wie load_views: Sichtbarkeitsfilter anwenden (sonst leckten z. B. blocked_by-Kennungen aus
+    // unsichtbaren Teams über den Triage-Pfad, LIN-79).
+    crate::usecases::issue::filter_extras(tx, visible, &issue, &mut extras).await?;
     Ok(IssueView {
-        extras: extras.remove(&issue.id).unwrap_or_default(),
+        extras,
         issue,
         previous_identifiers: Vec::new(),
     })
@@ -475,7 +487,7 @@ impl App {
             now,
         )
         .await?;
-        let view = view_of(&mut *tx, saved).await?;
+        let view = view_of(&mut *tx, &snap.visible_team_ids(), saved).await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -549,7 +561,7 @@ impl App {
             now,
         )
         .await?;
-        let view = view_of(&mut *tx, saved).await?;
+        let view = view_of(&mut *tx, &snap.visible_team_ids(), saved).await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -653,7 +665,7 @@ impl App {
             now,
         )
         .await?;
-        let view = view_of(&mut *tx, saved).await?;
+        let view = view_of(&mut *tx, &snap.visible_team_ids(), saved).await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -670,7 +682,7 @@ impl App {
         let now = self.clock.now();
         let (mut issue, _team) = prelude(&mut *tx, &snap, ctx, issue_ref, true).await?;
         if issue.snoozed_until_at.is_none() {
-            let view = view_of(&mut *tx, issue).await?;
+            let view = view_of(&mut *tx, &snap.visible_team_ids(), issue).await?;
             return Ok(view);
         }
         let old = issue.clone();
@@ -687,7 +699,7 @@ impl App {
             now,
         )
         .await?;
-        let view = view_of(&mut *tx, saved).await?;
+        let view = view_of(&mut *tx, &snap.visible_team_ids(), saved).await?;
         tx.commit().await?;
         Ok(view)
     }
@@ -752,10 +764,11 @@ impl App {
                 limit.clamp(1, 250),
             )
             .await?;
+        let visible = snap.visible_team_ids();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(issue) = tx.issues().get(id, false).await? {
-                out.push(view_of(&mut *tx, issue).await?);
+                out.push(view_of(&mut *tx, &visible, issue).await?);
             }
         }
         Ok(out)

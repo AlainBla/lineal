@@ -26,7 +26,7 @@ import {
   CornerRightUp,
   Link2,
 } from "lucide-react";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useCommands } from "@/app/commands";
 import { Keys } from "@/components/ui/kbd";
@@ -50,7 +50,7 @@ import { useSession } from "@/app/auth";
 
 import { BulkActions, type BulkKind } from "./bulk-actions";
 import { closeIssueMenu, useIssueMenuRequest, type IssueMenuRequest } from "./context-menu-store";
-import { useTeamMeta } from "./hooks";
+import { useCreateLabel, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { copyText, issueUrl, useIssueOps } from "./issue-extra-shortcuts";
 import { duePresets, toggleLabel, type RelationChoice } from "./model";
@@ -64,6 +64,7 @@ import {
   statusOptions,
 } from "./property-options";
 import { fetchBranchName } from "./queries";
+import { errorMessage, showToast } from "./toast-store";
 import { RelationDialog } from "./relation-dialog";
 import { IssuePickerHost, type PickerKind, type PickerRequest } from "./picker-host";
 import { useAssignableUsers } from "./users";
@@ -143,6 +144,8 @@ function PropertySubmenu({
   selected,
   multi,
   onSelect,
+  onCreate,
+  createLabel,
 }: {
   icon?: ReactNode;
   label: string;
@@ -152,6 +155,9 @@ function PropertySubmenu({
   selected: string | string[] | null;
   multi?: boolean;
   onSelect: (id: string) => void;
+  /** Opt-in (LIN-87): legt den eingegebenen Begriff als neue Option an; nur der Label-Picker nutzt es. */
+  onCreate?: (term: string) => void;
+  createLabel?: (term: string) => string;
 }) {
   const cmds = useCommands();
   const keys = actionId ? cmds.find((c) => c.id === actionId)?.shortcut : undefined;
@@ -185,6 +191,8 @@ function PropertySubmenu({
               onSelect(id);
               if (!multi) closeIssueMenu();
             }}
+            onCreate={onCreate}
+            createLabel={createLabel}
           />
         )}
       </DropdownMenuSubContent>
@@ -212,6 +220,10 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
   const users = useAssignableUsers(issue.teamId);
   // Mehrfachauswahl der Labels im Flyout: lokaler Zwischenstand, bis der Cache die Änderung zeigt.
   const [labelOverride, setLabelOverride] = useState<string[] | null>(null);
+  const createLabelMutation = useCreateLabel();
+  // Immer der aktuelle Label-Stand, damit ein asynchrones Anlegen keine zwischenzeitliche
+  // Umschaltung überschreibt (Stand zur Server-Antwort, nicht zum Klick).
+  const labelIdsRef = useRef<string[]>([]);
   const { toggleFavorite, toggleSubscription, isFavorite } = ops;
   useShortcutContext("modal", true);
 
@@ -251,6 +263,36 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
   const allLabels = meta.data?.labels ?? [];
   const projects = meta.data?.projects ?? [];
   const labelIds = labelOverride ?? issue.labelIds ?? [];
+  // Ref nach jedem Render synchronisieren (Schreiben im Effect, Lesen nur in Callbacks – vom
+  // React-Compiler-Lint so verlangt). Kein Dep-Array: `labelIds` ist je Render ein neues Array.
+  useEffect(() => {
+    labelIdsRef.current = labelIds;
+  });
+
+  // Label anlegen (LIN-87): gleiche Regel wie der Dialog-Picker. `labelManagement` ist immer der
+  // Default "member" und `ManageTeamLabels` schließt Gäste nicht aus → `isOwner || isMember` ist exakt.
+  const viewer = meta.data?.team.viewer;
+  const canCreateLabels = !!issue.teamId && (viewer?.isOwner === true || viewer?.isMember === true);
+  const attachLabel = (id: string) => {
+    const base = labelIdsRef.current;
+    const next = base.includes(id) ? base : [...base, id];
+    setLabelOverride(next);
+    actions.setLabels(issue, next);
+  };
+  const onCreateLabel = (term: string) => {
+    if (createLabelMutation.isPending) return;
+    createLabelMutation.mutate(
+      { name: term, teamId: issue.teamId },
+      {
+        onSuccess: (lbl) => attachLabel(lbl.id),
+        onError: (err) =>
+          showToast({
+            message: errorMessage(err, "Could not create the label."),
+            tone: "error",
+          }),
+      },
+    );
+  };
 
   /** Einzel-Ticket: Hover-Flyout (LIN-53); Mehrfachauswahl: bisheriger Bulk-Picker. */
   const propertyRow = (
@@ -338,20 +380,33 @@ function IssueMenu({ req, actions, ops, after, onPicker, onBulk, onRelation }: M
           actionId="issue.assign-me"
           onSelect={() => after(() => targets.forEach((t) => actions.assignToMe(t)))}
         />
-        {propertyRow(
-          "labels",
-          <Tag />,
-          "Labels…",
-          "issue.labels",
-          "Change labels…",
-          () => labelOptions(allLabels),
-          labelIds,
-          (id) => {
-            const next = toggleLabel(labelIds, id, allLabels);
-            setLabelOverride(next);
-            actions.setLabels(issue, next);
-          },
-          true,
+        {/* Labels inline (nicht über `propertyRow`): der Compiler-Lint (react-hooks/refs) verbietet,
+            einen ref-lesenden Callback wie `onCreateLabel` als Argument in eine Render-Funktion zu
+            geben; als JSX-Prop an die Komponente ist er erlaubt (wie im Dialog-Picker). */}
+        {multi ? (
+          <MenuItem
+            icon={<Tag />}
+            label="Labels…"
+            actionId="issue.labels"
+            onSelect={prop("labels")}
+          />
+        ) : (
+          <PropertySubmenu
+            icon={<Tag />}
+            label="Labels…"
+            actionId="issue.labels"
+            title="Change labels…"
+            options={() => labelOptions(allLabels)}
+            selected={labelIds}
+            multi
+            onSelect={(id) => {
+              const next = toggleLabel(labelIds, id, allLabels);
+              setLabelOverride(next);
+              actions.setLabels(issue, next);
+            }}
+            onCreate={canCreateLabels ? onCreateLabel : undefined}
+            createLabel={canCreateLabels ? (t) => `Create label "${t}"` : undefined}
+          />
         )}
         {propertyRow(
           "project",

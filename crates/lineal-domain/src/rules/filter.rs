@@ -1109,8 +1109,13 @@ impl Check for ProjectFilter {
         )?;
         v.field("hasBlockingRelations", &self.has_blocking_relations, false)?;
         v.field("lastAppliedTemplate", &self.last_applied_template, true)?;
-        v.list("and", &self.and, false)?;
-        v.list("or", &self.or, false)?;
+        // `and`/`or` beschreiben weiter dieselbe (ggf. nullbare) Projekt-Relation: Die Nullbarkeit
+        // muss in die Teilfilter durchgereicht werden, damit `{project: {or: [{id: …}, {null:
+        // true}]}}` (FE: „Projekt ist … ODER kein Projekt“, LIN-82) zulässig ist – wie bei
+        // `cycle`/`assignee`. Als Wurzelfilter (`validate_project`) bleibt `nullable` false, sodass
+        // `null` dort auch in `and`/`or` verboten bleibt.
+        v.list("and", &self.and, nullable)?;
+        v.list("or", &self.or, nullable)?;
         v.leave();
         Ok(())
     }
@@ -1457,6 +1462,37 @@ mod tests {
             Ok(_) => panic!("expected error for {v}"),
             Err(e) => e,
         }
+    }
+
+    #[test]
+    fn lin82_project_or_null_is_allowed_in_nested_relation() {
+        // LIN-82: "Projekt ist <Projekte> ODER kein Projekt" – die Filter-Bar
+        // (web/src/features/views/filter-model.ts `relationFilter`) erzeugt bei Auswahl von
+        // Projekt-IDs plus "No project" genau diese Form. Der verschachtelte `null` muss hier
+        // zulässig sein (Relation `issue.project` ist nullbar), sonst schlägt der Filter mit
+        // "`null` is not allowed here" fehl.
+        ok(json!({"project": {"or": [{"id": {"in": ["p-1", "p-2"]}}, {"null": true}]}}));
+        // `isNot`-Variante (ids über `nin`, "No project" über `null: false`).
+        ok(json!({"project": {"and": [{"id": {"nin": ["p-1"]}}, {"null": false}]}}));
+        // Auch tiefer verschachtelt (z. B. über `and` kombiniert mit weiteren Chips).
+        ok(json!({"and": [
+            {"project": {"or": [{"id": {"in": ["p-1"]}}, {"null": true}]}},
+            {"priority": {"in": [1, 2]}}
+        ]}));
+        // Dieselbe Nullbarkeit wie beim bereits funktionierenden `cycle` (Regressionsabgleich).
+        ok(json!({"cycle": {"or": [{"id": {"in": ["c-1"]}}, {"null": true}]}}));
+    }
+
+    #[test]
+    fn lin82_project_null_still_rejected_at_filter_root() {
+        // Schutz erhalten: Als Wurzel-Projektfilter (Projekt-Views) bleibt `null` verboten –
+        // auch in `and`/`or` –, weil es dort keine nullbare Relation gibt (docs/05 §1.11).
+        let root_null = from_json_value::<ProjectFilter>(&json!({"null": true})).unwrap();
+        assert!(validate_project(&root_null).is_err());
+        let root_or_null =
+            from_json_value::<ProjectFilter>(&json!({"or": [{"null": true}]})).unwrap();
+        let e = validate_project(&root_or_null).unwrap_err();
+        assert!(e.reason.contains("`null` is not allowed here"), "{e}");
     }
 
     /// Beispiele aus docs/05 §1.5–1.9: serde-Roundtrip ohne Verlust.

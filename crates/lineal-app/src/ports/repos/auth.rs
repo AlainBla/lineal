@@ -43,6 +43,21 @@ pub struct LoginCandidate {
     pub password_hash: Option<String>,
 }
 
+/// Neues Passwort-Reset-Token (LIN-58). Gespeichert wird nur der Hash; der Klartext steht einmalig
+/// im Mail-Link.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewPasswordReset {
+    pub id: Uuid,
+    pub org_id: OrgId,
+    pub user_id: UserId,
+    /// SHA-256 (hex) über das komplette Token inkl. Präfix `lin_reset_`.
+    pub token_hash: String,
+    /// Anfragende IP (betrieblich); `None`, wenn nicht ermittelbar.
+    pub requested_ip: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub now: DateTime<Utc>,
+}
+
 /// Neue Web-Session (nur der Hash des Tokens wird gespeichert).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewSession {
@@ -296,6 +311,52 @@ pub trait AuthRepo: Send {
         _user_id: UserId,
         _now: DateTime<Utc>,
     ) -> AppResult<()> {
+        unimplemented_repo()
+    }
+
+    // --- Passwort-Reset (LIN-58) -------------------------------------------------------------
+
+    /// Legt ein neues Reset-Token an (nur der Hash). Org-gebunden (`begin(org)`).
+    async fn insert_password_reset(&mut self, _reset: &NewPasswordReset) -> AppResult<()> {
+        unimplemented_repo()
+    }
+
+    /// Entwertet alle noch offenen (nicht verbrauchten) Reset-Tokens des Users, indem `used_at`
+    /// gesetzt wird — die Zeilen bleiben erhalten (Zähl-Limit). Liefert die Zahl der Treffer.
+    async fn invalidate_password_resets(
+        &mut self,
+        _user_id: UserId,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        unimplemented_repo()
+    }
+
+    /// Zahl der Reset-Anfragen eines Users seit `since` (unabhängig von `used_at`): neustart-festes
+    /// Konto-Limit (analog zum Einladungs-Limit LIN-64). Org-gebunden.
+    async fn count_password_resets_since(
+        &mut self,
+        _user_id: UserId,
+        _since: DateTime<Utc>,
+    ) -> AppResult<i64> {
+        unimplemented_repo()
+    }
+
+    /// Workspace eines Reset-Tokens (nur zum Routen der folgenden org-gebundenen Transaktion).
+    /// Mandantenübergreifend; nur unter `begin_system`. Prüft NICHT Ablauf/Verbrauch — das macht der
+    /// atomare [`Self::consume_password_reset`].
+    async fn find_password_reset_org(&mut self, _token_hash: &str) -> AppResult<Option<OrgId>> {
+        unimplemented_repo()
+    }
+
+    /// Löst ein Reset-Token atomar ein: setzt `used_at` **nur**, wenn es noch unverbraucht und nicht
+    /// abgelaufen ist, und liefert dann den User. `None` = unbekannt, abgelaufen oder bereits
+    /// verbraucht (Einmaligkeit; schützt gegen Doppel-Einlösung durch parallele Anfragen).
+    /// Org-gebunden; `now` ist die Anwendungsuhr.
+    async fn consume_password_reset(
+        &mut self,
+        _token_hash: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Option<UserId>> {
         unimplemented_repo()
     }
 }

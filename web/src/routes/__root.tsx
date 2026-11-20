@@ -36,7 +36,10 @@ function NotFoundRoute() {
 }
 
 /** Öffentliche Seiten ohne Login und ohne App-Shell. */
-const isPublicPath = (pathname: string) => pathname.startsWith("/invite/");
+const isPublicPath = (pathname: string) =>
+  pathname.startsWith("/invite/") ||
+  pathname === "/forgot-password" ||
+  pathname === "/reset-password";
 
 function RootLayout() {
   const session = useSession();

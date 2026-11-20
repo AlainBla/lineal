@@ -20,7 +20,7 @@ use lineal_app::{App, AppError, AppResult, RequestCtx};
 pub const SESSION_COOKIE: &str = "lineal_session";
 /// Name mit `__Host-`-Präfix, sobald das Cookie `Secure` ist (nur https): der Browser lässt ein
 /// solches Cookie nur host-exakt, `Path=/` und ohne `Domain` zu, sodass eine kompromittierte
-/// Schwester-Subdomain kein `Domain=.kollegeplus.de`-Cookie unterschieben kann (LIN-62 L-7).
+/// Schwester-Subdomain kein `Domain=.example.org`-Cookie unterschieben kann (LIN-62 L-7).
 pub const SESSION_COOKIE_HOST: &str = "__Host-lineal_session";
 /// Längere Tokens sind nie gültig (Schutz vor Hashing riesiger Header).
 const MAX_TOKEN_LEN: usize = 512;

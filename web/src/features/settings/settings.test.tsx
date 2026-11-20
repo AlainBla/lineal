@@ -1,3 +1,5 @@
+import "@/app/test-polyfills";
+
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,6 +97,95 @@ describe("TeamSettingsPage", () => {
     // Backlog (pos 0) und Todo (pos 1) sind je einzeln in ihrer Kategorie: nichts zu verschieben.
     expect(screen.getByRole("button", { name: "Move Todo up" })).toBeDisabled();
     expect(gql.of("SettingsStateUpdate")).toHaveLength(0);
+  });
+
+  it("LIN-73: picking a palette color for a status persists only the color", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="statuses" />,
+      newClient(),
+      "/acme/settings/teams/ENG/statuses",
+    );
+    const user = userEvent.setup();
+    // Farbwähler der Zeile „In Progress" öffnen und eine Palettenfarbe (Red, #eb5757) wählen.
+    await user.click(await screen.findByRole("button", { name: "Color for In Progress" }));
+    await user.click(await screen.findByRole("button", { name: "Red" }));
+    await waitFor(() => expect(gql.of("SettingsStateUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsStateUpdate")[0]!.variables).toEqual({
+      id: "s-progress",
+      input: { color: "#eb5757" },
+    });
+  });
+
+  it("LIN-73: typing a custom hex and applying persists the color", async () => {
+    const gql = mockGraphql(handlers());
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="statuses" />,
+      newClient(),
+      "/acme/settings/teams/ENG/statuses",
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Color for Done" }));
+    const hex = await screen.findByLabelText("Hex color");
+    await user.clear(hex);
+    await user.type(hex, "#123abc");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(gql.of("SettingsStateUpdate")).toHaveLength(1));
+    expect(gql.of("SettingsStateUpdate")[0]!.variables).toEqual({
+      id: "s-done",
+      input: { color: "#123abc" },
+    });
+  });
+
+  it("LIN-73: reordering a status persists the position and reflects the new order", async () => {
+    // Zwei „started"-Status, damit innerhalb der Kategorie sortiert werden kann; Handler ist
+    // zustandsbehaftet, damit der Refetch nach der Mutation die neue Reihenfolge zurückgibt.
+    const started = STATES.find((s) => s.type === "started")!;
+    let rows = [
+      { ...started, id: "s-progress", name: "In Progress", position: 2 },
+      { ...started, id: "s-review", name: "In Review", position: 3 },
+    ];
+    const gql = mockGraphql({
+      ...handlers(),
+      SettingsStates: () => ({ workflowStates: [...rows] }),
+      SettingsStateUpdate: (v) => {
+        const input = v.input as { position?: number };
+        if (typeof input.position === "number") {
+          const pos = input.position;
+          rows = rows.map((s) => (s.id === v.id ? { ...s, position: pos } : s));
+        }
+        return { workflowStateUpdate: { success: true } };
+      },
+    });
+    await renderWithApp(
+      <TeamSettingsPage ws="acme" teamKey="ENG" section="statuses" />,
+      newClient(),
+      "/acme/settings/teams/ENG/statuses",
+    );
+    const user = userEvent.setup();
+    const group = await screen.findByRole("group", { name: "Started" });
+    // Ausgangsreihenfolge: In Progress, In Review.
+    expect(
+      within(group)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([expect.stringContaining("In Progress"), expect.stringContaining("In Review")]);
+    await user.click(within(group).getByRole("button", { name: "Move In Progress down" }));
+    await waitFor(() => expect(gql.of("SettingsStateUpdate")).toHaveLength(1));
+    // In Progress (pos 2) hinter In Review (pos 3): neue Position > 3.
+    expect(gql.of("SettingsStateUpdate")[0]!.variables).toEqual({
+      id: "s-progress",
+      input: { position: 4 },
+    });
+    // Nach dem Refetch spiegelt die Liste die neue Reihenfolge.
+    await waitFor(() => {
+      const started2 = screen.getByRole("group", { name: "Started" });
+      expect(
+        within(started2)
+          .getAllByRole("listitem")
+          .map((li) => li.textContent),
+      ).toEqual([expect.stringContaining("In Review"), expect.stringContaining("In Progress")]);
+    });
   });
 
   it("B5.02: cycles form shows the team schedule and only sends changed values", async () => {

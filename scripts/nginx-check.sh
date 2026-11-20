@@ -29,6 +29,25 @@ check() { # Beschreibung, Bedingung (Exit-Code eines Befehls)
 mkdir -p "$TMP/html/assets"
 echo '<!doctype html><title>x</title><div id=root></div>' > "$TMP/html/index.html"
 echo 'console.log(1)' > "$TMP/html/assets/app-abc.js"
+
+# deploy/nginx.conf ist eine Vorlage: der Datei-Host steht als Platzhalter ${LINEAL_FILES_HOST}
+# darin (keine echte Domain in der Quelle). Vor `nginx -t` wird er gerendert – genau wie der Docker-
+# Build es tut. Wert: LINEAL_FILES_HOST, sonst der Host-Teil von LINEAL_FILES_BASE_URL, sonst der
+# Platzhalter (nur Beispiel, nie eine echte Domain). Substituiert wird NUR diese eine Variable,
+# damit nginx-Variablen ($host, $remote_addr, $lineal_upstream …) unangetastet bleiben.
+FILES_HOST="${LINEAL_FILES_HOST:-}"
+if [ -z "$FILES_HOST" ] && [ -n "${LINEAL_FILES_BASE_URL:-}" ]; then
+  FILES_HOST="${LINEAL_FILES_BASE_URL#*://}"; FILES_HOST="${FILES_HOST%%/*}"; FILES_HOST="${FILES_HOST%%:*}"
+fi
+: "${FILES_HOST:=lineal-files.example.org}"
+CONF="$TMP/nginx.conf"
+if command -v envsubst >/dev/null 2>&1; then
+  LINEAL_FILES_HOST="$FILES_HOST" envsubst '${LINEAL_FILES_HOST}' < deploy/nginx.conf > "$CONF"
+else
+  sed "s|\${LINEAL_FILES_HOST}|$FILES_HOST|g" deploy/nginx.conf > "$CONF"
+fi
+grep -q "server_name $FILES_HOST;" "$CONF" || { echo "nginx-check: Rendern von server_name fehlgeschlagen" >&2; exit 1; }
+
 chmod -R a+rX "$TMP"
 
 # Der Security-Header-Snippet liegt im Image unter snippets/ (siehe Dockerfile); hier mitmounten,
@@ -36,11 +55,11 @@ chmod -R a+rX "$TMP"
 SNIP="-v $PWD/deploy/security-headers.conf:/etc/nginx/snippets/lineal-security-headers.conf:ro"
 
 echo "== nginx -t"
-docker run --rm -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" $SNIP "$IMAGE" nginx -t 2>&1 | tail -2
+docker run --rm -v "$CONF:/etc/nginx/conf.d/default.conf:ro" $SNIP "$IMAGE" nginx -t 2>&1 | tail -2
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$NAME" --network "$NET" \
-  -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" $SNIP \
+  -v "$CONF:/etc/nginx/conf.d/default.conf:ro" $SNIP \
   -v "$TMP/html:/usr/share/nginx/html:ro" "$IMAGE" >/dev/null
 
 curl_in() { docker run --rm --network "$NET" curlimages/curl:8.10.1 -s -m 15 "$@"; }
@@ -97,7 +116,7 @@ check "/.well-known/x bleibt proxied -> 503 (Server aus), nicht vom Dotfile-Rege
 # KOL-478 (Weg B): Die eigene Datei-Origin (server_name lineal-files.*) serviert NUR /files/* –
 # alles andere ist 404, insbesondere liefert sie weder die SPA noch statische /assets (sonst
 # würde dort ein Session-Cookie möglich). Host-Header auf den Datei-Host setzen.
-hdrf() { curl_in -D - -o /dev/null -H "Host: lineal-files.kollegeplus.de" "$BASE$1"; }
+hdrf() { curl_in -D - -o /dev/null -H "Host: $FILES_HOST" "$BASE$1"; }
 check "Datei-Origin: / -> 404 (keine SPA, kein index.html)" \
   bash -c "head -1 <<<\"\$1\" | grep -q ' 404'" _ "$(hdrf /)"
 check "Datei-Origin: /assets/app-abc.js -> 404 (keine statische Datei)" \

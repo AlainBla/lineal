@@ -103,7 +103,10 @@ fn rule_for(method: &Method, path: &str, has_cookie_session: bool) -> Rule {
         // Token-basierten Pfade (enroll per enroll-Token, /auth/login/totp) tragen
         // kein Cookie und fallen damit nicht unter diese Regel.
         p if p.starts_with("/auth/totp/") && has_cookie_session => Rule::OriginAndHeader,
-        "/auth/login" | "/invite/accept" => Rule::OriginIfPresent,
+        // LIN-58: öffentliche, unauthentifizierte Formular-Posts (kein Ambient-Cookie), wie Login.
+        "/auth/login" | "/invite/accept" | "/auth/forgot-password" | "/auth/reset-password" => {
+            Rule::OriginIfPresent
+        }
         "/oauth/authorize" if has_cookie_session => Rule::OriginIfPresent,
         p if p.starts_with("/uploads/") => Rule::OriginIfPresent,
         _ => Rule::None,
