@@ -12,7 +12,7 @@ Trust-Modell: Uploader ≠ Betrachter, **beide intern** (kein externes Teilen in
 
 ## Kernidee
 
-HTML wird **nur auf einer eigenen, cookielosen Origin** (`lineal-files.kollegeplus.de`) **inline + script-fähig** ausgeliefert. Die App-Origin (`lineal.kollegeplus.de`) bleibt **unverändert**: HTML → `attachment` + `sandbox` (kein Script). Weil `GET /files/{token}` **nur per HMAC-Token** autorisiert (kein Session-Cookie, `blob.rs:525`) und der Host **nicht** in den Claims steht, verifiziert dasselbe Token auf beiden Origins — es ist kein Umbau der Autorisierung nötig.
+HTML wird **nur auf einer eigenen, cookielosen Origin** (`lineal-files.example.org`) **inline + script-fähig** ausgeliefert. Die App-Origin (`lineal.example.org`) bleibt **unverändert**: HTML → `attachment` + `sandbox` (kein Script). Weil `GET /files/{token}` **nur per HMAC-Token** autorisiert (kein Session-Cookie, `blob.rs:525`) und der Host **nicht** in den Claims steht, verifiziert dasselbe Token auf beiden Origins — es ist kein Umbau der Autorisierung nötig.
 
 Warum das sicher ist: Das Session-Cookie ist **host-only** (`middleware/auth.rs:127`, kein `Domain=`) → eine Subdomain sieht es nie. Zusätzlich `sandbox allow-scripts` (ohne `allow-same-origin`) → **opake Origin**: Script läuft, kann aber weder Cookie noch App-API noch Storage erreichen. Doppelte Absicherung (eigene Origin **und** Sandbox).
 
@@ -27,24 +27,24 @@ Warum das sicher ist: Das Session-Cookie ist **host-only** (`middleware/auth.rs:
 
 - **Kein** externes/öffentliches Teilen von HTML (spätere Stufe; dann wäre eigene Registrable-Domain Pflicht).
 - **Kein** Inline-Scripting auf der App-Origin — bricht die Isolation und ist ausdrücklich verboten.
-- **Keine** eigene Registrable-Domain in dieser Stufe (Subdomain genügt, solange kein Cookie mit `Domain=.kollegeplus.de` existiert — heute keins; siehe Invariante unten).
+- **Keine** eigene Registrable-Domain in dieser Stufe (Subdomain genügt, solange kein Cookie mit `Domain=.example.org` existiert — heute keins; siehe Invariante unten).
 - SVG/XML bleiben vorerst `attachment` auf beiden Origins (nur `text/html` wird inline geschaltet). Erweiterung später.
 
 ## Invariante (muss gelten, sonst bricht B)
 
-> Es darf **nie** ein Cookie mit `Domain=.kollegeplus.de` gesetzt werden. Alle heutigen Cookies sind host-only — bleibt so. (Als Kommentar an `session_cookie` verankern.)
+> Es darf **nie** ein Cookie mit `Domain=.example.org` gesetzt werden. Alle heutigen Cookies sind host-only — bleibt so. (Als Kommentar an `session_cookie` verankern.)
 
 ## Architektur
 
 ### Zwei Origins, ein Prozess
 
-- **App-Origin** `lineal.kollegeplus.de`: SPA, API, `/files/` → `attachment`/`sandbox` wie heute.
-- **Datei-Origin** `lineal-files.kollegeplus.de`: **nur** `/files/*`. Alles andere → 404 (nginx **und** App-Guard). Cookielos by construction.
+- **App-Origin** `lineal.example.org`: SPA, API, `/files/` → `attachment`/`sandbox` wie heute.
+- **Datei-Origin** `lineal-files.example.org`: **nur** `/files/*`. Alles andere → 404 (nginx **und** App-Guard). Cookielos by construction.
 
 ### DNS + TLS (Vorbereiten+Anleitung — Nutzer führt aus)
 
-- DNS: `lineal-files.kollegeplus.de` als CNAME (oder A) auf denselben Host wie `lineal`. CAA wird von `kollegeplus.de` geerbt (LIN-52) — kein neuer Record, aber Issuer-Liste muss Caddys ZeroSSL-Fallback decken (bereits in docs/15 §3.4 vermerkt).
-- Caddy: zweiter Site-Block `lineal-files.kollegeplus.de` → Reverse-Proxy auf dasselbe nginx :8080, **Host erhalten**. Auto-LE-Cert.
+- DNS: `lineal-files.example.org` als CNAME (oder A) auf denselben Host wie `lineal`. CAA wird von `example.org` geerbt (LIN-52) — kein neuer Record, aber Issuer-Liste muss Caddys ZeroSSL-Fallback decken (bereits in docs/15 §3.4 vermerkt).
+- Caddy: zweiter Site-Block `lineal-files.example.org` → Reverse-Proxy auf dasselbe nginx :8080, **Host erhalten**. Auto-LE-Cert.
 - HSTS `includeSubDomains` ist bereits aktiv → die Subdomain MUSS gültiges HTTPS liefern (Caddy erledigt das).
 
 ### nginx (deploy/nginx.conf)
@@ -54,7 +54,7 @@ Neuer, **separater** `server`-Block **vor** dem Catch-all:
 ```
 server {
     listen 8080;
-    server_name lineal-files.kollegeplus.de;   # exakt; Catch-all _ bleibt für die App
+    server_name lineal-files.example.org;   # exakt; Catch-all _ bleibt für die App
     server_tokens off;
     access_log /var/log/nginx/access.log lineal_masked;   # Token-Pfade maskiert (S-12)
     set $lineal_upstream http://server:8080;
@@ -77,7 +77,7 @@ Kleine Middleware in lineal-api/-server: wenn `Host` == konfigurierte Datei-Orig
 
 ### Config
 
-- Neu: `LINEAL_FILES_BASE_URL` (z. B. `https://lineal-files.kollegeplus.de`). Ungesetzt → Feature aus, heutiges Verhalten.
+- Neu: `LINEAL_FILES_BASE_URL` (z. B. `https://lineal-files.example.org`). Ungesetzt → Feature aus, heutiges Verhalten.
 - Validierung analog `base_url` (https, trailing-slash-normalisiert); sollte sich von `base_url` unterscheiden (Warnung/Fehler, wenn gleich).
 
 ### blob.rs — `download`-Handler
@@ -111,13 +111,13 @@ Anhangsliste: bei `text/html` Primäraktion „Im Tab öffnen" → `viewUrl` via
 1. **App-Origin + `text/html`** → weiterhin `attachment` + `default-src 'none'; sandbox` (kein Script). *Darf sich nie ändern.*
 2. **Datei-Origin + `text/html`** → `inline` + Präsentations-CSP mit `sandbox allow-scripts`.
 3. **Datei-Origin + Nicht-HTML** (png/pdf/…) → unverändert wie App-Origin.
-4. **Host-Spoofing:** `evil.lineal-files.kollegeplus.de`, `lineal-files.kollegeplus.de.evil.com`, Groß/Kleinschreibung, mit Port → **kein** Inline-Match (fail-closed).
+4. **Host-Spoofing:** `evil.lineal-files.example.org`, `lineal-files.example.org.evil.com`, Groß/Kleinschreibung, mit Port → **kein** Inline-Match (fail-closed).
 5. **`LINEAL_FILES_BASE_URL` ungesetzt** → Verhalten exakt wie heute (Feature aus).
 6. **App-Guard:** Host == Datei-Origin + Pfad `/login`,`/`,`/graphql` → 404 (SPA/Login nie auf der Datei-Origin).
 
 ## Entschieden (Eigentümer, 2026-11-13)
 
-- Subdomain-Name: **`lineal-files.kollegeplus.de`**.
+- Subdomain-Name: **`lineal-files.example.org`**.
 - **CNAME** auf `lineal`.
 - Freigabe zum Bau erteilt.
 

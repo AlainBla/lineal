@@ -33,6 +33,7 @@ Grundlage (Stand 2026-10-10):
 Eine gerenderte Übersicht mit allen Diagrammen liegt in [index.html](index.html).
 
 Weitere Artefakte:
+- [Betrieb (`betrieb/`)](betrieb/README.md) – generalisierte, öffentliche Runbooks zu den Skripten unter `scripts/` und den Vorlagen unter `deploy/` (Backup/Restore, signierter Deploy, nginx/Datei-Origin, Platten-Alarm, SSH-Härtung, TLS/CAA). Mit Platzhaltern statt konkreter Infrastruktur.
 - [`mcp-tools.snapshot.json`](mcp-tools.snapshot.json) – Name, Beschreibung und Eingabeschema aller 55 MCP-Tools; Fixture für den Schema-Snapshot-Test (siehe [07](07-mcp-server.md)).
 - `assets/mermaid.min.js` – lokale Mermaid-Kopie, damit `index.html` offline rendert.
 - `../tools/build_index.py` – erzeugt `index.html` neu aus den Markdown-Dateien (`python3 tools/build_index.py`, benötigt das Python-Paket `markdown`). Die Markdown-Dateien sind die maßgebliche Quelle.

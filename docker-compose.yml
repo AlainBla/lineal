@@ -178,7 +178,17 @@ services:
     tmpfs: ["/tmp", "/var/cache/nginx"]
     profiles: [app]
     logging: *logging
-    build: { context: ., target: web }
+    # Der Datei-Host für den zweiten server-Block (deploy/nginx.conf, Platzhalter
+    # ${LINEAL_FILES_HOST}) wird zur Build-Zeit gerendert. Ohne eigenes LINEAL_FILES_HOST leitet
+    # der Build ihn aus dem Host-Teil von LINEAL_FILES_BASE_URL ab; ist beides leer, greift der
+    # Platzhalter lineal-files.example.org (das Feature ist ohnehin aus, solange
+    # LINEAL_FILES_BASE_URL leer ist). Leere Werte sind ok – der Fallback liegt im Dockerfile.
+    build:
+      context: .
+      target: web
+      args:
+        LINEAL_FILES_HOST: ${LINEAL_FILES_HOST:-}
+        LINEAL_FILES_BASE_URL: ${LINEAL_FILES_BASE_URL:-}
     image: lineal-web:latest
     ports:
       - "127.0.0.1:${LINEAL_HTTP_PORT:-8088}:8080"
