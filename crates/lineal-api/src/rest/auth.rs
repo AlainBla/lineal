@@ -312,15 +312,16 @@ fn forgot_password_ok() -> Response {
 /// angestoßen, aber dieselbe Antwort geliefert.
 pub async fn forgot_password(
     State(app): State<Arc<App>>,
-    fails: Option<Extension<Arc<AuthFailures>>>,
+    reset_fails: Option<Extension<crate::auth_failures::ResetFailures>>,
     client: Option<Extension<ClientIp>>,
     Json(body): Json<ForgotPasswordBody>,
 ) -> Response {
     let now_ms = app.clock.now().timestamp_millis();
     let client_ip = client.as_ref().map(|Extension(c)| c.0.to_string());
     let ip_key = client.map(|Extension(c)| crate::rate_limit::ip_bucket(c.0));
-    let allowed = match &fails {
-        Some(Extension(f)) => f
+    // GETRENNTER Reset-Zähler (eigene Tabelle): eine Reset-Flut kann nie die Login-Tabelle füllen.
+    let allowed = match &reset_fails {
+        Some(Extension(crate::auth_failures::ResetFailures(f))) => f
             .reserve_password_reset(body.email.trim(), ip_key.as_deref(), now_ms)
             .is_ok(),
         None => true,
@@ -1028,6 +1029,44 @@ mod tests {
         }
         assert_eq!(last.0, StatusCode::OK);
         assert_eq!(&last.2, &existing.2, "auch im Limit dieselbe Antwort");
+    }
+
+    #[sqlx::test(migrations = "../lineal-db/migrations")]
+    async fn forgot_password_rate_limit_caps_delivered_mail(pool: sqlx::PgPool) {
+        // Beweist, dass der (getrennte) Reset-Zähler über den Router wirklich greift: 6 Anfragen für
+        // dasselbe existierende Konto führen zu höchstens 3 Mails (Stundenlimit) — die weiteren
+        // nehmen den blockierten „kein Versand"-Zweig.
+        let store = PgStore::new(pool);
+        let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+        seed::run(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let mailer = RecordingMailer::new();
+        let app = test_app_with_mailer(
+            std::sync::Arc::new(store),
+            std::sync::Arc::new(mailer.clone()),
+        );
+        app.set_user_password(&ctx_for(SeedUser::Alice), "me", PW)
+            .await
+            .unwrap();
+        let r = router(app, false);
+        for _ in 0..6 {
+            let (status, _, _) =
+                send(&r, forgot_req(json!({ "email": "alice@acme.example" }))).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        // Auf die losgelösten Versand-Tasks warten (blockierte Anfragen spawnen nicht).
+        for _ in 0..100 {
+            if mailer.sent().len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            mailer.sent().len(),
+            3,
+            "genau 3 Mails (Stundenlimit); die weiteren Anfragen wurden gesperrt"
+        );
     }
 
     #[sqlx::test(migrations = "../lineal-db/migrations")]

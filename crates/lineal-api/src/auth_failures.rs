@@ -111,6 +111,11 @@ pub trait LockoutAudit: Send + Sync {
     );
 }
 
+/// Request-Extension für den GETRENNTEN Passwort-Reset-Zähler (LIN-58). Eigener Typ, damit er neben
+/// dem Login-`Arc<AuthFailures>` als zweite Extension koexistieren kann, ohne ihn zu überschreiben.
+#[derive(Clone)]
+pub struct ResetFailures(pub std::sync::Arc<AuthFailures>);
+
 /// Prozessweiter Zähler für Fehlversuche.
 pub struct AuthFailures {
     state: Mutex<State>,
@@ -381,10 +386,15 @@ impl AuthFailures {
         Ok(LoginReservation { keys: held })
     }
 
-    /// Reserviert die Passwort-Reset-Limits (LIN-58): je E-Mail und je IP, jeweils 3/Stunde UND
-    /// 5/Tag. Alles-oder-nichts (bei `Err` ist nichts reserviert); die Reservierungen werden NIE
-    /// zurückgegeben (jede Anfrage zählt, unabhängig davon, ob ein Konto existiert). `ip = None`
-    /// zählt nicht gegen ein IP-Limit, die E-Mail-Limits gelten trotzdem.
+    /// Reserviert die Passwort-Reset-Limits (LIN-58): je IP UND je E-Mail, jeweils 3/Stunde und
+    /// 5/Tag. Diese Instanz ist GETRENNT vom Login-Zähler (eigene Tabelle), damit eine Reset-Flut
+    /// nie die Login-Tabelle füllen und so platformweite Login-429 auslösen kann.
+    ///
+    /// Die IP-Schlüssel werden ZUERST geprüft, dann die E-Mail-Schlüssel: eine bereits gesperrte IP
+    /// legt keine E-Mail-Einträge an. Alles-oder-nichts und EINTRAGSNEUTRAL bei Ablehnung: geprüft
+    /// wird unter EINEM Lock VOR jeder Mutation; nur wenn alle vier Schlüssel durchgehen, werden sie
+    /// erhöht/angelegt. Ein abgelehnter Versuch legt KEINEN Eintrag an und gibt nichts frei.
+    /// `ip = None` fällt auf einen gemeinsamen `"-"`-Bucket (die E-Mail-Limits gelten trotzdem).
     pub fn reserve_password_reset(
         &self,
         email: &str,
@@ -392,27 +402,67 @@ impl AuthFailures {
         now_ms: i64,
     ) -> Result<(), u64> {
         let email_hash = account_hash(email);
-        let mut keys: Vec<(String, Rule)> = vec![
+        let ip = ip.unwrap_or("-");
+        // IP zuerst (eine gesperrte IP darf keine E-Mail-Einträge erzeugen).
+        let keys = [
+            (format!("rpwih:{ip}"), RESET_HOUR_RULE),
+            (format!("rpwid:{ip}"), RESET_DAY_RULE),
             (format!("rpweh:{email_hash}"), RESET_HOUR_RULE),
             (format!("rpwed:{email_hash}"), RESET_DAY_RULE),
         ];
-        if let Some(ip) = ip {
-            keys.push((format!("rpwih:{ip}"), RESET_HOUR_RULE));
-            keys.push((format!("rpwid:{ip}"), RESET_DAY_RULE));
+        self.reserve_all(&keys, now_ms)
+    }
+
+    /// Reserviert mehrere Schlüssel atomar: entweder alle oder keiner. Prüft unter EINEM Lock, ob
+    /// jeder Schlüssel noch frei ist (und ob die neuen Schlüssel in die Tabelle passen), und erhöht
+    /// erst dann. Bei Ablehnung wird NICHTS angelegt oder verändert (kein Rollback-Leck). `Err` ist
+    /// die Wartezeit in Sekunden des zuerst blockierenden Schlüssels bzw. bei voller Tabelle.
+    fn reserve_all(&self, keys: &[(String, Rule)], now_ms: i64) -> Result<(), u64> {
+        let mut state = self.lock();
+        let state = &mut *state;
+        if state.entries.len() >= self.max_keys && now_ms - state.last_purge_ms >= PURGE_INTERVAL_MS
+        {
+            Self::purge_expired(state, now_ms);
         }
-        let mut held: Vec<String> = Vec::new();
+        // Prüfpass: keine Mutation. Zuerst Kapazität für neue Schlüssel, dann jedes Limit.
+        let new_keys = keys
+            .iter()
+            .filter(|(k, _)| !state.entries.contains_key(k))
+            .count();
+        if state.entries.len() + new_keys > self.max_keys {
+            tracing::warn!("password reset counter full; rejecting a new key");
+            let wait = keys
+                .iter()
+                .map(|(_, r)| r.window_ms)
+                .max()
+                .unwrap_or(60_000)
+                / 1000;
+            return Err(u64::try_from(wait).unwrap_or(60));
+        }
         for (key, rule) in keys {
-            match self.reserve(&key, rule, now_ms) {
-                Ok(()) => held.push(key),
-                Err(wait) => {
-                    // Zurückrollen: die bereits gezählten Teil-Reservierungen wieder freigeben, damit
-                    // eine abgelehnte Anfrage das Kontingent nicht doppelt belastet.
-                    for k in &held {
-                        self.release(k);
-                    }
-                    return Err(wait);
-                }
+            if let Some(e) = state.entries.get(key)
+                && Self::active(e, *rule, now_ms)
+                && e.count >= rule.limit
+            {
+                let left = (rule.window_ms - (now_ms - e.window_start_ms)) / 1000 + 1;
+                return Err(u64::try_from(left).unwrap_or(1));
             }
+        }
+        // Commit-Pass: alle Schlüssel sind frei → erhöhen/anlegen.
+        for (key, rule) in keys {
+            let e = state.entries.entry(key.clone()).or_insert(Entry {
+                count: 0,
+                window_start_ms: now_ms,
+                window_ms: rule.window_ms,
+            });
+            if !Self::active(e, *rule, now_ms) {
+                *e = Entry {
+                    count: 0,
+                    window_start_ms: now_ms,
+                    window_ms: rule.window_ms,
+                };
+            }
+            e.count = e.count.saturating_add(1);
         }
         Ok(())
     }
@@ -815,26 +865,30 @@ mod tests {
         );
     }
 
-    /// LIN-58: Eine abgelehnte Reset-Anfrage belastet das Kontingent nicht doppelt — die bereits
-    /// gezählten Teil-Reservierungen werden zurückgerollt. Szenario: frische E-Mail auf einer
-    /// erschöpften IP (E-Mail-Zähler werden reserviert, dann scheitert der IP-Zähler → Rollback des
-    /// E-Mail-Zählers).
+    /// LIN-58 (HIGH-Fix): Eine abgelehnte Reset-Anfrage legt KEINEN Eintrag an (atomar, kein
+    /// Rollback-Leck). Der frühere `reserve` + `release`-Pfad hinterließ je abgelehnter fremder
+    /// E-Mail Null-Zähler-Einträge und konnte so die Tabelle füllen; das darf nicht mehr passieren.
     #[test]
-    fn a_rejected_reset_rolls_back_partial_reservations() {
+    fn a_rejected_reset_creates_no_entries() {
         let f = AuthFailures::default();
         // IP 7.7.7.7 über E-Mail A erschöpfen (Stundenlimit 3).
         for _ in 0..3 {
             f.reserve_password_reset("a@acme.example", Some("7.7.7.7"), 0)
                 .unwrap();
         }
-        // Frische E-Mail B auf derselben IP: E-Mail-Zähler werden reserviert, dann scheitert der
-        // IP-Zähler → Ablehnung, und die E-Mail-Teilreservierung muss zurückgerollt werden.
+        let before = f.len();
+        // Frische E-Mail B auf der erschöpften IP: abgelehnt — und OHNE neue Einträge (IP zuerst
+        // geprüft, atomar). Der frühere Code hätte hier zwei Null-Zähler-`rpwe*:B`-Einträge geleakt.
         assert!(
             f.reserve_password_reset("b@acme.example", Some("7.7.7.7"), 0)
                 .is_err()
         );
-        // Beweis des Rollbacks: B kann auf einer ANDEREN IP noch volle 3× — wäre der E-Mail-Zähler
-        // oben nicht zurückgerollt worden, stünde er schon bei 1 und es wären nur 2.
+        assert_eq!(
+            f.len(),
+            before,
+            "ein abgelehnter Reset darf keinen Eintrag anlegen"
+        );
+        // B wurde nicht belastet: auf einer anderen IP sind noch volle 3× möglich.
         for _ in 0..3 {
             f.reserve_password_reset("b@acme.example", Some("8.8.8.8"), 0)
                 .unwrap();
@@ -843,6 +897,36 @@ mod tests {
             f.reserve_password_reset("b@acme.example", Some("8.8.8.8"), 0)
                 .is_err(),
             "B hat jetzt sein Stundenlimit (3) erreicht"
+        );
+    }
+
+    /// LIN-58 (HIGH-Fix): Der Reset-Zähler ist eine eigene Instanz (eigene Tabelle). Eine Reset-Flut,
+    /// die die Reset-Tabelle bis zur Obergrenze füllt, lässt den Login-Zähler völlig unberührt — kein
+    /// platformweites Login-429 mehr. Pre-Fix teilten sich beide dieselbe Tabelle.
+    #[test]
+    fn a_reset_flood_cannot_exhaust_the_login_table() {
+        let login = AuthFailures::with_max_keys(100);
+        let reset = AuthFailures::with_max_keys(50);
+        // Reset-Tabelle mit vielen verschiedenen E-Mails/IPs bis zur Obergrenze fluten.
+        for i in 0..1_000 {
+            let _ = reset.reserve_password_reset(
+                &format!("u{i}@acme.example"),
+                Some(&format!("v4:1.2.{}.{}", i / 256, i % 256)),
+                1_000,
+            );
+        }
+        assert!(
+            reset.len() <= 50,
+            "Reset-Tabelle bleibt begrenzt: {}",
+            reset.len()
+        );
+        // Der (getrennte) Login-Zähler ist leer und voll funktionsfähig.
+        assert!(login.is_empty());
+        assert!(
+            login
+                .reserve_login("alice@acme.example", Some("v4:9.9.9.9"), false, 1_000)
+                .is_ok(),
+            "Login bleibt trotz Reset-Flut nutzbar"
         );
     }
 
