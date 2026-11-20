@@ -53,6 +53,8 @@ export const EMPTY_AUDIT_FILTERS: AuditFilters = { action: "", actorId: "", peri
 export const AUDIT_ACTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "auth.login_succeeded", label: "Signed in" },
   { value: "auth.login_failed", label: "Failed sign-in attempt" },
+  { value: "auth.password_reset", label: "Password reset" },
+  { value: "auth.distributed_lockout", label: "Distributed lockout" },
   { value: "auth.logout", label: "Signed out" },
   { value: "workspace.created", label: "Workspace created" },
   { value: "workspace.updated", label: "Workspace settings changed" },

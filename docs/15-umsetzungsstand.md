@@ -223,30 +223,30 @@ printf '[sshd]\nenabled = true\nbackend = systemd\nbanaction = nftables-multipor
 systemctl enable --now fail2ban && fail2ban-client status sshd
 ```
 
-**Mail (DMARC/SPF).** Erst Ist-Zustand ansehen, dann stufen – sonst landet Legitim-Mail anderer Absender von `kollegeplus.de` im Spam.
+**Mail (DMARC/SPF).** Erst Ist-Zustand ansehen, dann stufen – sonst landet Legitim-Mail anderer Absender der eigenen Domain (hier als `example.org` geschrieben) im Spam.
 
 ```bash
-dig +short TXT kollegeplus.de            # SPF (v=spf1 …)
-dig +short TXT _dmarc.kollegeplus.de     # DMARC – hat der Eintrag schon rua= ?
-dig +short TXT lineal._domainkey.kollegeplus.de   # DKIM-Selector (OpenDKIM)
+dig +short TXT example.org            # SPF (v=spf1 …)
+dig +short TXT _dmarc.example.org     # DMARC – hat der Eintrag schon rua= ?
+dig +short TXT lineal._domainkey.example.org   # DKIM-Selector (OpenDKIM)
 ```
 
-- **DMARC:** Hat der aktuelle Eintrag kein `rua=`, zuerst `v=DMARC1; p=none; rua=mailto:<postfach>` setzen und 1–2 Wochen Reports sammeln. `<postfach>` muss ein **tatsächlich empfangendes** Postfach sein (Postfix auf dem Host ist send-only) – sonst nutzt man einen DMARC-Report-Dienst (z. B. dmarcian/Postmark Free Tier), dessen Adresse das Berichtsaufkommen aggregiert. Erst danach `p=quarantine; pct=25` → bei sauberen Reports auf `pct=100` → optional `p=reject`. Ausrichtung (Alignment) trägt DKIM `d=kollegeplus.de` unabhängig vom Postfix-`myhostname`.
+- **DMARC:** Hat der aktuelle Eintrag kein `rua=`, zuerst `v=DMARC1; p=none; rua=mailto:<postfach>` setzen und 1–2 Wochen Reports sammeln. `<postfach>` muss ein **tatsächlich empfangendes** Postfach sein (Postfix auf dem Host ist send-only) – sonst nutzt man einen DMARC-Report-Dienst (z. B. dmarcian/Postmark Free Tier), dessen Adresse das Berichtsaufkommen aggregiert. Erst danach `p=quarantine; pct=25` → bei sauberen Reports auf `pct=100` → optional `p=reject`. Ausrichtung (Alignment) trägt DKIM `d=example.org` unabhängig vom Postfix-`myhostname`.
 - **SPF:** `~all` → `-all` erst, wenn jede legitime Absenderquelle (Postfix auf dem Host, evtl. M365/Google o. Ä.) im `include` steht. Vorher die `dig`-Ausgabe prüfen.
 
 **DNS (CAA).** Kein CAA-Eintrag vorhanden. **Vor dem Setzen prüfen, welche CA Caddy wirklich nutzt** – Caddy 2.x hat Let's Encrypt mit ZeroSSL-Fallback (ZeroSSL stellt unter `sectigo.com` aus); ein CAA nur für `letsencrypt.org` könnte den Fallback blockieren.
 
 ```bash
 grep -rn 'issuer\|acme_ca\|email' /opt/caddy/ 2>/dev/null
-echo | openssl s_client -connect lineal.kollegeplus.de:443 2>/dev/null | openssl x509 -noout -issuer
+echo | openssl s_client -connect lineal.example.org:443 2>/dev/null | openssl x509 -noout -issuer
 ```
 
-CAA auf dem Apex `kollegeplus.de` gilt auch für alle Subdomains – nutzen andere Hosts andere CAs, entweder alle CAs auflisten oder CAA nur auf `lineal.kollegeplus.de` scoped setzen. Beispiel (an die tatsächlichen Issuer anpassen):
+CAA auf dem Apex `example.org` gilt auch für alle Subdomains – nutzen andere Hosts andere CAs, entweder alle CAs auflisten oder CAA nur auf `lineal.example.org` scoped setzen. Beispiel (`example.org` durch die eigene Domain und an die tatsächlichen Issuer anpassen):
 
 ```
-lineal.kollegeplus.de.  CAA 0 issue "letsencrypt.org"
-lineal.kollegeplus.de.  CAA 0 issue "sectigo.com"        # nur falls ZeroSSL-Fallback aktiv bleibt
-lineal.kollegeplus.de.  CAA 0 iodef "mailto:security@kollegeplus.de"
+lineal.example.org.  CAA 0 issue "letsencrypt.org"
+lineal.example.org.  CAA 0 issue "sectigo.com"        # nur falls ZeroSSL-Fallback aktiv bleibt
+lineal.example.org.  CAA 0 iodef "mailto:security@example.org"
 ```
 
 ### 3.4b HTML-Anhänge im Tab öffnen / eigene Datei-Origin (KOL-478, Weg B)
@@ -264,20 +264,26 @@ Session-Cookie ist host-only (kein `Domain=`), also sieht die Subdomain es ohneh
 `sandbox allow-scripts`-Header macht das HTML zusätzlich zur opaken Origin.
 **Invariante:** nie ein Cookie mit `Domain=.<registrable-domain>` setzen.
 
+Die Hosts sind hier als Platzhalter `lineal.example.org` (App-Origin) und
+`lineal-files.example.org` (Datei-Origin) geschrieben; durch die eigenen Domains ersetzen.
+
 **Einrichtung (einmalig, Betreiber):**
-1. **DNS:** `lineal-files.kollegeplus.de` als CNAME auf `lineal.kollegeplus.de` (gleicher Host).
+1. **DNS:** `lineal-files.example.org` als CNAME auf `lineal.example.org` (gleicher Host).
    CAA wird vom Apex geerbt (§3.4) – kein neuer Record.
-2. **Caddy:** zweiter Site-Block für `lineal-files.kollegeplus.de`, der **denselben Upstream wie
-   der bestehende `lineal.kollegeplus.de`-Block** nutzt (Block verbatim kopieren, nur den
+2. **Caddy:** zweiter Site-Block für `lineal-files.example.org`, der **denselben Upstream wie
+   der bestehende `lineal.example.org`-Block** nutzt (Block verbatim kopieren, nur den
    Site-Namen ändern; nicht den Port raten – nginx hängt je nach Setup an `LINEAL_HTTP_PORT`,
    Default 8088). `Host` muss erhalten bleiben. Auto-LE-Zertifikat; HSTS `includeSubDomains` ist
    aktiv → die Subdomain muss gültiges HTTPS liefern (erledigt Caddy).
-3. **nginx:** `deploy/nginx.conf` enthält den zweiten `server`-Block (`server_name
-   lineal-files.kollegeplus.de`, nur `/files/*`, sonst 404) bereits mit dem echten Host – keine
-   Änderung nötig. Die Routing-Eigenschaft ist in `scripts/nginx-check.sh` CI-geprüft.
-4. **Server:** `LINEAL_FILES_BASE_URL=https://lineal-files.kollegeplus.de` setzen (muss sich von
+3. **nginx:** `deploy/nginx.conf` enthält den zweiten `server`-Block (nur `/files/*`, sonst 404).
+   Der `server_name` steht darin als Platzhalter `${LINEAL_FILES_HOST}`; der Docker-Build rendert
+   ihn aus dem Host-Teil von `LINEAL_FILES_BASE_URL` (bzw. aus `LINEAL_FILES_HOST`, falls gesetzt).
+   Mit Schritt 4 passt der Datei-Host also automatisch – kein manuelles Eintragen. Die Routing-
+   Eigenschaft ist in `scripts/nginx-check.sh` CI-geprüft (siehe `docs/betrieb/nginx.md`).
+4. **Server:** `LINEAL_FILES_BASE_URL=https://lineal-files.example.org` setzen (muss sich von
    `LINEAL_BASE_URL` unterscheiden; ungesetzt = Feature aus). Aktiviert den App-Guard
-   (Host == Datei-Origin & Pfad ∉ `/files/` → 404) als Schutz unabhängig vom Proxy.
+   (Host == Datei-Origin & Pfad ∉ `/files/` → 404) als Schutz unabhängig vom Proxy und liefert
+   zugleich den `server_name` für den nginx-Block (Schritt 3).
 
 **Zuerst testen (nach Deploy):** einen HTML-Anhang (z. B. aus KOL-478) im Web über „Im Tab öffnen"
 aufrufen. Zeigt der Tab die Folien → gut. Bleibt er leer → Browser-Konsole prüfen: ein
@@ -287,12 +293,12 @@ auf gesperrte APIs zugreift (dann Deck anpassen, nicht die CSP lockern).
 **Verifikation (nach Deploy):**
 ```
 # Nicht-/files auf der Datei-Origin ist 404 (nginx-Block + App-Guard):
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: lineal-files.kollegeplus.de' https://lineal-files.kollegeplus.de/     # -> 404
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: lineal-files.example.org' https://lineal-files.example.org/     # -> 404
 # Ein HTML-Anhang auf der Datei-Origin kommt inline + script-fähiger CSP (nicht attachment):
-curl -sI 'https://lineal-files.kollegeplus.de/files/<token>' | grep -iE 'content-disposition|content-security-policy'
+curl -sI 'https://lineal-files.example.org/files/<token>' | grep -iE 'content-disposition|content-security-policy'
 #   -> content-disposition: inline...   und   content-security-policy: ...sandbox allow-scripts...
 # Derselbe Token auf der App-Origin bleibt Download + strikte Sandbox:
-curl -sI 'https://lineal.kollegeplus.de/files/<token>' | grep -iE 'content-disposition|content-security-policy'
+curl -sI 'https://lineal.example.org/files/<token>' | grep -iE 'content-disposition|content-security-policy'
 #   -> content-disposition: attachment...   und   content-security-policy: default-src 'none'; sandbox
 ```
 Im Web zeigt die Anhangsliste bei HTML-Uploads „Im Tab öffnen" (Datei-Origin) plus „Herunterladen"

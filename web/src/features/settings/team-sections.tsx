@@ -1,8 +1,21 @@
-import { ArrowDown, ArrowUp, Plus } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { useSession } from "@/app/auth";
+import { cn } from "@/lib/cn";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +53,8 @@ import { estimateLabel } from "./team-config-sections";
 import { TeamAccessSection, TeamDangerZone } from "./team-admin-sections";
 import { normalizeKey, validateKey } from "./team-key";
 import { LabelManager } from "./label-manager";
+import { ColorPicker } from "./color-picker";
+import { statusDropPosition } from "./status-reorder";
 import { Field, Section, selectClass } from "./ui";
 
 export function SaveRow({
@@ -377,7 +392,118 @@ export function MembersSection({ team }: { team: Team }) {
 
 const COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
-/** Workflow-Editor (docs/08 §2.11 „Issue statuses“): Gruppen je Kategorie, anlegen, umbenennen, verschieben, archivieren. */
+/** Eine sortierbare Statuszeile (LIN-73): Greifpunkt + Farbwähler, sonst wie zuvor. */
+function SortableStatusRow({
+  s,
+  index,
+  count,
+  rowColor,
+  isEditing,
+  draft,
+  onDraftChange,
+  onEditSubmit,
+  onStartEdit,
+  onMove,
+  onArchive,
+  onColorChange,
+  onColorPreview,
+}: {
+  s: WorkflowState;
+  index: number;
+  count: number;
+  rowColor: string | null | undefined;
+  isEditing: boolean;
+  draft: string;
+  onDraftChange: (v: string) => void;
+  onEditSubmit: () => void;
+  onStartEdit: () => void;
+  onMove: (dir: -1 | 1) => void;
+  onArchive: () => void;
+  onColorChange: (hex: string) => void;
+  onColorPreview: (hex: string | null) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: s.id,
+  });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(
+        "flex items-center gap-2 px-3 py-1.5 text-sm",
+        isDragging && "relative z-10 bg-surface opacity-80",
+      )}
+    >
+      {/* Maus: ab 6px; Touch: langes Drücken; Tastatur: Leertaste greift/legt ab (wie LIN-47). */}
+      <button
+        type="button"
+        aria-label={`Reorder ${s.name}`}
+        className="flex touch-none items-center text-muted-foreground hover:text-foreground"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="size-4 cursor-grab" />
+      </button>
+      <ColorPicker
+        value={s.color ?? "#5e6ad2"}
+        ariaLabel={`Color for ${s.name}`}
+        onChange={onColorChange}
+        onPreview={onColorPreview}
+      />
+      <StatusIcon type={s.type} color={rowColor} />
+      {isEditing ? (
+        <form
+          className="flex flex-1 items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onEditSubmit();
+          }}
+        >
+          <Input
+            aria-label="Status name"
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            autoFocus
+          />
+          <Button type="submit" size="sm">
+            Save
+          </Button>
+        </form>
+      ) : (
+        <span className="flex-1">
+          {s.name}
+          {s.isDefault && <span className="ml-2 text-xs text-muted-foreground">Default</span>}
+        </span>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={`Move ${s.name} up`}
+        disabled={index === 0}
+        onClick={() => onMove(-1)}
+      >
+        <ArrowUp />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={`Move ${s.name} down`}
+        disabled={index === count - 1}
+        onClick={() => onMove(1)}
+      >
+        <ArrowDown />
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onStartEdit}>
+        Rename
+      </Button>
+      <Button variant="ghost" size="sm" aria-label={`Archive ${s.name}`} onClick={onArchive}>
+        Archive
+      </Button>
+    </li>
+  );
+}
+
+/** Workflow-Editor (docs/08 §2.11 „Issue statuses“): Gruppen je Kategorie, anlegen, umbenennen, per Drag-and-Drop sortieren, Farbe wählen, archivieren (LIN-73). */
 export function StatusesSection({ team }: { team: Team }) {
   const q = useWorkflowStates(team.id);
   const m = useWorkflowMutations();
@@ -388,7 +514,15 @@ export function StatusesSection({ team }: { team: Team }) {
   const [draft, setDraft] = useState("");
   const [archiving, setArchiving] = useState<WorkflowState | null>(null);
   const [target, setTarget] = useState("");
+  // Live-Vorschau der gerade gewählten Farbe für genau eine Zeile.
+  const [preview, setPreview] = useState<{ id: string; color: string } | null>(null);
   const states = useMemo(() => sortStates(q.data ?? []), [q.data]);
+  // Maus: sofort ab 6px; Touch: langes Drücken (250ms); Tastatur: Leertaste greift/legt ab (LIN-47).
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(KeyboardSensor),
+  );
 
   /** Position zwischen den Nachbarn derselben Kategorie (Float-Mittelwert, wie `sort_order::between`). */
   const move = (s: WorkflowState, dir: -1 | 1) => {
@@ -401,6 +535,14 @@ export function StatusesSection({ team }: { team: Team }) {
     m.update.mutate({ id: s.id, input: { position } });
   };
 
+  /** Drop beendet: neue Position nur innerhalb derselben Kategorie festschreiben. */
+  const onDragEnd = (e: DragEndEvent) => {
+    const activeId = String(e.active.id);
+    const overId = e.over ? String(e.over.id) : null;
+    const position = statusDropPosition(states, activeId, overId);
+    if (position !== null) m.update.mutate({ id: activeId, input: { position } });
+  };
+
   if (q.isLoading) return <ListSkeleton rows={5} />;
   if (q.isError) return <ErrorState error={q.error} title="Could not load statuses" />;
   return (
@@ -408,6 +550,7 @@ export function StatusesSection({ team }: { team: Team }) {
       {STATE_TYPE_ORDER.map((t) => {
         const list = states.filter((s) => s.type === t);
         if (list.length === 0) return null;
+        const ids = list.map((s) => s.id);
         return (
           <div
             key={t}
@@ -416,83 +559,49 @@ export function StatusesSection({ team }: { team: Team }) {
             className="flex flex-col gap-1"
           >
             <h3 className="text-xs font-medium text-muted-foreground">{STATE_TYPE_LABEL[t]}</h3>
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {list.map((s, i) => (
-                <li key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                  <StatusIcon type={s.type} color={s.color} />
-                  {editing === s.id ? (
-                    <form
-                      className="flex flex-1 items-center gap-2"
-                      onSubmit={(e) => {
-                        e.preventDefault();
+            {/* Ein DnD-Kontext je Kategorie: strukturell nur kategorie-internes Sortieren. */}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <ul className="divide-y divide-border rounded-lg border border-border">
+                <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                  {list.map((s, i) => (
+                    <SortableStatusRow
+                      key={s.id}
+                      s={s}
+                      index={i}
+                      count={list.length}
+                      rowColor={preview?.id === s.id ? preview.color : s.color}
+                      isEditing={editing === s.id}
+                      draft={draft}
+                      onDraftChange={setDraft}
+                      onEditSubmit={() => {
                         if (draft.trim())
                           m.update.mutate({ id: s.id, input: { name: draft.trim() } });
                         setEditing(null);
                       }}
-                    >
-                      <Input
-                        aria-label="Status name"
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        autoFocus
-                      />
-                      <Button type="submit" size="sm">
-                        Save
-                      </Button>
-                    </form>
-                  ) : (
-                    <span className="flex-1">
-                      {s.name}
-                      {s.isDefault && (
-                        <span className="ml-2 text-xs text-muted-foreground">Default</span>
-                      )}
-                    </span>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Move ${s.name} up`}
-                    disabled={i === 0}
-                    onClick={() => move(s, -1)}
-                  >
-                    <ArrowUp />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Move ${s.name} down`}
-                    disabled={i === list.length - 1}
-                    onClick={() => move(s, 1)}
-                  >
-                    <ArrowDown />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setEditing(s.id);
-                      setDraft(s.name);
-                    }}
-                  >
-                    Rename
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Archive ${s.name}`}
-                    onClick={() => {
-                      setArchiving(s);
-                      setTarget("");
-                    }}
-                  >
-                    Archive
-                  </Button>
-                </li>
-              ))}
-            </ul>
+                      onStartEdit={() => {
+                        setEditing(s.id);
+                        setDraft(s.name);
+                      }}
+                      onMove={(dir) => move(s, dir)}
+                      onArchive={() => {
+                        setArchiving(s);
+                        setTarget("");
+                      }}
+                      onColorChange={(hex) => m.update.mutate({ id: s.id, input: { color: hex } })}
+                      onColorPreview={(hex) => setPreview(hex ? { id: s.id, color: hex } : null)}
+                    />
+                  ))}
+                </SortableContext>
+              </ul>
+            </DndContext>
           </div>
         );
       })}
+      {m.update.isError && (
+        <span role="alert" className="text-xs text-destructive">
+          {errorText(m.update.error)}
+        </span>
+      )}
       {archiving && (
         <div
           role="group"
@@ -567,12 +676,8 @@ export function StatusesSection({ team }: { team: Team }) {
           onChange={(e) => setName(e.target.value)}
           className="max-w-48"
         />
-        <Input
-          aria-label="Color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          className="w-24"
-        />
+        <ColorPicker value={color} ariaLabel="Color" onChange={setColor} />
+        <StatusIcon type={type} color={color} />
         <Button type="submit" size="sm" disabled={!name.trim() || !COLOR_RE.test(color)}>
           <Plus /> Create status
         </Button>

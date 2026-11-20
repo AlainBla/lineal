@@ -8,9 +8,16 @@ import type { Issue } from "@/gql/graphql";
 import { DEFAULT_PROPERTIES, type DisplayProperty } from "@/features/views/display-options";
 
 import { issueMenuHandlers } from "./context-menu-store";
-import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
+import { Avatar, BlockedIcon, LabelDot, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
-import { estimateLabel, issuePath, priorityLabel, relativeTime } from "./model";
+import {
+  blockedLabel,
+  estimateLabel,
+  isBlocked,
+  issuePath,
+  priorityLabel,
+  relativeTime,
+} from "./model";
 import type { Selection } from "./selection";
 
 interface RowProps {
@@ -181,6 +188,7 @@ export function IssueRow({
       {show("status") && (
         <StatusIcon type={issue.stateType} color={state?.color} title={issue.stateName} />
       )}
+      {isBlocked(issue) && <BlockedIcon label={blockedLabel(issue.blockedByIdentifiers)} />}
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
       {show("labels") && (
         <span className="hidden items-center gap-1 md:flex">
@@ -274,6 +282,7 @@ export function IssueCardBody({
       <div className="flex h-4 items-center gap-2 text-xs text-muted-foreground">
         <PriorityIcon priority={issue.priority} />
         <span className="tabular-nums">{issue.identifier}</span>
+        {isBlocked(issue) && <BlockedIcon label={blockedLabel(issue.blockedByIdentifiers)} />}
         <span className="ml-auto tabular-nums" data-testid="card-state-age">
           {relativeTime(issue.stateEnteredAt)}
         </span>

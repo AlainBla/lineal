@@ -132,6 +132,44 @@ export function PriorityIcon({ priority, className }: { priority: number; classN
   );
 }
 
+/**
+ * „Blocked"-Icon (gefüllter Kreis mit waagerechtem Balken, „no entry"), in Warnfarbe. Der Aufrufer
+ * liefert `label` (als `aria-label` und Tooltip), damit der Zustand nicht allein über die Farbe
+ * erkennbar ist (LIN-79, Accessibility). Gleiche 14×14-Formensprache wie `StatusIcon`.
+ */
+export function BlockedIcon({
+  label,
+  muted = false,
+  className,
+}: {
+  label: string;
+  /** Gedämpft (grau) für bereits erledigte Blocker; sonst Warnfarbe. */
+  muted?: boolean;
+  className?: string;
+}) {
+  return (
+    <span
+      title={label}
+      style={{ color: muted ? "var(--color-muted-foreground)" : "var(--destructive)" }}
+      className={cn("inline-flex shrink-0", className)}
+    >
+      <svg
+        width={14}
+        height={14}
+        viewBox="0 0 14 14"
+        role="img"
+        aria-label={label}
+        data-testid="blocked-icon"
+        className="shrink-0"
+        fill="none"
+      >
+        <circle cx="7" cy="7" r="6.25" fill="currentColor" />
+        <rect x="3.3" y="6.1" width="7.4" height="1.8" rx="0.9" fill="var(--background)" />
+      </svg>
+    </span>
+  );
+}
+
 /** Kleiner Avatar mit Initialen. */
 export function Avatar({ name, className }: { name: string; size?: number; className?: string }) {
   const initials = name

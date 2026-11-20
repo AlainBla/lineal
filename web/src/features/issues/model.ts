@@ -466,16 +466,38 @@ export function slugify(title: string): string {
   return s || "issue";
 }
 
+/** Art einer Relationsgruppe; steuert die Hervorhebung (statt Vergleich der Beschriftung). */
+export type RelationGroupKind =
+  "blocked-by" | "blocking" | "related" | "duplicate-of" | "duplicates";
+
 /** Gruppen der Relationsanzeige in Reihenfolge und Beschriftung (Sicht des aktuellen Issues). */
-export function relationGroups(r: IssueRelations): Array<{ label: string; items: RelatedIssue[] }> {
+export function relationGroups(
+  r: IssueRelations,
+): Array<{ kind: RelationGroupKind; label: string; items: RelatedIssue[] }> {
   return [
-    { label: "Blocked by", items: r.blockedBy },
-    { label: "Blocking", items: r.blocks },
-    { label: "Related", items: r.relatedTo },
-    { label: "Duplicate of", items: r.duplicateOf ? [r.duplicateOf] : [] },
-    { label: "Duplicates", items: r.duplicates },
+    { kind: "blocked-by" as const, label: "Blocked by", items: r.blockedBy },
+    { kind: "blocking" as const, label: "Blocking", items: r.blocks },
+    { kind: "related" as const, label: "Related", items: r.relatedTo },
+    {
+      kind: "duplicate-of" as const,
+      label: "Duplicate of",
+      items: r.duplicateOf ? [r.duplicateOf] : [],
+    },
+    { kind: "duplicates" as const, label: "Duplicates", items: r.duplicates },
   ].filter((g) => g.items.length > 0);
 }
+
+/**
+ * Ob das Issue durch mindestens ein offenes (nicht abgeschlossenes) Issue blockiert ist. Grundlage
+ * ist das serverseitig berechnete `blockedByIdentifiers` (nur offene, sichtbare Blocker, LIN-79),
+ * das auch in Listen/Board ohne Nachladen der Relationen verfügbar ist.
+ */
+export const isBlocked = (issue: Pick<Issue, "blockedByIdentifiers">): boolean =>
+  issue.blockedByIdentifiers.length > 0;
+
+/** `aria-label`/Tooltip des Blocked-Indikators; nennt die blockierenden Kennungen. */
+export const blockedLabel = (identifiers: readonly string[]): string =>
+  identifiers.length === 0 ? "Blocked" : `Blocked by ${identifiers.join(", ")}`;
 
 /** Pfad zum Issue-Detail (docs/08 §1.3). */
 export const issuePath = (ws: string, identifier: string) => `/${ws}/issue/${identifier}`;

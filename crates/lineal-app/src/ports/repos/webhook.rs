@@ -34,6 +34,8 @@ pub struct WebhookRecord {
     pub team_id: Option<TeamId>,
     pub all_public_teams: bool,
     pub resource_types: Vec<String>,
+    /// Nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen (LIN-77); sonst alle.
+    pub issue_status_changes_only: bool,
     pub creator_id: UserId,
     pub oauth_application_id: Option<Uuid>,
     pub consecutive_failures: i32,
@@ -53,6 +55,8 @@ pub struct NewWebhook {
     pub team_id: Option<TeamId>,
     pub all_public_teams: bool,
     pub resource_types: Vec<String>,
+    /// Nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen (LIN-77).
+    pub issue_status_changes_only: bool,
     pub creator_id: UserId,
     pub oauth_application_id: Option<Uuid>,
     pub now: DateTime<Utc>,
@@ -65,6 +69,8 @@ pub struct WebhookPatch {
     pub url: Option<String>,
     pub enabled: Option<bool>,
     pub resource_types: Option<Vec<String>>,
+    /// Statuswechsel-Filter (LIN-77) setzen/löschen.
+    pub issue_status_changes_only: Option<bool>,
     /// Neues Secret samt Vorgänger (Rotation).
     pub rotate_secret: Option<(String, String)>,
 }

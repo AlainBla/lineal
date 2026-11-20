@@ -5,5 +5,8 @@
 pub mod fake;
 pub mod seed;
 
-pub use fake::{FakeStore, FakeTx, fake_app, test_app};
+pub use fake::{
+    FakeStore, FakeTx, FixedClock, NeverMailer, RecordingMailer, fake_app, test_app, test_app_with,
+    test_app_with_mailer,
+};
 pub use seed::{SeedData, SeedUser, ctx_for};

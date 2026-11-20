@@ -2240,6 +2240,22 @@ mod tests {
     }
 
     #[test]
+    fn lin82_project_in_or_no_project_builds_sql() {
+        // LIN-82: "Projekt ist <Projekte> ODER kein Projekt". `sql()` parst+validiert zuerst
+        // (sonst würde die Validierung mit "`null` is not allowed here" scheitern) und übersetzt
+        // dann: der `or`-Zweig mit `null: true` wird zur `project_id IS NULL`-Prüfung, der andere
+        // zum `= ANY(...)` über die FK-Spalte.
+        let s = sql(
+            r#"{"project":{"or":[{"id":{"in":["00000000-0000-4000-8000-000000000001",
+               "00000000-0000-4000-8000-000000000002"]}},{"null":true}]}}"#,
+        );
+        assert!(s.contains("IS NULL"), "{s}");
+        assert!(s.contains("= ANY("), "{s}");
+        // Werte werden gebunden, nicht interpoliert.
+        assert!(s.contains("$1"), "{s}");
+    }
+
+    #[test]
     fn email_filter_is_rejected() {
         let f = parse_issue_filter(r#"{"assignee":{"email":{"eq":"a@b.c"}}}"#).unwrap();
         let e = ev();

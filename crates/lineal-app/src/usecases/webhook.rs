@@ -433,6 +433,23 @@ pub fn map_event(ev: &DomainEvent) -> Option<MappedEvent> {
     })
 }
 
+/// Ob `hook` dieses Event trotz seines Statuswechsel-Filters (LIN-77) erhalten soll.
+///
+/// Der Filter betrifft **ausschließlich** `Issue`-`update`-Events: ist `issue_status_changes_only`
+/// gesetzt, wird nur zugestellt, wenn die geänderten Felder `stateId` enthalten (ein echter
+/// Statuswechsel). Alle übrigen Ressourcentypen sowie `create`/`remove` bleiben unberührt – für sie
+/// ist das Flag ein No-op. So entsteht kein Verhaltensunterschied für Hooks, die den Filter nicht
+/// nutzen.
+pub fn event_passes_status_filter(hook: &WebhookRecord, mapped: &MappedEvent) -> bool {
+    if !hook.issue_status_changes_only {
+        return true;
+    }
+    if mapped.resource_type != "Issue" || mapped.action != "update" {
+        return true;
+    }
+    mapped.changed.iter().any(|f| f == "stateId")
+}
+
 // ---------------------------------------------------------------------------
 // Sichtbarkeit und Payload
 // ---------------------------------------------------------------------------
@@ -563,6 +580,8 @@ pub struct CreateWebhookInput {
     pub team: Option<String>,
     pub all_public_teams: bool,
     pub resource_types: Vec<String>,
+    /// LIN-77: nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen (Default false).
+    pub issue_status_changes_only: bool,
 }
 
 /// Eingabe für `update_webhook`.
@@ -572,6 +591,8 @@ pub struct UpdateWebhookInput {
     pub url: Option<String>,
     pub enabled: Option<bool>,
     pub resource_types: Option<Vec<String>>,
+    /// LIN-77: Statuswechsel-Filter setzen/löschen (`None` = unverändert).
+    pub issue_status_changes_only: Option<bool>,
 }
 
 /// Webhook mit dem Klartext-Secret (nur bei Anlage und Rotation gesetzt).
@@ -720,6 +741,7 @@ impl App {
                 team_id,
                 all_public_teams: input.all_public_teams,
                 resource_types,
+                issue_status_changes_only: input.issue_status_changes_only,
                 creator_id: creator,
                 oauth_application_id: None,
                 now,
@@ -810,6 +832,10 @@ impl App {
         if let Some(t) = &input.resource_types {
             patch.resource_types = Some(validate_resource_types(t)?);
             changed.push("resourceTypes");
+        }
+        if let Some(flag) = input.issue_status_changes_only {
+            patch.issue_status_changes_only = Some(flag);
+            changed.push("issueStatusChangesOnly");
         }
         let updated = tx
             .webhooks()
@@ -967,10 +993,13 @@ impl App {
             return Ok(0);
         };
         let mut tx = self.store.begin(ev.org_id).await?;
-        let hooks = tx
+        let mut hooks = tx
             .webhooks()
             .list_dispatch_webhooks(mapped.resource_type)
             .await?;
+        // LIN-77: Statuswechsel-Filter vor dem Laden von Entität/Teams/Actor anwenden – so sparen
+        // gefilterte Massen-Updates alle weiteren Datenbankzugriffe.
+        hooks.retain(|h| event_passes_status_filter(h, &mapped));
         if hooks.is_empty() {
             return Ok(0);
         }
@@ -1397,6 +1426,7 @@ mod tests {
             team_id: team,
             all_public_teams: public,
             resource_types: vec!["Issue".into()],
+            issue_status_changes_only: false,
             creator_id: lineal_domain::ids::UserId::new_v7(),
             oauth_application_id: None,
             consecutive_failures: 0,
@@ -1490,6 +1520,62 @@ mod tests {
         assert!(map_event(&DomainEvent::TeamUpdated { team_id: team }).is_none());
         // Jeder gemappte Typ ist abonnierbar.
         assert!(RESOURCE_TYPES.contains(&m.resource_type));
+    }
+
+    #[test]
+    fn status_filter_only_gates_issue_updates() {
+        let issue = Uuid::new_v4();
+        let mut status_only = hook(None, true);
+        status_only.issue_status_changes_only = true;
+        let normal = hook(None, true);
+        assert!(!normal.issue_status_changes_only);
+
+        let update = |changed: &[&str]| MappedEvent {
+            resource_type: "Issue",
+            action: "update",
+            entity_id: issue,
+            changed: changed.iter().map(|s| s.to_string()).collect(),
+            team_hint: None,
+        };
+
+        // Issue-Update: nur mit Statuswechsel zugestellt.
+        assert!(event_passes_status_filter(
+            &status_only,
+            &update(&["stateId"])
+        ));
+        assert!(event_passes_status_filter(
+            &status_only,
+            &update(&["title", "stateId"])
+        ));
+        assert!(!event_passes_status_filter(
+            &status_only,
+            &update(&["title"])
+        ));
+        assert!(!event_passes_status_filter(&status_only, &update(&[])));
+
+        // Ohne Flag bleibt alles unberührt.
+        assert!(event_passes_status_filter(&normal, &update(&["title"])));
+
+        // create/remove und Nicht-Issue-Events sind auch mit Flag unberührt.
+        let other = |t: &'static str, a: &'static str| MappedEvent {
+            resource_type: t,
+            action: a,
+            entity_id: issue,
+            changed: vec![],
+            team_hint: None,
+        };
+        assert!(event_passes_status_filter(
+            &status_only,
+            &other("Issue", "create")
+        ));
+        assert!(event_passes_status_filter(
+            &status_only,
+            &other("Issue", "remove")
+        ));
+        assert!(event_passes_status_filter(
+            &status_only,
+            &other("Comment", "update")
+        ));
     }
 
     #[test]

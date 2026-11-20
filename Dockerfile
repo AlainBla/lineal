@@ -87,7 +87,27 @@ RUN apk --no-cache del nginx-module-geoip nginx-module-image-filter nginx-module
     && apk --no-cache add --upgrade nginx \
     && apk --no-cache upgrade
 USER 101
-COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+# deploy/nginx.conf ist eine Vorlage: der konkrete Datei-Host steht als Platzhalter
+# `${LINEAL_FILES_HOST}` darin (keine echte Domain in der öffentlichen Quelle). Hier – zur
+# BUILD-Zeit – wird er gerendert; NICHT zur Laufzeit über das `templates/`-Verfahren von nginx,
+# weil der Container `read_only` läuft (docker-compose.yml) und conf.d dann nicht beschreibbar ist.
+# Wert: Build-Arg LINEAL_FILES_HOST, sonst der Host-Teil von LINEAL_FILES_BASE_URL (ohne Schema,
+# Port, Pfad), sonst der Platzhalter lineal-files.example.org. `envsubst` substituiert NUR diese
+# eine Variable, damit nginx-Variablen wie $host/$remote_addr/$lineal_upstream unangetastet bleiben.
+ARG LINEAL_FILES_HOST=
+ARG LINEAL_FILES_BASE_URL=
+COPY deploy/nginx.conf /tmp/nginx.conf.template
+USER root
+RUN host="${LINEAL_FILES_HOST}"; \
+    if [ -z "$host" ] && [ -n "${LINEAL_FILES_BASE_URL}" ]; then \
+      host="${LINEAL_FILES_BASE_URL#*://}"; host="${host%%/*}"; host="${host%%:*}"; \
+    fi; \
+    [ -n "$host" ] || host="lineal-files.example.org"; \
+    LINEAL_FILES_HOST="$host" envsubst '${LINEAL_FILES_HOST}' \
+      < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf \
+    && rm -f /tmp/nginx.conf.template \
+    && grep -q "server_name $host;" /etc/nginx/conf.d/default.conf
+USER 101
 # Snippet mit den Sicherheits-Headern NUR nach snippets/ (nicht conf.d/, siehe Datei-Kopf):
 # conf.d/*.conf würde auf http-Ebene gelten und die Header auf jede Antwort doppeln.
 COPY deploy/security-headers.conf /etc/nginx/snippets/lineal-security-headers.conf

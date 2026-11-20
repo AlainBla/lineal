@@ -1082,6 +1082,13 @@ type Issue {
 	"""
 	linkCount: Int!
 	"""
+	Kennungen offener Blocker: Issues, die dieses Issue blockieren und nicht abgeschlossen sind
+	(nicht completed/canceled/duplicate). Leer ⇒ nicht blockiert. In Listen und auf dem Board
+	ohne Nachladen der Relationen verfügbar; der Aufrufer sieht nur Blocker aus sichtbaren Teams
+	(LIN-79).
+	"""
+	blockedByIdentifiers: [String!]!
+	"""
 	Git-Branchname für den Aufrufer (`<handle>/<kennung>-<titel-slug>`), identisch zu MCP
 	`gitBranchName`.
 	"""
@@ -3483,6 +3490,10 @@ type Webhook {
 	teamId: String
 	allPublicTeams: Boolean!
 	resourceTypes: [String!]!
+	"""
+	LIN-77: nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen.
+	"""
+	issueStatusChangesOnly: Boolean!
 	creatorId: String!
 	consecutiveFailures: Int!
 	disabledReason: String
@@ -3500,6 +3511,10 @@ input WebhookCreateInput {
 	teamId: String
 	allPublicTeams: Boolean! = false
 	resourceTypes: [String!]!
+	"""
+	LIN-77: nur Issue-`update`-Events mit Statuswechsel (`stateId`) zustellen (Default false).
+	"""
+	issueStatusChangesOnly: Boolean! = false
 }
 
 """
@@ -3542,6 +3557,10 @@ input WebhookUpdateInput {
 	url: String
 	enabled: Boolean
 	resourceTypes: [String!]
+	"""
+	LIN-77: Statuswechsel-Filter setzen/löschen (`null` = unverändert).
+	"""
+	issueStatusChangesOnly: Boolean
 }
 
 """
