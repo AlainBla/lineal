@@ -24,7 +24,15 @@ import { ActivitySection } from "./comments";
 import { useIssue, useTeamMeta } from "./hooks";
 import { useIssueActions, type IssueActions } from "./issue-actions";
 import { useIssueLookup } from "./issue-lookup";
-import { issuePath, RELATION_CHOICES, slugify, type RelationChoice } from "./model";
+import { BlockedIcon } from "./icons";
+import {
+  blockedLabel,
+  isBlocked,
+  issuePath,
+  RELATION_CHOICES,
+  slugify,
+  type RelationChoice,
+} from "./model";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { PropertySidebar } from "./property-sidebar";
 import { MentionedInSection } from "./mentioned-in";
@@ -446,6 +454,15 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
           )}
           <span aria-hidden>›</span>
           <span className="shrink-0 text-foreground">{issue.identifier}</span>
+          {isBlocked(issue) && (
+            <span
+              data-testid="blocked-badge"
+              className="flex shrink-0 items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive"
+            >
+              <BlockedIcon label={blockedLabel(issue.blockedByIdentifiers)} />
+              Blocked
+            </span>
+          )}
           <span
             data-testid="header-title"
             title={issue.title}

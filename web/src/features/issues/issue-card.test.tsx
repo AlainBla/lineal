@@ -6,8 +6,8 @@ import "@/app/test-polyfills";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import type { IssueLookup } from "./issue-lookup";
-import { IssueCardBody, IssueCardHover } from "./issue-row";
-import { makeIssue } from "./test-fixtures";
+import { IssueCardBody, IssueCardHover, IssueRow } from "./issue-row";
+import { makeIssue, renderWithApp } from "./test-fixtures";
 
 const lookup: IssueLookup = {
   state: () => undefined,
@@ -69,5 +69,30 @@ describe("Project-Chip (LIN-5)", () => {
       <IssueCardBody issue={{ ...issue, projectId: "p1" }} lookup={withProject} display={["id"]} />,
     );
     expect(screen.queryByTestId("project-chip")).toBeNull();
+  });
+});
+
+describe("Blocked-Indikator (LIN-79)", () => {
+  const blocked = makeIssue({
+    id: "b",
+    identifier: "ENG-2",
+    blockedByIdentifiers: ["ENG-123"],
+  });
+
+  it("zeigt auf der Board-Karte ein Blocked-Icon mit barrierefreiem Label", () => {
+    render(<IssueCardBody issue={blocked} lookup={lookup} />);
+    expect(screen.getByLabelText("Blocked by ENG-123")).toBeInTheDocument();
+  });
+
+  it("zeigt kein Blocked-Icon ohne offene Blocker", () => {
+    render(<IssueCardBody issue={issue} lookup={lookup} />);
+    expect(screen.queryByTestId("blocked-icon")).toBeNull();
+  });
+
+  it("zeigt in der Listenzeile ein Blocked-Icon mit den blockierenden Kennungen", async () => {
+    await renderWithApp(
+      <IssueRow issue={blocked} ws="acme" lookup={lookup} focused={false} onFocus={() => {}} />,
+    );
+    expect(await screen.findByLabelText("Blocked by ENG-123")).toBeInTheDocument();
   });
 });

@@ -456,6 +456,12 @@ pub(crate) async fn filter_extras(
             .count();
         extras.children_count = visible_children as i64;
     }
+    // LIN-79: Blocker aus für den Aufrufer unsichtbaren Teams nicht als „blocked by" ausweisen
+    // (kein Leak fremder Kennungen; der Detail-Badge und die Relationsansicht blenden solche Blocker
+    // ebenfalls aus). In-Memory, ohne zusätzliche Query.
+    if !extras.blocked_by.is_empty() {
+        extras.blocked_by.retain(|(_, team)| visible.contains(team));
+    }
     Ok(())
 }
 

@@ -104,6 +104,7 @@ export function makeIssue(over: Partial<Issue> & Pick<Issue, "id" | "identifier"
     triagedAt: null,
     linkCount: 0,
     branchName: `alice/${over.identifier.toLowerCase()}`,
+    blockedByIdentifiers: [],
     attachments: [],
     ...over,
   };

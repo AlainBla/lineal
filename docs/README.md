@@ -28,10 +28,12 @@ Grundlage (Stand 2026-10-10):
 | 13 | [Import aus Linear](13-import-linear.md) | Migration eines Linear-Workspaces: Mapping, Phasen, Delta-Import, Sicherheit |
 | 14 | [Firmenweite Sicht](14-firmenweite-sicht.md) | Teamübergreifende Issues, Dashboard, Roadmap, Auslastung |
 | 15 | [Umsetzungsstand](15-umsetzungsstand.md) | Was implementiert ist, bekannte Lücken, Betrieb (Env, Jobs, Ports), Sicherheitsmaßnahmen, Entscheidungen bei Widersprüchen |
+| 16 | [Bots & API-Keys](16-bots-api-keys.md) | Anleitung: Bot anlegen und mit API-Key ausstatten, damit Automationen als Bot statt als Person auftreten (LIN-22) |
 
 Eine gerenderte Übersicht mit allen Diagrammen liegt in [index.html](index.html).
 
 Weitere Artefakte:
+- [Betrieb (`betrieb/`)](betrieb/README.md) – generalisierte, öffentliche Runbooks zu den Skripten unter `scripts/` und den Vorlagen unter `deploy/` (Backup/Restore, signierter Deploy, nginx/Datei-Origin, Platten-Alarm, SSH-Härtung, TLS/CAA). Mit Platzhaltern statt konkreter Infrastruktur.
 - [`mcp-tools.snapshot.json`](mcp-tools.snapshot.json) – Name, Beschreibung und Eingabeschema aller 55 MCP-Tools; Fixture für den Schema-Snapshot-Test (siehe [07](07-mcp-server.md)).
 - `assets/mermaid.min.js` – lokale Mermaid-Kopie, damit `index.html` offline rendert.
 - `../tools/build_index.py` – erzeugt `index.html` neu aus den Markdown-Dateien (`python3 tools/build_index.py`, benötigt das Python-Paket `markdown`). Die Markdown-Dateien sind die maßgebliche Quelle.

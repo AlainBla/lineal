@@ -49,7 +49,14 @@ export function RelationDialog({
     setError(null);
     try {
       for (const src of sources) await createRelation(relationInput(choice, src.id, other.id));
-      await qc.invalidateQueries({ queryKey: keys.issueDetails });
+      // Relationen nachladen UND die Issue-Caches (LIN-79: `blockedByIdentifiers` ändert sich, sobald
+      // ein „blocked by" angelegt wird – am Detail-Issue [`["issue", ref]`] für das Header-Badge und
+      // in Listen/Board [`["issues"]`] für das Zeilen-/Karten-Icon).
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: keys.issueDetails }),
+        qc.invalidateQueries({ queryKey: ["issue"] }),
+        qc.invalidateQueries({ queryKey: keys.issues }),
+      ]);
       onClose();
     } catch (err) {
       setError(errorMessage(err, "Could not add the relation."));

@@ -246,6 +246,7 @@ async fn exercise_all_actions(fx: &Fx) -> (String, String) {
                 team: None,
                 all_public_teams: true,
                 resource_types: vec!["Issue".into()],
+                ..Default::default()
             },
         )
         .await

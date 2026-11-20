@@ -89,6 +89,31 @@ describe("Kommentar-Aktionen (F.03)", () => {
     expect(within(human).queryByText(/\(via /)).toBeNull();
   });
 
+  it("antwortet mit nur parentId, nicht issueId (LIN-86)", async () => {
+    const gql = mockGraphql(
+      handlers([comment("c1", "user-bob", "Bob")], {
+        CommentCreate: () => ({
+          commentCreate: {
+            success: true,
+            comment: comment("r1", "user-bob", "Bob", { parentId: "c1" }),
+          },
+        }),
+      }),
+    );
+    await renderWithApp(view());
+    const card = await screen.findByRole("article", { name: "Comment by Bob" });
+    await userEvent.click(within(card).getByRole("button", { name: "Leave a reply…" }));
+    const box = within(card).getByRole("textbox", { name: "Leave a reply" });
+    await userEvent.type(box, "Antwort");
+    await userEvent.click(within(card).getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(gql.of("CommentCreate")).toHaveLength(1));
+    // issueId + parentId zusammen würde das Backend ablehnen ("not both"): nur parentId senden.
+    expect(gql.of("CommentCreate")[0]!.variables.input).toEqual({
+      body: "Antwort",
+      parentId: "c1",
+    });
+  });
+
   it("bearbeitet einen Kommentar", async () => {
     const gql = mockGraphql(
       handlers([comment("c1", "user-bob", "Bob")], {

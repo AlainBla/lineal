@@ -1221,6 +1221,79 @@ async fn upload_then_download_roundtrip() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
 
+/// LIN-85: Der ursprüngliche Upload-Name (über die signierte PUT-URL hinterlegt) landet im
+/// `Content-Disposition` des Downloads – statt der nackten UUID aus dem Speicher-Schlüssel.
+#[tokio::test]
+async fn download_uses_the_original_upload_filename() {
+    let dir = TempDir::new();
+    let app = blob_app(&dir);
+    let router = api(app.clone());
+    let store = store_at(&app, app.clock.now());
+    const PPTX: &str = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+    // ASCII-Name: PPTX ist nicht inline-sicher → attachment + octet-stream, Name bleibt erhalten.
+    let put_url = store
+        .signed_put_url_named(
+            "acme/eng/01a1-uuid",
+            PPTX,
+            5,
+            "Fehleruebersicht.pptx",
+            PUT_TTL,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        send(&router, put(&path_of(&put_url), PPTX, b"deck!".to_vec()))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let get_url = store
+        .signed_get_url("acme/eng/01a1-uuid", GET_TTL)
+        .await
+        .unwrap();
+    let res = router
+        .clone()
+        .oneshot(Request::get(path_of(&get_url)).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "application/octet-stream");
+    assert_eq!(
+        res.headers()["content-disposition"],
+        "attachment; filename=\"Fehleruebersicht.pptx\""
+    );
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+
+    // Nicht-ASCII-Name (CJK): ASCII-Fallback + RFC-5987-`filename*`, Header bleibt wohlgeformt und
+    // der Typ weiterhin ein sicherer Download.
+    let put_cjk = store
+        .signed_put_url_named("acme/eng/cjk-uuid", PPTX, 5, "月次報告.pptx", PUT_TTL)
+        .await
+        .unwrap();
+    assert_eq!(
+        send(&router, put(&path_of(&put_cjk), PPTX, b"deck!".to_vec()))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let get_cjk = store
+        .signed_get_url("acme/eng/cjk-uuid", GET_TTL)
+        .await
+        .unwrap();
+    let res = router
+        .clone()
+        .oneshot(Request::get(path_of(&get_cjk)).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let disp = res.headers()["content-disposition"].to_str().unwrap();
+    assert!(disp.starts_with("attachment; filename=\""), "disp={disp}");
+    assert!(
+        disp.contains("filename*=UTF-8''%E6%9C%88%E6%AC%A1%E5%A0%B1%E5%91%8A.pptx"),
+        "disp={disp}"
+    );
+}
+
 #[tokio::test]
 async fn html_uploads_are_served_as_attachment() {
     let dir = TempDir::new();

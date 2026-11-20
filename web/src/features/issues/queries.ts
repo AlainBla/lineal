@@ -21,7 +21,7 @@ export const ISSUE_FIELDS = `
   stateId stateName stateType assigneeId creatorId parentId projectId projectMilestoneId cycleId
   labelIds dueDate sortOrder startedAt completedAt canceledAt archivedAt trashed
   slaType slaStartedAt slaBreachesAt createdAt updatedAt
-  stateEnteredAt snoozedUntilAt startedTriageAt linkCount branchName
+  stateEnteredAt snoozedUntilAt startedTriageAt linkCount branchName blockedByIdentifiers
 `;
 
 const COMMENT_FIELDS = `
@@ -103,7 +103,7 @@ export interface TeamMeta {
 }
 
 const TEAM_META_QUERY = `query TeamMeta($team: String!) {
-  team(id: $team) { id key name displayName parentId icon color issueEstimationType cyclesEnabled triageEnabled }
+  team(id: $team) { id key name displayName parentId icon color issueEstimationType cyclesEnabled triageEnabled viewer { isMember isOwner } }
   workflowStates(teamId: $team) { id teamId name type color position isDefault }
   issueLabels(teamId: $team, includeGroups: true) { id name color teamId parentId isGroup groupType }
   cycles(teamId: $team) { id teamId number name startsAt endsAt isActive isNext isPast }
@@ -128,6 +128,37 @@ export async function fetchTeamMeta(team: string, signal?: AbortSignal): Promise
     cycles: res.cycles,
     projects: res.projects,
   };
+}
+
+/** Eingabe von `issueLabelCreate` (nur einfache Team-Labels, LIN-87). */
+export interface CreateLabelVars extends Record<string, unknown> {
+  name: string;
+  teamId?: string;
+  color?: string;
+}
+
+/**
+ * Legt ein Issue-Label an und liefert das neue Label (inkl. `id`, die zum Anhängen ans Issue nötig
+ * ist; die Settings-Mutation gibt sie nicht zurück). Farbe wird weggelassen – der Server vergibt
+ * seine Standardfarbe.
+ */
+export async function createLabel(input: CreateLabelVars): Promise<IssueLabel> {
+  const res = await gqlRequest<
+    { issueLabelCreate: { success: boolean; issueLabel: IssueLabel | null } },
+    { input: CreateLabelVars }
+  >(
+    `mutation IssueLabelCreate($input: IssueLabelCreateInput!) {
+      issueLabelCreate(input: $input) {
+        success
+        issueLabel { id name color teamId parentId isGroup groupType }
+      }
+    }`,
+    { input },
+  );
+  if (!res.issueLabelCreate.issueLabel) {
+    throw new Error("Could not create the label.");
+  }
+  return res.issueLabelCreate.issueLabel;
 }
 
 export async function fetchIssue(ref: string, signal?: AbortSignal): Promise<Issue> {
@@ -307,14 +338,20 @@ export async function createComment(input: {
   body: string;
   parentId?: string;
 }): Promise<Comment> {
+  // Bei einer Antwort NUR `parentId` senden: `issueId` + `parentId` zusammen lehnt das Backend ab
+  // („Provide either a parent object or a comment to reply to, not both"), weil `issueId` dort als
+  // Elternobjekt zählt. Thread-Wurzel wird serverseitig aus dem Parent abgeleitet.
+  const vars: { issueId?: string; body: string; parentId?: string } = input.parentId
+    ? { body: input.body, parentId: input.parentId }
+    : { issueId: input.issueId, body: input.body };
   const res = await gqlRequest<
     { commentCreate: { success: boolean; comment: Comment | null } },
-    { input: typeof input }
+    { input: typeof vars }
   >(
     `mutation CommentCreate($input: CommentCreateInput!) {
       commentCreate(input: $input) { success comment { ${COMMENT_FIELDS} } }
     }`,
-    { input },
+    { input: vars },
   );
   if (!res.commentCreate.success || !res.commentCreate.comment) throw new Error("Comment failed");
   return res.commentCreate.comment;

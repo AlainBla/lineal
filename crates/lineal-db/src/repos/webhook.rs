@@ -27,6 +27,7 @@ struct WebhookRow {
     team_id: Option<Uuid>,
     all_public_teams: bool,
     resource_types: Vec<String>,
+    issue_status_changes_only: bool,
     creator_id: Uuid,
     oauth_application_id: Option<Uuid>,
     failure_count: i32,
@@ -37,8 +38,8 @@ struct WebhookRow {
 }
 
 pub(crate) const WEBHOOK_COLS: &str = "id, organization_id, label, url, secret, previous_secret, \
-    secret_rotated_at, enabled, team_id, all_public_teams, resource_types, creator_id, \
-    oauth_application_id, failure_count, disabled_reason, last_success_at, created_at, updated_at";
+    secret_rotated_at, enabled, team_id, all_public_teams, resource_types, issue_status_changes_only, \
+    creator_id, oauth_application_id, failure_count, disabled_reason, last_success_at, created_at, updated_at";
 
 impl From<WebhookRow> for WebhookRecord {
     fn from(r: WebhookRow) -> Self {
@@ -54,6 +55,7 @@ impl From<WebhookRow> for WebhookRecord {
             team_id: r.team_id.map(TeamId),
             all_public_teams: r.all_public_teams,
             resource_types: r.resource_types,
+            issue_status_changes_only: r.issue_status_changes_only,
             creator_id: UserId(r.creator_id),
             oauth_application_id: r.oauth_application_id,
             consecutive_failures: r.failure_count,
@@ -610,8 +612,8 @@ impl WebhookRepo for PgTx {
     async fn insert_webhook(&mut self, w: &NewWebhook) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO webhook (id, organization_id, label, url, secret, enabled, team_id, all_public_teams, \
-             resource_types, creator_id, oauth_application_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11, $11)",
+             resource_types, issue_status_changes_only, creator_id, oauth_application_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11, $12, $12)",
         )
         .bind(w.id.0)
         .bind(self.org.0)
@@ -621,6 +623,7 @@ impl WebhookRepo for PgTx {
         .bind(w.team_id.map(|t| t.0))
         .bind(w.all_public_teams)
         .bind(&w.resource_types)
+        .bind(w.issue_status_changes_only)
         .bind(w.creator_id.0)
         .bind(w.oauth_application_id)
         .bind(w.now)
@@ -675,6 +678,7 @@ impl WebhookRepo for PgTx {
                url = COALESCE($5, url), \
                enabled = COALESCE($6, enabled), \
                resource_types = COALESCE($7, resource_types), \
+               issue_status_changes_only = COALESCE($11, issue_status_changes_only), \
                secret = COALESCE($8, secret), \
                previous_secret = CASE WHEN $8::text IS NOT NULL THEN $9 ELSE previous_secret END, \
                secret_rotated_at = CASE WHEN $8::text IS NOT NULL THEN $10 ELSE secret_rotated_at END, \
@@ -694,6 +698,7 @@ impl WebhookRepo for PgTx {
         .bind(new_secret)
         .bind(prev_secret)
         .bind(now)
+        .bind(p.issue_status_changes_only)
         .fetch_optional(&mut *self.tx)
         .await
         .map_err(db_err)?;

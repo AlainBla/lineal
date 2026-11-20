@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useId, useState, type FormEvent } from "react";
 
 import { login, validateLogin, type LoginErrors, type LoginResult } from "@/app/auth";
@@ -168,7 +169,12 @@ export function LoginForm({
         )}
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${id}-password`}>Password</Label>
+        <div className="flex items-center justify-between">
+          <Label htmlFor={`${id}-password`}>Password</Label>
+          <Link to="/forgot-password" className="text-xs text-primary hover:underline">
+            Forgot password?
+          </Link>
+        </div>
         <Input
           id={`${id}-password`}
           type="password"

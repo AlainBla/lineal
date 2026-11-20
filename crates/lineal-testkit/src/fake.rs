@@ -517,16 +517,69 @@ impl Mailer for FakeMailer {
     }
 }
 
+/// Mailer, der jede gesendete Nachricht festhält (für Tests, die den Versand prüfen – z. B. den
+/// Passwort-Reset-Link und seinen Token, LIN-58).
+#[derive(Clone, Default)]
+pub struct RecordingMailer {
+    sent: Arc<Mutex<Vec<Mail>>>,
+}
+
+impl RecordingMailer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Alle bisher gesendeten Mails (in Sendereihenfolge).
+    pub fn sent(&self) -> Vec<Mail> {
+        lock(&self.sent).clone()
+    }
+}
+
+#[async_trait]
+impl Mailer for RecordingMailer {
+    async fn send(&self, mail: Mail) -> AppResult<()> {
+        lock(&self.sent).push(mail);
+        Ok(())
+    }
+}
+
+/// Mailer, dessen `send` **nie** zurückkehrt (für Tests, die prüfen, dass der HTTP-Handler nicht
+/// inline auf den Versand wartet – der Reset-Endpunkt muss trotzdem sofort antworten, LIN-58).
+pub struct NeverMailer;
+
+#[async_trait]
+impl Mailer for NeverMailer {
+    async fn send(&self, _mail: Mail) -> AppResult<()> {
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
 /// Baut eine `App` mit beliebigem Store und Fake-Diensten (feste Uhr, Seq-IDs).
 pub fn test_app(store: Arc<dyn Store>) -> Arc<App> {
+    test_app_with_mailer(store, Arc::new(FakeMailer))
+}
+
+/// Wie [`test_app`], aber mit eigenem Mailer (z. B. [`RecordingMailer`] oder [`NeverMailer`]).
+pub fn test_app_with_mailer(store: Arc<dyn Store>, mailer: Arc<dyn Mailer>) -> Arc<App> {
+    test_app_with(store, Arc::new(FixedClock::default()), mailer)
+}
+
+/// Wie [`test_app`], aber mit eigener Uhr und eigenem Mailer. Nützlich u. a. für Ablauf-Tests, die
+/// dasselbe Store mit zwei Uhren bedienen (LIN-58: Token in der Vergangenheit anlegen, in der
+/// „Zukunft" einlösen).
+pub fn test_app_with(
+    store: Arc<dyn Store>,
+    clock: Arc<dyn Clock>,
+    mailer: Arc<dyn Mailer>,
+) -> Arc<App> {
     Arc::new(App {
         store,
-        clock: Arc::new(FixedClock::default()),
+        clock,
         ids: Arc::new(SeqIdGen::default()),
         blobs: Arc::new(FakeBlobs),
         search: Arc::new(FakeSearch),
         hasher: Arc::new(FakeHasher),
-        mailer: Arc::new(FakeMailer),
+        mailer,
         totp_keys: Arc::new(FakeTotpKeys),
         config: AppConfig::default(),
     })

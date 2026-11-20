@@ -163,6 +163,8 @@ JSON-RPC-Fehler (`error`-Objekt statt `result`) gibt es nur für Protokollproble
 
 Lineal implementiert die **MCP-Authorization-Spezifikation** (OAuth 2.1). Der MCP-Server ist eine *Protected Resource*, der Authorization Server ist der von Lineal (gemeinsam mit der öffentlichen API, siehe [09-api-events.md](09-api-events.md)).
 
+Nicht-interaktive Clients (Skripte, Bots) brauchen keinen OAuth-Flow: Ein **API-Key** wird direkt als `Authorization: Bearer <key>` gesendet (das `Bearer`-Schema ist am `/mcp`-Endpunkt Pflicht). Für Automationen, die als eigener Akteur statt als Person auftreten sollen, legen Admins einen **Bot** mit eigenem Key an – siehe [16 – Bots & API-Keys](16-bots-api-keys.md).
+
 | Endpunkt | Zweck |
 |---|---|
 | `GET /.well-known/oauth-protected-resource` | Metadaten der Ressource (RFC 9728): `resource: "https://lineal.example/mcp"`, `authorization_servers: ["https://lineal.example"]`, `scopes_supported: ["read","write"]`, `bearer_methods_supported: ["header"]` |
