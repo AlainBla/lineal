@@ -72,16 +72,19 @@ fn secret_key(session_secret: &str) -> Key {
     let mut h = Sha256::new();
     h.update(b"lineal-webhook-secret-v1");
     h.update(session_secret.as_bytes());
-    Key::clone_from_slice(&h.finalize())
+    // `Output<Sha256>` und `Key` sind in dieser RustCrypto-Generation derselbe
+    // `Array<u8, U32>` — der 32-Byte-SHA-256-Digest ist direkt der Schlüssel.
+    h.finalize()
 }
 
 /// Verschlüsselt `plaintext` (ChaCha20-Poly1305, Schlüssel aus `session_secret`) → `v1:<base64>`.
 pub fn seal_secret(session_secret: &str, plaintext: &str) -> AppResult<String> {
     let cipher = ChaCha20Poly1305::new(&secret_key(session_secret));
     let nonce_bytes = Uuid::new_v4();
-    let nonce = Nonce::from_slice(&nonce_bytes.as_bytes()[..12]);
+    let nonce = Nonce::try_from(&nonce_bytes.as_bytes()[..12])
+        .map_err(|_| AppError::internal("could not encrypt the webhook secret"))?;
     let ct = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|_| AppError::internal("could not encrypt the webhook secret"))?;
     let mut raw = nonce_bytes.as_bytes()[..12].to_vec();
     raw.extend(ct);
@@ -99,7 +102,7 @@ pub fn open_secret(session_secret: &str, sealed: &str) -> AppResult<String> {
     let (nonce, ct) = raw.split_at(12);
     let cipher = ChaCha20Poly1305::new(&secret_key(session_secret));
     let pt = cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
+        .decrypt(&Nonce::try_from(nonce).map_err(|_| bad())?, ct)
         .map_err(|_| bad())?;
     String::from_utf8(pt).map_err(|_| bad())
 }
@@ -107,11 +110,11 @@ pub fn open_secret(session_secret: &str, sealed: &str) -> AppResult<String> {
 /// `hex(HMAC-SHA256(secret, body))` (docs/09 §4.4).
 pub fn sign(secret: &str, body: &[u8]) -> String {
     // HMAC akzeptiert Schlüssel beliebiger Länge.
-    let Ok(mut mac) = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()) else {
+    let Ok(mut mac) = <Hmac<Sha256> as KeyInit>::new_from_slice(secret.as_bytes()) else {
         return String::new();
     };
     mac.update(body);
-    format!("{:x}", mac.finalize().into_bytes())
+    hex::encode(mac.finalize().into_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,6 +1284,22 @@ fn hide_forbidden(e: AppError, w: &WebhookRecord, snap: &PolicySnapshot) -> AppE
 mod tests {
     use super::*;
     use lineal_domain::ids::IssueId;
+
+    /// Known-Answer gegen die *alte* Generation: dieses `v1:`-Secret wurde mit
+    /// chacha20poly1305 0.10 erzeugt. Die migrierte Lib (0.11) muss es weiter
+    /// entschluesseln, sonst werden bestehende gespeicherte Webhook-Secrets
+    /// unlesbar. Bricht der Test, hat sich das At-Rest-Format geaendert ->
+    /// Ursache suchen, nicht den Erwartungswert anpassen (Invariante LIN-83).
+    #[test]
+    fn opens_pre_migration_webhook_secret() {
+        const SESSION: &str = "lin-83-kat-session-secret-0123456789";
+        const SEALED: &str =
+            "v1:arGa4uUSQ8Sce6aCiPvmIqSCl/xgpV5xAuPzDXfudZBiwFnzNVQKCmqjatwpymNhGi+6dHyR3Pk=";
+        assert_eq!(
+            open_secret(SESSION, SEALED).unwrap(),
+            "kat-webhook-secret-plaintext"
+        );
+    }
 
     #[test]
     fn signature_matches_rfc4231_vector() {

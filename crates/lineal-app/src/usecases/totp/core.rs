@@ -5,7 +5,7 @@
 //! getroffenen Zeitschritt zurück, damit der Aufrufer Code-Replay (RFC 6238 §5.2)
 //! über `last_used_step` ausschließen kann.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore;
 use sha1::Sha1;
 use subtle::ConstantTimeEq;
