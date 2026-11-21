@@ -15,7 +15,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use lineal_app::ports::repos::NewEvent;
 use lineal_app::ports::repos::webhook::{
     ClientRegistration, NewAuthCode, NewOauthToken, TokenRotation,
@@ -335,10 +335,10 @@ fn consent_nonce(
         get("code_challenge_method"),
         exp
     );
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(app.config.session_secret.as_bytes())
-        .unwrap_or_else(|_| <Hmac<Sha256> as Mac>::new_from_slice(b"x").expect("hmac key"));
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(app.config.session_secret.as_bytes())
+        .unwrap_or_else(|_| <Hmac<Sha256> as KeyInit>::new_from_slice(b"x").expect("hmac key"));
     mac.update(msg.as_bytes());
-    format!("{exp}.{:x}", mac.finalize().into_bytes())
+    format!("{exp}.{}", hex::encode(mac.finalize().into_bytes()))
 }
 
 fn consent_valid(

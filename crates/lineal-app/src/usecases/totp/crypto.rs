@@ -31,10 +31,10 @@ pub async fn seal(provider: &dyn TotpKeyProvider, plaintext: &[u8]) -> AppResult
 
     let mut nonce_bytes = [0u8; XNONCE_LEN];
     rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce = XNonce::from(nonce_bytes);
 
     let ct = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|_| AppError::internal("encryption failed"))?;
     let mut secret_enc = nonce_bytes.to_vec();
     secret_enc.extend_from_slice(&ct);
@@ -61,8 +61,10 @@ pub async fn open(
     let cipher = XChaCha20Poly1305::new_from_slice(&dek)
         .map_err(|_| AppError::internal("key setup failed"))?;
     let (nonce, ct) = secret_enc.split_at(XNONCE_LEN);
+    let nonce = XNonce::try_from(nonce)
+        .map_err(|_| AppError::internal("stored totp secret cannot be decrypted"))?;
     cipher
-        .decrypt(XNonce::from_slice(nonce), ct)
+        .decrypt(&nonce, ct)
         .map_err(|_| AppError::internal("stored totp secret cannot be decrypted"))
 }
 

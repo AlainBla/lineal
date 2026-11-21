@@ -3,8 +3,8 @@
 
 use crate::config::{Config, SmtpConfig};
 use argon2::Argon2;
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::{PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString};
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher as _, PasswordVerifier as _};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lineal_app::ports::{
@@ -71,9 +71,12 @@ impl PasswordHasher for Argon2Hasher {
         let password = password.to_owned();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let salt = SaltString::generate(&mut OsRng);
+            // `hash_password` erzeugt in password-hash 0.6 selbst ein zufälliges
+            // 16-Byte-Salt aus dem OS-RNG (RECOMMENDED_SALT_LEN, wie zuvor
+            // `SaltString::generate`). Parameter bleiben Argon2::default()
+            // (Argon2id, v=0x13, m=19456, t=2, p=1).
             Argon2::default()
-                .hash_password(password.as_bytes(), &salt)
+                .hash_password(password.as_bytes())
                 .map(|h| h.to_string())
                 .map_err(|e| AppError::internal(format!("password hashing failed: {e}")))
         })
@@ -279,6 +282,28 @@ mod tests {
         assert!(h.verify("correct horse", &a).await.unwrap());
         assert!(!h.verify("wrong", &a).await.unwrap());
         assert!(!h.verify("x", "not-a-phc-string").await.unwrap());
+    }
+
+    /// Known-Answer gegen die *alte* Argon2-Generation: der vor der RustCrypto-
+    /// Migration (argon2 0.5) erzeugte, fest gespeicherte PHC-String muss mit
+    /// argon2 0.6 weiter verifizieren. Bricht dieser Test, hat sich das
+    /// Argon2id-Byte-Verhalten geändert — nicht den Erwartungswert anpassen,
+    /// sondern die Ursache suchen (vgl. Sicherheits-Invariante LIN-83).
+    #[tokio::test]
+    async fn argon2_verifies_pre_migration_stored_hash() {
+        use lineal_testkit::seed::identity::{SEED_PASSWORD, SEED_PASSWORD_HASH};
+        let h = Argon2Hasher::default();
+        // Gespeicherter Hash + richtiges Passwort → verifiziert weiterhin.
+        assert!(
+            h.verify(SEED_PASSWORD, SEED_PASSWORD_HASH).await.unwrap(),
+            "bestehender Argon2id-Hash muss nach der Migration verifizieren"
+        );
+        // Falsches Passwort gegen denselben Hash → false.
+        assert!(!h.verify("falsch", SEED_PASSWORD_HASH).await.unwrap());
+        // Parameter/Variante des Default-Hashers sind unverändert
+        // (Argon2id, v=0x13, m=19456, t=2, p=1).
+        let fresh = h.hash(SEED_PASSWORD).await.unwrap();
+        assert!(fresh.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
     }
 
     #[test]

@@ -88,6 +88,24 @@ mod tests {
         assert_eq!(opened, secret);
     }
 
+    /// Known-Answer gegen die *alte* Generation: dieses Envelope wurde mit
+    /// chacha20poly1305 0.10 (XChaCha) + hkdf 0.12 + aes-gcm 0.10 erzeugt. Die
+    /// migrierten Libs (chacha 0.11 / hkdf 0.13) muessen es weiter entschluesseln,
+    /// sonst werden bestehende gespeicherte TOTP-Secrets unlesbar. Bricht der
+    /// Test, hat sich das At-Rest-Format geaendert -> Ursache suchen, nicht den
+    /// Erwartungswert anpassen (Sicherheits-Invariante LIN-83).
+    #[tokio::test]
+    async fn opens_pre_migration_totp_envelope() {
+        const SESSION: &str = "lin-83-kat-session-secret-0123456789";
+        const SECRET_ENC_HEX: &str = "da1ecb78ac5893418758832d19251d59f86774137016d3eb4e080c544ad5b51ddc261faedd21c94fbce84453d03380aac1f26362ba30b02fcec025a7";
+        const DEK_WRAPPED_HEX: &str = "55317150078d6c090673a1bb14dd2eb8d959b7aea1b7b1eaa6dd34eb2c517948e25682bd1c1095169795eb99778e1ba15bdad10804db0739a0e72abb";
+        let p = AppKeyProvider::from_session_secret(SESSION).unwrap();
+        let secret_enc = hex::decode(SECRET_ENC_HEX).unwrap();
+        let dek_wrapped = hex::decode(DEK_WRAPPED_HEX).unwrap();
+        let opened = open(&p, &secret_enc, &dek_wrapped).await.unwrap();
+        assert_eq!(opened, b"12345678901234567890");
+    }
+
     #[tokio::test]
     async fn different_session_secret_cannot_open() {
         let a =

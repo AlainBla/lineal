@@ -602,7 +602,7 @@ fn redacted_key(key: &str) -> String {
 }
 
 fn account_hash(account: &str) -> String {
-    format!("{:x}", Sha256::digest(account.trim().to_lowercase()))
+    hex::encode(Sha256::digest(account.trim().to_lowercase()))
 }
 
 fn pair_key(account: &str, ip: &str) -> String {

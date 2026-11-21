@@ -35,7 +35,7 @@ pub const MAX_ACTIVE_API_KEYS: usize = 25;
 
 /// SHA-256 (hex, Kleinbuchstaben) über das komplette Token.
 pub fn hash_token(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
+    hex::encode(Sha256::digest(token.as_bytes()))
 }
 
 /// 3 × UUIDv4 als Hex (366 Bit Zufall aus dem OS-RNG; nicht `IdGen`, das zeitbasiert ist).

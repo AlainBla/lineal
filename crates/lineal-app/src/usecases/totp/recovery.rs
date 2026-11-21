@@ -6,7 +6,7 @@
 //! Vergleich konstantzeitig. Eingaben werden vor Hash/Vergleich normalisiert
 //! (Großschreibung, Bindestriche/Leerzeichen entfernt).
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
