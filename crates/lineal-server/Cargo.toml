@@ -30,7 +30,7 @@ lineal-sync.workspace = true
 lineal-jobs.workspace = true
 lineal-testkit = { workspace = true, optional = true }
 anyhow.workspace = true
-argon2 = "0.5"
+argon2 = "0.6"
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
