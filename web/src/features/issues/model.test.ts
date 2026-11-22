@@ -14,6 +14,8 @@ import {
   splitBoardColumns,
   type BoardColumn,
   relationInput,
+  relationDeleteInput,
+  removeFromRelations,
   slugify,
   stateTypeInView,
   subIssueProgress,
@@ -144,6 +146,60 @@ describe("Labels, Relationen, Verschieben, Hilfen", () => {
       type: "blocks",
     });
     expect(relationInput("duplicate", "me", "o").type).toBe("duplicate");
+  });
+
+  it("relationDeleteInput spiegelt die Richtung je Relationsgruppe (LIN-80)", () => {
+    // „blocked by"/„Duplicates" drehen die Richtung, sodass `issueId` die gerichtete Relation trägt.
+    expect(relationDeleteInput("blocked-by", "me", "o")).toEqual({
+      issueId: "o",
+      relatedIssueId: "me",
+      type: "blocks",
+    });
+    expect(relationDeleteInput("blocking", "me", "o")).toEqual({
+      issueId: "me",
+      relatedIssueId: "o",
+      type: "blocks",
+    });
+    expect(relationDeleteInput("related", "me", "o")).toEqual({
+      issueId: "me",
+      relatedIssueId: "o",
+      type: "related",
+    });
+    expect(relationDeleteInput("duplicate-of", "me", "o")).toEqual({
+      issueId: "me",
+      relatedIssueId: "o",
+      type: "duplicate",
+    });
+    expect(relationDeleteInput("duplicates", "me", "o")).toEqual({
+      issueId: "o",
+      relatedIssueId: "me",
+      type: "duplicate",
+    });
+  });
+
+  it("removeFromRelations entfernt optimistisch das richtige Gegenstück", () => {
+    const rel = (id: string) => ({
+      id,
+      identifier: id.toUpperCase(),
+      title: id,
+      stateType: "backlog",
+      stateName: "Backlog",
+      stateColor: "#000000",
+    });
+    const base = {
+      blocks: [rel("x"), rel("y")],
+      blockedBy: [rel("z")],
+      relatedTo: [rel("r")],
+      duplicateOf: rel("d"),
+      duplicates: [rel("q")],
+    };
+    expect(removeFromRelations(base, "blocking", "x").blocks.map((i) => i.id)).toEqual(["y"]);
+    expect(removeFromRelations(base, "blocked-by", "z").blockedBy).toEqual([]);
+    expect(removeFromRelations(base, "related", "r").relatedTo).toEqual([]);
+    expect(removeFromRelations(base, "duplicate-of", "d").duplicateOf).toBeNull();
+    expect(removeFromRelations(base, "duplicates", "q").duplicates).toEqual([]);
+    // Unbeteiligte Gruppen bleiben unangetastet.
+    expect(removeFromRelations(base, "blocking", "x").blockedBy).toEqual(base.blockedBy);
   });
 
   it("previewMove nennt nur echte Verluste", () => {
