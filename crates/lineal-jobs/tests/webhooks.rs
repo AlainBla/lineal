@@ -13,7 +13,8 @@ use lineal_app::{App, RequestCtx};
 use lineal_db::PgStore;
 use lineal_jobs::EventConsumer;
 use lineal_jobs::consumers::webhooks::{
-    TransportResult, WebhookRequest, WebhookTransport, WebhooksConsumer, deliver_due,
+    ReqwestTransport, TransportResult, WebhookRequest, WebhookTransport, WebhooksConsumer,
+    deliver_due,
 };
 use lineal_testkit::{SeedData, SeedUser, ctx_for, seed, test_app};
 use serde_json::Value;
@@ -63,7 +64,7 @@ impl WebhookTransport for Recorder {
         self.0.lock().unwrap().push(req);
         TransportResult {
             status: Some(200),
-            error: None,
+            ..Default::default()
         }
     }
 }
@@ -453,4 +454,101 @@ async fn status_only_hook_skips_non_status_updates(pool: PgPool) {
     // ausgefilterte Update real existierte und sonst zugestellt worden wäre.
     let all_updates = all.iter().filter(|v| v["action"] == "update").count();
     assert_eq!(all_updates, 2, "{all:?}");
+}
+
+/// Wie `receiver`, antwortet aber mit frei wählbarem Status plus `Retry-After`-Header und zählt die
+/// eingegangenen Requests (für die 429-Burst-Prüfung über den echten `ReqwestTransport`).
+async fn receiver_retry_after(status: u16, retry_after: &'static str) -> (u16, Arc<Mutex<usize>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(Mutex::new(0usize));
+    let hits2 = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let hits = hits2.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                        let len = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if buf.len() >= pos + 4 + len {
+                            *hits.lock().unwrap() += 1;
+                            break;
+                        }
+                    }
+                }
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nRetry-After: {retry_after}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+    (port, hits)
+}
+
+/// LIN-89 (echter Transport): Ein 429 mit `Retry-After` wird vom `ReqwestTransport` bis zur
+/// Aufzeichnung durchgereicht und pausiert die ganze Subscription. Von mehreren gleichzeitig
+/// fälligen Zustellungen desselben Hooks geht in der Pause nur die erste raus (Burst-Schutz), keine
+/// erhöht den Strike-Zähler.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn http_429_from_real_transport_pauses_and_suppresses_siblings(pool: PgPool) {
+    let (app, _) = setup(pool.clone(), "http://localhost:8080").await;
+    let (port, hits) = receiver_retry_after(429, "120").await;
+    app.create_webhook(
+        &alice(),
+        CreateWebhookInput {
+            url: format!("http://127.0.0.1:{port}/hook"),
+            all_public_teams: true,
+            resource_types: vec!["Issue".into()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..3 {
+        app.create_issue(&alice(), issue()).await.unwrap();
+    }
+    plan(&app).await;
+
+    let t0 = app.clock.now();
+    deliver_due(&app, &ReqwestTransport, t0, 50).await.unwrap();
+
+    // Burst-Schutz: trotz 3 fälliger Zustellungen genau ein Request raus.
+    assert_eq!(*hits.lock().unwrap(), 1, "nur die erste Zustellung sendet");
+
+    // Header durchgereicht: Subscription ~120 s pausiert, kein Strike, alle Zustellungen pending.
+    let (paused_until, failures): (Option<chrono::DateTime<chrono::Utc>>, i32) =
+        sqlx::query_as("SELECT paused_until, failure_count FROM webhook")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (paused_until.expect("paused_until") - t0).num_seconds(),
+        120
+    );
+    assert_eq!(failures, 0, "429 ist kein Strike");
+    let statuses: Vec<String> = sqlx::query_scalar("SELECT status FROM webhook_delivery")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(statuses.len(), 3);
+    assert!(statuses.iter().all(|s| s == "pending"), "{statuses:?}");
 }

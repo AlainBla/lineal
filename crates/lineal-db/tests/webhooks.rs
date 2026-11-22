@@ -601,7 +601,7 @@ async fn retries_follow_the_plan_and_the_webhook_is_disabled_after_failures(pool
     );
     for d in &due {
         fx.app
-            .record_webhook_attempt(d, false, Some(500), 12, Some("HTTP 500".into()))
+            .record_webhook_attempt(d, false, Some(500), 12, Some("HTTP 500".into()), None)
             .await
             .unwrap();
     }
@@ -629,7 +629,7 @@ async fn retries_follow_the_plan_and_the_webhook_is_disabled_after_failures(pool
         for d in &due {
             last_disabled = fx
                 .app
-                .record_webhook_attempt(d, false, None, 5, Some("timeout".into()))
+                .record_webhook_attempt(d, false, None, 5, Some("timeout".into()), None)
                 .await
                 .unwrap();
         }
@@ -674,6 +674,132 @@ async fn retries_follow_the_plan_and_the_webhook_is_disabled_after_failures(pool
     assert!(w.enabled && w.consecutive_failures == 0 && w.disabled_reason.is_none());
 }
 
+/// LIN-89: HTTP 429 pausiert die ganze Subscription bis `Retry-After`, zählt NICHT als Strike, und
+/// lässt die Zustellung `pending`. Während der Pause liefert der Scheduler keine Zustellung dieser
+/// Subscription (wohl aber anderer); nach Ablauf laufen sie weiter. Andere Nicht-2xx bleiben beim
+/// festen Plan (Verzweigung am Status 429, nicht am Header).
+#[sqlx::test(migrations = "./migrations")]
+async fn http_429_pauses_the_subscription_without_a_strike(pool: PgPool) {
+    let fx = setup(pool).await;
+    let hook_a = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    let hook_b = fx
+        .app
+        .create_webhook(&alice(), ws_hook(&["Issue"]))
+        .await
+        .unwrap()
+        .webhook;
+    for i in 0..2 {
+        fx.app
+            .create_issue(&alice(), issue("ENG", &format!("Issue {i}")))
+            .await
+            .unwrap();
+    }
+    plan_all(&fx).await;
+    assert_eq!(deliveries(&fx, hook_a.id).await.len(), 2);
+    assert_eq!(deliveries(&fx, hook_b.id).await.len(), 2);
+
+    let t0 = fx.app.clock.now();
+    let due = fx.app.claim_due_webhook_deliveries(t0, 100).await.unwrap();
+    assert_eq!(due.len(), 4);
+
+    // Eine Zustellung von Hook A antwortet mit 429 + Retry-After 1 h (≤ 6 h, respektiert).
+    let da = due.iter().find(|d| d.webhook.id == hook_a.id).unwrap();
+    assert_eq!(da.attempt, 0);
+    let disabled = fx
+        .app
+        .record_webhook_attempt(
+            da,
+            false,
+            Some(429),
+            10,
+            Some("HTTP 429".into()),
+            Some("3600"),
+        )
+        .await
+        .unwrap();
+    assert!(!disabled, "429 deaktiviert nie");
+
+    // Hook A ist pausiert (~ now + 1 h), KEIN Strike; die Zustellung bleibt pending ohne attempt-Inkrement.
+    let (paused_until, failures): (Option<DateTime<Utc>>, i32) =
+        sqlx::query_as("SELECT paused_until, failure_count FROM webhook WHERE id = $1")
+            .bind(hook_a.id.0)
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    let paused_until = paused_until.expect("paused_until gesetzt");
+    assert_eq!((paused_until - t0).num_seconds(), 3600);
+    assert_eq!(failures, 0, "429 erhöht den Strike-Zähler nicht");
+    let (status, code, attempt, next): (String, Option<i32>, i32, Option<DateTime<Utc>>) =
+        sqlx::query_as(
+            "SELECT status, response_code, attempt, next_attempt_at FROM webhook_delivery WHERE id = $1",
+        )
+        .bind(da.id)
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(code, Some(429));
+    assert_eq!(attempt, 0, "429 zählt nicht als Versuch");
+    assert_eq!(next, Some(paused_until));
+
+    // Nach Lease-Ablauf (11 min): Hook A ruht, Hook B liefert normal weiter (per-Subscription).
+    fx.clock.advance(11 * 60);
+    let due = fx
+        .app
+        .claim_due_webhook_deliveries(fx.app.clock.now(), 100)
+        .await
+        .unwrap();
+    assert_eq!(due.len(), 2, "nur Hook B ist fällig");
+    assert!(
+        due.iter().all(|d| d.webhook.id == hook_b.id),
+        "keine Zustellung der pausierten Subscription A"
+    );
+    // Ein 503 (mit Retry-After!) auf Hook B nimmt weiterhin den festen Plan (+60 s), kein Pause-Pfad.
+    let db = &due[0];
+    fx.app
+        .record_webhook_attempt(
+            db,
+            false,
+            Some(503),
+            7,
+            Some("HTTP 503".into()),
+            Some("3600"),
+        )
+        .await
+        .unwrap();
+    let (b_paused, b_next): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT w.paused_until, d.next_attempt_at FROM webhook w \
+         JOIN webhook_delivery d ON d.webhook_id = w.id WHERE d.id = $1",
+    )
+    .bind(db.id)
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert!(b_paused.is_none(), "503 pausiert nicht");
+    let delay = (b_next.unwrap() - fx.app.clock.now()).num_seconds();
+    assert!(
+        (54..=66).contains(&delay),
+        "503 folgt dem festen 1-min-Plan: {delay}"
+    );
+
+    // Nach Ablauf der Pause (> 1 h ab t0) läuft Hook A wieder.
+    fx.clock.advance(60 * 60);
+    let due = fx
+        .app
+        .claim_due_webhook_deliveries(fx.app.clock.now(), 100)
+        .await
+        .unwrap();
+    assert!(
+        due.iter().any(|d| d.webhook.id == hook_a.id),
+        "nach Pausenablauf wird Hook A wieder zugestellt"
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn a_successful_delivery_resets_the_failure_counter(pool: PgPool) {
     let fx = setup(pool).await;
@@ -699,7 +825,7 @@ async fn a_successful_delivery_resets_the_failure_counter(pool: PgPool) {
         .await
         .unwrap();
     fx.app
-        .record_webhook_attempt(&due[0], true, Some(200), 8, None)
+        .record_webhook_attempt(&due[0], true, Some(200), 8, None, None)
         .await
         .unwrap();
     let w = fx.app.get_webhook(&alice(), hook.id).await.unwrap();
