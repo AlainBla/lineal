@@ -325,13 +325,24 @@ pub const RETRY_AFTER_MAX_SECS: i64 = 6 * 3600;
 ///
 /// Beide HTTP-Formen werden erkannt: **delta-seconds** (`"120"`) und **HTTP-date**
 /// (`"Wed, 21 Oct 2026 07:28:00 GMT"`, gemessen gegen `now`). Fehlt der Header, ist er leer oder
-/// unparsbar, gilt der Default (60 s). Negative Werte / Zeitpunkte in der Vergangenheit ergeben 0;
-/// absurd große Werte (auch solche, die `i64` übersteigen) werden auf 6 h gedeckelt.
+/// unparsbar, gilt der Default (60 s). Eine explizite 0, negative Werte und Zeitpunkte in der
+/// Vergangenheit ergeben **die Default-Pause, nie 0** — ein 429 darf nicht in eine sofortige
+/// Neuzustellung münden (Hammer-Loop gegen ein dauerhaft 429 antwortendes Ziel); absurd große
+/// Werte (auch solche, die `i64` übersteigen) werden auf 6 h gedeckelt.
 pub fn parse_retry_after(header: Option<&str>, now: DateTime<Utc>) -> Duration {
     let default = Duration::seconds(RETRY_AFTER_DEFAULT_SECS);
     let max = Duration::seconds(RETRY_AFTER_MAX_SECS);
-    // Dauer aus einer Date-Differenz; auf [0, 6h] klemmen (Duration ist Ord).
-    let clamp = |d: Duration| d.clamp(Duration::zero(), max);
+    // Eine berechnete Pause in den sinnvollen Bereich bringen: alles ≤ 0 (explizite 0, negative
+    // Werte, Zeitpunkte in der Vergangenheit) wird auf die Default-Pause angehoben — ein 429 darf
+    // NIE zu einer sofortigen Neuzustellung führen (sonst Hammer-Loop gegen ein dauerhaft 429
+    // antwortendes Ziel). Positive Werte werden auf 6 h gedeckelt.
+    let settle = |d: Duration| {
+        if d <= Duration::zero() {
+            default
+        } else {
+            d.min(max)
+        }
+    };
     let Some(raw) = header.map(str::trim).filter(|s| !s.is_empty()) else {
         return default;
     };
@@ -340,18 +351,18 @@ pub fn parse_retry_after(header: Option<&str>, now: DateTime<Utc>) -> Duration {
     let digits = raw.strip_prefix('-').unwrap_or(raw);
     if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
         return match raw.parse::<i64>() {
-            Ok(secs) => Duration::seconds(secs.clamp(0, RETRY_AFTER_MAX_SECS)),
-            // i64-Überlauf: negativ → 0 (Vergangenheit), positiv → Deckel 6 h (absurd groß).
-            Err(_) if raw.starts_with('-') => Duration::zero(),
+            Ok(secs) => settle(Duration::seconds(secs.clamp(0, RETRY_AFTER_MAX_SECS))),
+            // i64-Überlauf: negativ → Vergangenheit → Default, positiv → Deckel 6 h (absurd groß).
+            Err(_) if raw.starts_with('-') => default,
             Err(_) => max,
         };
     }
     // HTTP-date: IMF-fixdate (RFC 7231) bzw. die RFC-2822-Form mit numerischer Zone.
     if let Ok(dt) = DateTime::parse_from_rfc2822(raw) {
-        return clamp(dt.with_timezone(&Utc) - now);
+        return settle(dt.with_timezone(&Utc) - now);
     }
     if let Ok(naive) = NaiveDateTime::parse_from_str(raw, "%a, %d %b %Y %H:%M:%S GMT") {
-        return clamp(naive.and_utc() - now);
+        return settle(naive.and_utc() - now);
     }
     default
 }
@@ -1457,11 +1468,12 @@ mod tests {
         // delta-seconds
         assert_eq!(p(Some("120")), Duration::seconds(120));
         assert_eq!(p(Some("  120  ")), Duration::seconds(120));
-        assert_eq!(p(Some("0")), Duration::zero());
+        // Explizite 0 → Default-Pause (nie 0, sonst sofortiger Retry / Hammer-Loop).
+        assert_eq!(p(Some("0")), default);
         // HTTP-date (IMF-fixdate, GMT): 2 h in der Zukunft.
         assert_eq!(p(Some("Thu, 01 Jan 2026 02:00:00 GMT")), Duration::hours(2));
-        // HTTP-date in der Vergangenheit → 0 (jetzt).
-        assert_eq!(p(Some("Wed, 31 Dec 2025 23:00:00 GMT")), Duration::zero());
+        // HTTP-date in der Vergangenheit → Default-Pause (nie 0).
+        assert_eq!(p(Some("Wed, 31 Dec 2025 23:00:00 GMT")), default);
         // fehlend / leer / Müll → Default 60 s.
         assert_eq!(p(None), default);
         assert_eq!(p(Some("")), default);
@@ -1473,9 +1485,9 @@ mod tests {
         assert_eq!(p(Some("999999999999999999999999999")), max);
         // HTTP-date weit in der Zukunft → Deckel 6 h.
         assert_eq!(p(Some("Mon, 01 Jan 2255 00:00:00 GMT")), max);
-        // negativ / i64-Unterlauf → 0.
-        assert_eq!(p(Some("-5")), Duration::zero());
-        assert_eq!(p(Some("-999999999999999999999999999")), Duration::zero());
+        // negativ / i64-Unterlauf → Vergangenheit → Default-Pause (nie 0).
+        assert_eq!(p(Some("-5")), default);
+        assert_eq!(p(Some("-999999999999999999999999999")), default);
         // Grenze: exakt 6 h bleibt 6 h, 6 h + 1 s wird gedeckelt.
         assert_eq!(p(Some("21600")), max);
         assert_eq!(p(Some("21601")), max);
