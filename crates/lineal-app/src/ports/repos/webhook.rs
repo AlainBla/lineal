@@ -41,6 +41,9 @@ pub struct WebhookRecord {
     pub consecutive_failures: i32,
     pub disabled_reason: Option<String>,
     pub last_success_at: Option<DateTime<Utc>>,
+    /// LIN-89: Bis zu diesem Zeitpunkt ist die Subscription nach einem HTTP 429 pausiert; `None`
+    /// bzw. Vergangenheit = nicht pausiert. Der Scheduler überspringt pausierte Zustellungen.
+    pub paused_until: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -124,6 +127,10 @@ pub struct DeliveryOutcome {
     pub error: Option<String>,
     /// Zeitpunkt des nächsten Versuchs; `None` nach Erfolg oder nach dem letzten Retry.
     pub next_attempt_at: Option<DateTime<Utc>>,
+    /// LIN-89: Bei HTTP 429 der Pausenzeitpunkt der Subscription (`now + Retry-After`, ≤6h). `Some`
+    /// schaltet den Backpressure-Pfad: die Zustellung bleibt `pending`, es gibt **keinen** Strike und
+    /// **kein** `attempt`-Inkrement, und `webhook.paused_until` wird gesetzt. `None` = normaler Pfad.
+    pub paused_until: Option<DateTime<Utc>>,
 }
 
 /// Protokolleintrag einer Zustellung (Admin-Sicht, ohne Payload).
@@ -339,6 +346,24 @@ pub trait WebhookRepo: Send {
         _outcome: &DeliveryOutcome,
         _now: DateTime<Utc>,
     ) -> AppResult<bool> {
+        unimplemented_repo()
+    }
+    /// LIN-89: Aktueller `paused_until`-Wert des Webhooks (roh; die Fälligkeitsprüfung gegen die Zeit
+    /// macht der Aufrufer). `None`, wenn der Webhook fehlt oder nicht pausiert ist.
+    async fn webhook_paused_until(
+        &mut self,
+        _webhook: WebhookId,
+    ) -> AppResult<Option<DateTime<Utc>>> {
+        unimplemented_repo()
+    }
+    /// LIN-89: Stellt eine noch `pending`e Zustellung bis `next_attempt_at` zurück, ohne einen Versuch
+    /// zu zählen, zu senden oder den Fehlerzähler zu berühren (Subscription aktuell pausiert).
+    async fn defer_delivery(
+        &mut self,
+        _delivery: Uuid,
+        _next_attempt_at: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
         unimplemented_repo()
     }
     /// Die letzten Zustellungen eines Webhooks (neueste zuerst).

@@ -33,13 +33,15 @@ struct WebhookRow {
     failure_count: i32,
     disabled_reason: Option<String>,
     last_success_at: Option<DateTime<Utc>>,
+    paused_until: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
 pub(crate) const WEBHOOK_COLS: &str = "id, organization_id, label, url, secret, previous_secret, \
     secret_rotated_at, enabled, team_id, all_public_teams, resource_types, issue_status_changes_only, \
-    creator_id, oauth_application_id, failure_count, disabled_reason, last_success_at, created_at, updated_at";
+    creator_id, oauth_application_id, failure_count, disabled_reason, last_success_at, paused_until, \
+    created_at, updated_at";
 
 impl From<WebhookRow> for WebhookRecord {
     fn from(r: WebhookRow) -> Self {
@@ -61,6 +63,7 @@ impl From<WebhookRow> for WebhookRecord {
             consecutive_failures: r.failure_count,
             disabled_reason: r.disabled_reason,
             last_success_at: r.last_success_at,
+            paused_until: r.paused_until,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -817,10 +820,16 @@ impl WebhookRepo for PgTx {
         .execute(&mut *self.tx)
         .await
         .map_err(db_err)?;
+        // LIN-89: Zustellungen pausierter Subscriptions (429 → `webhook.paused_until > now`) bleiben
+        // liegen; die ganze Subscription ruht bis zum Pausenende. Die NOT-EXISTS-Unterabfrage sperrt
+        // die webhook-Zeile nicht, `FOR UPDATE SKIP LOCKED` gilt nur für webhook_delivery.
         let rows: Vec<(Uuid, Uuid, Uuid, Uuid, String, String, i32, Value)> = sqlx::query_as(
             "WITH due AS ( \
-               SELECT id FROM webhook_delivery WHERE status = 'pending' AND next_attempt_at <= $1 \
-               ORDER BY next_attempt_at LIMIT $2 FOR UPDATE SKIP LOCKED) \
+               SELECT id FROM webhook_delivery d WHERE status = 'pending' AND next_attempt_at <= $1 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM webhook w WHERE w.organization_id = d.organization_id \
+                 AND w.id = d.webhook_id AND w.paused_until > $1) \
+               ORDER BY next_attempt_at, id LIMIT $2 FOR UPDATE SKIP LOCKED) \
              UPDATE webhook_delivery d SET next_attempt_at = $3, updated_at = $1 \
              FROM due WHERE d.id = due.id \
              RETURNING d.id, d.organization_id, d.webhook_id, d.event_id, d.resource_type, d.action, d.attempt, d.payload",
@@ -864,6 +873,36 @@ impl WebhookRepo for PgTx {
         now: DateTime<Utc>,
     ) -> AppResult<bool> {
         let org = self.org.0;
+        // LIN-89: HTTP-429-Backpressure. Die Zustellung bleibt `pending` und wird auf das Pausenende
+        // gelegt – OHNE `attempt`-Inkrement und OHNE den Strike-/`failure_count`-Pfad zu berühren –,
+        // und die ganze Subscription wird über `webhook.paused_until` pausiert.
+        if let Some(pause) = o.paused_until {
+            sqlx::query(
+                "UPDATE webhook_delivery SET status = 'pending', response_code = $3, duration_ms = $4, \
+                 error = $5, next_attempt_at = $6, updated_at = $7 WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(org)
+            .bind(delivery)
+            .bind(o.response_code)
+            .bind(o.duration_ms)
+            .bind(o.error.as_deref().map(|e| e.chars().take(500).collect::<String>()))
+            .bind(pause)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            sqlx::query(
+                "UPDATE webhook SET paused_until = $3, updated_at = $4 WHERE organization_id = $1 AND id = $2",
+            )
+            .bind(org)
+            .bind(webhook.0)
+            .bind(pause)
+            .bind(now)
+            .execute(&mut *self.tx)
+            .await
+            .map_err(db_err)?;
+            return Ok(false);
+        }
         let status = if o.success {
             "succeeded"
         } else if o.next_attempt_at.is_some() {
@@ -918,6 +957,41 @@ impl WebhookRepo for PgTx {
         .await
         .map_err(db_err)?;
         Ok(disabled.unwrap_or(false))
+    }
+
+    async fn webhook_paused_until(
+        &mut self,
+        webhook: WebhookId,
+    ) -> AppResult<Option<DateTime<Utc>>> {
+        let paused: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
+            "SELECT paused_until FROM webhook WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(self.org.0)
+        .bind(webhook.0)
+        .fetch_optional(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(paused.flatten())
+    }
+
+    async fn defer_delivery(
+        &mut self,
+        delivery: Uuid,
+        next_attempt_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE webhook_delivery SET next_attempt_at = $3, updated_at = $4 \
+             WHERE organization_id = $1 AND id = $2 AND status = 'pending'",
+        )
+        .bind(self.org.0)
+        .bind(delivery)
+        .bind(next_attempt_at)
+        .bind(now)
+        .execute(&mut *self.tx)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn list_deliveries(

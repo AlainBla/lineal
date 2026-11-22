@@ -40,10 +40,13 @@ pub struct WebhookRequest {
 }
 
 /// Ergebnis eines Versuchs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TransportResult {
     pub status: Option<u16>,
     pub error: Option<String>,
+    /// LIN-89: roher `Retry-After`-Header der Antwort (nur bei HTTP 429 relevant); `None`, wenn er
+    /// fehlt oder kein gültiges UTF-8 ist.
+    pub retry_after: Option<String>,
 }
 
 /// HTTP-Transport (austauschbar für Tests).
@@ -61,6 +64,7 @@ impl WebhookTransport for ReqwestTransport {
         let fail = |e: String| TransportResult {
             status: None,
             error: Some(e),
+            retry_after: None,
         };
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -95,6 +99,12 @@ impl WebhookTransport for ReqwestTransport {
             }
         };
         let status = response.status().as_u16();
+        // LIN-89: `Retry-After` vor dem Verwerfen des Body sichern (nur bei 429 ausgewertet).
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         // Antwort begrenzt lesen (Verbindung sauber beenden), Inhalt wird verworfen.
         let mut read = 0usize;
         while read < MAX_RESPONSE_BYTES {
@@ -106,6 +116,7 @@ impl WebhookTransport for ReqwestTransport {
         TransportResult {
             status: Some(status),
             error: None,
+            retry_after,
         }
     }
 }
@@ -134,23 +145,34 @@ async fn deliver_one(
     policy: UrlPolicy,
     d: &DueDelivery,
 ) -> AppResult<()> {
+    // LIN-89: Ist die Subscription (per 429 eines Geschwisters/eines nebenläufigen Laufs) pausiert,
+    // wird NICHT gesendet; die Zustellung wartet bis zum Pausenende. Kein Versuch, kein Strike.
+    if app.defer_if_webhook_paused(d).await? {
+        return Ok(());
+    }
     let started = Instant::now();
     let sent_at = app.clock.now();
     let outcome = attempt(app, transport, policy, d, sent_at).await;
     let ms = i32::try_from(started.elapsed().as_millis()).unwrap_or(i32::MAX);
-    let (success, code, error) = match outcome {
+    let (success, code, error, retry_after) = match outcome {
         Ok(TransportResult {
             status: Some(s),
             error: None,
+            retry_after,
         }) => {
             let ok = (200..300).contains(&s);
-            (ok, Some(i32::from(s)), (!ok).then(|| format!("HTTP {s}")))
+            (
+                ok,
+                Some(i32::from(s)),
+                (!ok).then(|| format!("HTTP {s}")),
+                retry_after,
+            )
         }
-        Ok(TransportResult { error, .. }) => (false, None, error),
-        Err(msg) => (false, None, Some(msg)),
+        Ok(TransportResult { error, .. }) => (false, None, error, None),
+        Err(msg) => (false, None, Some(msg), None),
     };
     let disabled = app
-        .record_webhook_attempt(d, success, code, ms, error)
+        .record_webhook_attempt(d, success, code, ms, error, retry_after.as_deref())
         .await?;
     if disabled {
         tracing::warn!(webhook = %d.webhook.id, "webhook disabled after repeated delivery failures");

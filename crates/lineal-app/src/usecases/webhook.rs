@@ -22,7 +22,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use hmac::{Hmac, Mac};
 use lineal_domain::enums::TeamVisibility;
 use lineal_domain::events::{DomainEvent, EventOrigin};
@@ -310,6 +310,61 @@ pub const RETRY_DELAYS_SECS: [i64; 3] = [60, 3600, 6 * 3600];
 pub fn retry_delay(attempts_done: i32) -> Option<Duration> {
     let idx = usize::try_from(attempts_done.checked_sub(1)?).ok()?;
     RETRY_DELAYS_SECS.get(idx).map(|s| Duration::seconds(*s))
+}
+
+// ---------------------------------------------------------------------------
+// LIN-89: Retry-After bei HTTP 429
+// ---------------------------------------------------------------------------
+
+/// Default-Pause, wenn ein 429 keinen (gültigen) `Retry-After`-Header trägt.
+pub const RETRY_AFTER_DEFAULT_SECS: i64 = 60;
+/// Harte Obergrenze: ein `Retry-After` wird nie länger als 6 h respektiert.
+pub const RETRY_AFTER_MAX_SECS: i64 = 6 * 3600;
+
+/// Parst den `Retry-After`-Header eines HTTP 429 in eine Pausendauer, geklemmt auf `[0s, 6h]`.
+///
+/// Beide HTTP-Formen werden erkannt: **delta-seconds** (`"120"`) und **HTTP-date**
+/// (`"Wed, 21 Oct 2026 07:28:00 GMT"`, gemessen gegen `now`). Fehlt der Header, ist er leer oder
+/// unparsbar, gilt der Default (60 s). Eine explizite 0, negative Werte und Zeitpunkte in der
+/// Vergangenheit ergeben **die Default-Pause, nie 0** — ein 429 darf nicht in eine sofortige
+/// Neuzustellung münden (Hammer-Loop gegen ein dauerhaft 429 antwortendes Ziel); absurd große
+/// Werte (auch solche, die `i64` übersteigen) werden auf 6 h gedeckelt.
+pub fn parse_retry_after(header: Option<&str>, now: DateTime<Utc>) -> Duration {
+    let default = Duration::seconds(RETRY_AFTER_DEFAULT_SECS);
+    let max = Duration::seconds(RETRY_AFTER_MAX_SECS);
+    // Eine berechnete Pause in den sinnvollen Bereich bringen: alles ≤ 0 (explizite 0, negative
+    // Werte, Zeitpunkte in der Vergangenheit) wird auf die Default-Pause angehoben — ein 429 darf
+    // NIE zu einer sofortigen Neuzustellung führen (sonst Hammer-Loop gegen ein dauerhaft 429
+    // antwortendes Ziel). Positive Werte werden auf 6 h gedeckelt.
+    let settle = |d: Duration| {
+        if d <= Duration::zero() {
+            default
+        } else {
+            d.min(max)
+        }
+    };
+    let Some(raw) = header.map(str::trim).filter(|s| !s.is_empty()) else {
+        return default;
+    };
+    // delta-seconds: optionales '-' plus reine Ziffern. Vor dem Bau der Duration klemmen, da
+    // `Duration::seconds` bei i64-nahen Werten paniken würde.
+    let digits = raw.strip_prefix('-').unwrap_or(raw);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        return match raw.parse::<i64>() {
+            Ok(secs) => settle(Duration::seconds(secs.clamp(0, RETRY_AFTER_MAX_SECS))),
+            // i64-Überlauf: negativ → Vergangenheit → Default, positiv → Deckel 6 h (absurd groß).
+            Err(_) if raw.starts_with('-') => default,
+            Err(_) => max,
+        };
+    }
+    // HTTP-date: IMF-fixdate (RFC 7231) bzw. die RFC-2822-Form mit numerischer Zone.
+    if let Ok(dt) = DateTime::parse_from_rfc2822(raw) {
+        return settle(dt.with_timezone(&Utc) - now);
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(raw, "%a, %d %b %Y %H:%M:%S GMT") {
+        return settle(naive.and_utc() - now);
+    }
+    default
 }
 
 /// Zeitpunkt des nächsten Versuchs mit ±10 % Jitter (`jitter_seed` bestimmt den Jitter).
@@ -1183,8 +1238,32 @@ impl App {
         Ok((current, previous))
     }
 
+    /// LIN-89: Stellt die Zustellung zurück (ohne Versand/Versuch/Strike), wenn ihre Subscription
+    /// aktuell pausiert ist (ein voriger 429 setzte `webhook.paused_until > now`). Fängt sowohl
+    /// Geschwister im selben Batch als auch nebenläufige Läufe ab, deren `DueDelivery` die Pause
+    /// noch nicht kennt. Liefert `true`, wenn zurückgestellt wurde (dann nicht senden).
+    pub async fn defer_if_webhook_paused(&self, due: &DueDelivery) -> AppResult<bool> {
+        let now = self.clock.now();
+        let mut tx = self.store.begin(due.org_id).await?;
+        let paused = tx.webhooks().webhook_paused_until(due.webhook.id).await?;
+        let deferred = match paused {
+            Some(until) if until > now => {
+                tx.webhooks().defer_delivery(due.id, until, now).await?;
+                true
+            }
+            _ => false,
+        };
+        tx.commit().await?;
+        Ok(deferred)
+    }
+
     /// Protokolliert einen Versuch und plant ggf. den nächsten (Retry-Plan 1 min / 1 h / 6 h).
     /// Liefert `true`, wenn der Webhook dabei wegen Fehlschlägen deaktiviert wurde.
+    ///
+    /// LIN-89: Ein HTTP 429 ist Backpressure, kein Zustellfehler. Er zählt NICHT als Fehlversuch
+    /// Richtung Auto-Disable (kein Strike), die Zustellung bleibt `pending`, und die ganze
+    /// Subscription wird bis `now + Retry-After` (≤6h) pausiert. `retry_after` ist der rohe
+    /// Header-Wert (nur bei 429 ausgewertet).
     pub async fn record_webhook_attempt(
         &self,
         due: &DueDelivery,
@@ -1192,8 +1271,26 @@ impl App {
         response_code: Option<i32>,
         duration_ms: i32,
         error: Option<String>,
+        retry_after: Option<&str>,
     ) -> AppResult<bool> {
         let now = self.clock.now();
+        if !success && response_code == Some(429) {
+            let pause_until = now + parse_retry_after(retry_after, now);
+            let outcome = DeliveryOutcome {
+                success: false,
+                response_code,
+                duration_ms,
+                error,
+                next_attempt_at: Some(pause_until),
+                paused_until: Some(pause_until),
+            };
+            let mut tx = self.store.begin(due.org_id).await?;
+            tx.webhooks()
+                .record_delivery_attempt(due.id, due.webhook.id, &outcome, now)
+                .await?;
+            tx.commit().await?;
+            return Ok(false);
+        }
         let seed = u64::from_le_bytes(
             due.id.as_bytes()[8..16]
                 .try_into()
@@ -1210,6 +1307,7 @@ impl App {
             duration_ms,
             error,
             next_attempt_at: next,
+            paused_until: None,
         };
         let mut tx = self.store.begin(due.org_id).await?;
         let disabled = tx
@@ -1360,6 +1458,42 @@ mod tests {
     }
 
     #[test]
+    fn retry_after_parses_both_forms_and_is_clamped_to_six_hours() {
+        // Fester Bezugszeitpunkt (die Beispieldaten liegen bewusst in der Zukunft/Vergangenheit).
+        let now: DateTime<Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
+        let p = |h: Option<&str>| parse_retry_after(h, now);
+        let max = Duration::seconds(RETRY_AFTER_MAX_SECS);
+        let default = Duration::seconds(RETRY_AFTER_DEFAULT_SECS);
+
+        // delta-seconds
+        assert_eq!(p(Some("120")), Duration::seconds(120));
+        assert_eq!(p(Some("  120  ")), Duration::seconds(120));
+        // Explizite 0 → Default-Pause (nie 0, sonst sofortiger Retry / Hammer-Loop).
+        assert_eq!(p(Some("0")), default);
+        // HTTP-date (IMF-fixdate, GMT): 2 h in der Zukunft.
+        assert_eq!(p(Some("Thu, 01 Jan 2026 02:00:00 GMT")), Duration::hours(2));
+        // HTTP-date in der Vergangenheit → Default-Pause (nie 0).
+        assert_eq!(p(Some("Wed, 31 Dec 2025 23:00:00 GMT")), default);
+        // fehlend / leer / Müll → Default 60 s.
+        assert_eq!(p(None), default);
+        assert_eq!(p(Some("")), default);
+        assert_eq!(p(Some("   ")), default);
+        assert_eq!(p(Some("soon")), default);
+        assert_eq!(p(Some("12.5")), default);
+        // absurd groß (delta-seconds und i64-Überlauf) → Deckel 6 h.
+        assert_eq!(p(Some("99999999")), max);
+        assert_eq!(p(Some("999999999999999999999999999")), max);
+        // HTTP-date weit in der Zukunft → Deckel 6 h.
+        assert_eq!(p(Some("Mon, 01 Jan 2255 00:00:00 GMT")), max);
+        // negativ / i64-Unterlauf → Vergangenheit → Default-Pause (nie 0).
+        assert_eq!(p(Some("-5")), default);
+        assert_eq!(p(Some("-999999999999999999999999999")), default);
+        // Grenze: exakt 6 h bleibt 6 h, 6 h + 1 s wird gedeckelt.
+        assert_eq!(p(Some("21600")), max);
+        assert_eq!(p(Some("21601")), max);
+    }
+
+    #[test]
     fn ssrf_rejects_private_targets() {
         let s = UrlPolicy::STRICT;
         for bad in [
@@ -1451,6 +1585,7 @@ mod tests {
             consecutive_failures: 0,
             disabled_reason: None,
             last_success_at: None,
+            paused_until: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
