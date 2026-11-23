@@ -1,5 +1,5 @@
 import { ChevronRight, ListFilter, Plus, Search, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -36,7 +36,7 @@ export interface Option {
   label: string;
 }
 
-/** Kategorien des Filtermenüs in der Reihenfolge von Linear (docs/05 §1.5); „Dates“ klappt auf. */
+/** Kategorien des Filtermenüs in der Reihenfolge von Linear (docs/05 §1.5); „Dates“ öffnet ein Flyout. */
 const MENU_GROUPS: Array<Array<FilterField | "dates">> = [
   [
     "team",
@@ -461,8 +461,70 @@ function AdvancedFilterDialog({
 }
 
 /**
+ * Eine Menüzeile mit Flyout-Verhalten (Hover/Fokus/Klick/Pfeiltasten). Genutzt für die Kategorien,
+ * die „Dates“-Zeile und die Datumsfelder in der „Dates“-Spalte – alle öffnen nach demselben Muster
+ * (LIN-44/LIN-81). `ref` erlaubt das gezielte Fokussieren (React 19 ref-as-prop).
+ */
+function FlyoutRow({
+  ref,
+  label,
+  item,
+  expanded,
+  isActive,
+  isDateRow = false,
+  /** „Dates“ öffnet nicht per bloßem Fokus, sonst würde das Zurückfokussieren beim Schließen
+   *  (Pfeil-links) die Ebene sofort wieder öffnen. */
+  noFocusOpen = false,
+  onHover,
+  onOpen,
+  onPreview,
+  onArrowLeftClose,
+}: {
+  ref?: Ref<HTMLButtonElement>;
+  label: string;
+  item: string;
+  /** Flyout dieser Zeile ist offen (steuert Chevron-Hervorhebung + aria-expanded). */
+  expanded: boolean;
+  /** Diese Zeile ist das gerade aktive Feld (für Pfeil-links an einer Kategoriezeile). */
+  isActive: boolean;
+  isDateRow?: boolean;
+  noFocusOpen?: boolean;
+  onHover: () => void;
+  onOpen: () => void;
+  onPreview: () => void;
+  onArrowLeftClose: () => void;
+}) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      role="menuitem"
+      aria-haspopup="menu"
+      aria-expanded={expanded}
+      className={cn(item, expanded && "bg-surface-hover")}
+      onMouseEnter={onHover}
+      onFocus={isDateRow || noFocusOpen ? undefined : onPreview}
+      onClick={onOpen}
+      onKeyDown={(ev) => {
+        if (ev.key === "ArrowRight" || ev.key === "Enter") {
+          ev.preventDefault();
+          onOpen();
+        } else if (ev.key === "ArrowLeft" && (isDateRow || isActive)) {
+          ev.preventDefault();
+          onArrowLeftClose();
+        }
+      }}
+    >
+      {label}
+      <ChevronRight className="ml-auto size-3.5" />
+    </button>
+  );
+}
+
+/**
  * Filtermenü („Add filter…“, Taste F): Suchfeld, „Advanced filter“ und die Kategorien aus docs/05 §1.5.
- * Eine Kategorie öffnet den Wertedialog (Operator + Werte); „Dates“ klappt die Datumsfelder auf.
+ * Eine Kategorie öffnet den Werte-Flyout (Operator + Werte); „Dates“ öffnet ein Flyout mit den
+ * Datumsfeldern, die ihrerseits den Werte-Flyout öffnen (LIN-81).
  */
 export function FilterMenu({
   chips,
@@ -488,26 +550,28 @@ export function FilterMenu({
     setInDialog(!!triggerRef.current?.closest('[role="dialog"]'));
   }, []);
   const [query, setQuery] = useState("");
-  const [dates, setDates] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // LIN-44: Das Werte-Submenü je Kategorie öffnet als Flyout bei Hover, Fokus oder Klick (kein Modal).
-  const [activeField, setActiveField] = useState<FilterField | null>(null);
+  // LIN-44/LIN-81: Das Werte-Submenü je Kategorie öffnet als Flyout bei Hover, Fokus oder Klick (kein
+  // Modal); „Dates“ (als `"dates"`) nutzt denselben Mechanismus und öffnet ein Flyout mit den Datumsfeldern.
+  const [activeField, setActiveField] = useState<FilterField | "dates" | null>(null);
   // Fokus nur ins Flyout, wenn per Klick/Tastatur geöffnet (bei Hover würde der Fokus wegspringen).
   const [flyoutFocus, setFlyoutFocus] = useState(false);
+  const datesRowRef = useRef<HTMLButtonElement>(null);
+  const firstDateRowRef = useRef<HTMLButtonElement>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const clearTimers = () => {
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
   };
-  const hoverOpen = (f: FilterField) => {
+  const hoverOpen = (f: FilterField | "dates") => {
     clearTimers();
     openTimer.current = setTimeout(() => {
       setActiveField(f);
       setFlyoutFocus(false);
     }, 100);
   };
-  const openNow = (f: FilterField, focus: boolean) => {
+  const openNow = (f: FilterField | "dates", focus: boolean) => {
     clearTimers();
     setActiveField(f);
     setFlyoutFocus(focus);
@@ -520,19 +584,34 @@ export function FilterMenu({
     clearTimers();
     setActiveField(null);
   };
+  // Pfeil-links in der „Dates“-Spalte: Ebene schließen und Fokus zurück auf die „Dates“-Zeile.
+  const closeToDatesRow = () => {
+    closeFlyout();
+    datesRowRef.current?.focus();
+  };
   const active = chips.length + advanced.length;
   const q = query.trim().toLowerCase();
   const matches = (f: FilterField) => !q || FIELD_LABEL[f].toLowerCase().includes(q);
   const groups = MENU_GROUPS.map((g) =>
     g.flatMap((e): Array<FilterField | "dates"> => {
       if (e === "dates") {
-        // Mit Suche werden die Datumsfelder direkt durchsucht.
-        return q ? DATE_FIELD_LIST.filter(matches) : dates ? DATE_FIELD_LIST : ["dates"];
+        // Mit Suche werden die Datumsfelder direkt (flach) durchsucht, sonst öffnet „Dates“ ein Flyout.
+        return q ? DATE_FIELD_LIST.filter(matches) : ["dates"];
       }
       return matches(e) ? [e] : [];
     }),
   ).filter((g) => g.length > 0);
   const first = groups[0]?.[0];
+  const isDatesField = (f: FilterField) => DATE_FIELD_LIST.includes(f);
+  // Aktives Werte-Feld (Flyout mit Operator + Werten) und ob die „Dates“-Spalte sichtbar ist.
+  const valueField = activeField && activeField !== "dates" ? activeField : null;
+  // Bei aktiver Suche sind die Datumsfelder flach in der Liste; dann gibt es keine „Dates“-Spalte.
+  const datesOpen =
+    !q && (activeField === "dates" || (valueField !== null && isDatesField(valueField)));
+  // „Dates“-Ebene per Klick/Tastatur geöffnet: Fokus auf das erste Datumsfeld setzen.
+  useEffect(() => {
+    if (activeField === "dates" && flyoutFocus) firstDateRowRef.current?.focus();
+  }, [activeField, flyoutFocus]);
   const item =
     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-hover";
   return (
@@ -544,7 +623,6 @@ export function FilterMenu({
           setOpen(o);
           if (!o) {
             setQuery("");
-            setDates(false);
             closeFlyout();
           }
         }}
@@ -608,40 +686,31 @@ export function FilterMenu({
                 <div key={i} className="mt-1 border-t border-border pt-1">
                   {g.map((e) =>
                     e === "dates" ? (
-                      <button
+                      <FlyoutRow
                         key="dates"
-                        type="button"
-                        role="menuitem"
-                        className={item}
-                        onMouseEnter={closeFlyout}
-                        onClick={() => setDates(true)}
-                      >
-                        Dates <ChevronRight className="ml-auto size-3.5" />
-                      </button>
+                        ref={datesRowRef}
+                        label="Dates"
+                        item={item}
+                        expanded={datesOpen}
+                        isActive={activeField === "dates"}
+                        noFocusOpen
+                        onHover={() => hoverOpen("dates")}
+                        onOpen={() => openNow("dates", true)}
+                        onPreview={() => openNow("dates", false)}
+                        onArrowLeftClose={closeFlyout}
+                      />
                     ) : (
-                      <button
+                      <FlyoutRow
                         key={e}
-                        type="button"
-                        role="menuitem"
-                        aria-haspopup="menu"
-                        aria-expanded={activeField === e}
-                        className={cn(item, activeField === e && "bg-surface-hover")}
-                        onMouseEnter={() => hoverOpen(e)}
-                        onFocus={() => openNow(e, false)}
-                        onClick={() => openNow(e, true)}
-                        onKeyDown={(ev) => {
-                          if (ev.key === "ArrowRight" || ev.key === "Enter") {
-                            ev.preventDefault();
-                            openNow(e, true);
-                          } else if (ev.key === "ArrowLeft" && activeField === e) {
-                            ev.preventDefault();
-                            closeFlyout();
-                          }
-                        }}
-                      >
-                        {FIELD_LABEL[e]}
-                        <ChevronRight className="ml-auto size-3.5" />
-                      </button>
+                        label={FIELD_LABEL[e]}
+                        item={item}
+                        expanded={activeField === e}
+                        isActive={activeField === e}
+                        onHover={() => hoverOpen(e)}
+                        onOpen={() => openNow(e, true)}
+                        onPreview={() => openNow(e, false)}
+                        onArrowLeftClose={closeFlyout}
+                      />
                     ),
                   )}
                 </div>
@@ -650,23 +719,50 @@ export function FilterMenu({
                 <p className="px-2 py-2 text-xs text-muted-foreground">No matching filters.</p>
               )}
             </div>
-            {activeField && (
+            {datesOpen && (
               <div
                 role="menu"
-                aria-label={`${FIELD_LABEL[activeField]} values`}
+                aria-label="Dates"
+                className="flex w-56 flex-col border-l border-border p-1"
+                onMouseEnter={clearTimers}
+                onMouseLeave={scheduleClose}
+              >
+                {DATE_FIELD_LIST.map((f, i) => (
+                  <FlyoutRow
+                    key={f}
+                    ref={i === 0 ? firstDateRowRef : undefined}
+                    label={FIELD_LABEL[f]}
+                    item={item}
+                    expanded={activeField === f}
+                    isActive={activeField === f}
+                    isDateRow
+                    onHover={() => hoverOpen(f)}
+                    onOpen={() => openNow(f, true)}
+                    onPreview={() => openNow(f, false)}
+                    onArrowLeftClose={closeToDatesRow}
+                  />
+                ))}
+              </div>
+            )}
+            {valueField && (
+              <div
+                role="menu"
+                aria-label={`${FIELD_LABEL[valueField]} values`}
                 className="w-56 border-l border-border p-2"
                 onMouseEnter={clearTimers}
                 onMouseLeave={scheduleClose}
                 onKeyDown={(ev) => {
                   if (ev.key === "ArrowLeft") {
                     ev.preventDefault();
-                    closeFlyout();
+                    // Aus dem Werte-Flyout eines Datumsfeldes zurück in die „Dates“-Spalte.
+                    if (datesOpen) openNow("dates", true);
+                    else closeFlyout();
                   }
                 }}
               >
                 <FilterValueForm
-                  key={activeField}
-                  field={activeField}
+                  key={valueField}
+                  field={valueField}
                   sources={sources}
                   autoFocus={flyoutFocus}
                   onApply={(c) => {
