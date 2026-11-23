@@ -1,4 +1,4 @@
-import { act, within, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, within, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -183,6 +183,34 @@ describe("Issue-Detail", () => {
     expect(
       within(row("Project") as HTMLElement).getByText("Checkout Relaunch"),
     ).toBeInTheDocument();
+  });
+
+  it("Pos 1/Ende scrollen den Ticket-Inhalt ganz nach oben/unten (LIN-91)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const article = await screen.findByLabelText("Issue ENG-120");
+    const scrollTo = vi.fn();
+    // jsdom implementiert scrollTo nicht – auf der Instanz stubben.
+    (article as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
+    Object.defineProperty(article, "scrollHeight", { value: 4321, configurable: true });
+
+    fireEvent.keyDown(document.body, { key: "Home" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0 });
+
+    fireEvent.keyDown(document.body, { key: "End" });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 4321 });
+  });
+
+  it("Home/End bleiben in Eingabefeldern Cursor-Navigation, kein Scroll (LIN-91)", async () => {
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const article = await screen.findByLabelText("Issue ENG-120");
+    const scrollTo = vi.fn();
+    (article as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
+    const title = await screen.findByLabelText("Title");
+    fireEvent.keyDown(title, { key: "Home" });
+    fireEvent.keyDown(title, { key: "End" });
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it("zeigt Sub-Issues mit Fortschritt, Kommentare mit Reaktionen und Relationen-Abschnitt", async () => {

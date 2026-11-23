@@ -10,7 +10,7 @@ import { NotFound } from "@/components/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
 import { GraphQLRequestError } from "@/lib/graphql";
-import { useShortcutContext } from "@/lib/shortcuts";
+import { useShortcutContext, useShortcuts } from "@/lib/shortcuts";
 
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
@@ -332,7 +332,34 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const [addingSub, setAddingSub] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
   const closePicker = useCallback(() => setRequest(null), []);
+  // Scroll-Viewport des Ticket-Inhalts (der <article> unten). Home/End scrollen ihn ganz nach
+  // oben/unten – der Container ist nicht fokussierbar, daher greift das native Home/End sonst nicht.
+  const scrollRef = useRef<HTMLElement>(null);
   useShortcutContext("issue");
+  // Home/End = ganz hoch/runter im Ticket. Als Issue-Kontext-Shortcuts registriert: der Dispatcher
+  // überspringt Eingabefelder/Editoren, dort bleibt das native Cursor-Verhalten erhalten (LIN-91).
+  useShortcuts([
+    {
+      id: "issue.scroll-top",
+      keys: "home",
+      context: "issue",
+      description: "Scroll to top",
+      run: () => {
+        if (!scrollRef.current) return false;
+        scrollRef.current.scrollTo({ top: 0 });
+      },
+    },
+    {
+      id: "issue.scroll-bottom",
+      keys: "end",
+      context: "issue",
+      description: "Scroll to bottom",
+      run: () => {
+        if (!scrollRef.current) return false;
+        scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight });
+      },
+    },
+  ]);
   const router = useRouter();
   const teamKey = meta.data?.team.key;
   useEscapeBlur();
@@ -485,6 +512,7 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
       </header>
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <article
+          ref={scrollRef}
           className="min-w-0 flex-1 overflow-y-auto"
           aria-label={`Issue ${issue.identifier}`}
         >
