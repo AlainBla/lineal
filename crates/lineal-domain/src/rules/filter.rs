@@ -827,6 +827,14 @@ fn non_empty(v: &V, empty: bool) -> R {
 /// Riesen-Strings in `in`) zählen über diese Deckelung hinaus ganz normal gegen das Byte-Limit.
 const ID_ELEM_EXEMPT_BYTES: usize = 36 + 3;
 
+/// Gesamtobergrenze der von [`MAX_BYTES`] ausgenommenen ID-Listen-Bytes über den **ganzen** Filter.
+/// Ohne diese Deckelung wüchse die Ausnahme mit der Bedingungszahl (bis [`MAX_CONDITIONS`] × 2
+/// Listen × [`MAX_ID_LIST`]), sodass ein mehrere MB großer Filter den 8-KB-Strukturschutz
+/// unterliefe (Query mit Hunderten `= ANY(...)`-Arrays). Gedeckelt auf das Budget einiger voller
+/// ID-Listen (8 × [`MAX_ID_LIST`]) — deckt reale Mehrfeld-Filter ab, begrenzt den Worst Case aber
+/// auf wenige zehn KB (LIN-88, Security-Review).
+const MAX_ID_LIST_EXEMPT_BYTES: usize = 8 * MAX_ID_LIST * ID_ELEM_EXEMPT_BYTES;
+
 impl Check for IdComparator {
     fn check(&self, v: &mut V, _nullable: bool) -> R {
         non_empty(v, self.is_empty())?;
@@ -1270,7 +1278,9 @@ fn run<T: Check + Serialize>(filter: &T) -> R {
     // am 8-KB-Cap scheitern, obwohl die ID-Liste erlaubt ist (LIN-88). Das Byte-Limit schützt
     // weiter die übrige Struktur (Verschachtelung, Strings, Feldzahl) vor pathologischer Größe.
     let size = serde_json::to_vec(filter).map_or(0, |b| b.len());
-    let structural = size.saturating_sub(v.id_list_bytes);
+    // Ausnahme total deckeln, damit sie nicht mit der Bedingungszahl wächst (LIN-88, Security-Review).
+    let exempt = v.id_list_bytes.min(MAX_ID_LIST_EXEMPT_BYTES);
+    let structural = size.saturating_sub(exempt);
     if structural > MAX_BYTES {
         return Err(FilterError {
             path: String::new(),
@@ -1594,6 +1604,25 @@ mod tests {
         // schlägt daher weiter am Byte-Cap an (kein Missbrauch der ID-Listen-Ausnahme).
         let huge = "x".repeat(9000);
         let e = bad(json!({"project": {"id": {"in": [huge]}}}));
+        assert!(e.reason.contains("bytes"), "{e}");
+    }
+
+    #[test]
+    fn lin88_total_id_list_exemption_is_capped() {
+        // Security-Review: Die ID-Listen-Ausnahme darf nicht mit der Bedingungszahl wachsen. Mehrere
+        // volle ID-Listen (hier 5 Felder × in+nin × MAX_ID_LIST) überschreiten das Gesamt-Budget
+        // MAX_ID_LIST_EXEMPT_BYTES — der Rest zählt wieder gegen MAX_BYTES, der Filter wird abgewiesen,
+        // obwohl jede einzelne Liste ≤ MAX_ID_LIST ist.
+        let ids: Vec<String> = (0..MAX_ID_LIST)
+            .map(|i| format!("00000000-0000-4000-8000-{i:012}"))
+            .collect();
+        let e = bad(json!({"and": [
+            {"assignee": {"id": {"in": ids.clone(), "nin": ids.clone()}}},
+            {"creator": {"id": {"in": ids.clone(), "nin": ids.clone()}}},
+            {"project": {"id": {"in": ids.clone(), "nin": ids.clone()}}},
+            {"cycle": {"id": {"in": ids.clone(), "nin": ids.clone()}}},
+            {"team": {"id": {"in": ids.clone(), "nin": ids.clone()}}},
+        ]}));
         assert!(e.reason.contains("bytes"), "{e}");
     }
 
