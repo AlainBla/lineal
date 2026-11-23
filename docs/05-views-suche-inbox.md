@@ -29,7 +29,7 @@ Regeln des Baums:
 5. Skalare Felder werden mit einem **Comparator** geprüft (`{"priority": {"in": [1, 2]}}`).
 6. To-One-Relationen werden mit einem **verschachtelten Filter** des Zieltyps geprüft (`{"assignee": {"email": {"eq": "bob@acme.example"}}}`); zusätzlich gibt es dort `null: true|false` (Relation fehlt bzw. existiert).
 7. To-Many-Relationen (`labels`, `children`, `subscribers`, `comments` …) haben einen **Collection-Filter** mit `some`, `every`, `length`, `null`, `and`, `or`. Feldbedingungen direkt im Collection-Filter wirken wie `some`.
-8. Maximale Verschachtelungstiefe 10, maximal 200 Bedingungen pro Filter, maximal 8 KB serialisiert (**Festlegung**; Überschreitung → `invalid_request`).
+8. Maximale Verschachtelungstiefe 10, maximal 200 Bedingungen pro Filter, maximal 8 KB serialisiert (**Festlegung**; Überschreitung → `invalid_request`). Die Inhalte von `in`/`nin`-ID-Listen zählen nicht gegen das 8‑KB‑Byte-Limit (je Element gedeckelt): Sie sind bereits über die Listenlänge (≤ 250 Werte, Regel/`MAX_ID_LIST`) begrenzt und binden als ein Array (`= ANY($n)`), ohne die Query-Kosten mit ihrer Byte-Größe zu erhöhen. So ist ein reiner Projekt-/Meilensteinfilter mit bis zu 250 IDs zulässig, während das Byte-Limit weiter vor pathologischer Struktur-/String-Größe schützt.
 
 ### 1.2 Grammatik (JSON Schema)
 
@@ -251,7 +251,9 @@ Das folgende Schema ist normativ für `IssueFilter` und die Comparators. `Projec
         "id": { "$ref": "#/$defs/IDComparator" },
         "name": { "$ref": "#/$defs/StringComparator" },
         "targetDate": { "$ref": "#/$defs/NullableTimelessDateComparator" },
-        "null": { "type": "boolean" }
+        "null": { "type": "boolean" },
+        "and": { "type": "array", "items": { "$ref": "#/$defs/NullableProjectMilestoneFilter" } },
+        "or":  { "type": "array", "items": { "$ref": "#/$defs/NullableProjectMilestoneFilter" } }
       }
     },
 

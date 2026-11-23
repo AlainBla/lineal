@@ -1382,6 +1382,16 @@ fn milestone_filter<'q>(qb: &mut Qb<'q>, cx: &Cx<'_>, e: &Ent, f: &MilestoneFilt
         g.next(qb);
         timeless_cmp(qb, cx, &e.col(cx, "target_date"), c)?;
     }
+    // `and`/`or` (LIN-88: „Meilenstein ist … ODER kein Meilenstein“) über derselben Relation,
+    // analog zu `cycle_filter`; der `or`-Zweig mit `null: true` wird zu `… IS NULL`.
+    if let Some(l) = &f.and {
+        g.next(qb);
+        and_list(qb, cx, l, &|qb, cx, x| milestone_filter(qb, cx, e, x))?;
+    }
+    if let Some(l) = &f.or {
+        g.next(qb);
+        or_list(qb, cx, l, &|qb, cx, x| milestone_filter(qb, cx, e, x))?;
+    }
     g.close(qb, "TRUE");
     qb.push(")");
     Ok(())
@@ -2253,6 +2263,27 @@ mod tests {
         assert!(s.contains("= ANY("), "{s}");
         // Werte werden gebunden, nicht interpoliert.
         assert!(s.contains("$1"), "{s}");
+    }
+
+    #[test]
+    fn lin88_milestone_in_or_no_milestone_builds_sql() {
+        // LIN-88: "Meilenstein ist <Meilensteine> ODER kein Meilenstein". Analog zu LIN-82:
+        // `MilestoneFilter.or` mit `null: true` wird zur `… IS NULL`-Prüfung, der andere Zweig
+        // zum `= ANY(...)` über die Meilenstein-FK; Werte werden gebunden.
+        let s = sql(
+            r#"{"projectMilestone":{"or":[{"id":{"in":["00000000-0000-4000-8000-000000000001",
+               "00000000-0000-4000-8000-000000000002"]}},{"null":true}]}}"#,
+        );
+        assert!(s.contains("IS NULL"), "{s}");
+        assert!(s.contains("= ANY("), "{s}");
+        assert!(s.contains("$1"), "{s}");
+        // `isNot`-Variante: `and` mit `null: false` (Meilenstein gesetzt und nicht in der Liste).
+        let s = sql(
+            r#"{"projectMilestone":{"and":[{"id":{"nin":["00000000-0000-4000-8000-000000000001"]}},
+               {"null":false}]}}"#,
+        );
+        assert!(s.contains("IS NOT NULL"), "{s}");
+        assert!(s.contains("= ANY("), "{s}");
     }
 
     #[test]

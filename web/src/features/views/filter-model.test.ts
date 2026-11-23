@@ -83,6 +83,21 @@ describe("chipToFilter (docs/05 §1.6)", () => {
     expect(chipToFilter(chip({ field: "project", op: "isNot", values: ["none", "p-1"] }))).toEqual({
       project: { and: [{ id: { nin: ["p-1"] } }, { null: false }] },
     });
+    // LIN-88: Meilenstein analog zu Projekt. Emission auf `projectMilestone`; der Server muss den
+    // verschachtelten `null` auf der nullbaren Relation zulassen (filter.rs MilestoneFilter and/or).
+    expect(chipToFilter(chip({ field: "milestone", op: "is", values: ["none"] }))).toEqual({
+      projectMilestone: { null: true },
+    });
+    expect(
+      chipToFilter(chip({ field: "milestone", op: "is", values: ["none", "m-1", "m-2"] })),
+    ).toEqual({
+      projectMilestone: { or: [{ id: { in: ["m-1", "m-2"] } }, { null: true }] },
+    });
+    expect(
+      chipToFilter(chip({ field: "milestone", op: "isNot", values: ["none", "m-1"] })),
+    ).toEqual({
+      projectMilestone: { and: [{ id: { nin: ["m-1"] } }, { null: false }] },
+    });
     expect(chipToFilter(chip({ field: "cycle", op: "is", values: ["current"] }))).toEqual({
       cycle: { isActive: { eq: true } },
     });

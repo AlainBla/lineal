@@ -9,7 +9,9 @@
 //! * `null` nur dort, wo das Schema ihn erlaubt (nicht auf oberster Ebene, nicht bei `title`),
 //! * Enum-Werte gegen die Enums aus docs/00 §4, Priorität nur 0–4,
 //! * Datumswerte als ISO-Datum/-Zeit oder ISO-8601-Dauer,
-//! * Grenzen (Festlegung §1.1): Tiefe ≤ 10, ≤ 200 Bedingungen, ≤ 8 KB serialisiert.
+//! * Grenzen (Festlegung §1.1): Tiefe ≤ 10, ≤ 200 Bedingungen, ≤ 8 KB serialisiert; die Inhalte
+//!   von `in`/`nin`-ID-Listen (je Element gedeckelt) zählen nicht gegen das Byte-Limit, da sie
+//!   separat über `MAX_ID_LIST` begrenzt sind und als ein Postgres-Array binden (LIN-88).
 //!
 //! Fehler tragen einen JSON-Pointer (`details.path`, z. B. `/and/1/labels/some/id`).
 
@@ -22,7 +24,8 @@ use serde_json::{Map, Number, Value};
 pub const MAX_DEPTH: usize = 10;
 /// Maximale Zahl von Feldbedingungen.
 pub const MAX_CONDITIONS: usize = 200;
-/// Maximale Größe des serialisierten Filters in Bytes.
+/// Maximale Größe des serialisierten Filters in Bytes (ohne die separat über `MAX_ID_LIST`
+/// begrenzten Inhalte von `in`/`nin`-ID-Listen, siehe `run`/`V::id_list_bytes`, LIN-88).
 pub const MAX_BYTES: usize = 8 * 1024;
 /// Maximale Länge von `in`/`nin` bei ID-Comparators.
 pub const MAX_ID_LIST: usize = 250;
@@ -515,6 +518,8 @@ node!(
         name: Box<StringComparator>,
         target_date: Box<TimelessDateComparator>,
         null: bool,
+        and: Vec<MilestoneFilter>,
+        or: Vec<MilestoneFilter>,
     }
 );
 
@@ -675,6 +680,10 @@ struct V {
     path: Vec<String>,
     depth: usize,
     conditions: usize,
+    /// Serialisierte Bytes von `in`/`nin`-ID-Listen (gedeckelt je Element), die **nicht** gegen
+    /// [`MAX_BYTES`] zählen: ID-Listen binden als EIN Postgres-Array (`= ANY($n)`), ihre Größe
+    /// schlägt nicht in Query-Kosten um und ist bereits über [`MAX_ID_LIST`] begrenzt (LIN-88).
+    id_list_bytes: usize,
 }
 
 impl V {
@@ -813,13 +822,27 @@ fn non_empty(v: &V, empty: bool) -> R {
     Ok(())
 }
 
+/// Obergrenze (Bytes) je ID-Listenelement, die von [`MAX_BYTES`] ausgenommen wird: eine UUID
+/// (36 Zeichen) in Anführungszeichen plus Trennkomma. Längere Werte (z. B. pathologische
+/// Riesen-Strings in `in`) zählen über diese Deckelung hinaus ganz normal gegen das Byte-Limit.
+const ID_ELEM_EXEMPT_BYTES: usize = 36 + 3;
+
 impl Check for IdComparator {
     fn check(&self, v: &mut V, _nullable: bool) -> R {
         non_empty(v, self.is_empty())?;
         for (name, list) in [("in", &self.in_), ("nin", &self.nin)] {
-            if list.as_ref().is_some_and(|l| l.len() > MAX_ID_LIST) {
-                v.path.push(name.into());
-                return v.fail(format!("at most {MAX_ID_LIST} values"));
+            if let Some(l) = list {
+                if l.len() > MAX_ID_LIST {
+                    v.path.push(name.into());
+                    return v.fail(format!("at most {MAX_ID_LIST} values"));
+                }
+                // ID-Listen-Inhalte von MAX_BYTES ausnehmen (siehe `V::id_list_bytes`), aber je
+                // Element gedeckelt, damit ein einzelner Riesen-String die Ausnahme nicht
+                // missbrauchen kann (LIN-88, Byte-Cap vs. ID-Listen-Cap-Konsistenz).
+                v.id_list_bytes += l
+                    .iter()
+                    .map(|s| (s.len() + 2 + 1).min(ID_ELEM_EXEMPT_BYTES))
+                    .sum::<usize>();
             }
         }
         Ok(())
@@ -1010,6 +1033,14 @@ impl Check for MilestoneFilter {
         v.field("id", &self.id, false)?;
         v.field("name", &self.name, false)?;
         v.field("targetDate", &self.target_date, true)?;
+        // `and`/`or` beschreiben weiter dieselbe (ggf. nullbare) Meilenstein-Relation: Die
+        // Nullbarkeit muss in die Teilfilter durchgereicht werden, damit `{projectMilestone: {or:
+        // [{id: …}, {null: true}]}}` (FE: „Meilenstein ist … ODER kein Meilenstein“, LIN-88)
+        // zulässig ist – analog zu `project`/`cycle` (LIN-82). Als Element von
+        // `project.projectMilestones` (CollectionFilter, nicht nullbar) bleibt `nullable` false,
+        // sodass `null` dort auch in `and`/`or` verboten bleibt.
+        v.list("and", &self.and, nullable)?;
+        v.list("or", &self.or, nullable)?;
         v.leave();
         Ok(())
     }
@@ -1231,13 +1262,19 @@ fn run<T: Check + Serialize>(filter: &T) -> R {
         path: Vec::new(),
         depth: 0,
         conditions: 0,
+        id_list_bytes: 0,
     };
     filter.check(&mut v, false)?;
+    // ID-Listen-Inhalte (`= ANY($n)`, je Element gedeckelt) zählen nicht gegen MAX_BYTES: Ein
+    // reiner Projektfilter mit bis zu MAX_ID_LIST (250) UUIDs serialisiert ~9,8 KB und würde sonst
+    // am 8-KB-Cap scheitern, obwohl die ID-Liste erlaubt ist (LIN-88). Das Byte-Limit schützt
+    // weiter die übrige Struktur (Verschachtelung, Strings, Feldzahl) vor pathologischer Größe.
     let size = serde_json::to_vec(filter).map_or(0, |b| b.len());
-    if size > MAX_BYTES {
+    let structural = size.saturating_sub(v.id_list_bytes);
+    if structural > MAX_BYTES {
         return Err(FilterError {
             path: String::new(),
-            reason: format!("serialized filter is {size} bytes, limit is {MAX_BYTES}"),
+            reason: format!("serialized filter is {structural} bytes, limit is {MAX_BYTES}"),
         });
     }
     Ok(())
@@ -1493,6 +1530,71 @@ mod tests {
             from_json_value::<ProjectFilter>(&json!({"or": [{"null": true}]})).unwrap();
         let e = validate_project(&root_or_null).unwrap_err();
         assert!(e.reason.contains("`null` is not allowed here"), "{e}");
+    }
+
+    #[test]
+    fn lin88_milestone_or_null_is_allowed_in_nested_relation() {
+        // LIN-88: "Meilenstein ist <Meilensteine> ODER kein Meilenstein" – die Filter-Bar
+        // (filter-model.ts `relationFilter("projectMilestone", …)`) erzeugt dieselbe Form wie bei
+        // Projekten. Der verschachtelte `null` muss hier zulässig sein (Relation
+        // `issue.projectMilestone` ist nullbar), sonst schlägt der Filter mit einem
+        // Deserialisierungs-/Validierungsfehler fehl (`MilestoneFilter` hatte kein `and`/`or`).
+        ok(json!({"projectMilestone": {"or": [{"id": {"in": ["m-1", "m-2"]}}, {"null": true}]}}));
+        // `isNot`-Variante (ids über `nin`, "No milestone" über `null: false`).
+        ok(json!({"projectMilestone": {"and": [{"id": {"nin": ["m-1"]}}, {"null": false}]}}));
+        // Auch tiefer verschachtelt, mit weiteren Chips kombiniert.
+        ok(json!({"and": [
+            {"projectMilestone": {"or": [{"id": {"in": ["m-1"]}}, {"null": true}]}},
+            {"priority": {"in": [1, 2]}}
+        ]}));
+    }
+
+    #[test]
+    fn lin88_milestone_null_still_rejected_in_collection_context() {
+        // Schutz erhalten: Als Element von `project.projectMilestones` (CollectionFilter, nicht
+        // nullbar) bleibt `null` – auch in `and`/`or` – verboten, weil die Collection-Elemente
+        // keine nullbare Relation sind.
+        let e = bad(json!({"project": {"projectMilestones": {"some": {"null": true}}}}));
+        assert!(e.reason.contains("`null` is not allowed here"), "{e}");
+        let e = bad(json!({
+            "project": {"projectMilestones": {"some": {"or": [{"null": true}]}}}
+        }));
+        assert!(e.reason.contains("`null` is not allowed here"), "{e}");
+    }
+
+    #[test]
+    fn lin88_id_list_contents_do_not_count_against_byte_cap() {
+        // LIN-88: Bis zu MAX_ID_LIST (250) UUIDs serialisieren ~9,8 KB (250 × ~39 B) und würden
+        // sonst am 8-KB-Byte-Cap scheitern, obwohl die ID-Liste erlaubt ist. Ihre Inhalte zählen
+        // nicht gegen MAX_BYTES.
+        let uuids: Vec<String> = (0..MAX_ID_LIST)
+            .map(|i| format!("00000000-0000-4000-8000-{i:012}"))
+            .collect();
+        // Verschachtelt unter `project` (IssueFilter-Pfad, `run` teilt sich die Byte-Prüfung).
+        ok(json!({"project": {"id": {"in": uuids}}}));
+        // Reiner Wurzel-Projektfilter (Projekt-Views, `validate_project`).
+        let root = from_json_value::<ProjectFilter>(&json!({"id": {"in": uuids}})).unwrap();
+        assert!(validate_project(&root).is_ok());
+        // Mehrere ID-Listen-Felder gleichzeitig, je 250 – zusammen weit über 8 KB roh.
+        ok(json!({
+            "assignee": {"id": {"in": uuids}},
+            "creator": {"id": {"in": uuids}},
+            "project": {"id": {"in": uuids}}
+        }));
+    }
+
+    #[test]
+    fn lin88_pathological_input_still_rejected() {
+        // 251 IDs überschreiten MAX_ID_LIST und bleiben abgewiesen (die Ausnahme hebt den
+        // Längen-Cap nicht auf).
+        let too_many: Vec<String> = (0..=MAX_ID_LIST).map(|i| format!("m-{i}")).collect();
+        let e = bad(json!({"project": {"id": {"in": too_many}}}));
+        assert!(e.reason.contains(&MAX_ID_LIST.to_string()), "{e}");
+        // Ein einzelner Riesen-String in `id.in` wird je Element nur bis ~39 B ausgenommen und
+        // schlägt daher weiter am Byte-Cap an (kein Missbrauch der ID-Listen-Ausnahme).
+        let huge = "x".repeat(9000);
+        let e = bad(json!({"project": {"id": {"in": [huge]}}}));
+        assert!(e.reason.contains("bytes"), "{e}");
     }
 
     /// Beispiele aus docs/05 §1.5–1.9: serde-Roundtrip ohne Verlust.
