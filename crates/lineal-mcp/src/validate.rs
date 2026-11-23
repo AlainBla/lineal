@@ -251,7 +251,7 @@ pub fn validate_args(tool: &str, args: &Value) -> Result<(), AppError> {
     let errors: Vec<(String, String)> = validator
         .iter_errors(args)
         .take(10)
-        .map(|e| (e.instance_path.to_string(), e.to_string()))
+        .map(|e| (e.instance_path().to_string(), e.to_string()))
         .collect();
     let Some((path, message)) = errors.first().cloned() else {
         return Ok(());
