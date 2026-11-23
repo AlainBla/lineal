@@ -500,6 +500,150 @@ async fn blocked_by_identifiers_track_open_visible_blockers(pool: sqlx::PgPool) 
     );
 }
 
+/// LIN-80: `issueRelationDelete` entfernt Relationen über denselben App-Pfad wie create – gerichtet
+/// bei `blocks`, und die gerichtete Duplicate-Relation von beiden Seiten.
+#[sqlx::test(migrations = "../lineal-db/migrations")]
+async fn issue_relation_delete_removes_blocks_and_duplicates(pool: sqlx::PgPool) {
+    let store = PgStore::new(pool);
+    let mut tx = store.begin(SeedData::acme().org).await.unwrap();
+    seed::run(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let schema = build_schema(test_app(Arc::new(store)));
+
+    for title in ["Original", "Duplikat", "Fremd"] {
+        let q = format!(
+            r#"mutation {{ issueCreate(input: {{teamId: "ENG", title: "{title}"}}) {{ success }} }}"#
+        );
+        assert!(
+            run(&schema, SeedUser::Alice, &q).await.errors.is_empty(),
+            "{title}"
+        );
+    }
+    let create = |issue: &str, related: &str, kind: &str| {
+        format!(
+            r#"mutation {{ issueRelationCreate(input: {{issueId: "{issue}", relatedIssueId: "{related}", type: "{kind}"}}) {{ success }} }}"#
+        )
+    };
+    let delete = |issue: &str, related: &str, kind: &str| {
+        format!(
+            r#"mutation {{ issueRelationDelete(input: {{issueId: "{issue}", relatedIssueId: "{related}", type: "{kind}"}}) {{ success issue {{ identifier }} }} }}"#
+        )
+    };
+    // blocks: ENG-1 blockiert ENG-2.
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &create("ENG-1", "ENG-2", "blocks"),
+        )
+        .await,
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-2").await["relations"]["blockedBy"],
+        json!([{ "identifier": "ENG-1" }])
+    );
+    // Entfernen (gerichtet, issueId ist der Blocker).
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &delete("ENG-1", "ENG-2", "blocks"),
+        )
+        .await,
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-2").await["relations"]["blockedBy"],
+        json!([])
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-1").await["relations"]["blocks"],
+        json!([])
+    );
+
+    // duplicate: ENG-2 ist Duplikat von ENG-1 ⇒ ENG-2 wechselt in den Duplicate-Status.
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &create("ENG-2", "ENG-1", "duplicate"),
+        )
+        .await,
+    );
+    let eng2 = read_relations(&schema, "ENG-2").await;
+    assert_eq!(
+        eng2["relations"]["duplicateOf"],
+        json!({ "identifier": "ENG-1" })
+    );
+    assert_eq!(eng2["stateType"], "duplicate");
+    assert_eq!(
+        read_relations(&schema, "ENG-1").await["relations"]["duplicates"],
+        json!([{ "identifier": "ENG-2" }])
+    );
+
+    // Falsches Paar: Löschen der Duplicate-Relation ENG-2↔ENG-3 ist ein No-op (ENG-2→ENG-1 bleibt).
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &delete("ENG-2", "ENG-3", "duplicate"),
+        )
+        .await,
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-2").await["relations"]["duplicateOf"],
+        json!({ "identifier": "ENG-1" }),
+        "falsches Paar darf die bestehende Duplicate-Relation nicht entfernen"
+    );
+
+    // Von der „Duplicates"-Seite entfernen (umgekehrte Argumentreihenfolge: issueId = Original ENG-1).
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &delete("ENG-1", "ENG-2", "duplicate"),
+        )
+        .await,
+    );
+    let eng2 = read_relations(&schema, "ENG-2").await;
+    assert_eq!(eng2["relations"]["duplicateOf"], Value::Null);
+    // ENG-2 verlässt den Duplicate-Status wieder.
+    assert_ne!(eng2["stateType"], "duplicate");
+
+    // Erneut markieren und diesmal von der „Duplicate of"-Seite entfernen (issueId = Duplikat ENG-2).
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &create("ENG-2", "ENG-1", "duplicate"),
+        )
+        .await,
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-1").await["relations"]["duplicates"],
+        json!([{ "identifier": "ENG-2" }])
+    );
+    data(
+        run(
+            &schema,
+            SeedUser::Alice,
+            &delete("ENG-2", "ENG-1", "duplicate"),
+        )
+        .await,
+    );
+    assert_eq!(
+        read_relations(&schema, "ENG-1").await["relations"]["duplicates"],
+        json!([])
+    );
+}
+
+/// `stateType` und Relationen eines Issues aus Sicht von Alice.
+async fn read_relations(schema: &lineal_api::graphql::LinealSchema, id: &str) -> Value {
+    let q = format!(
+        r#"{{ issue(id: "{id}") {{ stateType relations {{ blocks {{ identifier }} blockedBy {{ identifier }} duplicateOf {{ identifier }} duplicates {{ identifier }} }} }} }}"#
+    );
+    data(run(schema, SeedUser::Alice, &q).await)["issue"].clone()
+}
+
 #[sqlx::test(migrations = "../lineal-db/migrations")]
 async fn detail_fields_are_budgeted_per_request(pool: sqlx::PgPool) {
     let store = PgStore::new(pool);

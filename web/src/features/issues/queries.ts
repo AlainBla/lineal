@@ -458,6 +458,22 @@ export async function createRelation(input: {
   );
 }
 
+export async function deleteRelation(input: {
+  issueId: string;
+  relatedIssueId: string;
+  type: RelationKind;
+}): Promise<void> {
+  await gqlRequest<
+    { issueRelationDelete: { success: boolean } },
+    { input: { issueId: string; relatedIssueId: string; type: RelationKind } }
+  >(
+    `mutation IssueRelationDelete($input: IssueRelationDeleteInput!) {
+      issueRelationDelete(input: $input) { success }
+    }`,
+    { input },
+  );
+}
+
 export async function setSubscription(issueId: string, subscribe: boolean): Promise<void> {
   const op = subscribe ? "issueSubscribe" : "issueUnsubscribe";
   await gqlRequest<Record<string, { success: boolean }>, { id: string }>(

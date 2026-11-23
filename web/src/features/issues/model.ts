@@ -452,6 +452,31 @@ export function relationInput(
   }
 }
 
+/**
+ * Übersetzt eine Relationszeile (Sicht des aktuellen Issues) in `issueRelationDelete` – symmetrisch
+ * zu `relationInput`: „blocked by"/„Duplicates" drehen die Richtung um, damit `issueId` jeweils die
+ * gerichtete Relation trägt (Blocker bzw. Duplikat). Dasselbe Objekt kehrt die Löschung als
+ * `issueRelationCreate` wieder um (Undo). `duplicate` löst das Backend von beiden Seiten.
+ */
+export function relationDeleteInput(
+  kind: RelationGroupKind,
+  thisId: string,
+  otherId: string,
+): { issueId: string; relatedIssueId: string; type: "blocks" | "related" | "duplicate" } {
+  switch (kind) {
+    case "blocked-by":
+      return { issueId: otherId, relatedIssueId: thisId, type: "blocks" };
+    case "blocking":
+      return { issueId: thisId, relatedIssueId: otherId, type: "blocks" };
+    case "related":
+      return { issueId: thisId, relatedIssueId: otherId, type: "related" };
+    case "duplicate-of":
+      return { issueId: thisId, relatedIssueId: otherId, type: "duplicate" };
+    case "duplicates":
+      return { issueId: otherId, relatedIssueId: thisId, type: "duplicate" };
+  }
+}
+
 /** URL-Slug aus dem Titel (kosmetisch, docs/08 §1.3). */
 export function slugify(title: string): string {
   const s = title
@@ -485,6 +510,27 @@ export function relationGroups(
     },
     { kind: "duplicates" as const, label: "Duplicates", items: r.duplicates },
   ].filter((g) => g.items.length > 0);
+}
+
+/** Entfernt ein Gegenstück aus der Relationssicht (optimistisch); `duplicate-of` ist einwertig. */
+export function removeFromRelations(
+  r: IssueRelations,
+  kind: RelationGroupKind,
+  itemId: string,
+): IssueRelations {
+  const without = (items: RelatedIssue[]) => items.filter((x) => x.id !== itemId);
+  switch (kind) {
+    case "blocked-by":
+      return { ...r, blockedBy: without(r.blockedBy) };
+    case "blocking":
+      return { ...r, blocks: without(r.blocks) };
+    case "related":
+      return { ...r, relatedTo: without(r.relatedTo) };
+    case "duplicate-of":
+      return { ...r, duplicateOf: null };
+    case "duplicates":
+      return { ...r, duplicates: without(r.duplicates) };
+  }
 }
 
 /**

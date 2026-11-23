@@ -444,6 +444,15 @@ pub struct IssueRelationCreateInput {
     pub relation_type: String,
 }
 
+#[derive(InputObject)]
+pub struct IssueRelationDeleteInput {
+    pub issue_id: String,
+    pub related_issue_id: String,
+    /// `blocks`, `related` oder `duplicate` (dieselben Werte wie `IssueRelationCreateInput`).
+    #[graphql(name = "type")]
+    pub relation_type: String,
+}
+
 fn date(s: &str) -> AppResult<NaiveDate> {
     lineal_domain::rules::date::parse_iso_date("dueDate", s)
         .map_err(|_| AppError::invalid_request("dueDate must be YYYY-MM-DD (year 1900-2200)"))
@@ -866,6 +875,106 @@ impl IssueMutation {
                 request_ctx(ctx)?,
                 UpdateIssueInput {
                     id: input.issue_id,
+                    relations,
+                    source: crate::context::history_source(request_ctx(ctx)?),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(gql_err)?;
+        Ok(payload(v))
+    }
+
+    /// Entfernt eine Relation (Gegenstück zu `issueRelationCreate`); ruft denselben App-Layer-Pfad,
+    /// nur entfernend. `blocks`/`related` bleiben gerichtet wie bei create (das FE dreht die Richtung
+    /// für „blocked by"). Bei `duplicate` löst die Mutation die gerichtete Duplicate-Relation zwischen
+    /// den beiden Issues auf, egal von welcher Seite sie aufgerufen wird: Da `duplicate_of: Some(None)`
+    /// nur das `duplicateOf` des aktualisierten Issues entfernt, wird zuerst bestimmt, welches der
+    /// beiden Issues das Duplikat ist, und dort entfernt.
+    async fn issue_relation_delete(
+        &self,
+        ctx: &Context<'_>,
+        input: IssueRelationDeleteInput,
+    ) -> async_graphql::Result<IssuePayload> {
+        let kind: RelationType = input
+            .relation_type
+            .parse()
+            .map_err(|_| gql_err(AppError::invalid_request("unknown relation type")))?;
+        let related = input.related_issue_id;
+        match kind {
+            RelationType::Blocks => {
+                let relations = RelationChanges {
+                    remove_blocks: vec![related],
+                    ..Default::default()
+                };
+                self.remove_relations(ctx, input.issue_id, relations).await
+            }
+            RelationType::Related => {
+                let relations = RelationChanges {
+                    remove_related_to: vec![related],
+                    ..Default::default()
+                };
+                self.remove_relations(ctx, input.issue_id, relations).await
+            }
+            RelationType::Duplicate => {
+                // Das gerichtete Duplikat A->B (A ist Duplikat von B) soll von beiden Seiten
+                // entfernbar sein: aus A's Zeile „Duplicate of" wie aus B's Zeile „Duplicates".
+                // `unmark_duplicate` entfernt nur das `duplicateOf` des aktualisierten Issues, daher
+                // zuerst herausfinden, welches der beiden Issues das Duplikat ist.
+                let detail = app(ctx)?
+                    .get_issue(request_ctx(ctx)?, &input.issue_id)
+                    .await
+                    .map_err(gql_err)?;
+                // `related` darf eine UUID oder eine (auch frühere) Kennung sein; beide Formen prüfen.
+                let is_related = |d: &lineal_app::usecases::issue::RelatedIssue| {
+                    d.uuid.to_string() == related || d.identifier.eq_ignore_ascii_case(&related)
+                };
+                let target = if detail
+                    .relations
+                    .duplicate_of
+                    .as_ref()
+                    .is_some_and(is_related)
+                {
+                    // issue_id ist das Duplikat von related.
+                    Some(input.issue_id.clone())
+                } else if detail.relations.duplicates.iter().any(is_related) {
+                    // related ist das Duplikat von issue_id.
+                    Some(related)
+                } else {
+                    None
+                };
+                match target {
+                    Some(id) => {
+                        let relations = RelationChanges {
+                            duplicate_of: Some(None),
+                            ..Default::default()
+                        };
+                        self.remove_relations(ctx, id, relations).await
+                    }
+                    // Keine Duplicate-Relation zwischen den beiden Issues: idempotenter No-op.
+                    None => Ok(payload(detail.view)),
+                }
+            }
+            RelationType::Similar => Err(gql_err(AppError::invalid_request(
+                "similar relations cannot be removed manually",
+            ))),
+        }
+    }
+}
+
+impl IssueMutation {
+    /// Schickt die entfernenden `RelationChanges` über den gemeinsamen `update_issue`-Pfad.
+    async fn remove_relations(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        relations: RelationChanges,
+    ) -> async_graphql::Result<IssuePayload> {
+        let v = app(ctx)?
+            .update_issue(
+                request_ctx(ctx)?,
+                UpdateIssueInput {
+                    id,
                     relations,
                     source: crate::context::history_source(request_ctx(ctx)?),
                     ..Default::default()

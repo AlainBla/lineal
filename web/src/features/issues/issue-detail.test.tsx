@@ -487,6 +487,61 @@ describe("Issue-Detail", () => {
     expect(gql.of("IssueExtras").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("entfernt eine Relation per X-Button und bietet Undo (LIN-80)", async () => {
+    let blocks = [
+      {
+        id: "i9",
+        identifier: "ENG-132",
+        title: "Anderes Issue",
+        stateType: "started",
+        stateName: "In Progress",
+        stateColor: "#f2c94c",
+      },
+    ];
+    const h = handlers();
+    const gql = mockGraphql({
+      ...h,
+      IssueExtras: () => ({
+        issue: {
+          id: "i1",
+          children: [],
+          relations: { blocks, blockedBy: [], relatedTo: [], duplicateOf: null, duplicates: [] },
+          history: [],
+        },
+      }),
+      IssueRelationDelete: () => {
+        blocks = [];
+        return { issueRelationDelete: { success: true } };
+      },
+    });
+    await renderWithApp(
+      <>
+        {page()}
+        <Toaster />
+      </>,
+      newClient(),
+      "/acme/issue/ENG-120/x",
+    );
+    const rel = await screen.findByRole("region", { name: "Related issues" });
+    expect(await within(rel).findByText("Anderes Issue")).toBeInTheDocument();
+
+    await userEvent.click(within(rel).getByRole("button", { name: "Remove Blocking ENG-132" }));
+    await waitFor(() => expect(gql.of("IssueRelationDelete")).toHaveLength(1));
+    // Richtung wie `issueRelationCreate`: issueId ist das Issue, das blockiert.
+    expect(gql.of("IssueRelationDelete")[0]!.variables).toEqual({
+      input: { issueId: "i1", relatedIssueId: "i9", type: "blocks" },
+    });
+    // Nach dem Neuladen ist die Relation verschwunden.
+    await waitFor(() => expect(within(rel).queryByText("Anderes Issue")).toBeNull());
+    // Undo-Toast stellt die Relation per `issueRelationCreate` wieder her.
+    const undo = await screen.findByRole("button", { name: "Undo" });
+    await userEvent.click(undo);
+    await waitFor(() => expect(gql.of("IssueRelationCreate")).toHaveLength(1));
+    expect(gql.of("IssueRelationCreate")[0]!.variables).toEqual({
+      input: { issueId: "i1", relatedIssueId: "i9", type: "blocks" },
+    });
+  });
+
   it("Glocke zeigt den Abo-Zustand des Servers und schaltet ihn um", async () => {
     let subscribed = true;
     const h = handlers();

@@ -1336,6 +1336,15 @@ input IssueRelationCreateInput {
 	type: String!
 }
 
+input IssueRelationDeleteInput {
+	issueId: String!
+	relatedIssueId: String!
+	"""
+	`blocks`, `related` oder `duplicate` (dieselben Werte wie `IssueRelationCreateInput`).
+	"""
+	type: String!
+}
+
 """
 Relationen eines Issues aus dessen Sicht (nur für den Aufrufer sichtbare Gegenstücke).
 """
@@ -1505,6 +1514,15 @@ type Mutation {
 	issueUnarchive(id: String!): IssuePayload!
 	issueDelete(id: String!, permanentlyDelete: Boolean): IssuePayload!
 	issueRelationCreate(input: IssueRelationCreateInput!): IssuePayload!
+	"""
+	Entfernt eine Relation (Gegenstück zu `issueRelationCreate`); ruft denselben App-Layer-Pfad,
+	nur entfernend. `blocks`/`related` bleiben gerichtet wie bei create (das FE dreht die Richtung
+	für „blocked by"). Bei `duplicate` löst die Mutation die gerichtete Duplicate-Relation zwischen
+	den beiden Issues auf, egal von welcher Seite sie aufgerufen wird: Da `duplicate_of: Some(None)`
+	nur das `duplicateOf` des aktualisierten Issues entfernt, wird zuerst bestimmt, welches der
+	beiden Issues das Duplikat ist, und dort entfernt.
+	"""
+	issueRelationDelete(input: IssueRelationDeleteInput!): IssuePayload!
 	issueLabelCreate(input: IssueLabelCreateInput!): IssueLabelPayload!
 	issueLabelUpdate(id: String!, input: IssueLabelUpdateInput!): IssueLabelPayload!
 	issueLabelRetire(id: String!): IssueLabelPayload!
