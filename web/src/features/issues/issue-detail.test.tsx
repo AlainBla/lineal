@@ -6,6 +6,8 @@ import "@/app/test-polyfills";
 import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
 import { getUiState, setUiState } from "@/app/ui-state";
 
+import type { CollabProvider } from "@/features/collab/provider";
+
 import { IssueDetailPage } from "./issue-detail";
 import type { IssueExtras } from "./queries";
 import { resetKnownUsers } from "./users";
@@ -14,17 +16,32 @@ import { makeIssue, mockGraphql, newClient, renderWithApp, TEAM_META } from "./t
 import { clearToasts } from "./toast-store";
 import { Toaster } from "./toaster";
 
-// Stufe 1 (Collab-Endpunkt nicht erreichbar): die Echtzeit-Tests liegen in features/collab.
-vi.mock("@/features/collab/use-collab", () => ({
-  useCollab: () => ({
+// Standard: Collab-Endpunkt nicht erreichbar → Stufe 1 (die Echtzeit-Tests liegen in features/collab).
+// `collab.session` ist je Test umstellbar, um `connecting`/`connected` abzudecken (LIN-95); der
+// afterEach-Hook setzt wieder auf den Fallback zurück.
+const collab = vi.hoisted(() => {
+  const fallback = {
     provider: null,
     status: "fallback",
     canWrite: false,
     synced: false,
     everConnected: false,
     generation: 0,
-  }),
+  };
+  return { fallback, session: { ...fallback } as Record<string, unknown> };
+});
+
+vi.mock("@/features/collab/use-collab", () => ({
+  useCollab: () => collab.session,
 }));
+
+// Minimaler Provider-Stub, damit `Presence` (awareness/doc) in der Live-Ansicht nicht abstürzt.
+function providerStub(): CollabProvider {
+  return {
+    awareness: { getStates: () => new Map(), on: () => {}, off: () => {} },
+    doc: { clientID: 1 },
+  } as unknown as CollabProvider;
+}
 
 vi.mock("./rich-editor", () => ({
   RichEditor: (p: {
@@ -140,6 +157,8 @@ afterEach(() => {
   shortcuts.reset();
   clearToasts();
   resetKnownUsers();
+  // Collab-Session für den nächsten Test auf den Standard (Fallback) zurücksetzen (LIN-95).
+  collab.session = { ...collab.fallback };
   // `detailsOpen` ist modul-global: für nachfolgende Tests auf den Standard (offen, LIN-94)
   // zurücksetzen, damit das angedockte Desktop-Panel wie beim ersten Laden sichtbar ist.
   setUiState({ detailsOpen: true });
@@ -786,6 +805,59 @@ describe("Issue-Detail", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("Beschreibung beim Verbinden (LIN-95)", () => {
+  it("connecting: zeigt die Beschreibung schreibgeschützt (kein Skeleton) mit Verbinde-Hinweis", async () => {
+    collab.session = { ...collab.fallback, status: "connecting" };
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    // Der Text aus dem schnellen GraphQL-Query ist sofort sichtbar – als reine Anzeige (read-only),
+    // nicht als bearbeitbares Description-Feld.
+    expect(screen.getByText("Beschreibung **fett**")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Description")).toBeNull();
+    // Statushinweis signalisiert den laufenden Verbindungsaufbau (Editieren noch nicht bereit).
+    expect(screen.getByText("Connecting…")).toBeInTheDocument();
+  });
+
+  it("disconnected ohne je verbunden gewesen zu sein: ebenfalls Vorschau mit Verbinde-Hinweis", async () => {
+    collab.session = { ...collab.fallback, status: "disconnected", everConnected: false };
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    await screen.findByLabelText("Title");
+    expect(screen.getByText("Beschreibung **fett**")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Description")).toBeNull();
+    expect(screen.getByText("Connecting…")).toBeInTheDocument();
+  });
+
+  it("connected: der Live-Editor greift – leerer Collab-Wert statt GraphQL-Text", async () => {
+    collab.session = {
+      provider: providerStub(),
+      status: "connected",
+      canWrite: true,
+      synced: true,
+      everConnected: true,
+      generation: 1,
+    };
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const desc = await screen.findByLabelText("Description");
+    // Collab-Pfad: der Inhalt kommt aus dem Yjs-Dokument, `value` bleibt leer (kein Doppel-Insert).
+    expect(desc).toHaveValue("");
+    // Kein statischer GraphQL-Text, stattdessen der Live-Status.
+    expect(screen.queryByText("Beschreibung **fett**")).toBeNull();
+    expect(screen.getByText("Live")).toBeInTheDocument();
+  });
+
+  it("fallback: Stufe 1 bleibt unverändert – editierbarer statischer Text", async () => {
+    collab.session = { ...collab.fallback };
+    mockGraphql(handlers());
+    await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/x");
+    const desc = await screen.findByLabelText("Description");
+    expect(desc.tagName).toBe("TEXTAREA");
+    expect(desc).toHaveValue("Beschreibung **fett**");
   });
 });
 
