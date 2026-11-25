@@ -200,3 +200,13 @@ export function LabelDot({ color, className }: { color: string; className?: stri
     />
   );
 }
+
+/** Label-Chip (Farbpunkt + Name) für Sidebar und kompakte Eigenschaften-Zeile. */
+export function LabelChip({ name, color }: { name: string; color: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 text-xs">
+      <LabelDot color={color} />
+      {name}
+    </span>
+  );
+}

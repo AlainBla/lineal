@@ -36,6 +36,7 @@ import {
   slugify,
   type RelationChoice,
 } from "./model";
+import { MobilePropertyRow } from "./mobile-property-row";
 import { IssuePickerHost, type PickerRequest } from "./picker-host";
 import { PropertySidebar } from "./property-sidebar";
 import { MentionedInSection } from "./mentioned-in";
@@ -524,6 +525,16 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
           </Button>
         </div>
       </header>
+      {/* LIN-92: Kompakte Eigenschaften-Zeile nur schmal (< md); Desktop zeigt das angedockte Panel. */}
+      {narrow && (
+        <MobilePropertyRow
+          issue={issue}
+          lookup={lookup}
+          onOpen={(kind) => setRequest({ kind, issue })}
+          readOnly={readOnly}
+          metaError={metaError}
+        />
+      )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <article
           ref={scrollRef}
