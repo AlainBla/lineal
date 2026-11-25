@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import "@/app/test-polyfills";
 import { attachShortcuts, shortcuts } from "@/lib/shortcuts";
+import { getUiState, setUiState } from "@/app/ui-state";
 
 import { IssueDetailPage } from "./issue-detail";
 import type { IssueExtras } from "./queries";
@@ -139,6 +140,8 @@ afterEach(() => {
   shortcuts.reset();
   clearToasts();
   resetKnownUsers();
+  // `detailsOpen` ist modul-global: für nachfolgende Tests zurücksetzen.
+  setUiState({ detailsOpen: false });
 });
 
 const page = () => <IssueDetailPage ws="acme" splat="ENG-120/checkout-ueberarbeiten" />;
@@ -859,5 +862,101 @@ describe("Blocked-Indikator (LIN-79)", () => {
     const row = (await within(related).findByText("ENG-5")).closest("a")!;
     expect(within(row).getByText("Blocked by")).toBeInTheDocument();
     expect(within(row).getAllByLabelText("Blocked by").length).toBeGreaterThan(0);
+  });
+});
+
+describe("Eigenschaften-Panel mobil (LIN-93)", () => {
+  // Media-Query stubben wie app.test.tsx: `max-width`-Query = schmal/breit steuerbar.
+  function stubViewport(narrow: boolean) {
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: narrow && q.includes("max-width"),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    return () => {
+      window.matchMedia = original;
+    };
+  }
+
+  it("Schmal + geschlossen: kein Panel-Sheet und kein Scrim", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      // `detailsOpen` wird beim Mount auf schmal zurückgesetzt – Sheet bleibt zu.
+      expect(screen.queryByLabelText("Issue details")).toBeNull();
+      expect(screen.queryByTestId("details-scrim")).toBeNull();
+      expect(screen.queryByLabelText("Properties")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Schmal + offen: Scrim, Schließen-Knopf und Eigenschaften sichtbar; Scrim schließt", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      // Öffnen wie der Topbar-Knopf „Toggle details" / Shortcut `]`.
+      act(() => setUiState({ detailsOpen: true }));
+
+      const scrim = await screen.findByTestId("details-scrim");
+      expect(scrim).toBeInTheDocument();
+      expect(screen.getByLabelText("Close details")).toBeInTheDocument();
+      expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+      const sheet = screen.getByLabelText("Issue details");
+      expect(sheet.className).toContain("fixed");
+
+      fireEvent.click(scrim);
+      await waitFor(() => expect(getUiState().detailsOpen).toBe(false));
+      expect(screen.queryByLabelText("Issue details")).toBeNull();
+      expect(screen.queryByTestId("details-scrim")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Schmal + offen: der Schließen-Knopf schließt das Sheet", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      act(() => setUiState({ detailsOpen: true }));
+
+      const close = await screen.findByLabelText("Close details");
+      fireEvent.click(close);
+      await waitFor(() => expect(getUiState().detailsOpen).toBe(false));
+      expect(screen.queryByLabelText("Issue details")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Breit: Panel bleibt angedockt (md:block), kein Scrim/Schließen-Knopf, detailsOpen ohne Wirkung", async () => {
+    const restore = stubViewport(false);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+
+      const aside = await screen.findByLabelText("Issue details");
+      expect(aside.className).toContain("md:block");
+      expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+      expect(screen.queryByTestId("details-scrim")).toBeNull();
+      expect(screen.queryByLabelText("Close details")).toBeNull();
+
+      // `detailsOpen` hat auf Desktop keinen Effekt: kein Scrim, Panel unverändert sichtbar.
+      act(() => setUiState({ detailsOpen: true }));
+      expect(screen.queryByTestId("details-scrim")).toBeNull();
+      expect(screen.getByLabelText("Issue details").className).toContain("md:block");
+      expect(screen.getByLabelText("Properties")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
   });
 });

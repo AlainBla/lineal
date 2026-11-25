@@ -1,16 +1,19 @@
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { Copy, Link as LinkIcon } from "lucide-react";
+import { Copy, Link as LinkIcon, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useActions } from "@/app/commands";
 import { useSession } from "@/app/auth";
 import { teamPaths, workspacePaths } from "@/app/nav";
+import { setUiState, useUiState } from "@/app/ui-state";
 import { Button } from "@/components/ui/button";
 import { NotFound } from "@/components/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Issue } from "@/gql/graphql";
+import { cn } from "@/lib/cn";
 import { GraphQLRequestError } from "@/lib/graphql";
 import { useShortcutContext, useShortcuts } from "@/lib/shortcuts";
+import { NARROW_QUERY, useMediaQuery } from "@/lib/use-media-query";
 
 import { ConnectionStatus, Presence } from "@/features/collab/presence";
 import { useCollab } from "@/features/collab/use-collab";
@@ -332,6 +335,17 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const [addingSub, setAddingSub] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
   const closePicker = useCallback(() => setRequest(null), []);
+  // Schmaler Viewport (< md): das Eigenschaften-Panel ist ein Overlay/Sheet, gesteuert über
+  // `detailsOpen` (Topbar-Knopf „Toggle details“ + Shortcut `]`). Ab `md` bleibt es rechts
+  // angedockt und immer sichtbar – unabhängig von `detailsOpen` (Desktop-Toggle: separates LIN-94).
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const { detailsOpen } = useUiState();
+  // `detailsOpen` ist global und wird nicht persistiert: der Topbar-Knopf/Shortcut kippt den Wert
+  // auf jeder Seite. Damit das Sheet beim Öffnen eines Tickets (bzw. beim Wechsel auf schmal) nicht
+  // ungefragt aufspringt, schließen wir es wie die Shell-Sidebar (B4.28) beim Mount/ID-Wechsel.
+  useEffect(() => {
+    if (narrow) setUiState({ detailsOpen: false });
+  }, [narrow, issue.id]);
   // Scroll-Viewport des Ticket-Inhalts (der <article> unten). Home/End scrollen ihn ganz nach
   // oben/unten – der Container ist nicht fokussierbar, daher greift das native Home/End sonst nicht.
   const scrollRef = useRef<HTMLElement>(null);
@@ -564,33 +578,61 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             <ActivitySection issue={issue} lookup={lookup} />
           </div>
         </article>
-        <aside
-          aria-label="Issue details"
-          className="hidden w-72 shrink-0 overflow-y-auto border-l border-border p-3 md:block"
-        >
-          <PropertySidebar
-            issue={issue}
-            meta={meta.data}
-            lookup={lookup}
-            ws={ws}
-            onOpen={(kind) => setRequest({ kind, issue })}
-            onEditDueDate={() => setDueOpen(true)}
-            readOnly={readOnly}
-            metaError={metaError}
-            onRetryMeta={() => void meta.refetch()}
-            parent={parent.data ?? null}
+        {narrow && detailsOpen && (
+          <div
+            aria-hidden
+            data-testid="details-scrim"
+            className="fixed inset-0 z-30 animate-in bg-scrim fade-in-0"
+            onClick={() => setUiState({ detailsOpen: false })}
           />
-          {!issue.dueDate && !readOnly && !metaError && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-1 ml-[5.5rem]"
-              onClick={() => setDueOpen(true)}
-            >
-              Set due date
-            </Button>
-          )}
-        </aside>
+        )}
+        {(!narrow || detailsOpen) && (
+          <aside
+            aria-label="Issue details"
+            className={cn(
+              // Ab `md`: rechts angedockt, immer sichtbar – exakt wie bisher.
+              !narrow && "hidden w-72 shrink-0 overflow-y-auto border-l border-border p-3 md:block",
+              // Unter `md`: Overlay/Sheet von rechts über dem Inhalt.
+              narrow &&
+                "fixed inset-y-0 right-0 z-40 w-72 max-w-[85vw] animate-in overflow-y-auto border-l border-border bg-background p-3 shadow-popover duration-[var(--duration-base)] ease-[var(--ease-out)] slide-in-from-right",
+            )}
+          >
+            {narrow && (
+              <div className="mb-1 flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close details"
+                  onClick={() => setUiState({ detailsOpen: false })}
+                >
+                  <X />
+                </Button>
+              </div>
+            )}
+            <PropertySidebar
+              issue={issue}
+              meta={meta.data}
+              lookup={lookup}
+              ws={ws}
+              onOpen={(kind) => setRequest({ kind, issue })}
+              onEditDueDate={() => setDueOpen(true)}
+              readOnly={readOnly}
+              metaError={metaError}
+              onRetryMeta={() => void meta.refetch()}
+              parent={parent.data ?? null}
+            />
+            {!issue.dueDate && !readOnly && !metaError && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 ml-[5.5rem]"
+                onClick={() => setDueOpen(true)}
+              >
+                Set due date
+              </Button>
+            )}
+          </aside>
+        )}
       </div>
       <IssuePickerHost request={request} onClose={closePicker} />
       <DueDateDialog
