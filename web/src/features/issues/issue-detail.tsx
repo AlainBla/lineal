@@ -70,12 +70,36 @@ function DescriptionEditor({
     session.status === "connecting" ||
     (session.status === "disconnected" && !session.everConnected)
   ) {
-    return <Skeleton className="h-16 w-full" />;
+    return <ConnectingDescriptionPreview issue={issue} />;
   }
   if (session.status === "fallback" || session.status === "closed" || !session.provider) {
     return <Stage1DescriptionEditor issue={issue} actions={actions} readOnly={readOnly} />;
   }
   return <LiveDescriptionEditor issue={issue} session={session} />;
+}
+
+/**
+ * Verbindungsaufbau (Stufe 2 noch nicht bereit): statt eines leeren Skeletons wird die bereits
+ * schnell aus dem GraphQL-Query geladene Beschreibung als schreibgeschützte, ausgegraute Vorschau
+ * gezeigt. Reine Anzeige: der Text fließt NICHT in das Yjs-Dokument (kein `collab`-Prop, Yjs bleibt
+ * die Quelle der Wahrheit); sobald die Session steht, ersetzt der Live-Editor diese Vorschau. Der
+ * Statushinweis „Connecting…“ signalisiert, dass das Editieren gerade noch nicht bereit ist.
+ */
+function ConnectingDescriptionPreview({ issue }: { issue: Issue }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <RichEditor
+        value={issue.description ?? ""}
+        editable={false}
+        ariaLabel="Description"
+        placeholder="Add description…"
+        className="opacity-60"
+      />
+      <div className="flex items-center justify-end gap-2 text-xs text-subtle-foreground">
+        <ConnectionStatus status="connecting" canWrite={false} />
+      </div>
+    </div>
+  );
 }
 
 function LiveDescriptionEditor({
