@@ -13,7 +13,11 @@ export interface UiState {
   createIssueOpen: boolean;
   /** Dialog „New team“ (Sidebar „+“, Command-Menü, Settings → Teams). */
   createTeamOpen: boolean;
-  /** Rechte Detail-Sidebar (`]`); die Inhalte liefern die Feature-WPs. */
+  /**
+   * Rechte Detail-Sidebar (`]`); die Inhalte liefern die Feature-WPs. Standard offen (LIN-94):
+   * auf Desktop ist das angedockte Panel per Default sichtbar, der Toggle blendet es aus/ein.
+   * Auf schmal (< md) schließt issue-detail.tsx es beim Mount, damit das Sheet nicht aufspringt.
+   */
   detailsOpen: boolean;
 }
 
@@ -34,7 +38,7 @@ let state: UiState = {
   shortcutHelpOpen: false,
   createIssueOpen: false,
   createTeamOpen: false,
-  detailsOpen: false,
+  detailsOpen: true,
 };
 
 const listeners = new Set<() => void>();

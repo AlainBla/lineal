@@ -140,8 +140,9 @@ afterEach(() => {
   shortcuts.reset();
   clearToasts();
   resetKnownUsers();
-  // `detailsOpen` ist modul-global: für nachfolgende Tests zurücksetzen.
-  setUiState({ detailsOpen: false });
+  // `detailsOpen` ist modul-global: für nachfolgende Tests auf den Standard (offen, LIN-94)
+  // zurücksetzen, damit das angedockte Desktop-Panel wie beim ersten Laden sichtbar ist.
+  setUiState({ detailsOpen: true });
 });
 
 const page = () => <IssueDetailPage ws="acme" splat="ENG-120/checkout-ueberarbeiten" />;
@@ -937,7 +938,7 @@ describe("Eigenschaften-Panel mobil (LIN-93)", () => {
     }
   });
 
-  it("Breit: Panel bleibt angedockt (md:block), kein Scrim/Schließen-Knopf, detailsOpen ohne Wirkung", async () => {
+  it("Breit + Default: Panel angedockt (md:block), kein Scrim/Schließen-Knopf", async () => {
     const restore = stubViewport(false);
     try {
       mockGraphql(handlers());
@@ -947,14 +948,9 @@ describe("Eigenschaften-Panel mobil (LIN-93)", () => {
       const aside = await screen.findByLabelText("Issue details");
       expect(aside.className).toContain("md:block");
       expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+      // Angedockt (kein Overlay): kein Scrim, kein Schließen-Knopf.
       expect(screen.queryByTestId("details-scrim")).toBeNull();
       expect(screen.queryByLabelText("Close details")).toBeNull();
-
-      // `detailsOpen` hat auf Desktop keinen Effekt: kein Scrim, Panel unverändert sichtbar.
-      act(() => setUiState({ detailsOpen: true }));
-      expect(screen.queryByTestId("details-scrim")).toBeNull();
-      expect(screen.getByLabelText("Issue details").className).toContain("md:block");
-      expect(screen.getByLabelText("Properties")).toBeInTheDocument();
     } finally {
       restore();
     }
@@ -1003,6 +999,83 @@ describe("Eigenschaften-Zeile mobil (LIN-92)", () => {
       await screen.findByLabelText("Title");
       expect(screen.queryByLabelText("Issue properties")).toBeNull();
       expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("Desktop Panel-Toggle (LIN-94)", () => {
+  it("Breit + Default: das angedockte Panel ist sichtbar", async () => {
+    const restore = stubViewport(false);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      // Ohne Zutun (Standard offen) steht das Panel da.
+      expect(await screen.findByLabelText("Issue details")).toBeInTheDocument();
+      expect(screen.getByLabelText("Properties")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Breit: detailsOpen=false blendet das Panel aus, wieder true zeigt es", async () => {
+    const restore = stubViewport(false);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+
+      // Toggle aus (wie Topbar-Knopf / Shortcut `]`): Panel verschwindet, kein Overlay/Scrim.
+      act(() => setUiState({ detailsOpen: false }));
+      await waitFor(() => expect(screen.queryByLabelText("Issue details")).toBeNull());
+      expect(screen.queryByLabelText("Properties")).toBeNull();
+      expect(screen.queryByTestId("details-scrim")).toBeNull();
+
+      // Toggle wieder an: angedocktes Panel kommt zurück.
+      act(() => setUiState({ detailsOpen: true }));
+      expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
+      expect(screen.getByLabelText("Issue details").className).toContain("md:block");
+    } finally {
+      restore();
+    }
+  });
+
+  it("Breit: der Ticket-Inhalt bleibt gerendert, wenn das Panel aus ist", async () => {
+    const restore = stubViewport(false);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+
+      act(() => setUiState({ detailsOpen: false }));
+      await waitFor(() => expect(screen.queryByLabelText("Issue details")).toBeNull());
+      // Titel/Beschreibung bleiben sichtbar; nur das angedockte Panel ist weg.
+      expect(screen.getByLabelText("Title")).toHaveValue("Checkout überarbeiten");
+      expect(screen.getByLabelText("Issue ENG-120")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Schmal schließt nur solange die schmale Ansicht lebt; danach gilt wieder der Standard (offen)", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      const { unmount } = await renderWithApp(
+        page(),
+        newClient(),
+        "/acme/issue/ENG-120/checkout-ueberarbeiten",
+      );
+      await screen.findByLabelText("Title");
+      // Schmal schließt das Sheet beim Mount (LIN-93).
+      expect(getUiState().detailsOpen).toBe(false);
+      // Verlässt man die schmale Ansicht (Unmount/Breiter-Resize), wird der Standard wiederhergestellt,
+      // damit Desktop kein durch Schmal gesetztes „zu“ erbt.
+      unmount();
+      expect(getUiState().detailsOpen).toBe(true);
     } finally {
       restore();
     }
