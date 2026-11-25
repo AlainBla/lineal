@@ -87,7 +87,9 @@ const MEMBERSHIP_MODELS: [&str; 3] = ["User", "Team", "Organization"];
 /// Einstellungen des Sync-Adapters.
 #[derive(Clone)]
 pub struct SyncConfig {
-    /// Gleichzeitige Verbindungen je User; weitere werden mit 429 abgewiesen.
+    /// Gleichzeitige Verbindungen je User; weitere werden mit 429 abgewiesen. Default 15 (LIN-96):
+    /// ein Tab = eine `/sync`-Verbindung, großzügig genug für legitime Mehrfach-Tab-Nutzung, ohne
+    /// den Schutz gegen Verbindungs-Floods pro User aufzugeben.
     pub max_connections_per_user: usize,
     /// Maximale Größe einer Client-Nachricht in Bytes (Frames darüber beenden die Verbindung).
     pub max_incoming_bytes: usize,
@@ -116,7 +118,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            max_connections_per_user: 10,
+            max_connections_per_user: 15,
             max_incoming_bytes: 16 * 1024,
             max_outgoing_bytes: 512 * 1024,
             batch_actions: 200,
@@ -802,5 +804,17 @@ async fn deliver(
         if !full {
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::SyncConfig;
+
+    /// Lockt die mit LIN-96 gewählte Obergrenze (von 10 auf 15 angehoben). Prod nutzt
+    /// `from_env()`, das `max_connections_per_user` aus dem Default übernimmt.
+    #[test]
+    fn default_connection_cap_is_15() {
+        assert_eq!(SyncConfig::default().max_connections_per_user, 15);
     }
 }
