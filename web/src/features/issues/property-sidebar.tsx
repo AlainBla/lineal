@@ -5,7 +5,7 @@ import { Keys } from "@/components/ui/kbd";
 import type { Issue } from "@/gql/graphql";
 import { teamPaths } from "@/app/nav";
 
-import { Avatar, LabelDot, PriorityIcon, StatusIcon } from "./icons";
+import { Avatar, LabelChip, PriorityIcon, StatusIcon } from "./icons";
 import type { IssueLookup } from "./issue-lookup";
 import { estimateLabel, issuePath, priorityLabel } from "./model";
 import type { PickerKind } from "./picker-host";
@@ -176,13 +176,7 @@ export function PropertySidebar({
         {labels.length > 0 ? (
           <span className="flex flex-wrap gap-1">
             {labels.map((l) => (
-              <span
-                key={l.id}
-                className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 text-xs"
-              >
-                <LabelDot color={l.color} />
-                {l.name}
-              </span>
+              <LabelChip key={l.id} name={l.name} color={l.color} />
             ))}
           </span>
         ) : (

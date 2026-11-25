@@ -146,6 +146,20 @@ afterEach(() => {
 
 const page = () => <IssueDetailPage ws="acme" splat="ENG-120/checkout-ueberarbeiten" />;
 
+// Media-Query stubben wie app.test.tsx: `max-width`-Query = schmal/breit steuerbar.
+function stubViewport(narrow: boolean) {
+  const original = window.matchMedia;
+  window.matchMedia = ((q: string) => ({
+    matches: narrow && q.includes("max-width"),
+    media: q,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })) as unknown as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = original;
+  };
+}
+
 describe("Issue-Detail", () => {
   it("rendert Titel, Beschreibung und die Property-Sidebar in der Reihenfolge aus docs/08", async () => {
     mockGraphql(handlers());
@@ -866,20 +880,6 @@ describe("Blocked-Indikator (LIN-79)", () => {
 });
 
 describe("Eigenschaften-Panel mobil (LIN-93)", () => {
-  // Media-Query stubben wie app.test.tsx: `max-width`-Query = schmal/breit steuerbar.
-  function stubViewport(narrow: boolean) {
-    const original = window.matchMedia;
-    window.matchMedia = ((q: string) => ({
-      matches: narrow && q.includes("max-width"),
-      media: q,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    })) as unknown as typeof window.matchMedia;
-    return () => {
-      window.matchMedia = original;
-    };
-  }
-
   it("Schmal + geschlossen: kein Panel-Sheet und kein Scrim", async () => {
     const restore = stubViewport(true);
     try {
@@ -955,6 +955,54 @@ describe("Eigenschaften-Panel mobil (LIN-93)", () => {
       expect(screen.queryByTestId("details-scrim")).toBeNull();
       expect(screen.getByLabelText("Issue details").className).toContain("md:block");
       expect(screen.getByLabelText("Properties")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("Eigenschaften-Zeile mobil (LIN-92)", () => {
+  it("Schmal: Status, Priorität, Zuständiger und Labels stehen in der Zeile – ohne Panel", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      const row = await screen.findByLabelText("Issue properties");
+      // Status und Priorität kommen direkt aus dem Issue.
+      expect(within(row).getByText("In Progress")).toBeInTheDocument();
+      expect(within(row).getByText("High")).toBeInTheDocument();
+      // Zuständiger und Labels erscheinen erst nach Laden von Team-Meta und Nutzern.
+      expect(await within(row).findByText("Bob")).toBeInTheDocument();
+      expect(await within(row).findByText("Bug")).toBeInTheDocument();
+      // Das angedockte Panel ist schmal + geschlossen nicht gerendert – keine Doppelanzeige.
+      expect(screen.queryByLabelText("Properties")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Schmal: Tipp auf den Status-Chip öffnet den Status-Picker", async () => {
+    const restore = stubViewport(true);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      const row = await screen.findByLabelText("Issue properties");
+      await userEvent.click(within(row).getByRole("button", { name: "Change status" }));
+      expect(await screen.findByPlaceholderText("Change status…")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("Breit: die Zeile ist nicht vorhanden, das Panel bleibt angedockt", async () => {
+    const restore = stubViewport(false);
+    try {
+      mockGraphql(handlers());
+      await renderWithApp(page(), newClient(), "/acme/issue/ENG-120/checkout-ueberarbeiten");
+      await screen.findByLabelText("Title");
+      expect(screen.queryByLabelText("Issue properties")).toBeNull();
+      expect(await screen.findByLabelText("Properties")).toBeInTheDocument();
     } finally {
       restore();
     }
