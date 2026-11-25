@@ -336,16 +336,21 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
   const [addingSub, setAddingSub] = useState(false);
   const [dueOpen, setDueOpen] = useState(false);
   const closePicker = useCallback(() => setRequest(null), []);
-  // Schmaler Viewport (< md): das Eigenschaften-Panel ist ein Overlay/Sheet, gesteuert über
-  // `detailsOpen` (Topbar-Knopf „Toggle details“ + Shortcut `]`). Ab `md` bleibt es rechts
-  // angedockt und immer sichtbar – unabhängig von `detailsOpen` (Desktop-Toggle: separates LIN-94).
+  // Das Eigenschaften-Panel wird über `detailsOpen` gesteuert (Topbar-Knopf „Toggle details“ +
+  // Shortcut `]`): ab `md` angedockt rechts (ein-/ausblendbar, LIN-94), darunter als Overlay/Sheet
+  // von rechts (LIN-93). Standard offen → Desktop zeigt das Panel ohne Zutun.
   const narrow = useMediaQuery(NARROW_QUERY);
   const { detailsOpen } = useUiState();
-  // `detailsOpen` ist global und wird nicht persistiert: der Topbar-Knopf/Shortcut kippt den Wert
-  // auf jeder Seite. Damit das Sheet beim Öffnen eines Tickets (bzw. beim Wechsel auf schmal) nicht
-  // ungefragt aufspringt, schließen wir es wie die Shell-Sidebar (B4.28) beim Mount/ID-Wechsel.
-  useEffect(() => {
-    if (narrow) setUiState({ detailsOpen: false });
+  // `detailsOpen` ist global und wird nicht persistiert. Schmal soll das Sheet beim Öffnen eines
+  // Tickets (bzw. beim Wechsel auf schmal) nicht ungefragt aufspringen; wir schließen es daher wie
+  // die Shell-Sidebar (B4.28) beim Mount/ID-Wechsel. `useLayoutEffect` statt `useEffect`: das
+  // Schließen greift noch vor dem Paint, sonst blitzte das Sheet beim Laden kurz auf. Die Cleanup
+  // stellt den Standard (offen) wieder her, wenn die schmale Ansicht endet (Breiter-Resize/Unmount),
+  // damit Desktop nicht ein durch Schmal gesetztes „zu“ erbt.
+  useLayoutEffect(() => {
+    if (!narrow) return;
+    setUiState({ detailsOpen: false });
+    return () => setUiState({ detailsOpen: true });
   }, [narrow, issue.id]);
   // Scroll-Viewport des Ticket-Inhalts (der <article> unten). Home/End scrollen ihn ganz nach
   // oben/unten – der Container ist nicht fokussierbar, daher greift das native Home/End sonst nicht.
@@ -597,11 +602,12 @@ function IssueDetail({ issue, ws }: { issue: Issue; ws: string }) {
             onClick={() => setUiState({ detailsOpen: false })}
           />
         )}
-        {(!narrow || detailsOpen) && (
+        {detailsOpen && (
           <aside
             aria-label="Issue details"
             className={cn(
-              // Ab `md`: rechts angedockt, immer sichtbar – exakt wie bisher.
+              // Ab `md`: rechts angedockt; `detailsOpen` entscheidet über Ein-/Ausblenden (LIN-94).
+              // Ausgeblendet unmountet das <aside>, der <article> verbreitert sich automatisch.
               !narrow && "hidden w-72 shrink-0 overflow-y-auto border-l border-border p-3 md:block",
               // Unter `md`: Overlay/Sheet von rechts über dem Inhalt.
               narrow &&
